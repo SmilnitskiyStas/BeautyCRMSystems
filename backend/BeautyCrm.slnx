@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="BeautyCrm.Api/BeautyCrm.Api.csproj" />
+  <Project Path="BeautyCrm.Application/BeautyCrm.Application.csproj" />
+  <Project Path="BeautyCrm.Domain/BeautyCrm.Domain.csproj" />
+  <Project Path="BeautyCrm.Infrastructure/BeautyCrm.Infrastructure.csproj" />
+  <Project Path="BeautyCrm.Tests/BeautyCrm.Tests.csproj" />
+</Solution>
