@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>Канали та інтеграції</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=Unbounded:wght@500;600&display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:'Onest',sans-serif}
+button{font-family:inherit;cursor:pointer}
+a{color:#6B2F5C}a:hover{color:#4A2260}
+.ai-pop{display:none}
+.ai-fab:hover .ai-pop,.ai-fab:focus-within .ai-pop{display:flex}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1100px; background: #F6F4F8; color: #1E1B2E; font-family: 'Onest', sans-serif">
+
+<nav aria-label="Головне меню" style="order: 0; flex: 1 1 240px; max-width: 280px; background: #1E1B2E; padding: 28px 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px">
+<div style="font-family: 'Unbounded', sans-serif; font-weight: 600; font-size: 20px; color: #FFFFFF; margin-bottom: 24px">Beauty Lab</div>
+<a href="Admin.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Огляд</a>
+<a href="Calendar.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Записи</a>
+<a href="Client.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Клієнти</a>
+<a href="Staff.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Спеціалісти</a>
+<a href="Promos.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Ціни та акції</a>
+<a href="Analytics.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Аналітика</a>
+<a href="AI.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">AI-асистент</a>
+<a href="Integrations.dc.html" aria-current="page" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: #6B2F5C; color: #FFFFFF; font-weight: 600">Канали</a>
+<a href="Main.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Запис клієнта</a>
+</nav>
+
+<div style="order: 1; flex: 999 1 560px; min-width: 0; padding: 28px 32px; box-sizing: border-box; display: flex; flex-direction: column; gap: 20px">
+
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px">
+<div>
+<h1 style="margin: 0; font-family: 'Unbounded', sans-serif; font-weight: 600; font-size: 28px">Канали та інтеграції</h1>
+<div style="color: #5E5873; font-size: 14px; margin-top: 4px">Підключіть месенджери й соцмережі: клієнти пишуть і записуються, а AI-агент відповідає.</div>
+</div>
+<div style="display: flex; gap: 24px; flex-wrap: wrap">
+<div style="display: flex; flex-direction: column"><span style="font-family: 'Unbounded', sans-serif; font-weight: 500; font-size: 24px">{{connectedCount}} з {{total}}</span><span style="font-size: 13px; color: #5E5873">каналів підключено</span></div>
+<div style="display: flex; flex-direction: column"><span style="font-family: 'Unbounded', sans-serif; font-weight: 500; font-size: 24px">{{aiCount}}</span><span style="font-size: 13px; color: #5E5873">каналів з AI-агентом</span></div>
+</div>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px">
+<sc-for list="{{channels}}" as="c" hint-placeholder-count="6">
+<button onClick="{{c.pick}}" aria-pressed="{{c.pressed}}" style="text-align: left; border: 2px solid {{c.border}}; background: #FFFFFF; border-radius: 16px; padding: 14px; display: flex; gap: 12px; align-items: center; color: #1E1B2E">
+<span style="width: 44px; height: 44px; border-radius: 22px; background: #EADCF2; color: #4A2260; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 14px; flex: none">{{c.icon}}</span>
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px">
+<span style="font-weight: 600; font-size: 15px">{{c.name}}</span>
+<span style="display: flex; gap: 6px; flex-wrap: wrap">
+<span style="border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 600; background: {{c.bg}}; color: {{c.fg}}">{{c.status}}</span>
+<sc-if value="{{c.aiOn}}" hint-placeholder-val="{{ false }}"><span style="border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 600; background: #EADCF2; color: #4A2260">AI</span></sc-if>
+</span>
+</span>
+</button>
+</sc-for>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start">
+
+<section style="flex: 999 1 460px; min-width: 0; background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap">
+<h2 style="margin: 0; font-size: 20px; font-weight: 600">{{cur.name}}</h2>
+<span style="border-radius: 8px; padding: 4px 10px; font-size: 13px; font-weight: 600; background: {{cur.bg}}; color: {{cur.fg}}">{{cur.status}}</span>
+</div>
+<div style="font-size: 14px; color: #5E5873">{{cur.desc}}</div>
+
+<sc-if value="{{notConnected}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 10px">
+<div style="font-weight: 600; font-size: 15px">Як підключити</div>
+<div style="font-size: 14px; line-height: 1.5; background: #F6F4F8; border-radius: 12px; padding: 12px 14px">{{cur.how}}</div>
+<label for="conn-field" style="font-size: 13px; font-weight: 600">{{cur.field}}</label>
+<input id="conn-field" type="text" placeholder="{{cur.placeholder}}" style="height: 44px; border-radius: 12px; border: 1px solid #D9D4E4; padding: 0 14px; font-family: inherit; font-size: 15px; color: #1E1B2E; box-sizing: border-box; width: 100%">
+<div style="font-size: 13px; color: #5E5873">Ключі зберігаються в зашифрованому вигляді й після підключення показуються лише частково.</div>
+<button onClick="{{connect}}" style="height: 52px; border-radius: 26px; border: none; background: {{accent}}; color: #FFFFFF; font-size: 16px; font-weight: 600">Підключити {{cur.name}}</button>
+</div>
+</sc-if>
+
+<sc-if value="{{isConnected}}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-direction: column; gap: 4px">
+<sc-for list="{{toggles}}" as="t" hint-placeholder-count="3">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 0; border-top: 1px solid #ECE8F2">
+<span style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><span style="font-weight: 600; font-size: 15px">{{t.label}}</span><span style="font-size: 13px; color: #5E5873; line-height: 1.4">{{t.note}}</span></span>
+<button role="switch" aria-checked="{{t.on}}" aria-label="{{t.label}}" onClick="{{t.flip}}" style="width: 52px; height: 44px; border: none; background: transparent; padding: 0; flex: none; display: flex; align-items: center"><span style="width: 52px; height: 30px; border-radius: 15px; background: {{t.track}}; display: block; position: relative"><span style="position: absolute; top: 3px; left: {{t.knob}}px; width: 24px; height: 24px; border-radius: 12px; background: #FFFFFF; display: block"></span></span></button>
+</div>
+</sc-for>
+</div>
+
+<sc-if value="{{aiOn}}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-direction: column; gap: 10px; border-top: 1px solid #ECE8F2; padding-top: 14px">
+<label for="mode" style="font-weight: 600; font-size: 15px">Як діє AI-агент</label>
+<select id="mode" value="{{mode}}" onChange="{{onMode}}" style="height: 52px; border-radius: 14px; border: 2px solid #D9D4E4; background: #FFFFFF; color: #1E1B2E; padding: 0 14px; font-family: inherit; font-size: 15px; font-weight: 600; width: 100%; box-sizing: border-box">
+<sc-for list="{{modeOpts}}" as="m" hint-placeholder-count="3">
+<option value="{{m.id}}">{{m.label}}</option>
+</sc-for>
+</select>
+<div style="font-size: 13px; color: #5E5873">{{modeHint}}</div>
+<label for="greeting" style="font-weight: 600; font-size: 15px; margin-top: 6px">Привітання клієнту</label>
+<textarea id="greeting" value="{{greeting}}" onChange="{{onGreeting}}" rows="3" style="width: 100%; box-sizing: border-box; border-radius: 12px; border: 2px solid #D9D4E4; padding: 12px 14px; font-family: inherit; font-size: 15px; line-height: 1.45; color: #1E1B2E; resize: vertical"></textarea>
+<div style="font-weight: 600; font-size: 15px; margin-top: 6px">Передавати розмову менеджеру</div>
+<sc-for list="{{handoff}}" as="h" hint-placeholder-count="3">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 16px">
+<span style="font-size: 14px">{{h.label}}</span>
+<button role="switch" aria-checked="{{h.on}}" aria-label="{{h.label}}" onClick="{{h.flip}}" style="width: 52px; height: 44px; border: none; background: transparent; padding: 0; flex: none; display: flex; align-items: center"><span style="width: 52px; height: 30px; border-radius: 15px; background: {{h.track}}; display: block; position: relative"><span style="position: absolute; top: 3px; left: {{h.knob}}px; width: 24px; height: 24px; border-radius: 12px; background: #FFFFFF; display: block"></span></span></button>
+</div>
+</sc-for>
+</div>
+</sc-if>
+
+<div style="display: flex; gap: 8px; flex-wrap: wrap; border-top: 1px solid #ECE8F2; padding-top: 14px; align-items: center">
+<div style="font-size: 13px; color: #5E5873; flex: 1 1 200px">Ключ підключення: ••••••••••••</div>
+<button onClick="{{disconnect}}" style="height: 44px; padding: 0 18px; border-radius: 22px; border: 1px solid #D9D4E4; background: #FFFFFF; color: #8A1F1F; font-weight: 600; font-size: 14px">Відключити канал</button>
+</div>
+</sc-if>
+</section>
+
+<aside style="flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+<div style="background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 12px">
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">Так це бачить клієнт</h2>
+<div style="background: #F6F4F8; border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 8px; min-height: 120px">
+<sc-for list="{{preview}}" as="m" hint-placeholder-count="4">
+<div style="max-width: 85%; align-self: {{m.align}}; background: {{m.bg}}; color: {{m.fg}}; border-radius: 14px; padding: 8px 12px; font-size: 13px; line-height: 1.4">{{m.text}}</div>
+</sc-for>
+</div>
+<sc-if value="{{showBooked}}" hint-placeholder-val="{{ false }}">
+<div style="background: #E3E9FB; color: #223A8C; border-radius: 12px; padding: 12px 14px; font-size: 13px; line-height: 1.45">Запис створено в чаті й одразу зʼявився в календарі майстра.<br><a href="Calendar.dc.html" style="font-weight: 600; color: #223A8C">Переглянути в календарі</a></div>
+</sc-if>
+<sc-if value="{{showInbox}}" hint-placeholder-val="{{ false }}">
+<div style="background: #FFF1CC; color: #5C3900; border-radius: 12px; padding: 12px 14px; font-size: 13px; line-height: 1.45">Нова заявка зʼявиться в розділі «AI-асистент → Заявки». <a href="AI.dc.html" style="font-weight: 600; color: #5C3900">Відкрити заявки</a></div>
+</sc-if>
+</div>
+<div style="background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px">
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">Сповіщення персоналу</h2>
+<div style="font-size: 13px; color: #5E5873; line-height: 1.45">Адміністратор отримає сповіщення про нове повідомлення, запис через канал або розмову, яку AI передав людині.</div>
+<div style="font-size: 14px; display: flex; justify-content: space-between; gap: 12px"><span style="color: #5E5873">Куди</span><span style="font-weight: 600">Telegram адміністратора</span></div>
+<div style="font-size: 14px; display: flex; justify-content: space-between; gap: 12px"><span style="color: #5E5873">Коли</span><span style="font-weight: 600">Завжди, у робочі години</span></div>
+</div>
+</aside>
+</div>
+</div>
+
+<div class="ai-fab" style="position: fixed; right: 24px; bottom: 24px; z-index: 50; display: flex; flex-direction: column; align-items: flex-end; gap: 12px">
+<div class="ai-pop" style="width: 340px; max-width: calc(100vw - 48px); max-height: calc(100vh - 120px); overflow-y: auto; background: #FFFFFF; border-radius: 20px; box-shadow: 0 12px 40px rgba(30,27,46,0.28); flex-direction: column">
+<div style="background: #1E1B2E; color: #FFFFFF; padding: 14px 16px; display: flex; flex-direction: column; gap: 2px"><span style="font-family: 'Unbounded', sans-serif; font-weight: 600; font-size: 15px">AI-асистент</span><span style="font-size: 12px; color: #D9D4E4">Аналізує: канали зв’язку</span></div>
+<div style="padding: 14px 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="background: #F1E4EE; border-radius: 12px; padding: 10px 12px; font-size: 13px; line-height: 1.45"><strong>Підказка</strong><br>Facebook, WhatsApp і Viber ще не підключені. Клієнти, які пишуть туди, не потрапляють в єдиний ящик.</div>
+<div style="align-self: flex-end; background: #6B2F5C; color: #FFFFFF; border-radius: 14px; padding: 8px 12px; font-size: 13px; max-width: 85%">З чого почати?</div>
+<div style="align-self: flex-start; background: #F6F4F8; border-radius: 14px; padding: 8px 12px; font-size: 13px; line-height: 1.45; max-width: 90%">Увімкніть запис через Instagram і режим «Готує, я підтверджую». Після тижня роботи можна дозволити AI відповідати самому.</div>
+</div>
+<div style="border-top: 1px solid #ECE8F2; padding: 10px 12px; display: flex; gap: 8px">
+<label for="ai-q" style="position: absolute; width: 1px; height: 1px; overflow: hidden">Запитання до AI</label>
+<input id="ai-q" type="text" placeholder="Запитайте AI" style="flex: 1; min-width: 0; height: 44px; border-radius: 22px; border: 1px solid #D9D4E4; padding: 0 14px; font-family: inherit; font-size: 14px; box-sizing: border-box">
+<button aria-label="Надіслати" style="width: 44px; height: 44px; border-radius: 22px; border: none; background: #6B2F5C; display: flex; align-items: center; justify-content: center; padding: 0"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+</div>
+</div>
+<button aria-label="Відкрити AI-асистента" style="width: 60px; height: 60px; border-radius: 30px; border: none; background: #6B2F5C; box-shadow: 0 8px 24px rgba(30,27,46,0.35); display: flex; align-items: center; justify-content: center; padding: 0"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 16l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/></svg></button>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#6B2F5C","options":["#6B2F5C","#0F6B6B","#2F4A8C","#8A2D3F"]},"$preview":{"width":1360,"height":1100}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = {
+sel: 'tg',
+cfg: {
+tg: { connected: true, inbox: true, booking: true, ai: true, mode: 'confirm' },
+ig: { connected: true, inbox: true, booking: false, ai: true, mode: 'suggest' },
+fb: { connected: false, inbox: true, booking: false, ai: false, mode: 'suggest' },
+wa: { connected: false, inbox: true, booking: false, ai: false, mode: 'suggest' },
+vb: { connected: false, inbox: true, booking: false, ai: false, mode: 'suggest' },
+web: { connected: true, inbox: true, booking: true, ai: false, mode: 'suggest' }
+},
+greeting: 'Вітаємо в Beauty Lab! Я допоможу з записом і відповім на питання про ціни та акції.',
+handoff: { neg: true, pay: true, human: true }
+};
+}
+renderVals() {
+const accent = this.props.accent ?? '#6B2F5C';
+const s = this.state;
+const chData = [
+{ id: 'tg', name: 'Telegram', icon: 'TG', desc: 'Бот для записів і повідомлень клієнтів.', field: 'Токен бота', placeholder: 'Вставте токен із BotFather', how: 'Створіть бота в @BotFather, скопіюйте токен і вставте його нижче. Клієнти зможуть писати боту й записуватися.' },
+{ id: 'ig', name: 'Instagram', icon: 'IG', desc: 'Direct-повідомлення бізнес-акаунта.', field: 'Бізнес-акаунт Instagram', placeholder: 'Назва акаунта', how: 'Підключається через Facebook-сторінку. Увійдіть у Facebook і оберіть бізнес-акаунт Instagram.' },
+{ id: 'fb', name: 'Facebook Messenger', icon: 'FB', desc: 'Повідомлення на сторінку закладу.', field: 'Facebook-сторінка', placeholder: 'Назва сторінки', how: 'Увійдіть у Facebook і надайте доступ до повідомлень сторінки вашого закладу.' },
+{ id: 'wa', name: 'WhatsApp Business', icon: 'WA', desc: 'Повідомлення на бізнес-номер.', field: 'Номер телефону', placeholder: '+380', how: 'Вкажіть номер WhatsApp Business і підтвердьте його кодом із SMS.' },
+{ id: 'vb', name: 'Viber', icon: 'VB', desc: 'Бот у Viber для клієнтів.', field: 'Токен бота', placeholder: 'Вставте токен Viber', how: 'Створіть бот-акаунт у Viber, скопіюйте токен і вставте його нижче.' },
+{ id: 'web', name: 'Віджет на сайті', icon: 'W', desc: 'Чат і кнопка запису на вашому сайті.', field: 'Адреса сайту', placeholder: 'https://', how: 'Скопіюйте код віджета на свій сайт. Чат зʼявиться в нижньому куті сторінки.' }
+];
+const modeData = [
+{ id: 'suggest', label: 'Тільки підказує', hint: 'AI готує чернетку, а надсилає її людина.' },
+{ id: 'confirm', label: 'Готує, я підтверджую', hint: 'AI пише відповідь і створює запис, але чекає вашого підтвердження.' },
+{ id: 'auto', label: 'Відповідає сам', hint: 'AI самостійно відповідає й записує в межах ваших правил, складні випадки передає менеджеру.' }
+];
+const connectedCount = chData.filter((c) => s.cfg[c.id].connected).length;
+const aiCount = chData.filter((c) => s.cfg[c.id].connected && s.cfg[c.id].ai).length;
+const channels = chData.map((c) => {
+const k = s.cfg[c.id];
+return {
+name: c.name, icon: c.icon, pressed: s.sel === c.id, border: s.sel === c.id ? accent : '#E4DFEC',
+status: k.connected ? 'Підключено' : 'Не підключено', bg: k.connected ? '#DDF3E6' : '#E9E6EF', fg: k.connected ? '#145A32' : '#4A4560',
+aiOn: k.connected && k.ai,
+pick: () => this.setState({ sel: c.id })
+};
+});
+const c = chData.find((x) => x.id === s.sel);
+const k = s.cfg[s.sel];
+const setCfg = (patch) => this.setState({ cfg: Object.assign({}, s.cfg, { [s.sel]: Object.assign({}, k, patch) }) });
+const track = (on) => (on ? accent : '#B9B3C7');
+const tog = (label, note, key) => ({
+label, note, on: !!k[key], track: track(!!k[key]), knob: k[key] ? 25 : 3,
+flip: () => setCfg({ [key]: !k[key] })
+});
+const toggles = [
+tog('Приймати повідомлення в єдиний ящик', 'Повідомлення з каналу зʼявляються в розділі «AI-асистент → Заявки».', 'inbox'),
+tog('Запис клієнтів через канал', 'Клієнт обирає заклад, майстра, послугу й час прямо в чаті. Запис потрапляє в календар.', 'booking'),
+tog('AI-агент спілкується з клієнтами', 'Відповідає про ціни, акції та вільний час, пропонує запис.', 'ai')
+];
+const hoData = [{ id: 'neg', label: 'Скарга або негативний відгук' }, { id: 'pay', label: 'Питання про оплату й повернення коштів' }, { id: 'human', label: 'Клієнт просить звʼязати з людиною' }];
+const handoff = hoData.map((h) => ({
+label: h.label, on: !!s.handoff[h.id], track: track(!!s.handoff[h.id]), knob: s.handoff[h.id] ? 25 : 3,
+flip: () => this.setState({ handoff: Object.assign({}, s.handoff, { [h.id]: !s.handoff[h.id] }) })
+}));
+const modeObj = modeData.find((m) => m.id === k.mode);
+
+const cl = (t) => ({ text: t, align: 'flex-end', bg: '#FFFFFF', fg: '#1E1B2E' });
+const bot = (t) => ({ text: t, align: 'flex-start', bg: accent, fg: '#FFFFFF' });
+let preview;
+if (!k.connected) {
+preview = [bot('Підключіть канал, щоб побачити, як виглядатиме розмова.')];
+} else if (!k.ai) {
+preview = [cl('Добрий день! Чи є вільний час на манікюр сьогодні?'), { text: 'Повідомлення отримано. Менеджер відповість у робочі години.', align: 'flex-start', bg: '#E9E6EF', fg: '#1E1B2E' }];
+} else if (k.booking) {
+preview = [bot(s.greeting), cl('Хочу манікюр з гель-лаком сьогодні ввечері'), bot('Є вільні вікна о 17:00 та 18:30 у закладі Центр, майстер Марина. Коштує 900 ₴, триває 1 г 30 хв. Записати на 17:00?'), cl('Так, на 17:00'), bot('Готово! Запис на 17:00 створено. Нагадаю за 1 годину.')];
+} else {
+preview = [bot(s.greeting), cl('Скільки коштує манікюр з гель-лаком?'), bot('900 ₴, триває 1 г 30 хв. Записатися можна на нашому сайті, або напишіть, і менеджер допоможе.')];
+}
+
+return {
+accent, connectedCount, total: chData.length, aiCount, channels,
+cur: { name: c.name, desc: c.desc, how: c.how, field: c.field, placeholder: c.placeholder, status: k.connected ? 'Підключено' : 'Не підключено', bg: k.connected ? '#DDF3E6' : '#E9E6EF', fg: k.connected ? '#145A32' : '#4A4560' },
+notConnected: !k.connected, isConnected: k.connected,
+connect: () => setCfg({ connected: true }),
+disconnect: () => setCfg({ connected: false }),
+toggles, aiOn: k.connected && k.ai,
+mode: k.mode, modeOpts: modeData.map((m) => ({ id: m.id, label: m.label })), modeHint: modeObj.hint,
+onMode: (e) => setCfg({ mode: e.target.value }),
+greeting: s.greeting, onGreeting: (e) => this.setState({ greeting: e.target.value }),
+handoff, preview,
+showBooked: k.connected && k.ai && k.booking,
+showInbox: k.connected && k.inbox
+};
+}
+}
+</script>
+</body>
+</html>

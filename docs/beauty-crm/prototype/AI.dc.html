@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>AI-асистент</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=Unbounded:wght@500;600&display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:'Onest',sans-serif}
+button{font-family:inherit;cursor:pointer}
+a{color:#6B2F5C}a:hover{color:#4A2260}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1100px; background: #F6F4F8; color: #1E1B2E; font-family: 'Onest', sans-serif">
+
+<nav aria-label="Головне меню" style="order: 0; flex: 1 1 240px; max-width: 280px; background: #1E1B2E; padding: 28px 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px">
+<div style="font-family: 'Unbounded', sans-serif; font-weight: 600; font-size: 20px; color: #FFFFFF; margin-bottom: 24px">Beauty Lab</div>
+<a href="Admin.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Огляд</a>
+<a href="Calendar.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Записи</a>
+<a href="Client.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Клієнти</a>
+<a href="Staff.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Спеціалісти</a>
+<a href="Promos.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Ціни та акції</a>
+<a href="Analytics.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Аналітика</a>
+<a href="AI.dc.html" aria-current="page" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: #6B2F5C; color: #FFFFFF; font-weight: 600">AI-асистент</a>
+<a href="Integrations.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Канали</a>
+<a href="Main.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Запис клієнта</a>
+</nav>
+
+<div style="order: 1; flex: 999 1 560px; min-width: 0; padding: 28px 32px; box-sizing: border-box; display: flex; flex-direction: column; gap: 20px">
+
+<div>
+<h1 style="margin: 0; font-family: 'Unbounded', sans-serif; font-weight: 600; font-size: 28px">AI-асистент</h1>
+<div style="color: #5E5873; font-size: 14px; margin-top: 4px">Допомагає з заявками, спілкуванням і акціями. Усе, що він пропонує, ви перевіряєте перед відправленням.</div>
+</div>
+
+<div style="display: flex; gap: 8px; flex-wrap: wrap">
+<sc-for list="{{tabs}}" as="t" hint-placeholder-count="3">
+<button onClick="{{t.pick}}" aria-pressed="{{t.pressed}}" style="height: 44px; padding: 0 18px; border-radius: 22px; border: 2px solid {{t.border}}; background: {{t.bg}}; color: {{t.fg}}; font-size: 14px; font-weight: 600">{{t.label}}</button>
+</sc-for>
+</div>
+
+<sc-if value="{{isReq}}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start">
+<section style="flex: 1 1 320px; min-width: 0; background: #FFFFFF; border-radius: 16px; padding: 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px">
+<h2 style="margin: 0 0 4px; font-size: 18px; font-weight: 600">Нові заявки</h2>
+<sc-for list="{{reqs}}" as="r" hint-placeholder-count="4">
+<button onClick="{{r.pick}}" aria-pressed="{{r.pressed}}" style="text-align: left; border: 2px solid {{r.border}}; background: #FFFFFF; border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 4px; color: #1E1B2E">
+<span style="display: flex; justify-content: space-between; gap: 8px; font-size: 14px"><span style="font-weight: 600">{{r.name}}</span><span style="color: #5E5873">{{r.channel}} · {{r.time}}</span></span>
+<span style="font-size: 14px; color: #5E5873">{{r.text}}</span>
+<span style="align-self: flex-start; border-radius: 8px; padding: 3px 8px; font-size: 12px; font-weight: 600; background: {{r.bg}}; color: {{r.fg}}">{{r.status}}</span>
+</button>
+</sc-for>
+</section>
+<section style="flex: 999 1 440px; min-width: 0; background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: center">
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">{{cur.name}} · {{cur.channel}}</h2>
+<span style="border-radius: 8px; padding: 4px 10px; font-size: 13px; font-weight: 600; background: #EADCF2; color: #4A2260">{{cur.intent}}</span>
+</div>
+<div style="background: #F6F4F8; border-radius: 12px; padding: 14px; font-size: 14px">{{cur.text}}</div>
+<div style="font-size: 13px; font-weight: 600; color: #5E5873">Чернетка відповіді від AI</div>
+<div style="border: 2px solid #D9D4E4; border-radius: 12px; padding: 14px; font-size: 15px; line-height: 1.45">{{cur.reply}}</div>
+<div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center">
+<button onClick="{{sendReply}}" style="height: 44px; padding: 0 20px; border-radius: 22px; border: none; background: {{accent}}; color: #FFFFFF; font-weight: 600; font-size: 14px">{{sendLabel}}</button>
+<button style="height: 44px; padding: 0 20px; border-radius: 22px; border: 1px solid #D9D4E4; background: #FFFFFF; color: #1E1B2E; font-weight: 600; font-size: 14px">Редагувати</button>
+<a href="Calendar.dc.html" style="font-size: 14px; font-weight: 600">Відкрити календар майстра</a>
+<a href="Integrations.dc.html" style="font-size: 14px; font-weight: 600">Налаштувати канали</a>
+</div>
+</section>
+</div>
+</sc-if>
+
+<sc-if value="{{isChat}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start">
+<section style="flex: 999 1 440px; min-width: 0; background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 12px">
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">Олена Кравченко · Telegram</h2>
+<div style="display: flex; flex-direction: column; gap: 8px; background: #F6F4F8; border-radius: 12px; padding: 14px">
+<sc-for list="{{msgs}}" as="m" hint-placeholder-count="3">
+<div style="max-width: 80%; align-self: {{m.align}}; background: {{m.bg}}; color: {{m.fg}}; border-radius: 14px; padding: 10px 14px; font-size: 14px; line-height: 1.4">{{m.text}}</div>
+</sc-for>
+</div>
+<div style="font-size: 13px; font-weight: 600; color: #5E5873">Підказки AI: натисніть, щоб надіслати</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<sc-for list="{{suggestions}}" as="s" hint-placeholder-count="3">
+<button onClick="{{s.pick}}" style="text-align: left; min-height: 44px; border: 2px solid #D9D4E4; background: #FFFFFF; color: #1E1B2E; border-radius: 12px; padding: 10px 14px; font-size: 14px">{{s.text}}</button>
+</sc-for>
+</div>
+</section>
+<aside style="flex: 1 1 300px; min-width: 0; background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">Контекст для відповіді</h2>
+<div style="font-size: 14px; display: flex; justify-content: space-between; gap: 12px"><span style="color: #5E5873">Статус</span><span style="font-weight: 600">VIP, 24 візити</span></div>
+<div style="font-size: 14px; display: flex; justify-content: space-between; gap: 12px"><span style="color: #5E5873">Майстер</span><span style="font-weight: 600">Марина Бойко</span></div>
+<div style="font-size: 14px; display: flex; justify-content: space-between; gap: 12px"><span style="color: #5E5873">Наступний запис</span><span style="font-weight: 600">19 жовт., 15:00</span></div>
+<div style="background: #FFF1CC; color: #5C3900; border-radius: 12px; padding: 12px; font-size: 13px">Алергія на латекс. AI враховує це в пропозиціях.</div>
+<a href="Client.dc.html" style="font-size: 14px; font-weight: 600">Відкрити профіль клієнта</a>
+</aside>
+</div>
+</sc-if>
+
+<sc-if value="{{isPromo}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start">
+<section style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+
+<div style="background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px">
+<label for="goal" style="font-size: 18px; font-weight: 600">Мета акції</label>
+<select id="goal" value="{{goal}}" onChange="{{onGoal}}" style="height: 52px; border-radius: 14px; border: 2px solid #D9D4E4; background: #FFFFFF; color: #1E1B2E; padding: 0 14px; font-family: inherit; font-size: 15px; font-weight: 600; width: 100%; box-sizing: border-box">
+<sc-for list="{{goalOpts}}" as="g" hint-placeholder-count="3">
+<option value="{{g.id}}">{{g.label}}</option>
+</sc-for>
+</select>
+<div style="font-size: 14px; color: #5E5873">{{g.reason}}</div>
+</div>
+
+<div style="background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 12px">
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">Рекомендована ціна: −{{pct}}%</h2>
+<div style="overflow-x: auto">
+<table style="width: 100%; min-width: 420px; border-collapse: collapse; font-size: 14px">
+<thead><tr style="text-align: left; color: #5E5873; font-size: 13px">
+<th style="padding: 8px 10px; font-weight: 500">Послуга</th>
+<th style="padding: 8px 10px; font-weight: 500">Зараз</th>
+<th style="padding: 8px 10px; font-weight: 500">З акцією</th>
+</tr></thead>
+<tbody>
+<sc-for list="{{priceRows}}" as="r" hint-placeholder-count="3">
+<tr style="border-top: 1px solid #ECE8F2">
+<td style="padding: 12px 10px; font-weight: 600">{{r.name}}</td>
+<td style="padding: 12px 10px; color: #5E5873">{{r.old}}</td>
+<td style="padding: 12px 10px; font-weight: 600; color: #A2300A">{{r.price}}</td>
+</tr>
+</sc-for>
+</tbody>
+</table>
+</div>
+<div style="font-size: 13px; color: #5E5873">Діє: {{g.when}}</div>
+</div>
+
+<div style="background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px">
+<label for="promo-text" style="font-size: 18px; font-weight: 600">Текст оголошення</label>
+<textarea id="promo-text" value="{{promoText}}" onChange="{{onText}}" rows="5" style="width: 100%; box-sizing: border-box; border-radius: 12px; border: 2px solid #D9D4E4; padding: 12px 14px; font-family: inherit; font-size: 15px; line-height: 1.45; color: #1E1B2E; resize: vertical"></textarea>
+</div>
+</section>
+
+<aside style="flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+<div style="background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">Кому надіслати</h2>
+<div style="font-size: 13px; color: #5E5873">AI підібрав групи клієнтів під мету акції. Групи можна змінити.</div>
+<sc-for list="{{segs}}" as="s" hint-placeholder-count="4">
+<button onClick="{{s.toggle}}" aria-pressed="{{s.pressed}}" style="text-align: left; min-height: 56px; border: 2px solid {{s.border}}; background: {{s.bg}}; color: #1E1B2E; border-radius: 14px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px">
+<span style="display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600; font-size: 15px">{{s.label}}</span><span style="font-size: 13px; color: #5E5873">{{s.note}}</span></span>
+<span style="font-weight: 600; font-size: 16px">{{s.count}}</span>
+</button>
+</sc-for>
+<div style="display: flex; justify-content: space-between; border-top: 1px solid #ECE8F2; padding-top: 10px; font-size: 15px"><span style="font-weight: 600">Охоплення</span><span style="font-weight: 600">{{reach}} клієнтів</span></div>
+</div>
+
+<div style="background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">Запуск</h2>
+<button onClick="{{launch}}" style="height: 52px; border-radius: 26px; border: none; background: {{accent}}; color: #FFFFFF; font-size: 16px; font-weight: 600">{{launchLabel}}</button>
+<a href="Promos.dc.html" style="font-size: 14px; font-weight: 600">Налаштувати в розділі «Ціни та акції»</a>
+<div style="font-size: 13px; color: #5E5873">AI лише пропонує. Ціни, текст і список клієнтів ви підтверджуєте самі.</div>
+</div>
+</aside>
+</div>
+</sc-if>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#6B2F5C","options":["#6B2F5C","#0F6B6B","#2F4A8C","#8A2D3F"]},"$preview":{"width":1360,"height":1100}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = {
+tab: 'req', req: 'r1', sent: {},
+msgs: [
+{ from: 'client', text: 'Привіт! Нагадайте, о котрій мій запис?' },
+{ from: 'staff', text: 'Добрий день, Олено! Ваш запис 19 жовтня о 15:00 до Марини.' },
+{ from: 'client', text: 'Чудово, дякую! А чи буде знижка на педикюр?' }
+],
+goal: 'fill', segs: null, text: null, launched: false
+};
+}
+renderVals() {
+const accent = this.props.accent ?? '#6B2F5C';
+const s = this.state;
+const line = '#D9D4E4';
+const money = (n) => n + ' ₴';
+
+const tabsData = [{ id: 'req', label: 'Заявки' }, { id: 'chat', label: 'Спілкування з клієнтами' }, { id: 'promo', label: 'Допомога з акцією' }];
+const tabs = tabsData.map((t) => ({
+label: t.label, pressed: s.tab === t.id,
+border: s.tab === t.id ? accent : line, bg: s.tab === t.id ? accent : '#FFFFFF', fg: s.tab === t.id ? '#FFFFFF' : '#1E1B2E',
+pick: () => this.setState({ tab: t.id })
+}));
+
+const requests = [
+{ id: 'r1', name: 'Ірина Л.', channel: 'Instagram', time: '10:42', text: 'Добрий день! Чи є вільний час на манікюр з гель-лаком сьогодні ввечері?', intent: 'Запис на послугу', reply: 'Добрий день, Ірино! Сьогодні є вільні вікна о 17:00 та 18:30 у закладі Центр. Манікюр з гель-лаком триває 1 г 30 хв і коштує 900 ₴. Записати вас на 17:00?' },
+{ id: 'r2', name: 'Дмитро Г.', channel: 'Telegram', time: '10:15', text: 'Скільки коштує чоловіча стрижка і чи можна до Ірини?', intent: 'Ціна та вибір майстра', reply: 'Добрий день! Чоловіча стрижка коштує 500 ₴ і триває 45 хв. Ірина Мельник працює у закладі Поділ, найближчий вільний час сьогодні о 15:00. Записати?' },
+{ id: 'r3', name: 'Софія М.', channel: 'Сайт', time: '09:50', text: 'Хочу перенести запис на четвер.', intent: 'Перенесення запису', reply: 'Звісно, Софіє! На четвер є вільні слоти о 12:00 та 16:30. Який зручніший? Перенесу без додаткової оплати.' },
+{ id: 'r4', name: 'Новий клієнт', channel: 'Instagram', time: '09:20', text: 'Чи діє знижка для нових клієнтів?', intent: 'Акції', reply: 'Так! Для нових клієнтів діє знижка 20% на першу послугу. Показати доступні години?' }
+];
+const reqs = requests.map((r) => {
+const done = !!s.sent[r.id];
+return {
+name: r.name, channel: r.channel, time: r.time, text: r.text,
+border: s.req === r.id ? accent : line, pressed: s.req === r.id,
+status: done ? 'Відповідь надіслано' : 'Нова', bg: done ? '#DDF3E6' : '#E3E9FB', fg: done ? '#145A32' : '#223A8C',
+pick: () => this.setState({ req: r.id })
+};
+});
+const cur = requests.find((r) => r.id === s.req);
+
+const msgs = s.msgs.map((m) => ({
+text: m.text, align: m.from === 'staff' ? 'flex-end' : 'flex-start',
+bg: m.from === 'staff' ? accent : '#FFFFFF', fg: m.from === 'staff' ? '#FFFFFF' : '#1E1B2E'
+}));
+const sugText = [
+'Так, на педикюр діє −15% до 14 жовтня. Додати його до вашого візиту?',
+'Можу записати вас на педикюр одразу після манікюру, щоб не приходити двічі.',
+'Нагадаю про акції ближче до візиту.'
+];
+const suggestions = sugText.map((t) => ({
+text: t,
+pick: () => this.setState({ msgs: s.msgs.concat([{ from: 'staff', text: t }]) })
+}));
+
+const goals = {
+fill: { label: 'Заповнити вільні слоти', pct: 15, when: 'пн–чт, 12:00–15:00, заклади Центр і Поділ', reason: 'У будні 12:00–15:00 завантаження найнижче. Помірна знижка швидше перенесе клієнтів у ці години, ніж велика на весь день.', rows: [['Манікюр + гель-лак', 900], ['Манікюр', 700], ['Педикюр', 1000]], rec: { sleep: true, vip: false, fresh: false, all: false }, text: (p) => 'Будні в Beauty Lab: −' + p + '% на манікюр і педикюр з понеділка по четвер, 12:00–15:00 у закладах Центр і Поділ. Оберіть зручний час і майстра онлайн.' },
+back: { label: 'Повернути клієнтів', pct: 20, when: 'протягом 14 днів, усі заклади', reason: 'Клієнтам, які не були 60+ днів, потрібна відчутна причина повернутися. Знижка 20% на улюблену послугу працює краще за загальну.', rows: [['Чистка обличчя', 1400], ['Манікюр + гель-лак', 900]], rec: { sleep: true, vip: false, fresh: false, all: false }, text: (p) => 'Давно не бачились! Для вас −' + p + '% на чистку обличчя та манікюр протягом 14 днів. Запишіться до свого майстра онлайн.' },
+fresh: { label: 'Залучити нових клієнтів', pct: 20, when: 'перша послуга, постійна пропозиція', reason: 'Для першого візиту знижка 20% знімає бар’єр. Показуйте її новим підписникам і тим, хто вже звертався, але ще не записався.', rows: [['Манікюр', 700], ['Жіноча стрижка', 650], ['Чистка обличчя', 1400]], rec: { sleep: false, vip: false, fresh: true, all: false }, text: (p) => 'Вперше у Beauty Lab? −' + p + '% на першу послугу. Оберіть заклад і майстра онлайн за кілька хвилин.' }
+};
+const segData = [
+{ id: 'sleep', label: 'Не були 60+ днів', note: 'давно не записувались', count: 38 },
+{ id: 'vip', label: 'VIP-клієнти', note: '10+ візитів', count: 24 },
+{ id: 'fresh', label: 'Нові за 30 днів', note: 'ще без повторного візиту', count: 17 },
+{ id: 'all', label: 'Усі клієнти Центру', note: 'широка розсилка', count: 212 }
+];
+const g = goals[s.goal];
+const goalOpts = Object.keys(goals).map((id) => ({ id, label: goals[id].label }));
+const selSegs = s.segs || g.rec;
+const segs = segData.map((x) => ({
+label: x.label, note: x.note, count: String(x.count), pressed: !!selSegs[x.id],
+border: selSegs[x.id] ? accent : line, bg: selSegs[x.id] ? '#F1E4EE' : '#FFFFFF',
+toggle: () => this.setState({ segs: Object.assign({}, selSegs, { [x.id]: !selSegs[x.id] }) })
+}));
+const reach = segData.reduce((a, x) => a + (selSegs[x.id] ? x.count : 0), 0);
+const priceRows = g.rows.map((r) => ({ name: r[0], old: money(r[1]), price: money(Math.round(r[1] * (100 - g.pct) / 100)) }));
+
+return {
+accent, tabs,
+isReq: s.tab === 'req', isChat: s.tab === 'chat', isPromo: s.tab === 'promo',
+reqs, cur: { name: cur.name, channel: cur.channel, intent: cur.intent, text: cur.text, reply: cur.reply },
+sendLabel: s.sent[cur.id] ? 'Надіслано' : 'Надіслати відповідь',
+sendReply: () => this.setState({ sent: Object.assign({}, s.sent, { [cur.id]: true }) }),
+msgs, suggestions,
+goal: s.goal, goalOpts, g: { reason: g.reason, when: g.when },
+onGoal: (e) => this.setState({ goal: e.target.value, segs: null, text: null, launched: false }),
+pct: g.pct, priceRows,
+promoText: s.text !== null ? s.text : g.text(g.pct),
+onText: (e) => this.setState({ text: e.target.value }),
+segs, reach: String(reach),
+launchLabel: s.launched ? 'Розсилку заплановано' : 'Надіслати ' + reach + ' клієнтам',
+launch: () => this.setState({ launched: true })
+};
+}
+}
+</script>
+</body>
+</html>

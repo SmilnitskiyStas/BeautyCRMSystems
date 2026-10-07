@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>Аналітика</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=Unbounded:wght@500;600&display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:'Onest',sans-serif}
+button{font-family:inherit;cursor:pointer}
+.ai-pop{display:none}
+.ai-fab:hover .ai-pop,.ai-fab:focus-within .ai-pop{display:flex}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1100px; background: #F6F4F8; color: #1E1B2E; font-family: 'Onest', sans-serif">
+
+<nav aria-label="Головне меню" style="order: 0; flex: 1 1 240px; max-width: 280px; background: #1E1B2E; padding: 28px 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px">
+<div style="font-family: 'Unbounded', sans-serif; font-weight: 600; font-size: 20px; color: #FFFFFF; margin-bottom: 24px">Beauty Lab</div>
+<a href="Admin.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Огляд</a>
+<a href="Calendar.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Записи</a>
+<a href="Client.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Клієнти</a>
+<a href="Staff.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Спеціалісти</a>
+<a href="Promos.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Ціни та акції</a>
+<a href="Analytics.dc.html" aria-current="page" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: #6B2F5C; color: #FFFFFF; font-weight: 600">Аналітика</a>
+<a href="AI.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">AI-асистент</a>
+<a href="Integrations.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Канали</a>
+<a href="Main.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Запис клієнта</a>
+</nav>
+
+<div class="ai-fab" style="position: fixed; right: 24px; bottom: 24px; z-index: 50; display: flex; flex-direction: column; align-items: flex-end; gap: 12px">
+<div class="ai-pop" style="width: 340px; max-width: calc(100vw - 48px); max-height: calc(100vh - 120px); overflow-y: auto; background: #FFFFFF; border-radius: 20px; box-shadow: 0 12px 40px rgba(30,27,46,0.28); flex-direction: column">
+<div style="background: #1E1B2E; color: #FFFFFF; padding: 14px 16px; display: flex; flex-direction: column; gap: 2px"><span style="font-family: 'Unbounded', sans-serif; font-weight: 600; font-size: 15px">AI-асистент</span><span style="font-size: 12px; color: #D9D4E4">Аналізує: аналітику мережі</span></div>
+<div style="padding: 14px 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="background: #F1E4EE; border-radius: 12px; padding: 10px 12px; font-size: 13px; line-height: 1.45"><strong>Головне за місяць</strong><br>Виручка мережі росте вже кілька тижнів. Найнижче завантаження в закладі Печерськ. Акції принесли записи переважно в Центрі й Поділі.</div>
+<div style="align-self: flex-end; background: #6B2F5C; color: #FFFFFF; border-radius: 14px; padding: 8px 12px; font-size: 13px; max-width: 85%">Чому Печерськ відстає?</div>
+<div style="align-self: flex-start; background: #F6F4F8; border-radius: 14px; padding: 8px 12px; font-size: 13px; line-height: 1.45; max-width: 90%">Там менше майстрів у вихідні й вечірні години, а акцій майже немає. Запропонувати акцію на пʼятницю після 17:00 для цього закладу?</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px">
+<a href="AI.dc.html" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 22px; border: 1px solid #6B2F5C; color: #6B2F5C; font-size: 13px; font-weight: 600; text-decoration: none">Запустити акцію з AI</a>
+<a href="Promos.dc.html" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 22px; border: 1px solid #6B2F5C; color: #6B2F5C; font-size: 13px; font-weight: 600; text-decoration: none">Ціни та акції</a>
+</div>
+</div>
+<div style="border-top: 1px solid #ECE8F2; padding: 10px 12px; display: flex; gap: 8px">
+<label for="ai-q" style="position: absolute; width: 1px; height: 1px; overflow: hidden">Запитання до AI</label>
+<input id="ai-q" type="text" placeholder="Запитайте AI" style="flex: 1; min-width: 0; height: 44px; border-radius: 22px; border: 1px solid #D9D4E4; padding: 0 14px; font-family: inherit; font-size: 14px; box-sizing: border-box">
+<button aria-label="Надіслати" style="width: 44px; height: 44px; border-radius: 22px; border: none; background: #6B2F5C; display: flex; align-items: center; justify-content: center; padding: 0"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+</div>
+</div>
+<button aria-label="Відкрити AI-асистента" style="width: 60px; height: 60px; border-radius: 30px; border: none; background: #6B2F5C; box-shadow: 0 8px 24px rgba(30,27,46,0.35); display: flex; align-items: center; justify-content: center; padding: 0"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 16l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/></svg></button>
+</div>
+
+<div style="order: 1; flex: 999 1 560px; min-width: 0; padding: 28px 32px; box-sizing: border-box; display: flex; flex-direction: column; gap: 24px">
+
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px">
+<div>
+<h1 style="margin: 0; font-family: 'Unbounded', sans-serif; font-weight: 600; font-size: 28px">Аналітика</h1>
+<div style="color: #5E5873; font-size: 14px; margin-top: 4px">Жовтень 2026 · дані за місяць</div>
+</div>
+<div style="display: flex; gap: 8px; flex-wrap: wrap">
+<sc-for list="{{tabs}}" as="t" hint-placeholder-count="3">
+<button onClick="{{t.pick}}" aria-pressed="{{t.pressed}}" style="height: 44px; padding: 0 18px; border-radius: 22px; border: 2px solid {{t.border}}; background: {{t.bg}}; color: {{t.fg}}; font-size: 14px; font-weight: 600">{{t.label}}</button>
+</sc-for>
+</div>
+</div>
+
+<sc-if value="{{isNet}}" hint-placeholder-val="{{ true }}">
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px">
+<sc-for list="{{netKpis}}" as="k" hint-placeholder-count="4">
+<div style="background: #FFFFFF; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 6px">
+<div style="font-size: 13px; color: #5E5873">{{k.label}}</div>
+<div style="font-family: 'Unbounded', sans-serif; font-weight: 500; font-size: 24px">{{k.value}}</div>
+<div style="font-size: 13px; color: #5E5873">{{k.note}}</div>
+</div>
+</sc-for>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start">
+<section style="flex: 1 1 480px; min-width: 0; background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box">
+<h2 style="margin: 0 0 4px; font-size: 18px; font-weight: 600">Виручка мережі по тижнях, тис. ₴</h2>
+<div style="font-size: 13px; color: #5E5873; margin-bottom: 16px">Останні 8 тижнів</div>
+<div style="display: flex; align-items: flex-end; gap: 12px; height: 200px">
+<sc-for list="{{weeks}}" as="w" hint-placeholder-count="8">
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 6px; height: 100%">
+<span style="font-size: 12px; font-weight: 600">{{w.value}}</span>
+<span style="width: 100%; border-radius: 6px 6px 0 0; background: {{w.fill}}; height: {{w.h}}px"></span>
+</div>
+</sc-for>
+</div>
+<div style="display: flex; gap: 12px; margin-top: 8px">
+<sc-for list="{{weeks}}" as="w" hint-placeholder-count="8">
+<div style="flex: 1; min-width: 0; text-align: center; font-size: 12px; color: #5E5873">{{w.label}}</div>
+</sc-for>
+</div>
+</section>
+<section style="flex: 1 1 420px; min-width: 0; background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px">
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">Виручка по закладах</h2>
+<sc-for list="{{locBars}}" as="l" hint-placeholder-count="3">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; justify-content: space-between; font-size: 14px"><span style="font-weight: 600">{{l.label}}</span><span>{{l.value}}</span></div>
+<div style="height: 14px; border-radius: 7px; background: #ECE8F2"><div style="height: 14px; border-radius: 7px; background: {{accent}}; width: {{l.w}}%"></div></div>
+<div style="font-size: 13px; color: #5E5873">{{l.note}}</div>
+</div>
+</sc-for>
+</section>
+</div>
+</sc-if>
+
+<sc-if value="{{isLoc}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; gap: 8px; flex-wrap: wrap">
+<sc-for list="{{locChips}}" as="c" hint-placeholder-count="3">
+<button onClick="{{c.pick}}" aria-pressed="{{c.pressed}}" style="height: 44px; padding: 0 16px; border-radius: 12px; border: 2px solid {{c.border}}; background: {{c.bg}}; color: {{c.fg}}; font-size: 14px; font-weight: 600">{{c.label}}</button>
+</sc-for>
+</div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px">
+<sc-for list="{{locKpis}}" as="k" hint-placeholder-count="4">
+<div style="background: #FFFFFF; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 6px">
+<div style="font-size: 13px; color: #5E5873">{{k.label}}</div>
+<div style="font-family: 'Unbounded', sans-serif; font-weight: 500; font-size: 24px">{{k.value}}</div>
+<div style="font-size: 13px; color: #5E5873">{{k.note}}</div>
+</div>
+</sc-for>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start">
+<section style="flex: 1 1 480px; min-width: 0; background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box">
+<h2 style="margin: 0 0 14px; font-size: 18px; font-weight: 600">Спеціалісти закладу</h2>
+<div style="overflow-x: auto">
+<table style="width: 100%; min-width: 440px; border-collapse: collapse; font-size: 14px">
+<thead><tr style="text-align: left; color: #5E5873; font-size: 13px">
+<th style="padding: 8px 10px; font-weight: 500">Спеціаліст</th>
+<th style="padding: 8px 10px; font-weight: 500">Записів</th>
+<th style="padding: 8px 10px; font-weight: 500">Виручка</th>
+<th style="padding: 8px 10px; font-weight: 500">Завантаження</th>
+</tr></thead>
+<tbody>
+<sc-for list="{{specRows}}" as="r" hint-placeholder-count="3">
+<tr style="border-top: 1px solid #ECE8F2">
+<td style="padding: 12px 10px; font-weight: 600"><a href="Staff.dc.html" style="color: #1E1B2E">{{r.name}}</a></td>
+<td style="padding: 12px 10px">{{r.n}}</td>
+<td style="padding: 12px 10px">{{r.rev}}</td>
+<td style="padding: 12px 10px"><span style="display: flex; align-items: center; gap: 8px"><span style="width: 90px; height: 10px; border-radius: 5px; background: #ECE8F2; display: block"><span style="display: block; height: 10px; border-radius: 5px; background: {{accent}}; width: {{r.load}}%"></span></span>{{r.load}}%</span></td>
+</tr>
+</sc-for>
+</tbody>
+</table>
+</div>
+</section>
+<section style="flex: 1 1 360px; min-width: 0; background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px">
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">Топ послуг</h2>
+<sc-for list="{{svcBars}}" as="l" hint-placeholder-count="4">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; justify-content: space-between; font-size: 14px"><span style="font-weight: 600">{{l.label}}</span><span>{{l.value}}</span></div>
+<div style="height: 12px; border-radius: 6px; background: #ECE8F2"><div style="height: 12px; border-radius: 6px; background: {{accent}}; width: {{l.w}}%"></div></div>
+</div>
+</sc-for>
+</section>
+</div>
+</sc-if>
+
+<sc-if value="{{isPromo}}" hint-placeholder-val="{{ false }}">
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px">
+<sc-for list="{{promoKpis}}" as="k" hint-placeholder-count="4">
+<div style="background: #FFFFFF; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 6px">
+<div style="font-size: 13px; color: #5E5873">{{k.label}}</div>
+<div style="font-family: 'Unbounded', sans-serif; font-weight: 500; font-size: 24px">{{k.value}}</div>
+<div style="font-size: 13px; color: #5E5873">{{k.note}}</div>
+</div>
+</sc-for>
+</div>
+<section style="background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box">
+<h2 style="margin: 0 0 14px; font-size: 18px; font-weight: 600">Ефективність акцій</h2>
+<div style="overflow-x: auto">
+<table style="width: 100%; min-width: 760px; border-collapse: collapse; font-size: 14px">
+<thead><tr style="text-align: left; color: #5E5873; font-size: 13px">
+<th style="padding: 8px 10px; font-weight: 500">Акція</th>
+<th style="padding: 8px 10px; font-weight: 500">Період</th>
+<th style="padding: 8px 10px; font-weight: 500">Заклади</th>
+<th style="padding: 8px 10px; font-weight: 500">Записів</th>
+<th style="padding: 8px 10px; font-weight: 500">Нових клієнтів</th>
+<th style="padding: 8px 10px; font-weight: 500">Виручка</th>
+<th style="padding: 8px 10px; font-weight: 500">Віддано знижками</th>
+</tr></thead>
+<tbody>
+<sc-for list="{{promoRows}}" as="r" hint-placeholder-count="4">
+<tr style="border-top: 1px solid #ECE8F2">
+<td style="padding: 12px 10px; font-weight: 600"><a href="Promos.dc.html" style="color: #1E1B2E">{{r.name}}</a></td>
+<td style="padding: 12px 10px; color: #5E5873">{{r.period}}</td>
+<td style="padding: 12px 10px; color: #5E5873">{{r.where}}</td>
+<td style="padding: 12px 10px">{{r.n}}</td>
+<td style="padding: 12px 10px">{{r.fresh}}</td>
+<td style="padding: 12px 10px; font-weight: 600">{{r.rev}}</td>
+<td style="padding: 12px 10px; color: #A2300A; font-weight: 600">{{r.cost}}</td>
+</tr>
+</sc-for>
+</tbody>
+</table>
+</div>
+</section>
+<section style="background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px">
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">Записи по акціях</h2>
+<sc-for list="{{promoBars}}" as="l" hint-placeholder-count="4">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; justify-content: space-between; font-size: 14px"><span style="font-weight: 600">{{l.label}}</span><span>{{l.value}}</span></div>
+<div style="height: 12px; border-radius: 6px; background: #ECE8F2"><div style="height: 12px; border-radius: 6px; background: #A2300A; width: {{l.w}}%"></div></div>
+</div>
+</sc-for>
+</section>
+</sc-if>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#6B2F5C","options":["#6B2F5C","#0F6B6B","#2F4A8C","#8A2D3F"]},"$preview":{"width":1360,"height":1100}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = { tab: 'net', loc: 'c' };
+}
+renderVals() {
+const accent = this.props.accent ?? '#6B2F5C';
+const s = this.state;
+const line = '#D9D4E4';
+const money = (n) => n.toLocaleString('uk-UA').replace(/ /g, ' ') + ' ₴';
+const pct = (v, max) => Math.round((v / max) * 100);
+
+const tabsData = [{ id: 'net', label: 'Мережа' }, { id: 'loc', label: 'Заклади' }, { id: 'promo', label: 'Акції' }];
+const tabs = tabsData.map((t) => ({
+label: t.label, pressed: s.tab === t.id,
+border: s.tab === t.id ? accent : line, bg: s.tab === t.id ? accent : '#FFFFFF', fg: s.tab === t.id ? '#FFFFFF' : '#1E1B2E',
+pick: () => this.setState({ tab: t.id })
+}));
+
+const locs = {
+c: { label: 'Центр', rev: 412000, n: 596, avg: 691, repeat: 64, load: 78,
+specs: [['Марина Бойко', 142, 118000, 84], ['Анна Шевчук', 96, 164000, 72], ['Оксана Лис', 88, 98000, 69]],
+svcs: [['Манікюр + гель-лак', 214000], ['Фарбування', 164000], ['Чистка обличчя', 98000], ['Стрижка', 54000]] },
+p: { label: 'Поділ', rev: 268000, n: 402, avg: 667, repeat: 58, load: 66,
+specs: [['Дарина Коваль', 128, 96000, 74], ['Ірина Мельник', 118, 172000, 68]],
+svcs: [['Стрижка', 120000], ['Манікюр', 96000], ['Барбер-догляд', 52000]] },
+k: { label: 'Печерськ', rev: 231000, n: 338, avg: 683, repeat: 61, load: 61,
+specs: [['Вікторія Руда', 104, 128000, 64], ['Наталя Гук', 98, 103000, 58]],
+svcs: [['Чистка обличчя', 118000], ['Манікюр', 78000], ['Депіляція', 35000]] }
+};
+const totalRev = locs.c.rev + locs.p.rev + locs.k.rev;
+const totalN = locs.c.n + locs.p.n + locs.k.n;
+
+const netKpis = [
+{ label: 'Виручка мережі', value: money(totalRev), note: 'за місяць, 3 заклади' },
+{ label: 'Записів', value: String(totalN), note: 'з них онлайн 71%' },
+{ label: 'Середній чек', value: money(Math.round(totalRev / totalN)), note: 'по мережі' },
+{ label: 'Повторні клієнти', value: '61%', note: 'прийшли вдруге за 60 днів' }
+];
+const wk = [188, 201, 195, 214, 223, 208, 236, 241];
+const wmax = 250;
+const weeks = wk.map((v, i) => ({ value: String(v), h: Math.round((v / wmax) * 150), fill: i === wk.length - 1 ? accent : '#B9A1C8', label: 'Т' + (i + 1) }));
+const locIds = ['c', 'p', 'k'];
+const locBars = locIds.map((id) => ({ label: locs[id].label, value: money(locs[id].rev), w: pct(locs[id].rev, locs.c.rev), note: locs[id].n + ' записів · середній чек ' + money(locs[id].avg) }));
+
+const L = locs[s.loc];
+const locChips = locIds.map((id) => ({
+label: locs[id].label, pressed: s.loc === id,
+border: s.loc === id ? accent : line, bg: s.loc === id ? '#F1E4EE' : '#FFFFFF', fg: '#1E1B2E',
+pick: () => this.setState({ loc: id })
+}));
+const locKpis = [
+{ label: 'Виручка закладу', value: money(L.rev), note: Math.round((L.rev / totalRev) * 100) + '% від мережі' },
+{ label: 'Записів', value: String(L.n), note: 'за місяць' },
+{ label: 'Середній чек', value: money(L.avg), note: 'по закладу' },
+{ label: 'Завантаження', value: L.load + '%', note: 'зайнятих годин у графіку' }
+];
+const specRows = L.specs.map((r) => ({ name: r[0], n: String(r[1]), rev: money(r[2]), load: r[3] }));
+const smax = Math.max.apply(null, L.svcs.map((r) => r[1]));
+const svcBars = L.svcs.map((r) => ({ label: r[0], value: money(r[1]), w: pct(r[1], smax) }));
+
+const promos = [
+{ name: 'Осінній манікюр', period: '7–14 жовт.', where: 'Центр, Поділ', n: 64, fresh: 21, rev: 44800, cost: 11200 },
+{ name: 'Нові клієнти −20%', period: 'постійна', where: 'Усі заклади', n: 58, fresh: 58, rev: 52200, cost: 13050 },
+{ name: 'Чистка обличчя −20%', period: '1–31 жовт.', where: 'Центр, Печерськ', n: 37, fresh: 9, rev: 40700, cost: 10175 },
+{ name: 'Happy hours 12–15', period: 'пн–пт', where: 'Поділ', n: 46, fresh: 12, rev: 29900, cost: 4485 }
+];
+const sum = (k) => promos.reduce((a, p) => a + p[k], 0);
+const promoKpis = [
+{ label: 'Записів по акціях', value: String(sum('n')), note: Math.round((sum('n') / totalN) * 100) + '% від усіх записів' },
+{ label: 'Нових клієнтів', value: String(sum('fresh')), note: 'прийшли через акції' },
+{ label: 'Виручка з акцій', value: money(sum('rev')), note: 'за місяць' },
+{ label: 'Віддано знижками', value: money(sum('cost')), note: 'вартість знижок' }
+];
+const promoRows = promos.map((p) => ({ name: p.name, period: p.period, where: p.where, n: String(p.n), fresh: String(p.fresh), rev: money(p.rev), cost: money(p.cost) }));
+const pmax = Math.max.apply(null, promos.map((p) => p.n));
+const promoBars = promos.map((p) => ({ label: p.name, value: String(p.n), w: pct(p.n, pmax) }));
+
+return {
+accent, tabs,
+isNet: s.tab === 'net', isLoc: s.tab === 'loc', isPromo: s.tab === 'promo',
+netKpis, weeks, locBars,
+locChips, locKpis, specRows, svcBars,
+promoKpis, promoRows, promoBars
+};
+}
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>Профіль клієнта</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=Unbounded:wght@500;600&display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:'Onest',sans-serif}
+button{font-family:inherit;cursor:pointer}
+.ai-pop{display:none}
+.ai-fab:hover .ai-pop,.ai-fab:focus-within .ai-pop{display:flex}
+a{color:#6B2F5C}a:hover{color:#4A2260}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1000px; background: #F6F4F8; color: #1E1B2E; font-family: 'Onest', sans-serif">
+
+<nav aria-label="Головне меню" style="order: 0; flex: 1 1 240px; max-width: 280px; background: #1E1B2E; padding: 28px 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px">
+<div style="font-family: 'Unbounded', sans-serif; font-weight: 600; font-size: 20px; color: #FFFFFF; margin-bottom: 24px">Beauty Lab</div>
+<a href="Admin.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Огляд</a>
+<a href="Calendar.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Записи</a>
+<a href="Client.dc.html" aria-current="page" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: #6B2F5C; color: #FFFFFF; font-weight: 600">Клієнти</a>
+<a href="Staff.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Спеціалісти</a>
+<a href="Promos.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Ціни та акції</a>
+<a href="Analytics.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Аналітика</a>
+<a href="AI.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">AI-асистент</a>
+<a href="Integrations.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Канали</a>
+<a href="Main.dc.html" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: transparent; color: #FFFFFF; font-weight: 400">Запис клієнта</a>
+</nav>
+
+<div class="ai-fab" style="position: fixed; right: 24px; bottom: 24px; z-index: 50; display: flex; flex-direction: column; align-items: flex-end; gap: 12px">
+<div class="ai-pop" style="width: 340px; max-width: calc(100vw - 48px); max-height: calc(100vh - 120px); overflow-y: auto; background: #FFFFFF; border-radius: 20px; box-shadow: 0 12px 40px rgba(30,27,46,0.28); flex-direction: column">
+<div style="background: #1E1B2E; color: #FFFFFF; padding: 14px 16px; display: flex; flex-direction: column; gap: 2px"><span style="font-family: 'Unbounded', sans-serif; font-weight: 600; font-size: 15px">AI-асистент</span><span style="font-size: 12px; color: #D9D4E4">Аналізує: профіль клієнта</span></div>
+<div style="padding: 14px 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="background: #F1E4EE; border-radius: 12px; padding: 10px 12px; font-size: 13px; line-height: 1.45"><strong>Про клієнтку</strong><br>VIP, 24 візити, улюблений майстер Марина. Користувалась двома акціями. Алергія на латекс. Наступний запис 19 жовтня.</div>
+<div style="align-self: flex-end; background: #6B2F5C; color: #FFFFFF; border-radius: 14px; padding: 8px 12px; font-size: 13px; max-width: 85%">Що їй запропонувати?</div>
+<div style="align-self: flex-start; background: #F6F4F8; border-radius: 14px; padding: 8px 12px; font-size: 13px; line-height: 1.45; max-width: 90%">Педикюр зі знижкою після манікюру в той самий візит. Вона відгукується на акції. Підготувати повідомлення в Telegram?</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px">
+<a href="AI.dc.html" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 22px; border: 1px solid #6B2F5C; color: #6B2F5C; font-size: 13px; font-weight: 600; text-decoration: none">Підготувати повідомлення</a>
+<a href="Calendar.dc.html" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 22px; border: 1px solid #6B2F5C; color: #6B2F5C; font-size: 13px; font-weight: 600; text-decoration: none">Календар майстра</a>
+</div>
+</div>
+<div style="border-top: 1px solid #ECE8F2; padding: 10px 12px; display: flex; gap: 8px">
+<label for="ai-q" style="position: absolute; width: 1px; height: 1px; overflow: hidden">Запитання до AI</label>
+<input id="ai-q" type="text" placeholder="Запитайте AI" style="flex: 1; min-width: 0; height: 44px; border-radius: 22px; border: 1px solid #D9D4E4; padding: 0 14px; font-family: inherit; font-size: 14px; box-sizing: border-box">
+<button aria-label="Надіслати" style="width: 44px; height: 44px; border-radius: 22px; border: none; background: #6B2F5C; display: flex; align-items: center; justify-content: center; padding: 0"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+</div>
+</div>
+<button aria-label="Відкрити AI-асистента" style="width: 60px; height: 60px; border-radius: 30px; border: none; background: #6B2F5C; box-shadow: 0 8px 24px rgba(30,27,46,0.35); display: flex; align-items: center; justify-content: center; padding: 0"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 16l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/></svg></button>
+</div>
+
+<div style="order: 1; flex: 999 1 560px; min-width: 0; padding: 28px 32px; box-sizing: border-box; display: flex; flex-direction: column; gap: 24px">
+
+<a href="Admin.dc.html" style="font-size: 14px; font-weight: 600">← Усі клієнти</a>
+
+<section style="background: #FFFFFF; border-radius: 16px; padding: 24px; box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: center; gap: 20px">
+<span style="width: 72px; height: 72px; border-radius: 36px; background: #EADCF2; color: #4A2260; display: flex; align-items: center; justify-content: center; font-family: 'Unbounded', sans-serif; font-weight: 600; font-size: 24px; flex: none">ОК</span>
+<div style="flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+<h1 style="margin: 0; font-family: 'Unbounded', sans-serif; font-weight: 600; font-size: 26px">Олена Кравченко</h1>
+<span style="border-radius: 8px; padding: 4px 8px; font-size: 12px; font-weight: 600; background: #EADCF2; color: #4A2260">VIP</span>
+</div>
+<div style="font-size: 14px; color: #5E5873">+380 50 000 00 00 · клієнтка з березня 2025 · основний заклад: Центр</div>
+</div>
+<div style="display: flex; gap: 8px; flex-wrap: wrap">
+<a href="Main.dc.html" style="display: inline-flex; align-items: center; height: 44px; padding: 0 20px; border-radius: 22px; background: {{accent}}; color: #FFFFFF; font-weight: 600; font-size: 14px; text-decoration: none">Записати</a>
+<button style="height: 44px; padding: 0 20px; border-radius: 22px; border: 1px solid #D9D4E4; background: #FFFFFF; color: #1E1B2E; font-weight: 600; font-size: 14px">Написати</button>
+</div>
+</section>
+
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px">
+<sc-for list="{{kpis}}" as="k" hint-placeholder-count="4">
+<div style="background: #FFFFFF; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 6px">
+<div style="font-size: 13px; color: #5E5873">{{k.label}}</div>
+<div style="font-family: 'Unbounded', sans-serif; font-weight: 500; font-size: 22px">{{k.value}}</div>
+<div style="font-size: 13px; color: #5E5873">{{k.note}}</div>
+</div>
+</sc-for>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start">
+
+<section style="flex: 999 1 560px; min-width: 0; background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px">
+<div style="display: flex; gap: 8px; flex-wrap: wrap">
+<sc-for list="{{tabs}}" as="t" hint-placeholder-count="3">
+<button onClick="{{t.pick}}" aria-pressed="{{t.pressed}}" style="height: 44px; padding: 0 18px; border-radius: 22px; border: 2px solid {{t.border}}; background: {{t.bg}}; color: {{t.fg}}; font-size: 14px; font-weight: 600">{{t.label}}</button>
+</sc-for>
+</div>
+
+<sc-if value="{{isVisits}}" hint-placeholder-val="{{ true }}">
+<div style="overflow-x: auto">
+<table style="width: 100%; min-width: 600px; border-collapse: collapse; font-size: 14px">
+<thead><tr style="text-align: left; color: #5E5873; font-size: 13px">
+<th style="padding: 8px 10px; font-weight: 500">Дата</th>
+<th style="padding: 8px 10px; font-weight: 500">Послуга</th>
+<th style="padding: 8px 10px; font-weight: 500">Спеціаліст</th>
+<th style="padding: 8px 10px; font-weight: 500">Заклад</th>
+<th style="padding: 8px 10px; font-weight: 500">Сума</th>
+<th style="padding: 8px 10px; font-weight: 500">Статус</th>
+</tr></thead>
+<tbody>
+<sc-for list="{{visits}}" as="v" hint-placeholder-count="7">
+<tr style="border-top: 1px solid #ECE8F2">
+<td style="padding: 12px 10px; font-weight: 600">{{v.date}}</td>
+<td style="padding: 12px 10px">{{v.service}}<sc-if value="{{v.promo}}" hint-placeholder-val="{{ false }}"><span style="margin-left: 8px; background: #FDE9DC; color: #7A2308; border-radius: 6px; padding: 2px 6px; font-size: 12px; font-weight: 600">акція</span></sc-if></td>
+<td style="padding: 12px 10px"><a href="Staff.dc.html" style="color: #1E1B2E">{{v.spec}}</a></td>
+<td style="padding: 12px 10px; color: #5E5873">{{v.loc}}</td>
+<td style="padding: 12px 10px; font-weight: 600">{{v.sum}}</td>
+<td style="padding: 12px 10px"><span style="display: inline-block; border-radius: 8px; padding: 4px 10px; font-size: 13px; font-weight: 600; background: {{v.bg}}; color: {{v.fg}}">{{v.status}}</span></td>
+</tr>
+</sc-for>
+</tbody>
+</table>
+</div>
+</sc-if>
+
+<sc-if value="{{isPromos}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 10px">
+<sc-for list="{{promos}}" as="p" hint-placeholder-count="3">
+<div style="border: 1px solid #ECE8F2; border-radius: 12px; padding: 14px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap">
+<div style="display: flex; flex-direction: column; gap: 2px">
+<span style="font-weight: 600; font-size: 15px">{{p.name}}</span>
+<span style="font-size: 13px; color: #5E5873">{{p.when}}</span>
+</div>
+<span style="font-weight: 600; color: #A2300A">{{p.saved}}</span>
+</div>
+</sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{isNotes}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 10px">
+<sc-for list="{{notes}}" as="n" hint-placeholder-count="3">
+<div style="background: #F6F4F8; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 4px">
+<span style="font-size: 14px">{{n.text}}</span>
+<span style="font-size: 12px; color: #5E5873">{{n.meta}}</span>
+</div>
+</sc-for>
+<label for="note" style="font-size: 13px; font-weight: 600; margin-top: 4px">Нова нотатка</label>
+<input id="note" type="text" placeholder="Наприклад: не любить сильні запахи" style="height: 44px; border-radius: 12px; border: 1px solid #D9D4E4; padding: 0 14px; font-size: 15px; font-family: inherit; color: #1E1B2E">
+</div>
+</sc-if>
+</section>
+
+<aside style="flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+<div style="background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">Вподобання</h2>
+<div style="display: flex; justify-content: space-between; font-size: 14px; gap: 12px"><span style="color: #5E5873">Улюблений майстер</span><span style="font-weight: 600">Марина Бойко</span></div>
+<div style="display: flex; justify-content: space-between; font-size: 14px; gap: 12px"><span style="color: #5E5873">Часті послуги</span><span style="font-weight: 600; text-align: right">Манікюр + гель-лак, чистка обличчя</span></div>
+<div style="display: flex; justify-content: space-between; font-size: 14px; gap: 12px"><span style="color: #5E5873">Зручний час</span><span style="font-weight: 600">Пн, Пт · після 15:00</span></div>
+<div style="display: flex; justify-content: space-between; font-size: 14px; gap: 12px"><span style="color: #5E5873">Канал звʼязку</span><span style="font-weight: 600">Telegram</span></div>
+</div>
+<div style="background: #FFF1CC; color: #5C3900; border-radius: 16px; padding: 16px; font-size: 14px; line-height: 1.4">
+<strong>Увага:</strong> алергія на латекс. Показується майстру перед кожним візитом.
+</div>
+<div style="background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">Лояльність</h2>
+<div style="display: flex; justify-content: space-between; font-size: 14px"><span style="color: #5E5873">Бонусний баланс</span><span style="font-weight: 600">420 балів</span></div>
+<div style="font-size: 13px; color: #5E5873">До наступного рівня: ще 3 візити</div>
+<div style="height: 10px; border-radius: 5px; background: #ECE8F2"><div style="height: 10px; border-radius: 5px; background: {{accent}}; width: 80%"></div></div>
+</div>
+</aside>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#6B2F5C","options":["#6B2F5C","#0F6B6B","#2F4A8C","#8A2D3F"]},"$preview":{"width":1360,"height":1000}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = { tab: 'visits' };
+}
+renderVals() {
+const accent = this.props.accent ?? '#6B2F5C';
+const s = this.state;
+const tabsData = [{ id: 'visits', label: 'Історія візитів' }, { id: 'promos', label: 'Акції клієнта' }, { id: 'notes', label: 'Нотатки' }];
+const tabs = tabsData.map((t) => ({
+label: t.label, pressed: s.tab === t.id,
+border: s.tab === t.id ? accent : '#D9D4E4', bg: s.tab === t.id ? accent : '#FFFFFF', fg: s.tab === t.id ? '#FFFFFF' : '#1E1B2E',
+pick: () => this.setState({ tab: t.id })
+}));
+const kpis = [
+{ label: 'Візитів', value: '24', note: 'з них 2 скасовано' },
+{ label: 'Витрачено', value: '21 480 ₴', note: 'за весь час' },
+{ label: 'Середній чек', value: '895 ₴', note: 'по завершених візитах' },
+{ label: 'Останній візит', value: '5 жовт.', note: 'Центр · Марина Бойко' }
+];
+const st = {
+done: { status: 'Завершено', bg: '#DDF3E6', fg: '#145A32' },
+plan: { status: 'Заплановано', bg: '#E3E9FB', fg: '#223A8C' },
+cancel: { status: 'Скасовано', bg: '#E9E6EF', fg: '#4A4560' }
+};
+const mk = (date, service, spec, loc, sum, kind, promo) => ({ date, service, spec, loc, sum, promo, status: st[kind].status, bg: st[kind].bg, fg: st[kind].fg });
+const visits = [
+mk('19 жовт.', 'Манікюр + гель-лак', 'Марина Бойко', 'Центр', '900 ₴', 'plan', false),
+mk('5 жовт.', 'Манікюр + гель-лак', 'Марина Бойко', 'Центр', '900 ₴', 'done', false),
+mk('21 вер.', 'Чистка обличчя', 'Оксана Лис', 'Центр', '1 120 ₴', 'done', true),
+mk('7 вер.', 'Манікюр + гель-лак', 'Марина Бойко', 'Центр', '900 ₴', 'done', false),
+mk('24 серп.', 'Манікюр', 'Наталя Гук', 'Печерськ', '650 ₴', 'cancel', false),
+mk('10 серп.', 'Манікюр + гель-лак', 'Марина Бойко', 'Центр', '720 ₴', 'done', true),
+mk('27 лип.', 'Стрижка', 'Ірина Мельник', 'Поділ', '650 ₴', 'done', false)
+];
+const promos = [
+{ name: 'Осінній манікюр −20%', when: 'використано 10 серпня', saved: '−180 ₴' },
+{ name: 'Чистка обличчя −20%', when: 'використано 21 вересня', saved: '−280 ₴' },
+{ name: 'Знижка за день народження', when: 'доступна 14–21 листопада', saved: 'ще не використано' }
+];
+const notes = [
+{ text: 'Алергія на латекс: працювати лише у нітрилових рукавичках.', meta: 'Марина Бойко · 12 березня 2025' },
+{ text: 'Любить нюдові відтінки, довжина коротка.', meta: 'Марина Бойко · 7 вересня' },
+{ text: 'Просила нагадувати про візит за 2 години.', meta: 'Адміністратор Центру · 21 вересня' }
+];
+return { accent, tabs, kpis, visits, promos, notes, isVisits: s.tab === 'visits', isPromos: s.tab === 'promos', isNotes: s.tab === 'notes' };
+}
+}
+</script>
+</body>
+</html>

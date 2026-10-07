@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>CRM · Огляд мережі</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=Unbounded:wght@500;600&display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:'Onest',sans-serif}
+button{font-family:inherit;cursor:pointer}
+.ai-pop{display:none}
+.ai-fab:hover .ai-pop,.ai-fab:focus-within .ai-pop{display:flex}
+a{color:#6B2F5C}a:hover{color:#4A2260}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 960px; background: #F6F4F8; color: #1E1B2E; font-family: 'Onest', sans-serif">
+
+<nav aria-label="Головне меню" style="order: 0; flex: 1 1 240px; max-width: 280px; background: #1E1B2E; padding: 28px 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px">
+<div style="font-family: 'Unbounded', sans-serif; font-weight: 600; font-size: 20px; color: #FFFFFF; margin-bottom: 24px">Beauty Lab</div>
+<sc-for list="{{nav}}" as="n" hint-placeholder-count="7">
+<a href="{{n.href}}" style="display: block; box-sizing: border-box; min-height: 44px; padding: 12px 14px; border-radius: 12px; text-decoration: none; font-size: 15px; background: {{n.bg}}; color: #FFFFFF; font-weight: {{n.weight}}">{{n.label}}</a>
+</sc-for>
+</nav>
+
+<div class="ai-fab" style="position: fixed; right: 24px; bottom: 24px; z-index: 50; display: flex; flex-direction: column; align-items: flex-end; gap: 12px">
+<div class="ai-pop" style="width: 340px; max-width: calc(100vw - 48px); max-height: calc(100vh - 120px); overflow-y: auto; background: #FFFFFF; border-radius: 20px; box-shadow: 0 12px 40px rgba(30,27,46,0.28); flex-direction: column">
+<div style="background: #1E1B2E; color: #FFFFFF; padding: 14px 16px; display: flex; flex-direction: column; gap: 2px"><span style="font-family: 'Unbounded', sans-serif; font-weight: 600; font-size: 15px">AI-асистент</span><span style="font-size: 12px; color: #D9D4E4">Аналізує: огляд мережі</span></div>
+<div style="padding: 14px 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="background: #F1E4EE; border-radius: 12px; padding: 10px 12px; font-size: 13px; line-height: 1.45"><strong>Аналіз дня</strong><br>42 записи, вільних слотів 14. У закладі Поділ завантаження нижче, ніж у Центрі. Один онлайн-запис очікує підтвердження.</div>
+<div style="align-self: flex-end; background: #6B2F5C; color: #FFFFFF; border-radius: 14px; padding: 8px 12px; font-size: 13px; max-width: 85%">Що зробити з вільними слотами?</div>
+<div style="align-self: flex-start; background: #F6F4F8; border-radius: 14px; padding: 8px 12px; font-size: 13px; line-height: 1.45; max-width: 90%">Запропонувати −15% на манікюр у будні 12:00–15:00 і надіслати 38 клієнтам, які не були 60+ днів. Підготувати акцію?</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px">
+<a href="AI.dc.html" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 22px; border: 1px solid #6B2F5C; color: #6B2F5C; font-size: 13px; font-weight: 600; text-decoration: none">Підготувати акцію</a>
+<a href="Calendar.dc.html" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 22px; border: 1px solid #6B2F5C; color: #6B2F5C; font-size: 13px; font-weight: 600; text-decoration: none">Відкрити календар</a>
+</div>
+</div>
+<div style="border-top: 1px solid #ECE8F2; padding: 10px 12px; display: flex; gap: 8px">
+<label for="ai-q" style="position: absolute; width: 1px; height: 1px; overflow: hidden">Запитання до AI</label>
+<input id="ai-q" type="text" placeholder="Запитайте AI" style="flex: 1; min-width: 0; height: 44px; border-radius: 22px; border: 1px solid #D9D4E4; padding: 0 14px; font-family: inherit; font-size: 14px; box-sizing: border-box">
+<button aria-label="Надіслати" style="width: 44px; height: 44px; border-radius: 22px; border: none; background: #6B2F5C; display: flex; align-items: center; justify-content: center; padding: 0"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+</div>
+</div>
+<button aria-label="Відкрити AI-асистента" style="width: 60px; height: 60px; border-radius: 30px; border: none; background: #6B2F5C; box-shadow: 0 8px 24px rgba(30,27,46,0.35); display: flex; align-items: center; justify-content: center; padding: 0"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 16l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/></svg></button>
+</div>
+
+<main style="order: 1; flex: 999 1 560px; min-width: 0; padding: 28px 32px; box-sizing: border-box; display: flex; flex-direction: column; gap: 24px">
+
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px">
+<div>
+<h1 style="margin: 0; font-family: 'Unbounded', sans-serif; font-weight: 600; font-size: 28px">Огляд на сьогодні</h1>
+<div style="color: #5E5873; font-size: 14px; margin-top: 4px">Мережа закладів · 5 жовтня</div>
+</div>
+<div style="display: flex; gap: 8px; flex-wrap: wrap">
+<sc-for list="{{locs}}" as="l" hint-placeholder-count="4">
+<button style="height: 44px; padding: 0 16px; border-radius: 22px; border: 1px solid {{l.border}}; background: {{l.bg}}; color: {{l.fg}}; font-size: 14px; font-weight: 600">{{l.label}}</button>
+</sc-for>
+</div>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px">
+<sc-for list="{{kpis}}" as="k" hint-placeholder-count="4">
+<div style="background: #FFFFFF; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 6px">
+<div style="font-size: 13px; color: #5E5873">{{k.label}}</div>
+<div style="font-family: 'Unbounded', sans-serif; font-weight: 500; font-size: 26px">{{k.value}}</div>
+<div style="font-size: 13px; color: #5E5873">{{k.note}}</div>
+</div>
+</sc-for>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start">
+
+<section style="flex: 999 1 560px; min-width: 0; background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box">
+<h2 style="margin: 0 0 14px; font-size: 18px; font-weight: 600">Записи на сьогодні</h2>
+<div style="overflow-x: auto">
+<table style="width: 100%; min-width: 560px; border-collapse: collapse; font-size: 14px">
+<thead>
+<tr style="text-align: left; color: #5E5873; font-size: 13px">
+<th style="padding: 8px 10px; font-weight: 500">Час</th>
+<th style="padding: 8px 10px; font-weight: 500">Клієнт</th>
+<th style="padding: 8px 10px; font-weight: 500">Послуга</th>
+<th style="padding: 8px 10px; font-weight: 500">Спеціаліст</th>
+<th style="padding: 8px 10px; font-weight: 500">Заклад</th>
+<th style="padding: 8px 10px; font-weight: 500">Статус</th>
+</tr>
+</thead>
+<tbody>
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="6">
+<tr style="border-top: 1px solid #ECE8F2">
+<td style="padding: 12px 10px; font-weight: 600">{{r.time}}</td>
+<td style="padding: 12px 10px"><a href="Client.dc.html" style="color: #1E1B2E">{{r.client}}</a></td>
+<td style="padding: 12px 10px">{{r.service}}</td>
+<td style="padding: 12px 10px"><a href="Staff.dc.html" style="color: #1E1B2E">{{r.spec}}</a></td>
+<td style="padding: 12px 10px; color: #5E5873">{{r.loc}}</td>
+<td style="padding: 12px 10px"><span style="display: inline-block; border-radius: 8px; padding: 4px 10px; font-size: 13px; font-weight: 600; background: {{r.bg}}; color: {{r.fg}}">{{r.status}}</span></td>
+</tr>
+</sc-for>
+</tbody>
+</table>
+</div>
+</section>
+
+<section style="flex: 1 1 320px; min-width: 0; background: #FFFFFF; border-radius: 16px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px">
+<h2 style="margin: 0 0 10px; font-size: 18px; font-weight: 600">Клієнти</h2>
+<sc-for list="{{clients}}" as="c" hint-placeholder-count="5">
+<div style="display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid #ECE8F2">
+<span style="width: 40px; height: 40px; border-radius: 20px; background: #EADCF2; color: #4A2260; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 14px; flex: none">{{c.initials}}</span>
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+<a href="Client.dc.html" style="font-weight: 600; font-size: 15px; color: #1E1B2E; text-decoration: none">{{c.name}}</a>
+<span style="font-size: 13px; color: #5E5873">{{c.meta}}</span>
+</span>
+<span style="border-radius: 8px; padding: 4px 8px; font-size: 12px; font-weight: 600; background: {{c.bg}}; color: {{c.fg}}; flex: none">{{c.tag}}</span>
+</div>
+</sc-for>
+<a href="Client.dc.html" style="margin-top: 10px; font-size: 14px; font-weight: 600">Усі клієнти</a>
+</section>
+
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1360,"height":960}}'>
+class Component extends DCLogic {
+renderVals() {
+const navItems = [
+['Огляд', 'Admin.dc.html'], ['Записи', 'Calendar.dc.html'], ['Клієнти', 'Client.dc.html'], ['Спеціалісти', 'Staff.dc.html'],
+['Ціни та акції', 'Promos.dc.html'], ['Аналітика', 'Analytics.dc.html'], ['AI-асистент', 'AI.dc.html'], ['Канали', 'Integrations.dc.html'], ['Запис клієнта', 'Main.dc.html']
+];
+const nav = navItems.map((it, i) => ({ label: it[0], href: it[1], bg: i === 0 ? '#6B2F5C' : 'transparent', weight: i === 0 ? 600 : 400 }));
+const locNames = ['Усі заклади', 'Центр', 'Поділ', 'Печерськ'];
+const locs = locNames.map((label, i) => ({
+label,
+border: i === 0 ? '#6B2F5C' : '#D9D4E4',
+bg: i === 0 ? '#6B2F5C' : '#FFFFFF',
+fg: i === 0 ? '#FFFFFF' : '#1E1B2E'
+}));
+const kpis = [
+{ label: 'Записів сьогодні', value: '42', note: 'з них 6 онлайн за останню годину' },
+{ label: 'Виручка за день', value: '38 400 ₴', note: 'очікується до закриття' },
+{ label: 'Нові клієнти', value: '9', note: 'за добу' },
+{ label: 'Вільних слотів', value: '14', note: 'до 21:00 по мережі' }
+];
+const tones = {
+ok: { bg: '#DDF3E6', fg: '#145A32' },
+wait: { bg: '#FFF1CC', fg: '#7A4B00' },
+now: { bg: '#E3E9FB', fg: '#223A8C' }
+};
+const mk = (time, client, service, spec, loc, status, tone) => ({ time, client, service, spec, loc, status, bg: tones[tone].bg, fg: tones[tone].fg });
+const rows = [
+mk('10:00', 'Олена Кравченко', 'Манікюр + гель-лак', 'Марина Бойко', 'Центр', 'Завершено', 'ok'),
+mk('11:30', 'Ірина Левченко', 'Жіноча стрижка', 'Ірина Мельник', 'Поділ', 'У процесі', 'now'),
+mk('12:00', 'Софія Мартин', 'Чистка обличчя', 'Вікторія Руда', 'Печерськ', 'Підтверджено', 'ok'),
+mk('13:15', 'Катерина Ляшко', 'Фарбування', 'Анна Шевчук', 'Центр', 'Очікує підтвердження', 'wait'),
+mk('14:00', 'Марія Пономаренко', 'Манікюр', 'Дарина Коваль', 'Поділ', 'Підтверджено', 'ok'),
+mk('15:30', 'Тетяна Гончар', 'Манікюр + гель-лак', 'Марина Бойко', 'Центр', 'Підтверджено', 'ok'),
+mk('17:00', 'Онлайн-запис', 'Манікюр + гель-лак', 'Марина Бойко', 'Центр', 'Очікує підтвердження', 'wait')
+];
+const tag = {
+vip: { tag: 'VIP', bg: '#EADCF2', fg: '#4A2260' },
+new: { tag: 'Новий', bg: '#DDF3E6', fg: '#145A32' },
+sleep: { tag: 'Давно не був', bg: '#FFF1CC', fg: '#7A4B00' }
+};
+const mc = (name, meta, t) => ({ name, meta, initials: name.split(' ').map((w) => w[0]).join(''), tag: tag[t].tag, bg: tag[t].bg, fg: tag[t].fg });
+const clients = [
+mc('Олена Кравченко', '24 візити · остання 5 жовтня', 'vip'),
+mc('Софія Мартин', '1 візит · перша запис онлайн', 'new'),
+mc('Катерина Ляшко', '8 візитів · остання 2 серпня', 'sleep'),
+mc('Тетяна Гончар', '12 візитів · остання 28 вересня', 'vip'),
+mc('Марія Пономаренко', '3 візити · остання 20 вересня', 'new')
+];
+return { nav, locs, kpis, rows, clients };
+}
+}
+</script>
+</body>
+</html>

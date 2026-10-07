@@ -1,0 +1,116 @@
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "Admin.dc.html": {
+      "expand": "fill",
+      "h": 960,
+      "title": "CRM · Огляд мережі",
+      "w": 1360,
+      "x": 470,
+      "y": 0
+    },
+    "Main.dc.html": {
+      "h": 844,
+      "is_interactive": true,
+      "title": "Запис клієнта",
+      "w": 390,
+      "x": 0,
+      "y": 0
+    },
+    "Promos.dc.html": {
+      "expand": "fill",
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Ціни та акції",
+      "w": 1360,
+      "x": 470,
+      "y": 1080
+    },
+    "Calendar.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "is_interactive": true,
+      "title": "Календар майстра",
+      "w": 1360,
+      "x": 470,
+      "y": 2200
+    },
+    "Analytics.dc.html": {
+      "expand": "fill",
+      "h": 1100,
+      "is_interactive": true,
+      "title": "Аналітика",
+      "w": 1360,
+      "x": 470,
+      "y": 3220
+    },
+    "Client.dc.html": {
+      "expand": "fill",
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Профіль клієнта",
+      "w": 1360,
+      "x": 470,
+      "y": 4440
+    },
+    "Staff.dc.html": {
+      "expand": "fill",
+      "h": 1100,
+      "is_interactive": true,
+      "title": "Профіль працівника",
+      "w": 1360,
+      "x": 470,
+      "y": 5560
+    },
+    "AI.dc.html": {
+      "expand": "fill",
+      "h": 1100,
+      "is_interactive": true,
+      "title": "AI-асистент",
+      "w": 1360,
+      "x": 470,
+      "y": 6780
+    },
+    "Integrations.dc.html": {
+      "expand": "fill",
+      "h": 1100,
+      "is_interactive": true,
+      "title": "Канали та інтеграції",
+      "w": 1360,
+      "x": 470,
+      "y": 8000
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-10-05T12:00:00Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas"
+  },
+  "notes": {
+    "t1": {
+      "kind": "title1",
+      "maxW": 1830,
+      "text": "Beauty CRM: клієнт, адміністратор, акції",
+      "w": 240,
+      "x": 0,
+      "y": -260
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "Admin.dc.html",
+    "Promos.dc.html",
+    "Calendar.dc.html",
+    "Analytics.dc.html",
+    "Client.dc.html",
+    "Staff.dc.html",
+    "AI.dc.html",
+    "Integrations.dc.html"
+  ],
+  "pages": [],
+  "title": "Beauty CRM"
+}
