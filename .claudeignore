@@ -1,0 +1,40 @@
+# залежності та збірки
+node_modules/
+**/node_modules/
+.next/
+dist/
+build/
+out/
+coverage/
+**/bin/
+**/obj/
+.expo/
+.turbo/
+
+# згенероване й важке
+**/Migrations/*.Designer.cs
+**/Migrations/*ModelSnapshot.cs
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+*.min.js
+*.map
+
+# логи, дані, артефакти
+logs/
+*.log
+.claude/logs/
+.claude/memory/
+error/
+img/
+loadtests/
+*.sql
+*.png
+*.jpg
+*.svg
+*.pdf
+
+# секрети (не читати й не комітити)
+.env
+.env.*
+!.env.*.example

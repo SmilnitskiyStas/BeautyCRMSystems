@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SmilnitskiyStas/AI_agent_only/schemas/agent.schema.json",
+  "title": "Shared agent definition",
+  "description": "Vendor-neutral role definition. Lives in agents/<category>/<id>.md as YAML frontmatter; the markdown body is the human-readable instruction. Adapters generate .claude/agents/*.md and .codex/agents/*.toml from this.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "category",
+    "version",
+    "summary",
+    "responsibilities",
+    "must_not",
+    "default_model_tier",
+    "allowed_model_tiers"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*[a-z0-9]$",
+      "description": "Unique kebab-case identifier. Must match the file name."
+    },
+    "category": {
+      "enum": ["control", "engineering", "product", "documentation"]
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 12,
+      "maxLength": 240,
+      "description": "One sentence: what this role does. Feeds the adapter `description` field used for auto-delegation."
+    },
+    "responsibilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" },
+      "description": "The narrow set of outcomes this role owns. Anything not listed is out of scope."
+    },
+    "must_not": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" },
+      "description": "Hard guardrails — actions this role never takes even if asked."
+    },
+    "default_model_tier": {
+      "$ref": "#/$defs/tier"
+    },
+    "allowed_model_tiers": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/tier" }
+    },
+    "risk_escalation": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/tier" },
+      "propertyNames": { "$ref": "#/$defs/riskFlag" },
+      "description": "Per-risk override of the resolved tier. e.g. { security: reasoning }."
+    },
+    "required_context": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Named context slices this role always needs (resolved by context-manager against source-of-truth). Not file paths."
+    },
+    "produces": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Outputs: code, tests, task-log, and artifact types from artifact.schema.json."
+    },
+    "handoff_targets": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*[a-z0-9]$" },
+      "description": "Agent ids this role may hand off to directly. Blockers always route through project-manager regardless."
+    },
+    "tools": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/toolCapability" },
+      "description": "Vendor-neutral capability names. Adapters map these to Claude `tools` / Codex `sandbox_mode`. Omit to inherit the runtime default."
+    },
+    "skills": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Skill ids to preload / reference. Must resolve to a directory under skills/."
+    },
+    "read_only": {
+      "type": "boolean",
+      "default": false,
+      "description": "True for review/research roles that never modify the working tree."
+    },
+    "when_to_use": {
+      "type": "string",
+      "description": "Optional disambiguation for adapters when two roles overlap (e.g. fullstack-developer vs backend-developer + database-engineer)."
+    }
+  },
+  "$defs": {
+    "tier": {
+      "enum": ["cheap", "standard", "reasoning"]
+    },
+    "riskFlag": {
+      "enum": [
+        "security",
+        "privacy",
+        "financial",
+        "data_loss",
+        "migration",
+        "external_integration",
+        "production",
+        "architecture",
+        "cross_platform",
+        "concurrency",
+        "offline_sync",
+        "destructive_data_change",
+        "cross_system_architecture"
+      ]
+    },
+    "toolCapability": {
+      "enum": [
+        "read",
+        "search",
+        "edit",
+        "shell",
+        "run-tests",
+        "web",
+        "spawn-subagent",
+        "git-write"
+      ]
+    }
+  }
+}

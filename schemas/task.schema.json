@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SmilnitskiyStas/AI_agent_only/schemas/task.schema.json",
+  "title": "Task",
+  "description": "One unit of work in the task DAG. Stored as a YAML block in the project task store (.claude/tasks/ or equivalent). Runtime state — not committed to this library.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "status"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^TASK-[0-9]{3,}$"
+    },
+    "title": { "type": "string", "minLength": 3 },
+    "agent": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*[a-z0-9]$",
+      "description": "Resolved assignee (agent id). May be empty until Definition of Ready is met."
+    },
+    "status": {
+      "enum": [
+        "draft",
+        "needs_clarification",
+        "researched",
+        "planned",
+        "ready",
+        "in_progress",
+        "blocked",
+        "review",
+        "changes_requested",
+        "done",
+        "cancelled"
+      ],
+      "description": "Not every project uses every state (§41)."
+    },
+    "complexity": {
+      "enum": ["trivial", "low", "medium", "high", "critical"]
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" },
+      "propertyNames": {
+        "enum": [
+          "security",
+          "privacy",
+          "financial",
+          "data_loss",
+          "migration",
+          "external_integration",
+          "production",
+          "architecture",
+          "cross_platform",
+          "concurrency",
+          "offline_sync"
+        ]
+      }
+    },
+    "depends_on": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^TASK-[0-9]{3,}$" },
+      "description": "Hard task dependencies. Prefer requires_artifacts where only an artifact is actually needed (§21)."
+    },
+    "requires_artifacts": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Artifact ids this task consumes. Lets frontend start once the API contract exists, without waiting for backend completion (§21, §24)."
+    },
+    "provides": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Artifact ids this task produces."
+    },
+    "blocks": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^TASK-[0-9]{3,}$" }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Model routing decision record (§46).",
+      "properties": {
+        "tier": { "enum": ["cheap", "standard", "reasoning"] },
+        "runtime": { "type": "string" },
+        "resolved_model": { "type": ["string", "null"] },
+        "reason": { "type": "string" },
+        "escalations": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "definition_of_ready": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "§42. All true => task may move to `ready`.",
+      "properties": {
+        "goal_defined": { "type": "boolean" },
+        "acceptance_criteria_defined": { "type": "boolean" },
+        "blocking_questions": { "type": "integer", "minimum": 0 },
+        "required_dependencies_available": { "type": "boolean" },
+        "required_context_resolvable": { "type": "boolean" },
+        "assigned_agent_known": { "type": "boolean" }
+      }
+    },
+    "definition_of_done": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "§43. All true => task may move to `done`.",
+      "properties": {
+        "implementation_completed": { "type": "boolean" },
+        "required_tests_pass": { "type": "boolean" },
+        "required_reviews_complete": { "type": "boolean" },
+        "artifacts_updated": { "type": "boolean" },
+        "task_log_written": { "type": "boolean" },
+        "docs_updated_if_needed": { "type": "boolean" },
+        "known_issue_recorded_if_applicable": { "type": "boolean" },
+        "human_gate_passed_if_required": { "type": "boolean" }
+      }
+    }
+  }
+}

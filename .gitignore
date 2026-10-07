@@ -1,0 +1,29 @@
+# секрети
+.env
+.env.*
+!.env.*.example
+
+# залежності та збірки
+node_modules/
+.next/
+dist/
+build/
+out/
+coverage/
+**/bin/
+**/obj/
+.expo/
+.turbo/
+
+# логи
+logs/
+*.log
+*.stackdump
+
+# Claude Code локальне
+.claude/settings.local.json
+.claude/memory/
+.claude/worktrees/
+.claude/logs/
+.claude/private/
+.claude/scheduled_tasks.lock
