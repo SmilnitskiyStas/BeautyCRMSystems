@@ -27,3 +27,4 @@ logs/
 .claude/logs/
 .claude/private/
 .claude/scheduled_tasks.lock
+!.env.example
