@@ -1,0 +1,31 @@
+/* Токени адмінки Beauty CRM. Використовуються як bg-(--accent), text-(--muted) тощо. */
+.beauty-admin {
+  --ink: #1e1b2e;
+  --muted: #5e5873;
+  --accent: #6b2f5c;
+  --accent-dark: #4a2260;
+  --page: #f6f4f8;
+  --line: #ece8f2;
+  --line-strong: #d9d4e4;
+  --tint: #f1e4ee;
+  --promo: #a2300a;
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--font-onest), system-ui, sans-serif;
+}
+
+.beauty-display {
+  font-family: var(--font-unbounded), var(--font-onest), sans-serif;
+}
+
+.beauty-admin :is(a, button, input, select, textarea):focus-visible {
+  outline: 3px solid #2f4a8c;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .beauty-admin * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
