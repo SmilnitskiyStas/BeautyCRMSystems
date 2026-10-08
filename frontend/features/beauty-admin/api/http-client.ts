@@ -1,6 +1,6 @@
 import { BeautyApiError } from "@/features/beauty-auth/errors";
-import { apiJson } from "@/features/beauty-auth/session";
-import { durationLabel, money } from "../format";
+import { apiJson, getUser } from "@/features/beauty-auth/session";
+import { money } from "../format";
 import type {
   AiRequest,
   Appointment,
@@ -16,14 +16,21 @@ import type {
   Overview,
   PriceListRow,
   PromoDraft,
-  StaffProfile,
-  StaffSummary,
+  Absence,
+  AbsenceConflict,
+  AbsenceResult,
+  AbsenceStatus,
+  AbsenceType,
+  ServiceItem,
+  StaffLocation,
+  StaffMember,
+  WorkingHours,
 } from "../types";
 import type { BeautyAdminApi } from "./client";
 import { DEFAULT_GREETING, INITIAL_CHANNELS } from "./mock-data";
 
 /**
- * Реальний HTTP-клієнт за `.claude/docs/beauty-contracts.md` §9–§11.
+ * Реальний HTTP-клієнт за `.claude/docs/beauty-contracts.md` §9–§13; форми DTO звірені з контролерами/моделями backend (TASK-693).
  * Помилки приходять як `BeautyApiError` (`{code,message}` + статус) — тексти формує `humanizeError`.
  * Те, чого backend ще не віддає (список спеціалістів, чат AI, план акції) — див. `unsupported()`.
  */
@@ -75,6 +82,8 @@ interface ClientDetailDto {
 interface ServiceDto {
   id: string;
   name: string;
+  description: string | null;
+  category: string | null;
   durationMinutes: number;
   isActive: boolean;
   networkPrice: number | null;
@@ -289,8 +298,102 @@ function groupSum<T>(items: T[], key: (t: T) => string, val: (t: T) => number) {
 
 const pctOf = (v: number, max: number) => (max > 0 ? Math.round((v / max) * 100) : 0);
 
+// ---------- працівники й відсутність (§13, v0.6) ----------
+// Форми точно за `StaffModels.cs` (SpecialistDto, AbsenceDto, AbsenceConflictDto).
+
+interface SpecialistDto {
+  id: string;
+  name: string;
+  /** Відсутнє для ролі specialist (і коли порожнє): `JsonIgnore(WhenWritingNull)`. */
+  phone?: string;
+  position: string | null;
+  photoUrl: string | null;
+  isActive: boolean;
+  hasAccount?: boolean;
+  services: { id: string; name: string }[];
+  locations: { locationId: string; locationName: string; isActive: boolean; workingHours: WorkingHours | null }[];
+}
+interface AbsenceDto {
+  id: string;
+  specialistId: string;
+  type: AbsenceType;
+  /** `yyyy-MM-dd` (DateOnly). */
+  dateFrom: string;
+  dateTo: string;
+  status: AbsenceStatus;
+  /** Присутнє лише для owner/admin і автора (`WhenWritingNull`) — не припускаємо його наявності. */
+  note?: string;
+  /** Лише для керівників при створенні та `approve`. */
+  conflicts?: ConflictDto[];
+}
+interface ConflictDto {
+  appointmentId: string;
+  /** DateTimeOffset: може бути в UTC, тому НЕ обрізаємо - форматуємо як момент часу (див. dateTimeLabel). */
+  startsAt: string;
+  /** Зона закладу, якщо backend її додасть (TASK-689); наразі поля немає. */
+  timezone?: string;
+  serviceName: string;
+}
+
+/** InviteDto (AuthModels.cs); `status`: pending | accepted | revoked | expired. Шлях - `/api/invites`, не `/api/beauty`. */
+interface InviteDto {
+  id: string;
+  email: string;
+  role: string;
+  specialistId: string | null;
+  expiresAt: string;
+  status: string;
+}
+
+async function loadServices(): Promise<ServiceItem[]> {
+  // `GET /services` без `includeInactive` віддає лише активні.
+  const rows = await get<ServiceDto[]>("/services");
+  return rows.map((s) => ({ id: s.id, name: s.name, category: s.category, durationMinutes: s.durationMinutes }));
+}
+
+const toStaff = (r: SpecialistDto): StaffMember => ({
+  id: r.id,
+  name: r.name,
+  phone: r.phone ?? null,
+  position: r.position,
+  isActive: r.isActive,
+  services: r.services.map((x) => ({ id: x.id, name: x.name })),
+  locations: r.locations.map<StaffLocation>((l) => ({
+    locationId: l.locationId,
+    locationName: l.locationName,
+    workingHours: l.workingHours ?? {},
+  })),
+});
+
+const toAbsence = (a: AbsenceDto): Absence => ({
+  id: a.id,
+  specialistId: a.specialistId,
+  type: a.type,
+  dateFrom: a.dateFrom,
+  dateTo: a.dateTo,
+  status: a.status,
+  ...(typeof a.note === "string" ? { note: a.note } : {}),
+});
+
+const toAbsenceResult = (a: AbsenceDto): AbsenceResult => ({
+  absence: toAbsence(a),
+  conflicts: (a.conflicts ?? []).map<AbsenceConflict>((c) => ({
+    appointmentId: c.appointmentId,
+    startsAt: c.startsAt,
+    timezone: c.timezone,
+    serviceName: c.serviceName,
+  })),
+});
+
 export const httpBeautyApi: BeautyAdminApi = {
   getLocations: async () => {
+    // Окремого `GET /locations` для персоналу немає. specialist не має доступу до analytics -> заклади з власного профілю.
+    if (getUser()?.role === "specialist") {
+      const mine = await get<SpecialistDto[]>("/specialists");
+      const seen = new Map<string, string>();
+      for (const m of mine) for (const l of m.locations) seen.set(l.locationId, l.locationName);
+      return [...seen].map(([id, name]) => ({ id, name }));
+    }
     const rows = await get<LocationStatDto[]>(`/analytics/locations?${range(addDays(new Date(), -30), new Date())}`);
     return rows.map((r) => ({ id: r.locationId, name: r.name }));
   },
@@ -334,8 +437,11 @@ export const httpBeautyApi: BeautyAdminApi = {
   getCalendarWeek: async (specialistId) => {
     const monday = mondayOf(new Date());
     const sunday = addDays(monday, 6);
-    const all = await weeklyAppointments(monday, addDays(monday, 7));
-    const masters = specialistsFrom(all).map((m) => ({ id: m.id, name: m.name, locationName: [...m.locations].join(", ") }));
+    const [all, roster] = await Promise.all([weeklyAppointments(monday, addDays(monday, 7)), get<SpecialistDto[]>("/specialists")]);
+    const me = getUser();
+    const masters = roster
+      .filter((r) => r.isActive && (me?.role !== "specialist" || r.id === me.specialistId))
+      .map((r) => ({ id: r.id, name: r.name, locationName: r.locations.map((l) => l.locationName).join(", ") }));
     const effective = masters.find((m) => m.id === specialistId)?.id ?? masters[0]?.id ?? specialistId;
     const fmt = (d: Date) => d.toLocaleDateString("uk-UA", { day: "numeric", month: "long" });
     return {
@@ -416,58 +522,92 @@ export const httpBeautyApi: BeautyAdminApi = {
     await send("POST", `/clients/${id}/notes`, { body: text });
   },
 
-  getStaff: async () => {
-    const today = startOfDay(new Date());
-    const list = await weeklyAppointments(addDays(today, -30), addDays(today, 30));
-    return specialistsFrom(list).map<StaffSummary>((m) => ({
-      id: m.id,
-      name: m.name,
-      role: "Спеціаліст",
-      locations: [...m.locations].join(", "),
-    }));
+  getStaff: async () => (await get<SpecialistDto[]>("/specialists")).map(toStaff),
+
+  getStaffProfile: async (id) => {
+    try {
+      return toStaff(await get<SpecialistDto>(`/specialists/${id}`));
+    } catch (e) {
+      if (e instanceof BeautyApiError && e.status === 404) return null;
+      throw e;
+    }
   },
 
-  getStaffProfile: async (id): Promise<StaffProfile | null> => {
-    const today = startOfDay(new Date());
-    const all = await weeklyAppointments(addDays(today, -30), addDays(today, 30), `&specialistId=${id}`);
-    const mine = all.filter((a) => a.specialistId === id);
-    if (mine.length === 0) return null;
-    const done = mine.filter((a) => a.status === "completed");
-    const revenue = done.reduce((s, a) => s + a.priceFinal, 0);
-    const bySvc = groupSum(done, (a) => a.serviceName, (a) => a.priceFinal);
-    const durations = new Map(mine.map((a) => [a.serviceName, a.durationMinutes]));
-    return {
-      id,
-      name: mine[0].specialistName,
-      role: "Спеціаліст",
-      locationBadges: [...new Set(mine.map((a) => a.locationName))],
-      kpis: [
-        { label: "Завершено візитів", value: String(done.length), note: "за 30 днів" },
-        { label: "Виручка", value: money(revenue), note: "за 30 днів" },
-        { label: "Середній чек", value: money(done.length ? Math.round(revenue / done.length) : 0), note: "" },
-      ],
-      activity: Array.from({ length: 14 }, (_, i) => {
-        const d = addDays(today, i - 13);
-        return { label: String(d.getDate()), value: done.filter((a) => a.startsAt.slice(0, 10) === ymd(d)).length };
+  getServices: () => loadServices(),
+
+  createStaff: async (input) =>
+    toStaff(
+      await send<SpecialistDto>("POST", "/specialists", {
+        name: input.name.trim(),
+        phone: input.phone.trim() || null,
+        position: input.position.trim() || null,
+        locationIds: input.locationIds,
+        serviceIds: input.serviceIds,
+        workingHours: input.workingHours,
       }),
-      feed: [],
-      services: bySvc.map(([name, sum]) => ({
-        name,
-        duration: durationLabel(durations.get(name) ?? 0),
-        price: money(Math.round(sum / Math.max(1, done.filter((a) => a.serviceName === name).length))),
-        count: String(done.filter((a) => a.serviceName === name).length),
-      })),
-      schedule: [],
-      bars: bySvc.map(([label, sum]) => ({ label, value: money(sum), pct: pctOf(sum, bySvc[0]?.[1] ?? 0) })),
-      contacts: [],
-    };
+    ),
+
+  updateStaff: async (id, input) => {
+    await send<SpecialistDto>("PUT", `/specialists/${id}`, {
+      name: input.name.trim(),
+      phone: input.phone.trim() || null,
+      position: input.position.trim() || null,
+      isActive: input.isActive,
+    });
+  },
+
+  setStaffServices: async (id, serviceIds) => {
+    await send<SpecialistDto>("PUT", `/specialists/${id}/services`, { serviceIds });
+  },
+
+  setStaffSchedule: async (id, locationId, workingHours) => {
+    await send<SpecialistDto>("PUT", `/specialists/${id}/schedule`, { locationId, workingHours });
+  },
+
+  getStaffInvites: async (staffId) => {
+    const rows = await apiJson<InviteDto[]>("/api/invites");
+    return rows
+      .filter((i) => i.specialistId === staffId && i.status === "pending")
+      .map((i) => ({ id: i.id, email: i.email, expiresAt: i.expiresAt }));
+  },
+
+  revokeInvite: async (inviteId) => {
+    await apiJson<void>(`/api/invites/${encodeURIComponent(inviteId)}`, { method: "DELETE" });
+  },
+
+  inviteStaff: async (id, email) => {
+    const r = await send<{ token: string }>("POST", `/specialists/${id}/invite`, { email: email.trim() });
+    return { token: r.token };
+  },
+
+  getAbsences: async ({ from, to, specialistId }) => {
+    const q = `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${specialistId ? `&specialistId=${encodeURIComponent(specialistId)}` : ""}`;
+    return (await get<AbsenceDto[]>(`/absences?${q}`)).map(toAbsence);
+  },
+
+  createAbsence: async (specialistId, input) =>
+    toAbsenceResult(
+      await send<AbsenceDto>("POST", `/specialists/${specialistId}/absences`, {
+        type: input.type,
+        dateFrom: input.dateFrom,
+        dateTo: input.dateTo,
+        note: input.note?.trim() ? input.note.trim() : null,
+      }),
+    ),
+
+  approveAbsence: async (id) => toAbsenceResult(await send<AbsenceDto>("POST", `/absences/${id}/approve`)),
+
+  rejectAbsence: async (id) => {
+    await send<AbsenceDto>("POST", `/absences/${id}/reject`);
+  },
+
+  cancelAbsence: async (id) => {
+    await send<AbsenceDto>("POST", `/absences/${id}/cancel`);
   },
 
   getPriceList: async () => {
     const rows = await get<ServiceDto[]>("/services");
-    return rows
-      .filter((s) => s.isActive)
-      .map<PriceListRow>((s) => ({ serviceId: s.id, name: s.name, durationMinutes: s.durationMinutes, price: s.networkPrice ?? 0 }));
+    return rows.map<PriceListRow>((s) => ({ serviceId: s.id, name: s.name, durationMinutes: s.durationMinutes, price: s.networkPrice ?? 0 }));
   },
 
   previewPromotion: async (draft: PromoDraft) => {

@@ -32,6 +32,7 @@ export function SpecialistStep() {
           </button>
         </StateMessage>
       )}
+      {data?.length === 0 && <StateMessage>У цьому закладі зараз немає майстрів для онлайн-запису.</StateMessage>}
       {data?.map((p) => (
         <OptionCard
           key={p.id}
@@ -47,8 +48,8 @@ export function SpecialistStep() {
           </span>
           <span className="flex flex-col gap-0.5">
             <span className="text-base font-semibold">{p.name}</span>
-            <span className="text-[13px] text-[#5E5873]">{p.role}</span>
-            <span className="text-[13px]">{p.nextFree}</span>
+            {p.role && <span className="text-[13px] text-[#5E5873]">{p.role}</span>}
+            {p.nextFree && <span className="text-[13px]">{p.nextFree}</span>}
           </span>
         </OptionCard>
       ))}

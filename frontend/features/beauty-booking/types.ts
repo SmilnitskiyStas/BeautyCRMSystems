@@ -6,42 +6,60 @@ export type ReminderOption = z.infer<typeof reminderOptionSchema>;
 export const paymentMethodSchema = z.enum(["card", "cash"]);
 export type PaymentMethod = z.infer<typeof paymentMethodSchema>;
 
+/** Заклад (`GET /locations`, §12): адреса й телефон необов'язкові. */
 export interface Location {
   id: string;
   name: string;
-  address: string;
-  hours: string;
-  hasPromo: boolean;
+  address?: string;
+  phone?: string;
+  /** IANA-зона закладу: від неї рахуємо «сьогодні» для вибору дати. */
+  timezone: string;
 }
 
 export interface Specialist {
   id: string;
   name: string;
+  /** Посада (`title` публічного API); може бути порожньою. */
   role: string;
-  nextFree: string;
+  /** Лише для mock: підказка «найближчий запис». Публічний API її не віддає. */
+  nextFree?: string;
 }
 
-/** Спеціальне значення «будь-який майстер». */
+/** Спеціальне значення «будь-який майстер»: для API це відсутність `specialistId`. */
 export const ANY_SPECIALIST_ID = "any";
 
 export interface Service {
   id: string;
   name: string;
+  description?: string;
+  category?: string;
   durationMinutes: number;
   priceOriginal: number;
   priceFinal: number;
-  /** Мітка акції, напр. «−20% до кінця тижня»; є лише для акційних послуг. */
+  /** Мітка акції (назва + відсоток); є лише для акційних послуг. */
   promoLabel?: string;
   promotionId?: string;
 }
 
+/** Умови скасування з API (§11): слоти й записи віддають їх у кожному елементі. Текст у UI будується з цих полів. */
+export interface CancellationTerms {
+  windowHours: number;
+  refundPercentInWindow: number;
+  refundPercentOutside: number;
+  deductFee: boolean;
+  feePercent: number;
+}
+
 export interface Slot {
-  startsAt: string; // ISO
-  label: string; // HH:mm
+  startsAt: string; // ISO зі зсувом закладу
+  label: string; // HH:mm у часі закладу
+  /** Майстер слота: для «будь-якого майстра» це фактичний майстер, якого сервер запропонував. */
+  specialistId: string;
+  cancellation?: CancellationTerms;
 }
 
 export const clientSchema = z.object({
-  name: z.string().trim().min(2, "Вкажіть імʼя"),
+  name: z.string().trim().min(2, "Вкажіть імʼя").max(100, "Імʼя занадто довге"),
   phone: z
     .string()
     .trim()
@@ -57,34 +75,53 @@ export const createAppointmentSchema = z.object({
   client: clientSchema,
   reminder: reminderOptionSchema,
   paymentMethod: paymentMethodSchema,
+  /** Honeypot: люди його не бачать і не заповнюють; непорожнє значення сервер відхиляє (422). */
+  website: z.string().optional(),
 });
 export type CreateAppointmentRequest = z.infer<typeof createAppointmentSchema>;
 
+export type AppointmentStatus = "pending" | "confirmed" | "in_progress" | "completed" | "cancelled" | "no_show";
+
+/** Запис для клієнта (`PublicAppointment`, §12): без id запису/клієнта й без PII. Адресується токеном. */
 export interface Appointment {
-  id: string;
-  locationId: string;
   locationName: string;
-  specialistId: string;
   specialistName: string;
-  serviceId: string;
   serviceName: string;
   startsAt: string;
+  endsAt: string;
   durationMinutes: number;
-  status: "pending" | "confirmed" | "completed" | "cancelled" | "no_show";
-  source: "online";
+  status: AppointmentStatus;
   priceOriginal: number;
   priceFinal: number;
   promotionId?: string;
   reminderOption: ReminderOption;
-  paymentMethod: PaymentMethod;
+  paymentMethod?: PaymentMethod;
+  paymentStatus?: string;
+  cancellation?: CancellationTerms;
 }
 
-/** Типізована помилка API (409 перетин слоту, 422 валідація, 404). */
+/** Результат створення: `publicToken` — єдиний ключ доступу до запису (у шляху `/book/appointment/{token}`). */
+export interface BookingResult {
+  token: string;
+  appointment: Appointment;
+}
+
+export interface CancelResult {
+  appointment: Appointment;
+  refundAmount: number;
+  refundPercent: number;
+  feePercent: number;
+}
+
+/** Типізована помилка API: HTTP-статус + код `{code,message}` (message сервера користувачу не показуємо). */
 export class BookingApiError extends Error {
-  status: 409 | 422 | 404;
-  constructor(status: 409 | 422 | 404, message: string) {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    message: string = code,
+    public readonly retryAfterSeconds?: number,
+  ) {
     super(message);
     this.name = "BookingApiError";
-    this.status = status;
   }
 }

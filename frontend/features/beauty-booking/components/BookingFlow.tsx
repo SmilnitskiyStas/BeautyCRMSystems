@@ -4,7 +4,8 @@ import { useState } from "react";
 import { formatPrice, stepTitles } from "../content";
 import { useCreateAppointment } from "../hooks/queries";
 import { useBookingFlow } from "../hooks/useBookingFlow";
-import { BookingApiError, clientSchema } from "../types";
+import { humanizeBookingError, isSlotLost } from "../errors";
+import { clientSchema } from "../types";
 import { BookingProviders } from "./BookingProviders";
 import { CheckoutStep, type ClientErrors } from "./CheckoutStep";
 import { ConfirmationStep } from "./ConfirmationStep";
@@ -14,7 +15,7 @@ import { SpecialistStep } from "./SpecialistStep";
 
 function Flow() {
   const flow = useBookingFlow();
-  const { step, location, specialist, service, slot, client, reminder, paymentMethod } = flow;
+  const { step, location, specialist, service, slot, client, reminder, paymentMethod, website } = flow;
   const create = useCreateAppointment();
   const [errors, setErrors] = useState<ClientErrors>({});
   const [submitError, setSubmitError] = useState<string>();
@@ -52,20 +53,20 @@ function Flow() {
     try {
       const a = await create.mutateAsync({
         locationId: location.id,
-        specialistId: specialist.id,
+        specialistId: slot.specialistId,
         serviceId: service.id,
         startsAt: slot.startsAt,
         client: parsed.data,
         reminder,
         paymentMethod,
+        website,
       });
-      flow.done(a.id);
+      flow.done(a);
     } catch (e) {
-      if (e instanceof BookingApiError && e.status === 409) {
-        setSubmitError(e.message);
+      setSubmitError(humanizeBookingError(e, "Не вдалося створити запис. Спробуйте ще раз."));
+      if (isSlotLost(e)) {
         flow.setSlot(null);
-      } else {
-        setSubmitError("Не вдалося створити запис. Спробуйте ще раз.");
+        flow.back();
       }
     }
   }
@@ -129,9 +130,9 @@ function Flow() {
   );
 }
 
-export function BookingFlow() {
+export function BookingFlow({ tenant }: { tenant: string }) {
   return (
-    <BookingProviders>
+    <BookingProviders tenant={tenant}>
       <Flow />
     </BookingProviders>
   );

@@ -1,4 +1,4 @@
-import type { PaymentMethod, ReminderOption } from "./types";
+import type { CancellationTerms, PaymentMethod, ReminderOption } from "./types";
 
 export const reminderOptions: { id: ReminderOption; label: string }[] = [
   { id: "none", label: "Не нагадувати" },
@@ -11,11 +11,44 @@ export const paymentOptions: { id: PaymentMethod; label: string; note: string }[
   { id: "cash", label: "Готівкою", note: "Оплата в закладі після послуги" },
 ];
 
-// Рішення A2: скасування за 12 годин і менше до візиту → повернення 50%.
-export const cancellationPolicy = "За 12 годин і менше до візиту повертається 50%.";
+/** «година / години / годин» для цілого числа (укр.). */
+export function hoursLabel(n: number): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  const word = m10 === 1 && m100 !== 11 ? "годину" : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? "години" : "годин";
+  return `${n} ${word}`;
+}
+
+/**
+ * Умови скасування для показу клієнту. Беруться ЛИШЕ з полів `cancellation` API (§11) - жодних зашитих відсотків.
+ * Без умов (старий backend / помилка) - нейтральний текст.
+ */
+export function describeCancellation(t: CancellationTerms | undefined | null): string[] {
+  if (!t) return ["Умови скасування уточнюйте в закладі."];
+  const lines: string[] = [];
+  lines.push(
+    t.windowHours > 0
+      ? `За ${hoursLabel(t.windowHours)} і менше до візиту повертається ${t.refundPercentInWindow}%.`
+      : `Після початку візиту повертається ${t.refundPercentInWindow}%.`,
+  );
+  if (t.windowHours > 0) lines.push(`Раніше за цей строк повертається ${t.refundPercentOutside}%.`);
+  if (t.deductFee && t.feePercent > 0) lines.push(`З суми повернення утримується комісія ${t.feePercent}%.`);
+  return lines;
+}
+
+/** Чи потрапляє скасування «зараз» у вікно (межа включна, як на backend). */
+export const isInCancellationWindow = (t: CancellationTerms, startsAtIso: string, now = Date.now()) =>
+  Date.parse(startsAtIso) - now <= t.windowHours * 3_600_000;
+
+/** Орієнтовний відсоток повернення, якщо скасувати зараз (з урахуванням комісії). Остаточну суму рахує сервер. */
+export function estimateRefundPercent(t: CancellationTerms, startsAtIso: string, now = Date.now()): number {
+  const base = isInCancellationWindow(t, startsAtIso, now) ? t.refundPercentInWindow : t.refundPercentOutside;
+  const fee = t.deductFee ? t.feePercent : 0;
+  return Math.floor((base * (100 - fee)) / 100);
+}
 
 export const paymentPolicy: Record<PaymentMethod, string> = {
-  card: "Оплата карткою: 50% суми повернемо на картку.",
+  card: "Оплата карткою: кошти повертаємо на картку за умовами вище.",
   cash: "Оплата готівкою в закладі після послуги, передоплати немає.",
 };
 

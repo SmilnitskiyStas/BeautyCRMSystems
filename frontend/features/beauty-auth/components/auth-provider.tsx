@@ -3,6 +3,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { BeautyApiError } from "../errors";
 import { canOpen, homeFor } from "../permissions";
 import { clearSession, logout as apiLogout, onSessionEnd, refreshSession } from "../session";
 import { USE_MOCK, type Role, type SessionUser } from "../types";
@@ -49,6 +50,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const qc = useQueryClient();
   const [user, setUser] = useState<SessionUser | null>(USE_MOCK ? mockUser() : null);
+  /** Тимчасовий збій перевірки сесії (мережа, 429, 5xx): сесію не завершуємо, пропонуємо повторити. */
+  const [blocked, setBlocked] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   const toLogin = useCallback(() => {
     qc.clear();
@@ -64,8 +68,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
       .then((s) => {
         if (alive) setUser(s.user);
       })
-      .catch(() => {
-        if (alive) toLogin();
+      .catch((e: unknown) => {
+        if (!alive) return;
+        // Лише явне відхилення сесії (401) веде на логін; 429/5xx/мережа — повторна спроба.
+        if (e instanceof BeautyApiError && e.status === 401) toLogin();
+        else setBlocked(true);
       });
     const off = onSessionEnd(() => {
       if (alive) toLogin();
@@ -74,7 +81,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       alive = false;
       off();
     };
-  }, [toLogin]);
+  }, [toLogin, attempt]);
 
   const role = user?.role;
   const allowed = !role || canOpen(role, pathname);
@@ -91,6 +98,23 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   const value = useMemo(() => (user ? { user, logout } : null), [user, logout]);
 
+  if (!value && blocked) {
+    return (
+      <div role="alert" className="flex min-h-screen flex-col items-center justify-center gap-3 text-sm text-(--muted)">
+        <p>Не вдалося перевірити сесію. Спробуйте за хвилину.</p>
+        <button
+          type="button"
+          className="min-h-[44px] rounded-lg border px-4 font-semibold"
+          onClick={() => {
+            setBlocked(false);
+            setAttempt((n) => n + 1);
+          }}
+        >
+          Повторити
+        </button>
+      </div>
+    );
+  }
   if (!value) return <Splash text="Перевіряємо сесію…" />;
   if (!allowed) return <Splash text="Перенаправляємо…" />;
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

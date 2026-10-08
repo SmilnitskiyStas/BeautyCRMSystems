@@ -20,8 +20,16 @@ import type {
   PromoPreview,
   PromotionAnalytics,
   PromoGoalId,
-  StaffProfile,
-  StaffSummary,
+  Absence,
+  AbsenceInput,
+  AbsenceResult,
+  InviteResult,
+  PendingInvite,
+  ServiceItem,
+  StaffCreateInput,
+  StaffMember,
+  StaffUpdateInput,
+  WorkingHours,
 } from "../types";
 
 /**
@@ -50,10 +58,36 @@ export interface BeautyAdminApi {
   getClient(id: string): Promise<ClientProfile | null>;
   /** POST /clients/{id}/notes */
   addClientNote(id: string, text: string): Promise<void>;
-  /** GET /specialists */
-  getStaff(): Promise<StaffSummary[]>;
+  /** GET /api/invites (§10) - лише незакриті (pending) запрошення цього працівника */
+  getStaffInvites(staffId: string): Promise<PendingInvite[]>;
+  /** DELETE /api/invites/{id} (§10) - відкликати запрошення */
+  revokeInvite(inviteId: string): Promise<void>;
+  /** GET /specialists (§13; specialist бачить довідник без телефонів) */
+  getStaff(): Promise<StaffMember[]>;
   /** GET /specialists/{id} */
-  getStaffProfile(id: string): Promise<StaffProfile | null>;
+  getStaffProfile(id: string): Promise<StaffMember | null>;
+  /** GET /services — каталог для призначення послуг */
+  getServices(): Promise<ServiceItem[]>;
+  /** POST /specialists (owner, admin) */
+  createStaff(input: StaffCreateInput): Promise<StaffMember>;
+  /** PUT /specialists/{id} (owner, admin) */
+  updateStaff(id: string, input: StaffUpdateInput): Promise<void>;
+  /** PUT /specialists/{id}/services — повна заміна */
+  setStaffServices(id: string, serviceIds: string[]): Promise<void>;
+  /** PUT /specialists/{id}/schedule — графік у закладі, формат §9 */
+  setStaffSchedule(id: string, locationId: string, workingHours: WorkingHours): Promise<void>;
+  /** POST /specialists/{id}/invite — токен показується один раз */
+  inviteStaff(id: string, email: string): Promise<InviteResult>;
+  /** GET /absences?from&to&specialistId — `note` лише owner/admin і автору */
+  getAbsences(q: { from: string; to: string; specialistId?: string }): Promise<Absence[]>;
+  /** POST /specialists/{id}/absences — керівник: одразу approved + conflicts; specialist: requested */
+  createAbsence(specialistId: string, input: AbsenceInput): Promise<AbsenceResult>;
+  /** POST /absences/{id}/approve — повертає conflicts */
+  approveAbsence(id: string): Promise<AbsenceResult>;
+  /** POST /absences/{id}/reject */
+  rejectAbsence(id: string): Promise<void>;
+  /** POST /absences/{id}/cancel */
+  cancelAbsence(id: string): Promise<void>;
   /** GET /services (+ /services/{id}/prices) */
   getPriceList(): Promise<PriceListRow[]>;
   /** GET /promotions/preview */

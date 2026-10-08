@@ -95,12 +95,15 @@ async function validToken(): Promise<string> {
   return accessToken as unknown as string;
 }
 
-/** Refresh; якщо сервер відхилив сесію (401) — завершуємо її. Мережеві збої сесію не завершують. */
+/**
+ * Refresh; сесію завершуємо ЛИШЕ коли сервер відхилив її (401). Мережеві збої, 429 (rate limit), 423 і 5xx
+ * сесію не завершують: користувач повторить пізніше (інакше rate limit розлогінював би всіх за одним NAT).
+ */
 async function refreshOrEnd(): Promise<void> {
   try {
     await refreshSession();
   } catch (e) {
-    if (e instanceof BeautyApiError && e.status !== 0 && e.status < 500) clearSession();
+    if (e instanceof BeautyApiError && e.status === 401) clearSession();
     throw e;
   }
 }

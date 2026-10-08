@@ -1,11 +1,13 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { useId, useState } from "react";
 import { useAuth } from "@/features/beauty-auth/components/auth-provider";
 import { humanizeError } from "@/features/beauty-auth/errors";
-import { useCalendarWeek, useCancelAppointment, useMoveAppointment } from "../hooks/use-beauty-admin";
-import { clock, dayIndex, durationLabel, minutesOfDay, money } from "../format";
-import type { Appointment, CalendarKind } from "../types";
+import { useAbsences, useCalendarWeek, useCancelAppointment, useMoveAppointment } from "../hooks/use-beauty-admin";
+import { addDaysIso, clock, dayIndex, durationLabel, minutesOfDay, money } from "../format";
+import type { Absence, Appointment, CalendarKind } from "../types";
+import { ABSENCE_TYPE_LABEL } from "./staff-parts";
 import { Badge, Card, Chip, FIELD_INPUT, FIELD_LABEL, PageHeader, PrimaryButton, QueryState, SecondaryButton, TextLink } from "./ui";
 
 const START_HOUR = 9;
@@ -144,7 +146,8 @@ export function CalendarScreen() {
   const { user } = useAuth();
   const isSpecialist = user.role === "specialist";
   // Порожній id = «перший майстер»; specialist бачить лише власний календар.
-  const [chosenId, setChosenId] = useState<string>(isSpecialist ? (user.specialistId ?? "") : "");
+  const fromLink = useSearchParams().get("specialist") ?? "";
+  const [chosenId, setChosenId] = useState<string>(isSpecialist ? (user.specialistId ?? "") : fromLink);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const week = useCalendarWeek(chosenId);
@@ -152,6 +155,19 @@ export function CalendarScreen() {
   const masterId = data?.specialistId ?? chosenId;
 
   const master = data?.masters.find((m) => m.id === masterId);
+  // Відсутність майстра на тиждень: смуга на весь день; текст примітки є лише у відповіді для керівника й автора.
+  const weekStart = data?.weekStart ?? "";
+  const absences = useAbsences(
+    { from: weekStart, to: weekStart ? addDaysIso(weekStart, 6) : "", specialistId: masterId },
+    !!weekStart && !!masterId,
+  );
+  const dayAbsences = (d: number): Absence[] => {
+    if (!weekStart) return [];
+    const day = addDaysIso(weekStart, d);
+    return (absences.data ?? []).filter(
+      (a) => a.specialistId === masterId && (a.status === "approved" || a.status === "requested") && a.dateFrom <= day && a.dateTo >= day,
+    );
+  };
   const real = data?.appointments.filter((a) => a.kind !== "break") ?? [];
   const bookedMinutes = real.reduce((s, a) => s + a.durationMinutes, 0);
   const selected = data?.appointments.find((a) => a.id === selectedId && a.kind !== "break") ?? null;
@@ -233,8 +249,32 @@ export function CalendarScreen() {
                         backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${PX_PER_HOUR - 1}px, #ECE8F2 ${PX_PER_HOUR - 1}px, #ECE8F2 ${PX_PER_HOUR}px)`,
                       }}
                       role="group"
-                      aria-label={day}
+                      aria-label={dayAbsences(d).length ? `${day}. ${dayAbsences(d).map((a) => `${a.status === "requested" ? "Запит: " : ""}${ABSENCE_TYPE_LABEL[a.type]}`).join(", ")}${dayAbsences(d).some((a) => a.status === "approved") ? ", слоти недоступні" : ""}` : day}
                     >
+                      {dayAbsences(d).map((a) => {
+                        const pending = a.status === "requested";
+                        return (
+                          <div
+                            key={a.id}
+                            data-absence={a.status}
+                            className={`absolute inset-0 overflow-hidden px-1.5 py-1 text-[11px] leading-tight font-semibold text-[#4A4560] ${
+                              pending ? "border-2 border-dashed border-[#6F6985] bg-[#F1EEF6]/80" : "bg-[#E9E6EF]"
+                            }`}
+                            style={{
+                              backgroundImage: pending
+                                ? undefined
+                                : "repeating-linear-gradient(135deg, transparent 0 8px, rgba(74,69,96,0.12) 8px 10px)",
+                            }}
+                          >
+                            <span className="block">
+                              {pending ? "Запит: " : ""}
+                              {ABSENCE_TYPE_LABEL[a.type]}
+                            </span>
+                            <span className="block font-normal">{pending ? "очікує підтвердження" : "слоти недоступні"}</span>
+                            {a.note ? <span className="mt-0.5 block font-normal">{a.note}</span> : null}
+                          </div>
+                        );
+                      })}
                       {data.appointments
                         .filter((a) => dayIndex(a.startsAt, data.weekStart) === d)
                         .map((a) => {

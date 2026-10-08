@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import type {
+  BookingResult,
   Location,
   PaymentMethod,
   ReminderOption,
@@ -21,7 +22,11 @@ interface BookingState {
   reminder: ReminderOption;
   paymentMethod: PaymentMethod;
   client: { name: string; phone: string };
-  appointmentId: string | null;
+  /** Результат створення: `publicToken` + запис. Токен живе лише в пам'яті та в посиланні на запис. */
+  booking: BookingResult | null;
+  /** Honeypot-поле: людина його не бачить, тож значення завжди порожнє. */
+  website: string;
+  setWebsite: (v: string) => void;
   setLocation: (l: Location) => void;
   setSpecialist: (s: Specialist) => void;
   setService: (s: Service) => void;
@@ -31,7 +36,7 @@ interface BookingState {
   setClient: (c: Partial<{ name: string; phone: string }>) => void;
   next: () => void;
   back: () => void;
-  done: (appointmentId: string) => void;
+  done: (booking: BookingResult) => void;
   reset: () => void;
 }
 
@@ -44,14 +49,15 @@ const initial = {
   reminder: "1h" as ReminderOption,
   paymentMethod: "card" as PaymentMethod,
   client: { name: "", phone: "" },
-  appointmentId: null,
+  booking: null,
+  website: "",
 };
 
 export const useBookingFlow = create<BookingState>((set) => ({
   ...initial,
   // Зміна попереднього вибору скидає залежні кроки.
   setLocation: (location) => set({ location, specialist: null, service: null, slot: null }),
-  setSpecialist: (specialist) => set({ specialist, slot: null }),
+  setSpecialist: (specialist) => set({ specialist, service: null, slot: null }),
   setService: (service) => set({ service, slot: null }),
   setSlot: (slot) => set({ slot }),
   setReminder: (reminder) => set({ reminder }),
@@ -59,6 +65,7 @@ export const useBookingFlow = create<BookingState>((set) => ({
   setClient: (c) => set((s) => ({ client: { ...s.client, ...c } })),
   next: () => set((s) => ({ step: Math.min(5, s.step + 1) as Step })),
   back: () => set((s) => ({ step: Math.max(1, s.step - 1) as Step })),
-  done: (appointmentId) => set({ appointmentId, step: 5 }),
+  setWebsite: (website) => set({ website }),
+  done: (booking) => set({ booking, step: 5 }),
   reset: () => set(initial),
 }));

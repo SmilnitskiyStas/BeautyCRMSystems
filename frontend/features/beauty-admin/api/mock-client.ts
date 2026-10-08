@@ -1,4 +1,6 @@
+import { BeautyApiError } from "@/features/beauty-auth/errors";
 import { money } from "../format";
+import { normalizeHours, validateHours } from "../working-hours";
 import type { BeautyAdminApi } from "./client";
 import {
   AI_GOALS,
@@ -15,13 +17,18 @@ import {
   MASTERS,
   OVERVIEW_ROWS,
   PRICE_LIST,
-  STAFF,
+  ABSENCES_SEED,
+  SERVICES,
+  STAFF_SEED,
   appointmentsFor,
-  staffProfile,
+  type MockAbsence,
 } from "./mock-data";
 import type {
+  Absence,
   AiChat,
   AiChatMessage,
+  AbsenceConflict,
+  AbsenceResult,
   AiPromoPlan,
   CancellationSettings,
   ChannelConfig,
@@ -30,6 +37,7 @@ import type {
   Overview,
   PromoDraft,
   PromoGoalId,
+  StaffMember,
 } from "../types";
 
 const LATENCY_MS = 150;
@@ -56,6 +64,42 @@ let cancellationSettings: CancellationSettings = {
   feePercent: 0,
 };
 const addedNotes:Record<string, ClientNote[]> = {};
+
+const staff: StaffMember[] = structuredClone(STAFF_SEED);
+const absences: MockAbsence[] = ABSENCES_SEED();
+const mockInvites: { staffId: string; id: string; email: string; expiresAt: string }[] = [];
+
+/** Роль демо-користувача збігається з `auth-provider` (NEXT_PUBLIC_MOCK_ROLE, за замовчуванням owner). */
+const mockRole = () => process.env.NEXT_PUBLIC_MOCK_ROLE ?? "owner";
+const isManager = () => mockRole() !== "specialist";
+const MOCK_SPECIALIST_ID = "m";
+
+const forbid = () => new BeautyApiError(403, "forbidden_role", "forbidden");
+const notFound = () => new BeautyApiError(404, "not_found", "not found");
+
+/** Правило видимості §13: `note` лише керівнику й автору; інакше поля немає взагалі. */
+function view(a: MockAbsence): Absence {
+  const { by, note, ...rest } = a;
+  return isManager() || by === "me" ? { ...rest, note } : rest;
+}
+
+function conflictsFor(a: MockAbsence): AbsenceConflict[] {
+  if (!isManager()) return [];
+  return appointmentsFor(a.specialistId)
+    .filter((x) => x.kind !== "break" && !cancelled.has(x.id))
+    .filter((x) => x.startsAt.slice(0, 10) >= a.dateFrom && x.startsAt.slice(0, 10) <= a.dateTo)
+    .map((x) => ({ appointmentId: x.id, startsAt: x.startsAt, serviceName: x.serviceName }));
+}
+
+function findAbsence(id: string): MockAbsence {
+  const a = absences.find((x) => x.id === id);
+  if (!a) throw notFound();
+  return a;
+}
+
+function staffView(m: StaffMember): StaffMember {
+  return isManager() ? m : { ...m, phone: null };
+}
 
 function findChannel(id: string): ChannelConfig {
   const c = channels.find((x) => x.id === id);
@@ -137,8 +181,132 @@ export const mockBeautyApi: BeautyAdminApi = {
     await wait(null);
   },
 
-  getStaff: () => wait(STAFF),
-  getStaffProfile: (id) => wait(staffProfile(id)),
+  getStaff: () => wait(staff.map(staffView)),
+  getStaffProfile: (id) => {
+    const m = staff.find((x) => x.id === id);
+    return wait(m ? staffView(m) : null);
+  },
+  getServices: () => wait(SERVICES),
+
+  createStaff: async (input) => {
+    if (!isManager()) throw forbid();
+    const member: StaffMember = {
+      id: `st${Date.now()}`,
+      name: input.name.trim(),
+      phone: input.phone.trim() || null,
+      position: input.position.trim() || null,
+      isActive: true,
+      services: SERVICES.filter((x) => input.serviceIds.includes(x.id)).map(({ id, name }) => ({ id, name })),
+      locations: input.locationIds.map((id) => ({
+        locationId: id,
+        locationName: locationName(id),
+        workingHours: normalizeHours(input.workingHours),
+      })),
+    };
+    if (Object.keys(validateHours(input.workingHours)).length > 0) throw new BeautyApiError(422, "invalid_working_hours", "invalid");
+    staff.push(member);
+    return wait(member);
+  },
+
+  updateStaff: async (id, input) => {
+    if (!isManager()) throw forbid();
+    const m = staff.find((x) => x.id === id);
+    if (!m) throw notFound();
+    Object.assign(m, { name: input.name.trim(), phone: input.phone.trim() || null, position: input.position.trim() || null, isActive: input.isActive });
+    await wait(null);
+  },
+
+  setStaffServices: async (id, serviceIds) => {
+    if (!isManager()) throw forbid();
+    const m = staff.find((x) => x.id === id);
+    if (!m) throw notFound();
+    m.services = SERVICES.filter((x) => serviceIds.includes(x.id)).map(({ id: sid, name }) => ({ id: sid, name }));
+    await wait(null);
+  },
+
+  setStaffSchedule: async (id, locationId, workingHours) => {
+    if (!isManager()) throw forbid();
+    const m = staff.find((x) => x.id === id);
+    if (!m) throw notFound();
+    if (Object.keys(validateHours(workingHours)).length > 0) throw new BeautyApiError(422, "invalid_working_hours", "invalid");
+    const loc = m.locations.find((l) => l.locationId === locationId);
+    if (!loc) throw notFound();
+    loc.workingHours = normalizeHours(workingHours);
+    await wait(null);
+  },
+
+  inviteStaff: async (id, email) => {
+    if (!isManager()) throw forbid();
+    if (!staff.some((x) => x.id === id)) throw notFound();
+    mockInvites.push({ staffId: id, id: crypto.randomUUID(), email, expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString() });
+    return wait({ token: `mock-${crypto.randomUUID()}` });
+  },
+
+  getStaffInvites: async (staffId) => {
+    if (!isManager()) throw forbid();
+    return wait(mockInvites.filter((i) => i.staffId === staffId).map(({ id, email, expiresAt }) => ({ id, email, expiresAt })));
+  },
+
+  revokeInvite: async (inviteId) => {
+    if (!isManager()) throw forbid();
+    const k = mockInvites.findIndex((i) => i.id === inviteId);
+    if (k >= 0) mockInvites.splice(k, 1);
+    await wait(null);
+  },
+
+  getAbsences: ({ from, to, specialistId }) => {
+    const list = absences.filter(
+      (a) => a.dateTo >= from && a.dateFrom <= to && (!specialistId || a.specialistId === specialistId),
+    );
+    return wait(list.map(view));
+  },
+
+  createAbsence: async (specialistId, input): Promise<AbsenceResult> => {
+    const manager = isManager();
+    if (!manager && specialistId !== MOCK_SPECIALIST_ID) throw forbid();
+    if (!staff.some((x) => x.id === specialistId)) throw notFound();
+    if (input.dateTo < input.dateFrom) throw new BeautyApiError(422, "invalid_request", "invalid dates");
+    const overlap = absences.some(
+      (a) =>
+        a.specialistId === specialistId &&
+        (a.status === "requested" || a.status === "approved") &&
+        a.dateFrom <= input.dateTo &&
+        a.dateTo >= input.dateFrom,
+    );
+    if (overlap) throw new BeautyApiError(409, "absence_overlap", "overlap");
+    const created: MockAbsence = {
+      id: `ab${Date.now()}`,
+      specialistId,
+      type: input.type,
+      dateFrom: input.dateFrom,
+      dateTo: input.dateTo,
+      status: manager ? "approved" : "requested",
+      note: input.note ?? "",
+      by: "me",
+    };
+    absences.push(created);
+    return wait({ absence: view(created), conflicts: conflictsFor(created) });
+  },
+
+  approveAbsence: async (id): Promise<AbsenceResult> => {
+    if (!isManager()) throw forbid();
+    const a = findAbsence(id);
+    a.status = "approved";
+    return wait({ absence: view(a), conflicts: conflictsFor(a) });
+  },
+
+  rejectAbsence: async (id) => {
+    if (!isManager()) throw forbid();
+    findAbsence(id).status = "rejected";
+    await wait(null);
+  },
+
+  cancelAbsence: async (id) => {
+    const a = findAbsence(id);
+    if (!isManager() && a.by !== "me") throw forbid();
+    a.status = "cancelled";
+    await wait(null);
+  },
   getPriceList: () => wait(PRICE_LIST),
 
   previewPromotion: (draft: PromoDraft) => {

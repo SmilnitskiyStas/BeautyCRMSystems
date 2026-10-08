@@ -7,8 +7,10 @@ import type {
   ClientSummary,
   ClientTag,
   PriceListRow,
-  StaffProfile,
-  StaffSummary,
+  Absence,
+  ServiceItem,
+  StaffMember,
+  WorkingHours,
   BeautyLocation,
   AiRequest,
   AiSegment,
@@ -182,67 +184,89 @@ for (const [id, name, meta, tag] of clientSeed) {
   CLIENTS.push({ id, name, meta, tag, profile: baseProfile });
 }
 
-export const STAFF: StaffSummary[] = [
-  { id: "m", name: "Марина Бойко", role: "Майстер манікюру", locations: "Центр, Печерськ" },
-  { id: "a", name: "Анна Шевчук", role: "Колорист", locations: "Центр" },
-  { id: "o", name: "Оксана Лис", role: "Косметолог", locations: "Центр" },
-  { id: "im", name: "Ірина Мельник", role: "Стиліст", locations: "Поділ" },
+/** Каталог послуг для призначення працівникам (з категоріями). */
+export const SERVICES: ServiceItem[] = [
+  { id: "mn", name: "Манікюр + гель-лак", category: "Нігті", durationMinutes: 90 },
+  { id: "mn2", name: "Манікюр", category: "Нігті", durationMinutes: 60 },
+  { id: "pd", name: "Педикюр", category: "Нігті", durationMinutes: 90 },
+  { id: "hc", name: "Жіноча стрижка", category: "Волосся", durationMinutes: 60 },
+  { id: "br", name: "Чоловіча стрижка", category: "Волосся", durationMinutes: 45 },
+  { id: "col", name: "Фарбування", category: "Волосся", durationMinutes: 150 },
+  { id: "ton", name: "Тонування", category: "Волосся", durationMinutes: 120 },
+  { id: "cl", name: "Чистка обличчя", category: "Обличчя", durationMinutes: 75 },
 ];
 
-const days14 = [7, 6, 0, 8, 7, 5, 0, 6, 8, 7, 7, 4, 3, 0];
-const labels14 = ["22", "23", "24", "25", "26", "27", "28", "29", "30", "1", "2", "3", "4", "5"];
+const weekdays = (from: string, to: string, days: ("mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun")[]): WorkingHours =>
+  Object.fromEntries(days.map((d) => [d, [{ from, to }]]));
 
-export function staffProfile(id: string): StaffProfile | null {
-  const s = STAFF.find((x) => x.id === id);
-  if (!s) return null;
-  return {
-    id: s.id,
-    name: s.name,
-    role: `${s.role} · у команді з січня 2024`,
-    locationBadges: ["Центр · пн, вт, ср, пт", "Печерськ · чт, сб"],
-    kpis: [
-      { label: "Візитів за місяць", value: "142", note: "5 з них скасовано" },
-      { label: "Виручка", value: "118 000 ₴", note: "за місяць" },
-      { label: "Завантаження", value: "84%", note: "зайнятих годин у графіку" },
-      { label: "Повторні клієнти", value: "67%", note: "повернулися за 60 днів" },
+const svc = (...ids: string[]) => ids.map((id) => ({ id, name: SERVICES.find((x) => x.id === id)?.name ?? id }));
+
+export const STAFF_SEED: StaffMember[] = [
+  {
+    id: "m",
+    name: "Марина Бойко",
+    phone: "+380 67 000 00 00",
+    position: "Майстер манікюру",
+    isActive: true,
+    services: svc("mn", "mn2", "pd"),
+    locations: [
+      { locationId: "c", locationName: "Центр", workingHours: weekdays("10:00", "19:00", ["mon", "tue", "wed", "fri"]) },
+      { locationId: "k", locationName: "Печерськ", workingHours: weekdays("10:00", "18:00", ["thu", "sat"]) },
     ],
-    activity: days14.map((value, i) => ({ value, label: labels14[i] })),
-    feed: [
-      { id: "f1", kind: "done", kindLabel: "Візит", text: "Завершила: Олена К. · Манікюр + гель-лак · 900 ₴", when: "Сьогодні 11:30" },
-      { id: "f2", kind: "review", kindLabel: "Відгук", text: "Новий відгук 5 з 5 від Софії М.: «Дуже акуратно»", when: "Сьогодні 09:12" },
-      { id: "f3", kind: "move", kindLabel: "Перенесення", text: "Запис Тетяни Г. перенесено з 16:00 на 15:30", when: "Вчора 18:40" },
-      { id: "f4", kind: "note", kindLabel: "Нотатка", text: "Додала нотатку до профілю Олени К.: нюдові відтінки", when: "Вчора 12:05" },
-      { id: "f5", kind: "slot", kindLabel: "Слоти", text: "Відкрила вільні слоти на четвер у Печерську", when: "3 жовт. 10:20" },
-      { id: "f6", kind: "done", kindLabel: "Візит", text: "Завершила: Діана В. · Манікюр + гель-лак · 720 ₴ (акція)", when: "3 жовт. 14:00" },
-      { id: "f7", kind: "move", kindLabel: "Скасування", text: "Клієнтка Алла Ф. скасувала запис на 12:00", when: "2 жовт. 09:30" },
-    ],
-    services: [
-      { name: "Манікюр + гель-лак", duration: "1 г 30 хв", price: "900 ₴", count: "86" },
-      { name: "Манікюр", duration: "1 г", price: "700 ₴", count: "38" },
-      { name: "Педикюр", duration: "1 г 30 хв", price: "1 000 ₴", count: "14" },
-      { name: "Зняття + нарощування", duration: "2 г 30 хв", price: "1 600 ₴", count: "4" },
-    ],
-    schedule: [
-      { day: "Пн", hours: "10:00–19:00", location: "Центр", off: false },
-      { day: "Вт", hours: "10:00–19:00", location: "Центр", off: false },
-      { day: "Ср", hours: "10:00–19:00", location: "Центр", off: false },
-      { day: "Чт", hours: "10:00–18:00", location: "Печерськ", off: false },
-      { day: "Пт", hours: "10:00–19:00", location: "Центр", off: false },
-      { day: "Сб", hours: "10:00–17:00", location: "Печерськ", off: false },
-      { day: "Нд", hours: "Вихідний", location: "Вихідний", off: true },
-    ],
-    bars: [
-      { label: "Записи по акціях", value: "31 з 142", pct: 22 },
-      { label: "Онлайн-записи", value: "104 з 142", pct: 73 },
-      { label: "Середня оцінка", value: "4,9 з 5", pct: 98 },
-    ],
-    contacts: [
-      { label: "Телефон", value: "+380 67 000 00 00" },
-      { label: "Оплата", value: "30% від послуги" },
-      { label: "Онлайн-запис", value: "увімкнено" },
-    ],
-  };
-}
+  },
+  {
+    id: "a",
+    name: "Анна Шевчук",
+    phone: "+380 50 111 22 33",
+    position: "Колорист",
+    isActive: true,
+    services: svc("col", "ton", "hc"),
+    locations: [{ locationId: "c", locationName: "Центр", workingHours: weekdays("09:00", "18:00", ["mon", "tue", "wed", "thu", "fri", "sat"]) }],
+  },
+  {
+    id: "o",
+    name: "Оксана Лис",
+    phone: "+380 63 222 33 44",
+    position: "Косметолог",
+    isActive: true,
+    services: svc("cl"),
+    locations: [{ locationId: "c", locationName: "Центр", workingHours: weekdays("10:00", "19:00", ["mon", "tue", "wed", "thu", "fri", "sat"]) }],
+  },
+  {
+    id: "im",
+    name: "Ірина Мельник",
+    phone: "+380 96 333 44 55",
+    position: "Стиліст",
+    isActive: true,
+    services: svc("hc", "br"),
+    locations: [{ locationId: "p", locationName: "Поділ", workingHours: weekdays("09:00", "18:00", ["mon", "tue", "wed", "thu", "fri"]) }],
+  },
+  {
+    id: "ng",
+    name: "Наталя Гук",
+    phone: "+380 99 444 55 66",
+    position: "Майстер манікюру",
+    isActive: false,
+    services: svc("mn2"),
+    locations: [{ locationId: "k", locationName: "Печерськ", workingHours: weekdays("10:00", "18:00", ["tue", "thu"]) }],
+  },
+];
+
+const isoDay = (offset: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() + offset);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+/** `by` = хто створив (`me` — поточний демо-користувач); потрібен лише mock-клієнту для правил видимості note. */
+export type MockAbsence = Absence & { note: string; by: "me" | "other" };
+
+export const ABSENCES_SEED = (): MockAbsence[] => [
+  { id: "ab1", specialistId: "a", type: "vacation", dateFrom: "2026-10-07", dateTo: "2026-10-08", status: "approved", note: "Сімейні обставини", by: "other" },
+  { id: "ab2", specialistId: "o", type: "day_off", dateFrom: isoDay(0), dateTo: isoDay(0), status: "approved", note: "Особисті справи", by: "other" },
+  { id: "ab3", specialistId: "m", type: "sick", dateFrom: isoDay(3), dateTo: isoDay(4), status: "requested", note: "Візит до лікаря", by: "me" },
+  { id: "ab4", specialistId: "im", type: "vacation", dateFrom: isoDay(14), dateTo: isoDay(21), status: "approved", note: "Відпустка на морі", by: "other" },
+];
 
 export const OVERVIEW_ROWS = [
   { id: "r1", time: "10:00", clientId: "oc", clientName: "Олена Кравченко", serviceName: "Манікюр + гель-лак", specialistId: "m", specialistName: "Марина Бойко", locationId: "c", locationName: "Центр", status: "completed" },

@@ -39,7 +39,7 @@ test.describe("публічний запис (mock API)", () => {
 
     await expect(page.getByText("Послуга та час").first()).toBeVisible();
     await pick(page, 0); // послуга
-    await page.locator("section[aria-labelledby='slots-heading'] button[aria-pressed]").first().click();
+    await page.locator("section[aria-labelledby='slots-heading'] button[aria-pressed]:not([data-testid='date-option'])").first().click();
     await next(page, /До оформлення/);
 
     // умова скасування A2 видна клієнту перед підтвердженням
@@ -63,7 +63,7 @@ test.describe("публічний запис (mock API)", () => {
     await pick(page);
     await next(page, /^Далі$/);
     await pick(page, 0);
-    await page.locator("section[aria-labelledby='slots-heading'] button[aria-pressed]").first().click();
+    await page.locator("section[aria-labelledby='slots-heading'] button[aria-pressed]:not([data-testid='date-option'])").first().click();
     await next(page, /До оформлення/);
 
     await page.getByRole("button", { name: /Підтвердити запис|Оплатити/ }).click();

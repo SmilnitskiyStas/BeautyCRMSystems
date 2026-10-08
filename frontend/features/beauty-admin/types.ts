@@ -129,34 +129,104 @@ export interface ClientProfile {
   loyalty: { balance: string; nextLevel: string; progressPct: number };
 }
 
-export interface StaffSummary {
+/** Ключі днів тижня у `working_hours` (§9): mon..sun. */
+export type Weekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+export interface TimeInterval {
+  /** `HH:mm`, локальний час закладу. */
+  from: string;
+  to: string;
+}
+/** Відсутній день = вихідний. */
+export type WorkingHours = Partial<Record<Weekday, TimeInterval[]>>;
+
+/** Послуга з каталогу (для призначення працівникам). */
+export interface ServiceItem {
   id: string;
   name: string;
-  role: string;
-  locations: string;
+  category: string | null;
+  durationMinutes: number;
 }
 
-export interface StaffFeedItem {
-  id: string;
-  kind: "done" | "move" | "note" | "review" | "slot";
-  kindLabel: string;
-  text: string;
-  when: string;
+export interface StaffLocation {
+  locationId: LocationId;
+  locationName: string;
+  workingHours: WorkingHours;
 }
 
-export interface StaffProfile {
+/** Працівник (§13). `phone` відсутній для ролі specialist (довідник). */
+export interface StaffMember {
   id: string;
   name: string;
-  role: string;
-  locationBadges: string[];
-  kpis: OverviewKpi[];
-  /** Візитів по днях за 14 днів. */
-  activity: { label: string; value: number }[];
-  feed: StaffFeedItem[];
-  services: { name: string; duration: string; price: string; count: string }[];
-  schedule: { day: string; hours: string; location: string; off: boolean }[];
-  bars: { label: string; value: string; pct: number }[];
-  contacts: { label: string; value: string }[];
+  phone: string | null;
+  position: string | null;
+  isActive: boolean;
+  services: { id: string; name: string }[];
+  locations: StaffLocation[];
+}
+
+export interface StaffCreateInput {
+  name: string;
+  phone: string;
+  position: string;
+  locationIds: LocationId[];
+  serviceIds: string[];
+  workingHours: WorkingHours;
+}
+
+export interface StaffUpdateInput {
+  name: string;
+  phone: string;
+  position: string;
+  isActive: boolean;
+}
+
+/** Одноразовий токен запрошення (показується лише один раз; не логувати й не кешувати). */
+export interface InviteResult {
+  token: string;
+}
+
+/** Незакритe запрошення працівника (без токена: він показується лише при створенні). */
+export interface PendingInvite {
+  id: string;
+  email: string;
+  expiresAt: string;
+}
+
+export type AbsenceType = "sick" | "vacation" | "day_off" | "other";
+export type AbsenceStatus = "requested" | "approved" | "rejected" | "cancelled";
+
+export interface Absence {
+  id: string;
+  specialistId: string;
+  type: AbsenceType;
+  /** Повні дні, включно, `YYYY-MM-DD` (часова зона закладу). */
+  dateFrom: string;
+  dateTo: string;
+  status: AbsenceStatus;
+  /** Чутливе: бекенд віддає лише owner/admin і автору; інакше поле відсутнє. Не логувати. */
+  note?: string;
+}
+
+export interface AbsenceConflict {
+  appointmentId: string;
+  /** Локальний `YYYY-MM-DDTHH:mm` (mock) або повний ISO зі зсувом/Z (backend). */
+  startsAt: string;
+  /** IANA-зона закладу, якщо backend її віддає; інакше показуємо в зоні браузера. */
+  timezone?: string;
+  serviceName: string;
+}
+
+export interface AbsenceInput {
+  type: AbsenceType;
+  dateFrom: string;
+  dateTo: string;
+  note?: string;
+}
+
+export interface AbsenceResult {
+  absence: Absence | null;
+  /** Заповнюється лише для керівників. */
+  conflicts: AbsenceConflict[];
 }
 
 export interface CalendarMaster {

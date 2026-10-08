@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  cancellationPolicy,
+  describeCancellation,
   formatDateTime,
   formatDuration,
   formatPrice,
@@ -26,6 +26,8 @@ export function CheckoutStep({ errors, submitError }: { errors: ClientErrors; su
   const setReminder = useBookingFlow((s) => s.setReminder);
   const setPaymentMethod = useBookingFlow((s) => s.setPaymentMethod);
   const setClient = useBookingFlow((s) => s.setClient);
+  const website = useBookingFlow((s) => s.website);
+  const setWebsite = useBookingFlow((s) => s.setWebsite);
   if (!service || !slot) return null;
 
   return (
@@ -88,6 +90,20 @@ export function CheckoutStep({ errors, submitError }: { errors: ClientErrors; su
         )}
       </div>
 
+      {/* Honeypot: невидиме для людей й допоміжних технологій поле; боти його заповнюють - сервер відхиляє запис. */}
+      <div aria-hidden="true" className="absolute -left-[9999px] h-0 w-0 overflow-hidden">
+        <label htmlFor="website">Website</label>
+        <input
+          id="website"
+          name="website"
+          type="text"
+          tabIndex={-1}
+          autoComplete="off"
+          value={website}
+          onChange={(e) => setWebsite(e.target.value)}
+        />
+      </div>
+
       <label htmlFor="remind" className="mt-1 text-sm font-semibold">
         Нагадати про запис
       </label>
@@ -123,7 +139,9 @@ export function CheckoutStep({ errors, submitError }: { errors: ClientErrors; su
 
       <div className="flex flex-col gap-1 rounded-xl bg-[#FFF1CC] px-3.5 py-3 text-[13px] leading-snug text-[#5C3900]">
         <span className="font-semibold">Умови скасування</span>
-        <span>{cancellationPolicy}</span>
+        {describeCancellation(slot.cancellation).map((line) => (
+          <span key={line}>{line}</span>
+        ))}
         <span>{paymentPolicy[paymentMethod]}</span>
       </div>
 

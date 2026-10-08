@@ -10,6 +10,10 @@ import type {
   LocationId,
   PromoDraft,
   PromoGoalId,
+  AbsenceInput,
+  StaffCreateInput,
+  StaffUpdateInput,
+  WorkingHours,
 } from "../types";
 
 export const beautyKeys = {
@@ -20,6 +24,9 @@ export const beautyKeys = {
   client: (id: string) => ["beauty", "client", id] as const,
   staff: ["beauty", "staff"] as const,
   staffProfile: (id: string) => ["beauty", "staff", id] as const,
+  services: ["beauty", "services"] as const,
+  staffInvites: (id: string) => ["beauty", "staff-invites", id] as const,
+  absences: (from: string, to: string, specialistId?: string) => ["beauty", "absences", from, to, specialistId ?? null] as const,
   priceList: ["beauty", "price-list"] as const,
   promoPreview: (d: PromoDraft) => ["beauty", "promo-preview", d] as const,
   network: ["beauty", "analytics", "network"] as const,
@@ -90,11 +97,96 @@ export function useAddClientNote(id: string) {
   });
 }
 
-export const useStaff = () =>
-  useQuery({ queryKey: beautyKeys.staff, queryFn: () => beautyApi.getStaff() });
+export const useStaff = (enabled = true) =>
+  useQuery({ queryKey: beautyKeys.staff, queryFn: () => beautyApi.getStaff(), enabled });
 
 export const useStaffProfile = (id: string) =>
   useQuery({ queryKey: beautyKeys.staffProfile(id), queryFn: () => beautyApi.getStaffProfile(id) });
+
+export const useServices = () =>
+  useQuery({ queryKey: beautyKeys.services, queryFn: () => beautyApi.getServices() });
+
+/** Після зміни працівника оновлюємо і список, і профіль. */
+function useInvalidateStaff() {
+  const qc = useQueryClient();
+  return () => qc.invalidateQueries({ queryKey: beautyKeys.staff });
+}
+
+export function useCreateStaff() {
+  const invalidate = useInvalidateStaff();
+  return useMutation({ mutationFn: (input: StaffCreateInput) => beautyApi.createStaff(input), onSuccess: invalidate });
+}
+
+export function useUpdateStaff(id: string) {
+  const invalidate = useInvalidateStaff();
+  return useMutation({ mutationFn: (input: StaffUpdateInput) => beautyApi.updateStaff(id, input), onSuccess: invalidate });
+}
+
+export function useSetStaffServices(id: string) {
+  const invalidate = useInvalidateStaff();
+  return useMutation({ mutationFn: (serviceIds: string[]) => beautyApi.setStaffServices(id, serviceIds), onSuccess: invalidate });
+}
+
+export function useSetStaffSchedule(id: string) {
+  const invalidate = useInvalidateStaff();
+  return useMutation({
+    mutationFn: ({ locationId, workingHours }: { locationId: string; workingHours: WorkingHours }) =>
+      beautyApi.setStaffSchedule(id, locationId, workingHours),
+    onSuccess: invalidate,
+  });
+}
+
+/** Токен запрошення живе лише в результаті мутації (не в кеші запитів). */
+export function useInviteStaff() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, email }: { id: string; email: string }) => beautyApi.inviteStaff(id, email),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["beauty", "staff-invites"] }),
+  });
+}
+
+export const useStaffInvites = (staffId: string) =>
+  useQuery({ queryKey: beautyKeys.staffInvites(staffId), queryFn: () => beautyApi.getStaffInvites(staffId) });
+
+export function useRevokeInvite(staffId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (inviteId: string) => beautyApi.revokeInvite(inviteId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: beautyKeys.staffInvites(staffId) }),
+  });
+}
+
+export const useAbsences = (q: { from: string; to: string; specialistId?: string }, enabled = true) =>
+  useQuery({
+    queryKey: beautyKeys.absences(q.from, q.to, q.specialistId),
+    queryFn: () => beautyApi.getAbsences(q),
+    enabled,
+  });
+
+function useInvalidateAbsences() {
+  const qc = useQueryClient();
+  return () => qc.invalidateQueries({ queryKey: ["beauty", "absences"] });
+}
+
+export function useCreateAbsence(specialistId: string) {
+  const invalidate = useInvalidateAbsences();
+  return useMutation({ mutationFn: (input: AbsenceInput) => beautyApi.createAbsence(specialistId, input), onSuccess: invalidate });
+}
+
+export function useApproveAbsence() {
+  const invalidate = useInvalidateAbsences();
+  return useMutation({ mutationFn: (id: string) => beautyApi.approveAbsence(id), onSuccess: invalidate });
+}
+
+export function useRejectAbsence() {
+  const invalidate = useInvalidateAbsences();
+  return useMutation({ mutationFn: (id: string) => beautyApi.rejectAbsence(id), onSuccess: invalidate });
+}
+
+export function useCancelAbsence() {
+  const invalidate = useInvalidateAbsences();
+  return useMutation({ mutationFn: (id: string) => beautyApi.cancelAbsence(id), onSuccess: invalidate });
+}
 
 export const usePriceList = () =>
   useQuery({ queryKey: beautyKeys.priceList, queryFn: () => beautyApi.getPriceList() });
