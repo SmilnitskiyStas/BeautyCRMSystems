@@ -1,20 +1,15 @@
-# Known Discrepancies (Contract vs. Code)
+# Known Discrepancies: Documentation vs. Implementation
 
-**Date:** 2026-10-07 (TASK-683)
+**Date:** 2026-10-08 (TASK-700)
 
-**Status:** Reviewed against TASK-674, TASK-675, TASK-676, TASK-677, TASK-678 code & contracts
+**Status codes:**
+- ✓ RESOLVED — ADR or contract updated (TASK-700)
+- ⚠ PENDING — Code correct; documentation needs update by documentation-writer
+- ✗ BLOCKER — Code does NOT match spec; needs backend/frontend fix
 
-This document lists differences between what is specified in `.claude/docs/beauty-contracts.md` (the contract) and what is actually implemented in the code. If a discrepancy is found, it is marked with its reason and next action.
-
----
-
-## Current Status
-
-**No critical discrepancies found.** The implementation closely follows Wave A contracts (TASK-674–678). Minor implementation details are noted below.
+This document tracks cases where documentation (contracts, ADRs, API spec) does NOT match the actual code. Only meaningful discrepancies listed (minor implementation detail enhancements not listed here).
 
 ---
-
-## Notes on Implementation Details
 
 ### 1. AI Tool: `create_appointment` source
 

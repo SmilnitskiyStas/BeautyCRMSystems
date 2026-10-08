@@ -232,10 +232,8 @@ UNIQUE (tenant_id, idempotency_key) DEFERRABLE INITIALLY DEFERRED
 **Webhook deduplication:**
 When Telegram/Instagram re-delivers a webhook (if our ACK was lost), we check idempotency_key:
 ```typescript
-const msg = await db.getMessageByIdempotencyKey(
-  tenantId,
-  `telegram:${externalMessageId}`
-);
+const key = `${channel}:${channelId:N}:${externalMessageId}`;
+const msg = await db.getMessageByIdempotencyKey(tenantId, key);
 
 if (msg && msg.status !== "draft") {
   // Already received/sent, don't process again
@@ -243,28 +241,38 @@ if (msg && msg.status !== "draft") {
 }
 ```
 
+**Deduplication key:** `{channel}:{channelId:N}:{externalMessageId}` where `channelId` is the `beauty_channels.id` (UUID, no hyphens).
+This prevents double-processing if webhook provider re-delivers due to our timeout or connection drop.
+
 ---
 
 ## Retry Strategy
 
-**Max 3 attempts total** (not 1 initial + 3 retries):
+**Max 3 attempts total** (`OUTBOX_MAX_ATTEMPTS = 3`, `OUTBOX_BACKOFF_MS = 5000`):
 
-| Attempt | Status | Delay | Next action |
-|---------|--------|-------|------------|
-| 1 | pending | immediately | process → success or error |
-| 2 | pending | 30s | process → success or error |
-| 3 | pending | 60s | process → success or error |
-| 4 | — | — | mark `failed`, log error |
+| Attempt | Delay before | Status after failure | Action |
+|---------|---------|----------|--------|
+| 1 | (none) | failed retry | `throw` → BullMQ re-enqueues |
+| 2 | 5 seconds (exponential) | failed retry | `throw` → BullMQ re-enqueues |
+| 3 | 10 seconds (exponential: 5s × 2^1) | final failure | `recordSendFailure(msg.id, 3, error, final=true)` |
 
-**Permanent failures (no retry):**
-- 4xx HTTP (invalid request)
-- Instagram 24-hour window closed (HANDOFF: operator reviews)
-- Channel disabled (SKIP: manual intervention)
+**Backoff formula:** `delayMs = OUTBOX_BACKOFF_MS × 2^(attemptNumber - 1)`
+- Attempt 1 fails → delay = 0ms (immediate retry via BullMQ)
+- Attempt 2 fails → delay = 5_000ms × 2^0 = 5s
+- Attempt 3 fails → delay = 5_000ms × 2^1 = 10s
+- After attempt 3: mark `failed`, do not retry further
 
-**Transient failures (retry):**
+**Permanent failures (no retry, mark failed immediately):**
+- 4xx HTTP (invalid request, bad token)
+- Instagram 24-hour window closed (permanent error flag set)
+- Channel disabled or deleted
+- Recipient unsubscribed from marketing
+
+**Transient failures (retry with backoff):**
 - Network timeout
 - 5xx server error
-- Rate limit (429) — retry with backoff
+- Rate limit (429)
+- Any unhandled exception thrown by adapter
 
 ---
 

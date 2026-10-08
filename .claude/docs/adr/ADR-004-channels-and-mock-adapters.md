@@ -284,21 +284,42 @@ var channel = new Channel
 
 ---
 
-## Registration & Selection
+## Configuration
 
-### DI Setup (Program.cs)
+### Environment Variables
+
+**Development:**
+```
+Channels__UseMocks=true
+```
+
+**Production:**
+```
+Channels__UseMocks=false
+Channels__EncryptionKey=<base64-32-bytes>
+TELEGRAM_BOT_TOKEN=<token>
+INSTAGRAM_APP_SECRET=<secret-for-HMAC>
+INSTAGRAM_VERIFY_TOKEN=<verify-token-for-handshake>
+```
+
+### Registration & DI Setup
 
 ```csharp
 public static IServiceCollection AddBeautyChannels(
-    this IServiceCollection services, bool useMocks = true)
+    this IServiceCollection services, bool useMocks)
 {
-    // Register all adapters
+    // In Development, useMocks=true → register only mocks
+    // Outside Development, useMocks=true is an ERROR: API refuses to start
+    if (useMocks && !env.IsDevelopment())
+        throw new InvalidOperationException("Channels:UseMocks=true is not allowed outside Development");
+
+    // Register all adapter instances
     services.AddSingleton<TelegramAdapter>();
     services.AddSingleton<InstagramAdapter>();
     services.AddSingleton<ViberMockAdapter>();
     services.AddSingleton<WhatsAppMockAdapter>();
     
-    // Registry
+    // Registry: select real or mock based on config
     services.AddSingleton<ChannelRegistry>(provider =>
     {
         var registry = new ChannelRegistry();
@@ -309,22 +330,15 @@ public static IServiceCollection AddBeautyChannels(
             ? provider.GetRequiredService<InstagramMockAdapter>()
             : provider.GetRequiredService<InstagramAdapter>());
         registry.Register("viber", provider.GetRequiredService<ViberMockAdapter>());
-        // ... others
+        registry.Register("whatsapp", provider.GetRequiredService<WhatsAppMockAdapter>());
         return registry;
     });
     
     services.AddScoped<AesGcmSecretProtector>();
     services.AddScoped<WebhookIngestService>();
-    services.AddScoped<OutboundDispatcher>();
     
     return services;
 }
-```
-
-**In Program.cs:**
-```csharp
-var useMocks = builder.Configuration.GetValue("Channels:UseMocks", true);
-builder.Services.AddBeautyChannels(useMocks);
 ```
 
 ---
@@ -405,23 +419,39 @@ public class WebhookIngestService(ChannelRegistry registry, ChannelRequestContex
 
 ---
 
-## Secrets in .env
+## Instagram Webhook Secrets (Meta Handshake)
 
+Instagram uses two separate secrets:
+
+1. **`appSecret`** — used for POST (webhook delivery) signature verification
+   - Format: HMAC-SHA256 key
+   - Header: `X-Hub-Signature-256: sha256=<hex>`
+   - Verification: HMAC-SHA256(body, secret).toHex()
+
+2. **`verifyToken`** — used for GET (webhook subscription handshake)
+   - Format: arbitrary string (≤512 chars)
+   - Query param: `hub.verify_token`
+   - Handshake: returns `hub.challenge` if token matches
+
+**Storage:** Both secrets encrypted in `beauty_channels.credentials_encrypted` as JSON:
+```json
+{ "appSecret": "...", "verifyToken": "..." }
 ```
-# Telegram
-TELEGRAM_BOT_TOKEN=123:ABC...
-TELEGRAM_WEBHOOK_SECRET=secret-key
 
-# Instagram
-INSTAGRAM_APP_SECRET=abcd1234...
-INSTAGRAM_VERIFY_TOKEN=token123...
-
-# Channel encryption
-Channels__EncryptionKey=<base64-32-bytes>
-
-# Development: use mocks
-Channels__UseMocks=true
+**Webhook flow:**
 ```
+1. GET /webhooks/instagram/{channelId}?hub.verify_token=...&hub.challenge=...
+   → Decrypt credentials, check verifyToken, return hub.challenge
+   
+2. POST /webhooks/instagram/{channelId}
+   → Verify X-Hub-Signature-256 using appSecret
+   → Parse & store messages
+```
+
+**API update (§14.4):**
+- `PUT /api/beauty/channels/{id}` accepts optional `appSecret` & `verifyToken` (null/omitted = no change)
+- Response includes `hasAppSecret`, `hasVerifyToken` (booleans, secrets not returned)
+- 409 `channel_id_conflict` if id already exists in another tenant
 
 ---
 
