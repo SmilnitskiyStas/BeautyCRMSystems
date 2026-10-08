@@ -65,6 +65,8 @@ export interface BeautyDataPort {
   upsertMessage(msg: OutboundMessage): Promise<{ message: StoredMessage; created: boolean }>;
   getMessage(id: string): Promise<StoredMessage | null>;
   setMessageStatus(id: string, status: StoredMessage["status"]): Promise<void>;
+  /** Marketing (campaign/winback) messages of the current tenant sent since `since` (daily limit). */
+  countMarketingSentSince(since: Date): Promise<number>;
   /** Persist a failed attempt (attempts/last_error); `final` => status "failed", otherwise stays queued ("pending"). */
   recordSendFailure(id: string, attempt: number, error: string, final: boolean): Promise<void>;
 }
@@ -114,4 +116,6 @@ export interface BeautyDeps {
   log: NotificationLogPort;
   queue: QueuePort;
   now: () => Date;
+  /** Marketing messages per tenant per rolling 24 h; default DEFAULT_MARKETING_DAILY_LIMIT. */
+  marketingDailyLimit?: number;
 }

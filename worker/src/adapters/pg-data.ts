@@ -132,6 +132,14 @@ export class PgBeautyData implements BeautyDataPort {
     });
   }
 
+  async countMarketingSentSince(since: Date): Promise<number> {
+    const { rows } = await this.db.tx((c) => c.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM beauty_messages
+       WHERE direction = 'outbound' AND status = 'sent' AND sent_at >= $1::timestamptz
+         AND idempotency_key ~ '^(campaign|winback):'`, [since]));
+    return rows[0]?.n ?? 0;
+  }
+
   async recordSendFailure(id: string, attempt: number, error: string, final: boolean): Promise<void> {
     const now = this.now();
     const err = error.length > 1000 ? error.slice(0, 1000) : error;

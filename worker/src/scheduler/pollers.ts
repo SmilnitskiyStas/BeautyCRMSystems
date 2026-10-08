@@ -3,6 +3,7 @@ import type { Logger } from "../adapters/pg-support";
 import { withTenant } from "../db/tenant-db";
 import type { TenantDirectory } from "../db/tenants";
 import { processOutbox } from "../jobs/beauty-outbox";
+import { processReviewRequest } from "../jobs/beauty-review";
 import { processReminder } from "../jobs/beauty-reminder";
 import { processWinback } from "../jobs/beauty-winback";
 import type { BeautyDeps } from "../ports";
@@ -86,4 +87,23 @@ export function pollWinback(ctx: PollContext, inactiveDays?: number): Promise<Po
     const r = await processWinback(ctx.deps, inactiveDays);
     return { processed: r.sent, errors: 0 };
   }, "pollWinback");
+}
+
+/**
+ * Review request after a completed visit. Idempotent: key `review:{appointmentId}`; appointments that already
+ * have the message are excluded by the query, and a concurrent duplicate is rejected by the unique key.
+ */
+export function pollReviews(ctx: PollContext): Promise<PollResult> {
+  return forEachTenant(ctx, async () => {
+    const res: PollResult = { processed: 0, errors: 0 };
+    for (const id of await ctx.store.listCompletedWithoutReview(ctx.deps.now(), ctx.batchSize ?? 50)) {
+      try {
+        if (await processReviewRequest(ctx.deps, { appointmentId: id }) === "queued") res.processed++;
+      } catch (err) {
+        res.errors++;
+        ctx.logger.error("review request failed", { appointmentId: id, error: String(err) });
+      }
+    }
+    return res;
+  }, "pollReviews");
 }

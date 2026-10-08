@@ -1,5 +1,5 @@
 import type { BeautyDeps } from "../ports";
-import { enqueueMessage } from "./beauty-common";
+import { enqueueMessage, withUnsubscribe } from "./beauty-common";
 
 export const WINBACK_INACTIVE_DAYS = 60;
 
@@ -12,7 +12,7 @@ export async function processWinback(deps: BeautyDeps, inactiveDays = WINBACK_IN
     // Keyed by last visit: one nudge per lapse, repeat runs do not duplicate.
     const ok = await enqueueMessage(deps, {
       tenantId: c.tenantId, clientId: c.id, channel: c.channel, address: c.address,
-      text: `${c.name ?? "Привіт"}, ми давно вас не бачили! Запишіться на візит.`,
+      text: withUnsubscribe(`${c.name ?? "Привіт"}, ми давно вас не бачили! Запишіться на візит.`),
       idempotencyKey: `winback:${c.id}:${c.lastVisitAt.toISOString().slice(0, 10)}`, kind: "winback",
     });
     if (ok) sent++; else skipped++;

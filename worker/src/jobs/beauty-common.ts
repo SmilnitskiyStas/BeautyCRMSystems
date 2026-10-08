@@ -10,6 +10,15 @@ export const QUEUES = {
 
 export const OUTBOX_MAX_ATTEMPTS = 3;
 export const OUTBOX_BACKOFF_MS = 5_000;
+/** Marketing messages per tenant per rolling 24 h (override: WORKER_MARKETING_DAILY_LIMIT). */
+export const DEFAULT_MARKETING_DAILY_LIMIT = 200;
+export const MARKETING_KINDS: ReadonlySet<OutboundMessage["kind"]> = new Set(["campaign", "winback"]);
+export const UNSUBSCRIBE_NOTE = "Щоб не отримувати повідомлення, надішліть STOP";
+
+/** Marketing texts must carry the opt-out instruction. */
+export const withUnsubscribe = (text: string): string => `${text}
+
+${UNSUBSCRIBE_NOTE}`;
 
 /** Create the message once per key and enqueue it into the outbox. Returns false if it already existed. */
 export async function enqueueMessage(deps: BeautyDeps, msg: OutboundMessage): Promise<boolean> {

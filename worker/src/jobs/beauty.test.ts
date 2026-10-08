@@ -6,6 +6,7 @@ import { processReminder, scheduleReminder } from "./beauty-reminder";
 import { processCampaign } from "./beauty-campaign";
 import { processWinback } from "./beauty-winback";
 import { processReviewRequest } from "./beauty-review";
+import { UNSUBSCRIBE_NOTE } from "./beauty-common";
 
 const client: ClientInfo = { id: "c1", tenantId: "t1", channel: "telegram", address: "42", marketingConsent: true };
 const noConsent: ClientInfo = { ...client, id: "c2", marketingConsent: false };
@@ -115,5 +116,59 @@ describe("winback and review", () => {
     expect(await processReviewRequest(t.deps, { appointmentId: "a1" })).toBe("skipped");
     expect(await processReviewRequest(t.deps, { appointmentId: "a2" })).toBe("skipped");
     expect(t.outbox).toHaveLength(1);
+  });
+});
+
+describe("marketing safeguards (unsubscribe, daily limit)", () => {
+  const lapsed: LapsedClient = { ...client, lastVisitAt: new Date("2025-10-01T00:00:00Z") };
+  const campaign = { id: "k1", tenantId: "t1", text: "Акція", allowedFromHour: 9, allowedToHour: 21, utcOffsetMinutes: 0 };
+
+  it("winback_and_campaign_texts_include-unsubscribe-instruction", async () => {
+    const t = makeDeps({ now: NOW, lapsed: [lapsed], campaign, audience: [client] });
+    await processWinback(t.deps);
+    await processCampaign(t.deps, { campaignId: "k1" });
+    const texts = [...t.messages.values()].map((m) => m.text);
+    expect(texts).toHaveLength(2);
+    for (const x of texts) expect(x).toContain(UNSUBSCRIBE_NOTE);
+    expect(UNSUBSCRIBE_NOTE).toContain("STOP");
+  });
+
+  it("reminder_text_has-no-unsubscribe-line", async () => {
+    const t = makeDeps({ now: NOW, appointments: [appt()], clients: [client] });
+    await processReminder(t.deps, { appointmentId: "a1", offset: "2h" });
+    expect([...t.messages.values()][0]!.text).not.toContain(UNSUBSCRIBE_NOTE);
+  });
+
+  it("processOutbox_skips-and-fails-marketing_when-client-unsubscribed-after-enqueue", async () => {
+    const t = makeDeps({ now: NOW, lapsed: [lapsed], clients: [client] });
+    await processWinback(t.deps);
+    const messageId = t.outbox[0]!;
+    // client unsubscribes between audience selection and delivery
+    t.deps.data.getClient = async () => ({ ...client, marketingConsent: false });
+    expect(await processOutbox(t.deps, { messageId })).toBe("skipped");
+    expect(t.sent).toHaveLength(0);
+    expect(t.messages.get(messageId)!.status).toBe("failed");
+    expect(t.logs.at(-1)).toMatchObject({ status: "skipped", reason: "unsubscribed" });
+  });
+
+  it("processOutbox_still-sends-reminder_to-unsubscribed-client", async () => {
+    const t = makeDeps({ now: NOW, appointments: [appt()], clients: [{ ...client, marketingConsent: false }] });
+    await processReminder(t.deps, { appointmentId: "a1", offset: "2h" });
+    expect(await processOutbox(t.deps, { messageId: t.outbox[0]! })).toBe("sent");
+  });
+
+  it("processOutbox_defers-marketing_when-daily-limit-reached_but-not-reminders", async () => {
+    const l2: LapsedClient = { ...lapsed, id: "c3" };
+    const t = makeDeps({ now: NOW, lapsed: [lapsed, l2], clients: [client, { ...client, id: "c3" }], appointments: [appt()], marketingDailyLimit: 1 });
+    await processWinback(t.deps);
+    expect(await processOutbox(t.deps, { messageId: t.outbox[0]! })).toBe("sent");
+    expect(await processOutbox(t.deps, { messageId: t.outbox[1]! })).toBe("deferred");
+    expect(t.sent).toHaveLength(1);
+    expect(t.messages.get(t.outbox[1]!)!.status).toBe("queued"); // not failed: retried later
+    expect(t.logs.at(-1)).toMatchObject({ status: "skipped" });
+    expect(t.logs.at(-1)!.reason).toContain("daily marketing limit");
+    // transactional reminder is not limited
+    await processReminder(t.deps, { appointmentId: "a1", offset: "2h" });
+    expect(await processOutbox(t.deps, { messageId: t.outbox[2]! })).toBe("sent");
   });
 });

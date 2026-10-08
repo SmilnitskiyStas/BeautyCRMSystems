@@ -11,7 +11,7 @@ import { PgAdvisoryIdempotency, PgQueuePort, type Logger } from "../adapters/pg-
 import { TenantDb, withTenant } from "../db/tenant-db";
 import { PgFunctionTenantDirectory, StaticTenantDirectory } from "../db/tenants";
 import type { BeautyDeps, NotificationLogEntry, StoredMessage } from "../ports";
-import { pollOutbox, pollReminders, pollWinback, type PollContext } from "../scheduler/pollers";
+import { pollOutbox, pollReminders, pollReviews, pollWinback, type PollContext } from "../scheduler/pollers";
 
 const NOW = new Date("2026-03-10T10:00:00Z"); // Kyiv 12:00 (inside the 09-20 window)
 const NIGHT = new Date("2026-03-10T22:00:00Z"); // Kyiv 00:00 (outside)
@@ -79,7 +79,7 @@ async function seed(o: {
   return { tenantId, clientId: client, apptId: appt, reminderId, channelId: channel, convId: conv };
 }
 
-function makeCtx(tenantIds: string[], opts: { now?: () => Date; sender?: (m: StoredMessage) => Promise<void> } = {}) {
+function makeCtx(tenantIds: string[], opts: { now?: () => Date; sender?: (m: StoredMessage) => Promise<void>; marketingDailyLimit?: number } = {}) {
   const sent: StoredMessage[] = [];
   const logs: NotificationLogEntry[] = [];
   const now = opts.now ?? (() => NOW);
@@ -90,6 +90,7 @@ function makeCtx(tenantIds: string[], opts: { now?: () => Date; sender?: (m: Sto
     idempotency: new PgAdvisoryIdempotency(lockPool),
     log: { append: async (e) => { logs.push(e); } },
     queue: new PgQueuePort(),
+    marketingDailyLimit: opts.marketingDailyLimit,
   };
   const ctx: PollContext = {
     deps, store: new PgPollStore(db), tenants: new StaticTenantDirectory(tenantIds), logger: silent, backoffMs: 0,
@@ -219,6 +220,55 @@ describe("reminder -> outbox -> channel (PostgreSQL, RLS enforced)", () => {
     await pollOutbox(day.ctx); await pollOutbox(day.ctx);
     expect(day.sent).toHaveLength(1);
     expect(day.sent[0]).toMatchObject({ tenantId: lapsed.tenantId, kind: "winback", clientId: lapsed.clientId });
+  });
+
+  it("winback_unsubscribed-after-enqueue_is-not-sent_and-text-has-stop-line", async () => {
+    const s = await seed({ consent: true, starts: new Date("2025-12-01T10:00:00Z"), apptStatus: "completed", reminderAt: null });
+    const { ctx, sent } = makeCtx([s.tenantId]);
+    await pollWinback(ctx);
+    const [m] = await row("SELECT body FROM beauty_messages WHERE tenant_id=$1", [s.tenantId]);
+    expect(m.body).toContain("надішліть STOP");
+    await admin.query("UPDATE beauty_clients SET unsubscribed = true WHERE id = $1", [s.clientId]); // after enqueue
+    await pollOutbox(ctx);
+    expect(sent).toHaveLength(0);
+    expect(await row("SELECT status, last_error FROM beauty_messages WHERE tenant_id=$1", [s.tenantId]))
+      .toMatchObject([{ status: "failed", last_error: expect.stringContaining("unsubscribed") }]);
+  });
+
+  it("marketing_daily-limit-per-tenant_defers-excess-and-sends-after-window", async () => {
+    const mk = () => seed({ consent: true, starts: new Date("2025-12-01T10:00:00Z"), apptStatus: "completed", reminderAt: null });
+    const a = await mk(); const b = await mk();
+    // limit 1 per tenant: each tenant is independent, so both get their one message
+    const first = makeCtx([a.tenantId, b.tenantId], { marketingDailyLimit: 1 });
+    await pollWinback(first.ctx); await pollOutbox(first.ctx);
+    expect(first.sent).toHaveLength(2);
+    // a second marketing message for tenant a exceeds the limit -> stays pending
+    const extra = await admin.query(
+      `INSERT INTO beauty_messages (tenant_id, conversation_id, direction, sender_type, body, status, idempotency_key)
+       VALUES ($1,$2,'outbound','system','Promo','pending','campaign:x:'||$3) RETURNING id`, [a.tenantId, a.convId, a.clientId]);
+    const again = makeCtx([a.tenantId], { marketingDailyLimit: 1 });
+    await pollOutbox(again.ctx);
+    expect(again.sent).toHaveLength(0);
+    expect(await row("SELECT status FROM beauty_messages WHERE id=$1", [extra.rows[0].id])).toEqual([{ status: "pending" }]);
+    // 25 h later the old sends left the rolling window
+    const later = makeCtx([a.tenantId], { marketingDailyLimit: 1, now: () => new Date(NOW.getTime() + 25 * 3_600_000) });
+    await pollOutbox(later.ctx);
+    expect(later.sent).toHaveLength(1);
+  });
+
+  it("review_poller_requests-review-once-per-completed-visit_and-skips-others", async () => {
+    const done = await seed({ starts: new Date(NOW.getTime() - 3_600_000), apptStatus: "completed", reminderAt: null });
+    const open = await seed({ reminderAt: null }); // confirmed, in the future
+    const old = await seed({ starts: new Date(NOW.getTime() - 10 * 86_400_000), apptStatus: "completed", reminderAt: null });
+    const { ctx, sent } = makeCtx([done.tenantId, open.tenantId, old.tenantId]);
+    expect(await pollReviews(ctx)).toEqual({ processed: 1, errors: 0 });
+    expect(await pollReviews(ctx)).toEqual({ processed: 0, errors: 0 }); // rerun: no duplicate
+    await pollOutbox(ctx);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ kind: "review", clientId: done.clientId, idempotencyKey: `review:${done.apptId}` });
+    expect(sent[0]!.text).not.toContain("STOP");
+    await pollReviews(ctx); await pollOutbox(ctx);
+    expect(sent).toHaveLength(1);
   });
 
   it("outbound-messages-created-by-backend_are-sent-too_with-null-key", async () => {

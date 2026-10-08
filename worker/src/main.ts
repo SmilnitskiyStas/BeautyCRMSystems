@@ -6,9 +6,10 @@ import { DEFAULT_WINDOW, PgPollStore } from "./adapters/pg-poll-store";
 import { LoggerNotificationLog, PgAdvisoryIdempotency, PgQueuePort, consoleLogger } from "./adapters/pg-support";
 import { TenantDb } from "./db/tenant-db";
 import { StaticTenantDirectory, type TenantDirectory } from "./db/tenants";
+import { DEFAULT_MARKETING_DAILY_LIMIT } from "./jobs/beauty-common";
 import type { BeautyDeps } from "./ports";
 import { Scheduler } from "./scheduler/scheduler";
-import { pollOutbox, pollReminders, pollWinback, type PollContext } from "./scheduler/pollers";
+import { pollOutbox, pollReminders, pollReviews, pollWinback, type PollContext } from "./scheduler/pollers";
 
 const MIN = 60_000;
 
@@ -29,12 +30,14 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
     idempotency: new PgAdvisoryIdempotency(lockPool),
     log: new LoggerNotificationLog(consoleLogger),
     queue: new PgQueuePort(),
+    marketingDailyLimit: Number(env.WORKER_MARKETING_DAILY_LIMIT) > 0 ? Number(env.WORKER_MARKETING_DAILY_LIMIT) : DEFAULT_MARKETING_DAILY_LIMIT,
   };
   const store = new PgPollStore(db, { ...DEFAULT_WINDOW, defaultTimezone: env.WORKER_DEFAULT_TIMEZONE ?? DEFAULT_WINDOW.defaultTimezone });
   const ctx: PollContext = { deps, store, tenants: tenants ?? StaticTenantDirectory.fromEnv(env.WORKER_TENANT_IDS), logger: consoleLogger };
   const scheduler = new Scheduler([
     { name: "beauty.reminders", everyMs: 1 * MIN, run: () => pollReminders(ctx) },
     { name: "beauty.outbox", everyMs: 30_000, run: () => pollOutbox(ctx) },
+    { name: "beauty.reviews", everyMs: 10 * MIN, run: () => pollReviews(ctx) },
     { name: "beauty.winback", everyMs: 24 * 60 * MIN, run: () => pollWinback(ctx) },
   ], consoleLogger);
   return {

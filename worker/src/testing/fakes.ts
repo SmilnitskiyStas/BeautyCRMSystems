@@ -4,7 +4,7 @@ import type {
 
 export function makeDeps(init: {
   now?: Date; appointments?: AppointmentInfo[]; clients?: ClientInfo[]; campaign?: CampaignInfo;
-  audience?: ClientInfo[]; lapsed?: LapsedClient[]; sendFailures?: number;
+  audience?: ClientInfo[]; lapsed?: LapsedClient[]; sendFailures?: number; marketingDailyLimit?: number;
 } = {}) {
   const messages = new Map<string, StoredMessage>();
   const claims = new Map<string, "held" | "done">();
@@ -18,6 +18,7 @@ export function makeDeps(init: {
 
   const deps: BeautyDeps = {
     now: () => state.now,
+    marketingDailyLimit: init.marketingDailyLimit,
     data: {
       getAppointment: async (id) => init.appointments?.find((a) => a.id === id) ?? null,
       getClient: async (id) => init.clients?.find((c) => c.id === id) ?? null,
@@ -33,6 +34,7 @@ export function makeDeps(init: {
       },
       getMessage: async (id) => messages.get(id) ?? null,
       setMessageStatus: async (id, s) => { messages.get(id)!.status = s; },
+      countMarketingSentSince: async () => sent.filter((m) => m.kind === "campaign" || m.kind === "winback").length,
       recordSendFailure: async (id, _attempt, _error, final) => { if (final) messages.get(id)!.status = "failed"; },
     },
     sender: { send: async (m) => { if (failures > 0) { failures--; throw new Error("channel down"); } sent.push(m); } },

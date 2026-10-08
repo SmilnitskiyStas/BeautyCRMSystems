@@ -1,5 +1,5 @@
 import type { BeautyDeps, CampaignInfo } from "../ports";
-import { enqueueMessage } from "./beauty-common";
+import { enqueueMessage, withUnsubscribe } from "./beauty-common";
 
 export interface CampaignJobData { campaignId: string }
 
@@ -27,7 +27,7 @@ export async function processCampaign(deps: BeautyDeps, data: CampaignJobData): 
     if (!c.marketingConsent) { skipped++; continue; }
     const ok = await enqueueMessage(deps, {
       tenantId: campaign.tenantId, clientId: c.id, channel: c.channel, address: c.address,
-      text: campaign.text, idempotencyKey: `campaign:${campaign.id}:${c.id}`, kind: "campaign",
+      text: withUnsubscribe(campaign.text), idempotencyKey: `campaign:${campaign.id}:${c.id}`, kind: "campaign",
     });
     if (ok) sent++; else skipped++;
   }

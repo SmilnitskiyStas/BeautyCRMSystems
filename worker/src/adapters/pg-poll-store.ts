@@ -9,6 +9,9 @@ export interface SendWindow { fromHour: number; toHour: number; defaultTimezone:
 /** Contract §8: mailing hours 09:00-20:00 local. */
 export const DEFAULT_WINDOW: SendWindow = { fromHour: 9, toHour: 20, defaultTimezone: "Europe/Kyiv" };
 
+/** Only visits completed within this period get a review request (avoids spamming history on first start). */
+export const REVIEW_LOOKBACK_DAYS = 3;
+
 /** Selection queries of the pollers (tenant-scoped through TenantDb). */
 export class PgPollStore {
   constructor(private readonly db: TenantDb, private readonly window: SendWindow = DEFAULT_WINDOW) {}
@@ -25,6 +28,17 @@ export class PgPollStore {
       id: r.id, appointmentId: r.appointment_id, startsAt: r.starts_at,
       offset: r.reminder_option === "1h" || r.reminder_option === "2h" ? r.reminder_option : null,
     }));
+  }
+
+  /** Completed visits (recent) that have no review-request message yet. */
+  async listCompletedWithoutReview(now: Date, limit: number, lookbackDays = REVIEW_LOOKBACK_DAYS): Promise<string[]> {
+    const { rows } = await this.db.tx((c) => c.query<{ id: string }>(
+      `SELECT a.id FROM beauty_appointments a
+       WHERE a.status = 'completed'
+         AND a.starts_at <= $1::timestamptz AND a.starts_at >= $1::timestamptz - make_interval(days => $2::int)
+         AND NOT EXISTS (SELECT 1 FROM beauty_messages m WHERE m.idempotency_key = 'review:' || a.id::text)
+       ORDER BY a.starts_at LIMIT $3`, [now, lookbackDays, limit]));
+    return rows.map((r) => r.id);
   }
 
   async closeReminder(id: string, status: "cancelled" | "failed", reason: string, now: Date): Promise<void> {
