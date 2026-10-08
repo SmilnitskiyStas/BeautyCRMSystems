@@ -15,6 +15,7 @@ import {
   useSetStaffServices,
   useStaff,
   useStaffProfile,
+  useUpcomingAppointmentsCount,
   useUpdateStaff,
 } from "../hooks/use-beauty-admin";
 import { addDaysIso, initials, todayIso } from "../format";
@@ -308,6 +309,7 @@ function ProfileTab({ m, canEdit }: { m: StaffMember; canEdit: boolean }) {
   const [errors, setErrors] = useState<FormErrors>({});
   const [saved, setSaved] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const upcoming = useUpcomingAppointmentsCount(m.id, confirming);
 
   function validate(): boolean {
     const next: FormErrors = {};
@@ -380,6 +382,20 @@ function ProfileTab({ m, canEdit }: { m: StaffMember; canEdit: boolean }) {
                 Працівник зникне з онлайн-запису й календаря для нових записів. Наявні записи не видаляються — перенесіть їх за потреби.
               </p>
               <p className="text-sm font-semibold">Деактивація забере вхід у систему для прив’язаного користувача.</p>
+              <div role="status" className="flex flex-col items-start gap-1 text-sm" data-testid="upcoming-info">
+                {upcoming.isPending ? (
+                  <span>Рахуємо майбутні записи…</span>
+                ) : upcoming.isError ? (
+                  <span>Не вдалося порахувати майбутні записи. Перевірте календар.</span>
+                ) : upcoming.data > 0 ? (
+                  <span>
+                    <strong>Майбутніх записів (найближчі 60 днів): {upcoming.data}.</strong> Їх потрібно перенести або скасувати.
+                  </span>
+                ) : (
+                  <span>Майбутніх записів (найближчі 60 днів) немає.</span>
+                )}
+                <TextLink href={`/beauty/calendar?specialist=${encodeURIComponent(m.id)}`}>Відкрити календар</TextLink>
+              </div>
               <div className="flex flex-wrap gap-2">
                 <PrimaryButton disabled={update.isPending} onClick={() => setActive(false)}>
                   Так, деактивувати

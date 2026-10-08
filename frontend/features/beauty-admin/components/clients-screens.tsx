@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useAddClientNote, useClient, useClients } from "../hooks/use-beauty-admin";
+import { cancelledByLabel } from "../cancellation";
 import { initials } from "../format";
 import type { ClientProfile } from "../types";
 import {
@@ -62,6 +63,7 @@ const VISIT_TONE: Record<ClientProfile["visits"][number]["status"], { label: str
   completed: { label: "Завершено", tone: "ok" },
   planned: { label: "Заплановано", tone: "now" },
   cancelled: { label: "Скасовано", tone: "neutral" },
+  no_show: { label: "Не прийшов", tone: "neutral" },
 };
 
 function NoteForm({ clientId }: { clientId: string }) {
@@ -136,7 +138,13 @@ export function ClientProfileScreen({ id }: { id: string }) {
               </div>
             </Card>
 
-            <KpiGrid items={c.kpis} min={200} />
+            <KpiGrid
+              items={[
+                ...c.kpis,
+                { label: "Скасовано", value: String(c.cancelledCount), note: `з них скасував клієнт: ${c.cancelledByClientCount}` },
+              ]}
+              min={200}
+            />
 
             <div className="flex flex-wrap items-start gap-6">
               <Card className="flex flex-[999_1_560px] flex-col gap-4">
@@ -165,6 +173,13 @@ export function ClientProfileScreen({ id }: { id: string }) {
                         <td className={`${TD} font-semibold`}>{v.sum}</td>
                         <td className={TD}>
                           <Badge tone={VISIT_TONE[v.status].tone}>{VISIT_TONE[v.status].label}</Badge>
+                          {v.status === "cancelled" ? (
+                            <div className="mt-1.5 flex flex-col gap-0.5 text-[13px] text-(--muted)" data-testid="visit-cancel-info">
+                              <span>{cancelledByLabel(v.cancelledBy)}</span>
+                              {v.cancelledAtLabel ? <span>{v.cancelledAtLabel}</span> : null}
+                              {v.cancelReason ? <span>Причина: {v.cancelReason}</span> : null}
+                            </div>
+                          ) : null}
                         </td>
                       </tr>
                     ))}

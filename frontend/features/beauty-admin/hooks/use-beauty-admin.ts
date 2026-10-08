@@ -8,6 +8,7 @@ import type {
   ChannelId,
   ChannelPatch,
   LocationId,
+  LocationInput,
   PromoDraft,
   PromoGoalId,
   AbsenceInput,
@@ -18,8 +19,10 @@ import type {
 
 export const beautyKeys = {
   locations: ["beauty", "locations"] as const,
+  managedLocations: ["beauty", "locations", "manage"] as const,
   overview: (loc: LocationId | null) => ["beauty", "overview", loc] as const,
-  calendar: (id: string) => ["beauty", "calendar", id] as const,
+  calendar: (id: string, includeCancelled = false) => ["beauty", "calendar", id, includeCancelled] as const,
+  upcoming: (id: string) => ["beauty", "upcoming", id] as const,
   clients: ["beauty", "clients"] as const,
   client: (id: string) => ["beauty", "client", id] as const,
   staff: ["beauty", "staff"] as const,
@@ -42,6 +45,28 @@ export const beautyKeys = {
 export const useLocations = () =>
   useQuery({ queryKey: beautyKeys.locations, queryFn: () => beautyApi.getLocations() });
 
+export const useManagedLocations = (enabled = true) =>
+  useQuery({ queryKey: beautyKeys.managedLocations, queryFn: () => beautyApi.getManagedLocations(), enabled });
+
+function useInvalidateLocations() {
+  const qc = useQueryClient();
+  // Префікс ["beauty","locations"] охоплює і довідник, і список керування; календар і персонал показують назви закладів.
+  return () => {
+    void qc.invalidateQueries({ queryKey: beautyKeys.locations });
+    void qc.invalidateQueries({ queryKey: beautyKeys.staff });
+  };
+}
+
+export function useCreateLocation() {
+  const invalidate = useInvalidateLocations();
+  return useMutation({ mutationFn: (input: LocationInput) => beautyApi.createLocation(input), onSuccess: invalidate });
+}
+
+export function useUpdateLocation(id: string) {
+  const invalidate = useInvalidateLocations();
+  return useMutation({ mutationFn: (input: LocationInput) => beautyApi.updateLocation(id, input), onSuccess: invalidate });
+}
+
 export const useOverview = (locationId: LocationId | null) =>
   useQuery({
     queryKey: beautyKeys.overview(locationId),
@@ -49,18 +74,32 @@ export const useOverview = (locationId: LocationId | null) =>
     placeholderData: keepPreviousData,
   });
 
-export const useCalendarWeek = (specialistId: string) =>
+export const useCalendarWeek = (specialistId: string, includeCancelled = false) =>
   useQuery({
-    queryKey: beautyKeys.calendar(specialistId),
-    queryFn: () => beautyApi.getCalendarWeek(specialistId),
+    queryKey: beautyKeys.calendar(specialistId, includeCancelled),
+    queryFn: () => beautyApi.getCalendarWeek(specialistId, includeCancelled),
     placeholderData: keepPreviousData,
+  });
+
+/** Скільки майбутніх pending/confirmed записів у майстра (перед деактивацією). */
+export const useUpcomingAppointmentsCount = (specialistId: string, enabled = true) =>
+  useQuery({
+    queryKey: beautyKeys.upcoming(specialistId),
+    queryFn: () => beautyApi.getUpcomingAppointmentsCount(specialistId),
+    enabled,
+    staleTime: 0,
   });
 
 export function useCancelAppointment(specialistId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => beautyApi.cancelAppointment(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: beautyKeys.calendar(specialistId) }),
+    mutationFn: ({ id, reason }: { id: string; reason?: string }) => beautyApi.cancelAppointment(id, reason),
+    onSuccess: () => {
+      // Префікс охоплює календар з/без скасованих; скасований запис потрапляє в історію клієнта.
+      void qc.invalidateQueries({ queryKey: ["beauty", "calendar", specialistId] });
+      void qc.invalidateQueries({ queryKey: ["beauty", "client"] });
+      void qc.invalidateQueries({ queryKey: ["beauty", "upcoming"] });
+    },
   });
 }
 
@@ -68,7 +107,10 @@ export function useMoveAppointment(specialistId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, startsAt }: { id: string; startsAt: string }) => beautyApi.moveAppointment(id, startsAt),
-    onSuccess: () => qc.invalidateQueries({ queryKey: beautyKeys.calendar(specialistId) }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["beauty", "calendar", specialistId] });
+      void qc.invalidateQueries({ queryKey: ["beauty", "upcoming"] });
+    },
   });
 }
 

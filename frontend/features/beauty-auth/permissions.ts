@@ -10,6 +10,7 @@ const ALL_NAV: NavItem[] = [
   { label: "Записи", href: "/beauty/calendar" },
   { label: "Клієнти", href: "/beauty/clients" },
   { label: "Спеціалісти", href: "/beauty/staff" },
+  { label: "Заклади", href: "/beauty/locations" },
   { label: "Ціни та акції", href: "/beauty/promos" },
   { label: "Аналітика", href: "/beauty/analytics" },
   { label: "AI-асистент", href: "/beauty/ai" },

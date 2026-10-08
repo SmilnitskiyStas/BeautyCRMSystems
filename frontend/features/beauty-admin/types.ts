@@ -9,6 +9,28 @@ export type LocationId = string;
 export interface BeautyLocation {
   id: LocationId;
   name: string;
+  address?: string | null;
+  phone?: string | null;
+  /** IANA-зона закладу (`Europe/Kyiv`). */
+  timezone?: string;
+  /** Відсутнє = активний. Неактивні віддає лише `GET /locations?includeInactive=true` (керівники). */
+  isActive?: boolean;
+}
+
+/** Тіло POST/PUT /locations (§16). `isActive` — лише для PUT. */
+export interface LocationInput {
+  name: string;
+  address: string;
+  phone: string;
+  timezone: string;
+  isActive: boolean;
+}
+
+/** Хто скасував запис (§16). `name` — лише для staff і лише якщо API його віддав. */
+export type CancelledByType = "client" | "staff" | "system";
+export interface CancelledBy {
+  type: CancelledByType;
+  name?: string;
 }
 
 export type AppointmentStatus =
@@ -44,6 +66,11 @@ export interface Appointment {
   promotionName?: string;
   /** Умови скасування запису (§11), якщо їх повернув backend. */
   cancellation?: CancellationSettings;
+  /** Лише для `status === "cancelled"` (§16). */
+  cancelledAt?: string;
+  cancelledBy?: CancelledBy;
+  /** Лише керівникам і лише якщо вказана. */
+  cancelReason?: string;
 }
 
 /** Політика повернення коштів (§11). */
@@ -98,8 +125,12 @@ export interface ClientVisit {
   specialistName: string;
   locationName: string;
   sum: string;
-  status: "completed" | "planned" | "cancelled";
+  status: "completed" | "planned" | "cancelled" | "no_show";
   viaPromo: boolean;
+  /** Підпис «5 жовт., 12:40»; лише для скасованих. */
+  cancelledAtLabel?: string;
+  cancelledBy?: CancelledBy;
+  cancelReason?: string;
 }
 
 export interface ClientPromoUse {
@@ -127,6 +158,9 @@ export interface ClientProfile {
   preferences: { label: string; value: string }[];
   warning: string | null;
   loyalty: { balance: string; nextLevel: string; progressPct: number };
+  /** Зведення скасувань (§16). */
+  cancelledCount: number;
+  cancelledByClientCount: number;
 }
 
 /** Ключі днів тижня у `working_hours` (§9): mon..sun. */
@@ -233,6 +267,10 @@ export interface CalendarMaster {
   id: string;
   name: string;
   locationName: string;
+  /** Неактивний майстер потрапляє в селектор, лише якщо має нескасовані записи у видимому періоді. */
+  isActive: boolean;
+  /** Кількість записів pending/confirmed, які треба перенести (для неактивних). */
+  toMoveCount: number;
 }
 
 export interface CalendarWeek {

@@ -12,6 +12,7 @@ import type {
   ClientSummary,
   ConnectChannelInput,
   LocationAnalytics,
+  LocationInput,
   LocationId,
   NetworkAnalytics,
   Overview,
@@ -38,20 +39,31 @@ import type {
  * експорт у `api/index.ts`; хуки й компоненти не змінюються.
  */
 export interface BeautyAdminApi {
-  /** GET /locations */
+  /** GET /locations - активні заклади (для вибору в формах і фільтрів) */
   getLocations(): Promise<BeautyLocation[]>;
+  /** GET /locations?includeInactive=true (керівники, §16) - для екрана «Заклади» */
+  getManagedLocations(): Promise<BeautyLocation[]>;
+  /** POST /locations (owner, admin) - 422 invalid_timezone, 409 location_name_taken */
+  createLocation(input: LocationInput): Promise<BeautyLocation>;
+  /** PUT /locations/{id} (owner, admin) - 409 has_future_appointments | timezone_locked | location_name_taken */
+  updateLocation(id: LocationId, input: LocationInput): Promise<BeautyLocation>;
   /** GET /appointments?date&locationId (огляд дня) + /clients (останні) */
   getOverview(locationId: LocationId | null): Promise<Overview>;
-  /** GET /appointments?from&to[&specialistId]; порожній `specialistId` = перший майстер зі списку */
-  getCalendarWeek(specialistId: string): Promise<CalendarWeek>;
+  /**
+   * GET /appointments?from&to[&includeCancelled=true]; порожній `specialistId` = перший майстер зі списку.
+   * За замовчуванням БЕЗ скасованих (§16); `includeCancelled` додає їх до записів вибраного майстра.
+   */
+  getCalendarWeek(specialistId: string, includeCancelled?: boolean): Promise<CalendarWeek>;
+  /** GET /appointments?specialistId (найближчі 60 днів): кількість майбутніх pending/confirmed записів майстра */
+  getUpcomingAppointmentsCount(specialistId: string): Promise<number>;
   /** PATCH /appointments/{id} { startsAt } — перенос. `startsAt` = локальний час закладу `YYYY-MM-DDTHH:mm` */
   moveAppointment(id: string, startsAt: string): Promise<void>;
   /** GET /settings/cancellation (§11) */
   getCancellationSettings(): Promise<CancellationSettings>;
   /** PUT /settings/cancellation (§11, лише owner) */
   updateCancellationSettings(s: CancellationSettings): Promise<CancellationSettings>;
-  /** POST /appointments/{id}/cancel — refundAmount рахує backend за політикою §11 */
-  cancelAppointment(id: string): Promise<{ refundAmount: number }>;
+  /** POST /appointments/{id}/cancel {reason?} — refundAmount рахує backend за політикою §11; reason ≤300 (§16) */
+  cancelAppointment(id: string, reason?: string): Promise<{ refundAmount: number }>;
   /** GET /clients */
   getClients(): Promise<ClientSummary[]>;
   /** GET /clients/{id} */

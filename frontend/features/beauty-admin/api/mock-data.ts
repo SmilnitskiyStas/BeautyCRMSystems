@@ -1,7 +1,6 @@
 import type {
   Appointment,
   CalendarKind,
-  CalendarMaster,
   ChannelConfig,
   ClientProfile,
   ClientSummary,
@@ -19,9 +18,10 @@ import type {
 /** Демо-дані для mock-клієнта. Не імпортувати поза `api/`. */
 
 export const LOCATIONS: BeautyLocation[] = [
-  { id: "c", name: "Центр" },
-  { id: "p", name: "Поділ" },
-  { id: "k", name: "Печерськ" },
+  { id: "c", name: "Центр", address: "вул. Хрещатик, 22, Київ", phone: "+380 44 000 11 22", timezone: "Europe/Kyiv", isActive: true },
+  { id: "p", name: "Поділ", address: "вул. Сагайдачного, 10, Київ", phone: "+380 44 000 33 44", timezone: "Europe/Kyiv", isActive: true },
+  { id: "k", name: "Печерськ", address: "вул. Лаврська, 5, Київ", phone: null, timezone: "Europe/Kyiv", isActive: true },
+  { id: "l", name: "Лівий берег (закрито)", address: "просп. Мира, 3, Київ", phone: null, timezone: "Europe/Kyiv", isActive: false },
 ];
 
 export const PRICE_LIST: PriceListRow[] = [
@@ -51,11 +51,6 @@ const SERVICE_ID: Record<string, string> = {
   "Чистка обличчя": "cl",
 };
 
-export const MASTERS: CalendarMaster[] = [
-  { id: "m", name: "Марина Бойко", locationName: "Центр" },
-  { id: "a", name: "Анна Шевчук", locationName: "Центр" },
-  { id: "o", name: "Оксана Лис", locationName: "Центр" },
-];
 
 export const CALENDAR_DAYS = ["Пн 5", "Вт 6", "Ср 7", "Чт 8", "Пт 9", "Сб 10", "Нд 11"];
 
@@ -101,7 +96,15 @@ const RAW: Record<string, Tuple[]> = {
     [5, 10, 1.25, "Олена К.", "Чистка обличчя", "visit", 1400],
     [6, 9, 12, "Вихідний", "", "break", 0],
   ],
+  // Неактивна майстриня з нескасованими записами: має зʼявитися в селекторі з попередженням.
+  ng: [
+    [3, 11, 1, "Леся М.", "Манікюр", "visit", 700],
+    [4, 14, 1, "Дарина К.", "Манікюр", "visit", 700],
+  ],
 };
+
+/** Заклад, у якому працює майстер (за замовчуванням «Центр»). */
+const LOCATION_OF: Record<string, string> = { ng: "k" };
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -116,7 +119,7 @@ export function appointmentsFor(specialistId: string): Appointment[] {
     const [day, start, dur, client, service, kind, price] = t;
     return {
       id: `${specialistId}${i}`,
-      locationId: "c",
+      locationId: LOCATION_OF[specialistId] ?? "c",
       specialistId,
       serviceId: SERVICE_ID[service] ?? "none",
       clientId: kind === "break" || kind === "online" ? null : "oc",
@@ -149,7 +152,8 @@ const baseProfile: Omit<ClientProfile, "id" | "name" | "tag"> = {
     { id: "v2", dateLabel: "5 жовт.", serviceName: "Манікюр + гель-лак", specialistId: "m", specialistName: "Марина Бойко", locationName: "Центр", sum: "900 ₴", status: "completed", viaPromo: false },
     { id: "v3", dateLabel: "21 вер.", serviceName: "Чистка обличчя", specialistId: "o", specialistName: "Оксана Лис", locationName: "Центр", sum: "1 120 ₴", status: "completed", viaPromo: true },
     { id: "v4", dateLabel: "7 вер.", serviceName: "Манікюр + гель-лак", specialistId: "m", specialistName: "Марина Бойко", locationName: "Центр", sum: "900 ₴", status: "completed", viaPromo: false },
-    { id: "v5", dateLabel: "24 серп.", serviceName: "Манікюр", specialistId: "m", specialistName: "Наталя Гук", locationName: "Печерськ", sum: "650 ₴", status: "cancelled", viaPromo: false },
+    { id: "v5", dateLabel: "24 серп.", serviceName: "Манікюр", specialistId: "m", specialistName: "Наталя Гук", locationName: "Печерськ", sum: "650 ₴", status: "cancelled", viaPromo: false, cancelledAtLabel: "23 серп., 18:05", cancelledBy: { type: "client" }, cancelReason: "Змінились плани" },
+    { id: "v8", dateLabel: "2 серп.", serviceName: "Стрижка", specialistId: "m", specialistName: "Ірина Мельник", locationName: "Поділ", sum: "650 ₴", status: "cancelled", viaPromo: false, cancelledAtLabel: "1 серп., 09:30", cancelledBy: { type: "staff", name: "Світлана Коваленко" } },
     { id: "v6", dateLabel: "10 серп.", serviceName: "Манікюр + гель-лак", specialistId: "m", specialistName: "Марина Бойко", locationName: "Центр", sum: "720 ₴", status: "completed", viaPromo: true },
     { id: "v7", dateLabel: "27 лип.", serviceName: "Стрижка", specialistId: "m", specialistName: "Ірина Мельник", locationName: "Поділ", sum: "650 ₴", status: "completed", viaPromo: false },
   ],
@@ -171,6 +175,8 @@ const baseProfile: Omit<ClientProfile, "id" | "name" | "tag"> = {
   ],
   warning: "Алергія на латекс. Показується майстру перед кожним візитом.",
   loyalty: { balance: "420 балів", nextLevel: "До наступного рівня: ще 3 візити", progressPct: 80 },
+  cancelledCount: 2,
+  cancelledByClientCount: 1,
 };
 
 const clientSeed: [string, string, string, ClientTag][] = [

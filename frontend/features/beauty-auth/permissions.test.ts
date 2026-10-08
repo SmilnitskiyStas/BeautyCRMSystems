@@ -37,6 +37,13 @@ describe("рольова навігація", () => {
     expect(canOpen("specialist", "/beauty/staff/abc")).toBe(true);
     expect(canOpen("specialist", "/beauty/clients")).toBe(false);
   });
+  it("«Заклади» бачать owner і admin, specialist - ні (і не відкриє за URL)", () => {
+    expect(navFor("owner").some((n) => n.href === "/beauty/locations" && n.label === "Заклади")).toBe(true);
+    expect(navFor("admin").some((n) => n.href === "/beauty/locations")).toBe(true);
+    expect(navFor("specialist").some((n) => n.href === "/beauty/locations")).toBe(false);
+    expect(canOpen("specialist", "/beauty/locations")).toBe(false);
+    expect(canOpen("admin", "/beauty/locations")).toBe(true);
+  });
   it("owner/admin бачать усе", () => {
     expect(canOpen("owner", "/beauty/analytics")).toBe(true);
     expect(canOpen("admin", "/beauty/channels")).toBe(true);

@@ -1,11 +1,14 @@
 import { BeautyApiError } from "@/features/beauty-auth/errors";
 import { apiJson, getUser } from "@/features/beauty-auth/session";
-import { money } from "../format";
+import { mastersForCalendar } from "../calendar-masters";
+import { dateTimeLabel, money } from "../format";
 import type {
   AiRequest,
   Appointment,
   AppointmentStatus,
+  BeautyLocation,
   CalendarKind,
+  CancelledBy,
   CancellationSettings,
   ChannelConfig,
   ChannelId,
@@ -65,6 +68,20 @@ interface AppointmentDto {
   priceFinal: number;
   promotionId: string | null;
   cancellation?: CancellationSettings | null;
+  /** IANA-зона закладу (§14.5). */
+  timezone?: string;
+  /** §16: лише для скасованих; `cancelledBy.name` - тільки staff і тільки керівникам; `cancelReason` - лише керівникам. */
+  cancelledAt?: string | null;
+  cancelledBy?: { type?: string; name?: string | null } | null;
+  cancelReason?: string | null;
+}
+interface LocationDto {
+  id: string;
+  name: string;
+  address?: string | null;
+  phone?: string | null;
+  timezone: string;
+  isActive: boolean;
 }
 interface ClientDto {
   id: string;
@@ -73,6 +90,9 @@ interface ClientDto {
   email: string | null;
   visits: number;
   lastVisitAt: string | null;
+  /** §16 (звірено з ClientDto backend): зведення скасувань - усі / ініційовані клієнтом. */
+  cancelledCount?: number;
+  cancelledByClientCount?: number;
 }
 interface ClientDetailDto {
   client: ClientDto;
@@ -164,6 +184,22 @@ function kindOf(a: AppointmentDto): CalendarKind {
   return "visit";
 }
 
+function toCancelledBy(a: AppointmentDto): CancelledBy | undefined {
+  const t = a.cancelledBy?.type;
+  if (t !== "client" && t !== "staff" && t !== "system") return undefined;
+  const name = t === "staff" ? a.cancelledBy?.name?.trim() : undefined;
+  return name ? { type: t, name } : { type: t };
+}
+
+const toLocation = (l: LocationDto): BeautyLocation => ({
+  id: l.id,
+  name: l.name,
+  address: l.address ?? null,
+  phone: l.phone ?? null,
+  timezone: l.timezone,
+  isActive: l.isActive,
+});
+
 function toAppointment(a: AppointmentDto): Appointment {
   const off = offsetOf(a.startsAt);
   if (off) offsets.set(a.id, off);
@@ -184,6 +220,9 @@ function toAppointment(a: AppointmentDto): Appointment {
     promotionId: a.promotionId,
     promotionName: a.promotionId ? "Акція" : undefined,
     cancellation: a.cancellation ?? undefined,
+    ...(a.cancelledAt ? { cancelledAt: a.cancelledAt } : {}),
+    ...(toCancelledBy(a) ? { cancelledBy: toCancelledBy(a) } : {}),
+    ...(a.cancelReason?.trim() ? { cancelReason: a.cancelReason.trim() } : {}),
   };
 }
 
@@ -386,17 +425,31 @@ const toAbsenceResult = (a: AbsenceDto): AbsenceResult => ({
 });
 
 export const httpBeautyApi: BeautyAdminApi = {
-  getLocations: async () => {
-    // Окремого `GET /locations` для персоналу немає. specialist не має доступу до analytics -> заклади з власного профілю.
-    if (getUser()?.role === "specialist") {
-      const mine = await get<SpecialistDto[]>("/specialists");
-      const seen = new Map<string, string>();
-      for (const m of mine) for (const l of m.locations) seen.set(l.locationId, l.locationName);
-      return [...seen].map(([id, name]) => ({ id, name }));
-    }
-    const rows = await get<LocationStatDto[]>(`/analytics/locations?${range(addDays(new Date(), -30), new Date())}`);
-    return rows.map((r) => ({ id: r.locationId, name: r.name }));
-  },
+  // `GET /locations` (§14.5/§16) доступний усім ролям; без `includeInactive` віддає лише активні.
+  getLocations: async () => (await get<LocationDto[]>("/locations")).map(toLocation),
+
+  getManagedLocations: async () => (await get<LocationDto[]>("/locations?includeInactive=true")).map(toLocation),
+
+  createLocation: async (input) =>
+    toLocation(
+      await send<LocationDto>("POST", "/locations", {
+        name: input.name.trim(),
+        address: input.address.trim() || null,
+        phone: input.phone.trim() || null,
+        timezone: input.timezone.trim(),
+      }),
+    ),
+
+  updateLocation: async (id, input) =>
+    toLocation(
+      await send<LocationDto>("PUT", `/locations/${encodeURIComponent(id)}`, {
+        name: input.name.trim(),
+        address: input.address.trim() || null,
+        phone: input.phone.trim() || null,
+        timezone: input.timezone.trim(),
+        isActive: input.isActive,
+      }),
+    ),
 
   getOverview: async (locationId: LocationId | null) => {
     const today = startOfDay(new Date());
@@ -434,15 +487,19 @@ export const httpBeautyApi: BeautyAdminApi = {
     return overview;
   },
 
-  getCalendarWeek: async (specialistId) => {
+  getCalendarWeek: async (specialistId, includeCancelled = false) => {
     const monday = mondayOf(new Date());
     const sunday = addDays(monday, 6);
-    const [all, roster] = await Promise.all([weeklyAppointments(monday, addDays(monday, 7)), get<SpecialistDto[]>("/specialists")]);
+    // Без скасованих (дефолт API): за ними будуємо селектор майстрів; неактивним потрібні перенесення.
+    const [live, roster] = await Promise.all([weeklyAppointments(monday, addDays(monday, 7)), get<SpecialistDto[]>("/specialists")]);
     const me = getUser();
-    const masters = roster
-      .filter((r) => r.isActive && (me?.role !== "specialist" || r.id === me.specialistId))
-      .map((r) => ({ id: r.id, name: r.name, locationName: r.locations.map((l) => l.locationName).join(", ") }));
+    const masters = mastersForCalendar(
+      roster.map((r) => ({ id: r.id, name: r.name, isActive: r.isActive, locationNames: r.locations.map((l) => l.locationName) })),
+      live.map((a) => ({ specialistId: a.specialistId, status: statusOf(a.status) })),
+      me?.role === "specialist" ? me.specialistId : null,
+    );
     const effective = masters.find((m) => m.id === specialistId)?.id ?? masters[0]?.id ?? specialistId;
+    const shown = includeCancelled ? await weeklyAppointments(monday, addDays(monday, 7), "&includeCancelled=true") : live;
     const fmt = (d: Date) => d.toLocaleDateString("uk-UA", { day: "numeric", month: "long" });
     return {
       weekLabel: `Тиждень ${fmt(monday)} – ${fmt(sunday)}`,
@@ -453,12 +510,21 @@ export const httpBeautyApi: BeautyAdminApi = {
       }),
       masters,
       specialistId: effective,
-      appointments: all.filter((a) => a.specialistId === effective && a.status !== "cancelled").map(toAppointment),
+      appointments: shown
+        .filter((a) => a.specialistId === effective && (includeCancelled || a.status !== "cancelled"))
+        .map(toAppointment),
     };
   },
 
-  cancelAppointment: async (id) => {
-    const r = await send<{ refundAmount: number }>("POST", `/appointments/${id}/cancel`);
+  getUpcomingAppointmentsCount: async (specialistId) => {
+    const from = new Date();
+    const rows = await weeklyAppointments(from, addDays(from, 60), `&specialistId=${encodeURIComponent(specialistId)}`);
+    return rows.filter((a) => a.specialistId === specialistId && (a.status === "pending" || a.status === "confirmed")).length;
+  },
+
+  cancelAppointment: async (id, reason) => {
+    const text = reason?.trim();
+    const r = await send<{ refundAmount: number }>("POST", `/appointments/${id}/cancel`, text ? { reason: text.slice(0, 300) } : undefined);
     return { refundAmount: r.refundAmount };
   },
 
@@ -482,6 +548,7 @@ export const httpBeautyApi: BeautyAdminApi = {
       throw e;
     }
     const done = d.history.filter((a) => a.status === "completed");
+    const cancelledRows = d.history.filter((a) => a.status === "cancelled");
     const profile: ClientProfile = {
       id: d.client.id,
       name: d.client.fullName,
@@ -496,6 +563,10 @@ export const httpBeautyApi: BeautyAdminApi = {
           note: "",
         },
       ],
+      // Лічильники з `client` (ClientDto); запасний варіант - рахуємо з історії.
+      cancelledCount: d.client.cancelledCount ?? cancelledRows.length,
+      cancelledByClientCount:
+        d.client.cancelledByClientCount ?? cancelledRows.filter((a) => a.cancelledBy?.type === "client").length,
       visits: d.history.map((a) => ({
         id: a.id,
         dateLabel: `${dayLabel(a.startsAt)}, ${a.startsAt.slice(11, 16)}`,
@@ -504,8 +575,15 @@ export const httpBeautyApi: BeautyAdminApi = {
         specialistName: a.specialistName,
         locationName: a.locationName,
         sum: money(a.priceFinal),
-        status: a.status === "completed" ? "completed" : a.status === "cancelled" || a.status === "no_show" ? "cancelled" : "planned",
+        status: a.status === "completed" ? "completed" : a.status === "cancelled" ? "cancelled" : a.status === "no_show" ? "no_show" : "planned",
         viaPromo: !!a.promotionId,
+        ...(a.status === "cancelled"
+          ? {
+              ...(a.cancelledAt ? { cancelledAtLabel: dateTimeLabel(a.cancelledAt, a.timezone) } : {}),
+              ...(toCancelledBy(a) ? { cancelledBy: toCancelledBy(a) } : {}),
+              ...(a.cancelReason?.trim() ? { cancelReason: a.cancelReason.trim() } : {}),
+            }
+          : {}),
       })),
       promos: d.history
         .filter((a) => a.promotionId && a.status === "completed")

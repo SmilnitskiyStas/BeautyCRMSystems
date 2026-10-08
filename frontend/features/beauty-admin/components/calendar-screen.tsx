@@ -5,9 +5,10 @@ import { useId, useState } from "react";
 import { useAuth } from "@/features/beauty-auth/components/auth-provider";
 import { humanizeError } from "@/features/beauty-auth/errors";
 import { useAbsences, useCalendarWeek, useCancelAppointment, useMoveAppointment } from "../hooks/use-beauty-admin";
-import { addDaysIso, clock, dayIndex, durationLabel, minutesOfDay, money } from "../format";
+import { MAX_CANCEL_REASON, cancelledByLabel, cancelledByShort } from "../cancellation";
+import { addDaysIso, clock, dateTimeLabel, dayIndex, durationLabel, minutesOfDay, money } from "../format";
 import type { Absence, Appointment, CalendarKind } from "../types";
-import { ABSENCE_TYPE_LABEL } from "./staff-parts";
+import { ABSENCE_TYPE_LABEL, CheckRow } from "./staff-parts";
 import { Badge, Card, Chip, FIELD_INPUT, FIELD_LABEL, PageHeader, PrimaryButton, QueryState, SecondaryButton, TextLink } from "./ui";
 
 const START_HOUR = 9;
@@ -55,6 +56,8 @@ function AppointmentPanel({
   const cancel = useCancelAppointment(specialistId);
   const move = useMoveAppointment(specialistId);
   const moveInputId = useId();
+  const reasonId = useId();
+  const [reason, setReason] = useState("");
   const closed = appt.status === "completed" || appt.status === "cancelled" || appt.status === "no_show";
   const terms = appt.cancellation;
 
@@ -66,6 +69,13 @@ function AppointmentPanel({
         {dayLabel}, {timeRange(appt)} ({durationLabel(appt.durationMinutes)})
       </div>
       <div className="text-sm font-semibold">{money(appt.priceFinal)}</div>
+      {appt.status === "cancelled" ? (
+        <div className="flex flex-col gap-0.5 rounded-xl bg-(--page) p-3 text-sm" data-testid="cancel-info">
+          <span className="font-semibold">{cancelledByLabel(appt.cancelledBy)}</span>
+          {appt.cancelledAt ? <span className="text-(--muted)">{dateTimeLabel(appt.cancelledAt)}</span> : null}
+          {appt.cancelReason ? <span>Причина: {appt.cancelReason}</span> : null}
+        </div>
+      ) : null}
       {appt.clientId ? <TextLink href={`/beauty/clients/${appt.clientId}`}>Профіль клієнта</TextLink> : null}
       {appt.kind === "promo" ? <Badge tone="promo" className="self-start">Акція: {appt.promotionName}</Badge> : null}
       {appt.kind === "online" ? <Badge tone="now" className="self-start">Створено клієнтом онлайн</Badge> : null}
@@ -122,7 +132,27 @@ function AppointmentPanel({
         ) : null}
         {confirming ? (
           <>
-            <PrimaryButton disabled={cancel.isPending} onClick={() => cancel.mutate(appt.id, { onSuccess: (r) => onCancelled(r.refundAmount) })}>
+            <div className="flex w-full flex-col gap-1.5">
+              <label htmlFor={reasonId} className={FIELD_LABEL}>
+                Причина (необов’язково)
+              </label>
+              <textarea
+                id={reasonId}
+                rows={2}
+                maxLength={MAX_CANCEL_REASON}
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                aria-describedby={`${reasonId}-count`}
+                className={`${FIELD_INPUT} py-2`}
+              />
+              <span id={`${reasonId}-count`} className="text-[13px] text-(--muted)">
+                {reason.length}/{MAX_CANCEL_REASON}
+              </span>
+            </div>
+            <PrimaryButton
+              disabled={cancel.isPending}
+              onClick={() => cancel.mutate({ id: appt.id, reason: reason.trim() || undefined }, { onSuccess: (r) => onCancelled(r.refundAmount) })}
+            >
               {cancel.isPending ? "Скасовуємо…" : "Так, скасувати"}
             </PrimaryButton>
             <SecondaryButton onClick={() => setConfirming(false)}>Залишити</SecondaryButton>
@@ -150,7 +180,8 @@ export function CalendarScreen() {
   const [chosenId, setChosenId] = useState<string>(isSpecialist ? (user.specialistId ?? "") : fromLink);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const week = useCalendarWeek(chosenId);
+  const [showCancelled, setShowCancelled] = useState(false);
+  const week = useCalendarWeek(chosenId, showCancelled);
   const data = week.data;
   const masterId = data?.specialistId ?? chosenId;
 
@@ -168,7 +199,7 @@ export function CalendarScreen() {
       (a) => a.specialistId === masterId && (a.status === "approved" || a.status === "requested") && a.dateFrom <= day && a.dateTo >= day,
     );
   };
-  const real = data?.appointments.filter((a) => a.kind !== "break") ?? [];
+  const real = data?.appointments.filter((a) => a.kind !== "break" && a.status !== "cancelled") ?? [];
   const bookedMinutes = real.reduce((s, a) => s + a.durationMinutes, 0);
   const selected = data?.appointments.find((a) => a.id === selectedId && a.kind !== "break") ?? null;
 
@@ -192,7 +223,7 @@ export function CalendarScreen() {
         }
         actions={
           isSpecialist ? null : (
-          <div className="flex flex-wrap gap-2" role="group" aria-label="Майстер">
+          <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Майстер">
             {data?.masters.map((m) => (
               <Chip
                 key={m.id}
@@ -203,6 +234,7 @@ export function CalendarScreen() {
                 }}
               >
                 {m.name} · {m.locationName}
+                {m.isActive ? "" : " · неактивний"}
               </Chip>
             ))}
           </div>
@@ -218,6 +250,17 @@ export function CalendarScreen() {
           </li>
         ))}
       </ul>
+
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
+        <CheckRow label="Показати скасовані" checked={showCancelled} onChange={setShowCancelled} />
+      </div>
+
+      {master && !master.isActive ? (
+        <p role="status" className="rounded-xl bg-[#FFF1CC] px-3.5 py-2.5 text-sm text-[#5C3900]">
+          <strong>{master.name} — неактивний.</strong>{" "}
+          {master.toMoveCount > 0 ? `Є записи, їх потрібно перенести (${master.toMoveCount}).` : "Нових записів немає."}
+        </p>
+      ) : null}
 
       <QueryState isPending={week.isPending} isError={week.isError} onRetry={() => week.refetch()}>
         {data ? (
@@ -279,7 +322,8 @@ export function CalendarScreen() {
                         .filter((a) => dayIndex(a.startsAt, data.weekStart) === d)
                         .map((a) => {
                           const { top, height } = blockGeometry(a);
-                          const base = `absolute right-1 left-1 box-border overflow-hidden rounded-lg px-2 py-0.5 text-left text-[11px] leading-tight ${KIND_VIEW[a.kind].block}`;
+                          const gone = a.status === "cancelled";
+                          const base = `absolute right-1 left-1 box-border overflow-hidden rounded-lg px-2 py-0.5 text-left text-[11px] leading-tight ${gone ? "bg-[#F4F2F8] text-[#4A4560]" : KIND_VIEW[a.kind].block}`;
                           if (a.kind === "break") {
                             return (
                               <div key={a.id} className={`${base} border-2 border-transparent`} style={{ top, height }}>
@@ -293,19 +337,20 @@ export function CalendarScreen() {
                               key={a.id}
                               type="button"
                               aria-pressed={on}
-                              aria-label={`${a.clientName}, ${a.serviceName}, ${timeRange(a)}`}
+                              aria-label={`${a.clientName}, ${a.serviceName}, ${timeRange(a)}${gone ? `, скасовано. ${cancelledByLabel(a.cancelledBy)}` : ""}`}
                               onClick={() => {
                                 setSelectedId(a.id);
                                 setNotice(null);
                               }}
-                              className={`${base} cursor-pointer border-2 ${on ? "border-(--accent)" : "border-transparent"}`}
+                              data-cancelled={gone ? "true" : undefined}
+                              className={`${base} cursor-pointer border-2 ${gone ? "border-dashed" : ""} ${on ? "border-(--accent)" : gone ? "border-[#6F6985]" : "border-transparent"}`}
                               style={{ top, height }}
                             >
-                              <span className="block font-semibold">{a.clientName}</span>
+                              <span className={`block font-semibold ${gone ? "line-through" : ""}`}>{a.clientName}</span>
                               <span className="block">
                                 {timeRange(a)} · {durationLabel(a.durationMinutes)}
                               </span>
-                              <span className="block truncate">{a.serviceName}</span>
+                              <span className="block truncate">{gone ? cancelledByShort(a.cancelledBy) : a.serviceName}</span>
                             </button>
                           );
                         })}

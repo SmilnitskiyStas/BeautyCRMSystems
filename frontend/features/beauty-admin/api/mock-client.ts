@@ -1,5 +1,7 @@
 import { BeautyApiError } from "@/features/beauty-auth/errors";
 import { money } from "../format";
+import { mastersForCalendar } from "../calendar-masters";
+import { isValidTimeZone } from "../locations-logic";
 import { normalizeHours, validateHours } from "../working-hours";
 import type { BeautyAdminApi } from "./client";
 import {
@@ -14,7 +16,6 @@ import {
   DEFAULT_GREETING,
   INITIAL_CHANNELS,
   LOCATIONS,
-  MASTERS,
   OVERVIEW_ROWS,
   PRICE_LIST,
   ABSENCES_SEED,
@@ -30,6 +31,8 @@ import type {
   AbsenceConflict,
   AbsenceResult,
   AiPromoPlan,
+  BeautyLocation,
+  CancelledBy,
   CancellationSettings,
   ChannelConfig,
   ClientNote,
@@ -54,7 +57,18 @@ const chatMessages: AiChatMessage[] = [
   { from: "staff", text: "Добрий день, Олено! Ваш запис 19 жовтня о 15:00 до Марини." },
   { from: "client", text: "Чудово, дякую! А чи буде знижка на педикюр?" },
 ];
-const cancelled = new Set<string>();
+/** Скасовані записи: хто, коли й чому (§16) - дані не видаляються. */
+const cancelled = new Map<string, { at: string; by: CancelledBy; reason?: string }>();
+const MOCK_APPT_OWNERS = ["m", "a", "o", "ng"];
+const allMockAppointments = () => MOCK_APPT_OWNERS.flatMap(appointmentsFor);
+const locations: BeautyLocation[] = structuredClone(LOCATIONS);
+const todayMock = () => new Date().toISOString().slice(0, 10);
+/** Майбутні активні (pending/confirmed) записи закладу - для правил has_future_appointments / timezone_locked. */
+const hasFutureAt = (locationId: string) =>
+  allMockAppointments().some(
+    (a) => a.locationId === locationId && a.kind !== "break" && !cancelled.has(a.id) && a.startsAt.slice(0, 10) >= todayMock(),
+  );
+const nowLabel = () => new Date().toISOString();
 const moved = new Map<string, string>();
 let cancellationSettings: CancellationSettings = {
   windowHours: 12,
@@ -108,11 +122,48 @@ function findChannel(id: string): ChannelConfig {
 }
 
 function locationName(id: string): string {
-  return LOCATIONS.find((l) => l.id === id)?.name ?? id;
+  return locations.find((l) => l.id === id)?.name ?? id;
 }
 
+const activeLocations = () => locations.filter((l) => l.isActive !== false);
+
 export const mockBeautyApi: BeautyAdminApi = {
-  getLocations: () => wait(LOCATIONS),
+  getLocations: () => wait(activeLocations()),
+
+  getManagedLocations: async () => {
+    if (!isManager()) throw forbid();
+    return wait(locations);
+  },
+
+  createLocation: async (input) => {
+    if (!isManager()) throw forbid();
+    const name = input.name.trim();
+    if (!isValidTimeZone(input.timezone)) throw new BeautyApiError(422, "invalid_timezone", "invalid timezone");
+    if (locations.some((l) => l.name.toLowerCase() === name.toLowerCase())) throw new BeautyApiError(409, "location_name_taken", "name taken");
+    const created: BeautyLocation = {
+      id: `loc${Date.now()}`,
+      name,
+      address: input.address.trim() || null,
+      phone: input.phone.trim() || null,
+      timezone: input.timezone.trim(),
+      isActive: true,
+    };
+    locations.push(created);
+    return wait(created);
+  },
+
+  updateLocation: async (id, input) => {
+    if (!isManager()) throw forbid();
+    const loc = locations.find((l) => l.id === id);
+    if (!loc) throw notFound();
+    const name = input.name.trim();
+    if (!isValidTimeZone(input.timezone)) throw new BeautyApiError(422, "invalid_timezone", "invalid timezone");
+    if (locations.some((l) => l.id !== id && l.name.toLowerCase() === name.toLowerCase())) throw new BeautyApiError(409, "location_name_taken", "name taken");
+    if (loc.isActive !== false && !input.isActive && hasFutureAt(id)) throw new BeautyApiError(409, "has_future_appointments", "future");
+    if (input.timezone.trim() !== loc.timezone && hasFutureAt(id)) throw new BeautyApiError(409, "timezone_locked", "locked");
+    Object.assign(loc, { name, address: input.address.trim() || null, phone: input.phone.trim() || null, timezone: input.timezone.trim(), isActive: input.isActive });
+    return wait(loc);
+  },
 
   getOverview: (locationId) => {
     const rows = OVERVIEW_ROWS.filter((r) => !locationId || r.locationId === locationId).map((r) => ({ ...r }));
@@ -129,19 +180,41 @@ export const mockBeautyApi: BeautyAdminApi = {
     });
   },
 
-  getCalendarWeek: (requestedId) => {
-    const specialistId = requestedId || "m";
+  getCalendarWeek: (requestedId, includeCancelled = false) => {
+    const live = allMockAppointments().filter((a) => !cancelled.has(a.id));
+    const me = isManager() ? null : MOCK_SPECIALIST_ID;
+    const masters = mastersForCalendar(
+      staff.map((m) => ({ id: m.id, name: m.name, isActive: m.isActive, locationNames: m.locations.map((l) => l.locationName) })),
+      live,
+      me,
+    );
+    const specialistId = masters.find((m) => m.id === requestedId)?.id ?? masters[0]?.id ?? requestedId;
+    const appointments = appointmentsFor(specialistId)
+      .filter((a) => includeCancelled || !cancelled.has(a.id))
+      .map((a) => {
+        const c = cancelled.get(a.id);
+        const base = { ...a, startsAt: moved.get(a.id) ?? a.startsAt };
+        // `cancelReason` лише керівникам (§16).
+        return c
+          ? { ...base, status: "cancelled" as const, cancelledAt: c.at, cancelledBy: c.by, ...(c.reason && isManager() ? { cancelReason: c.reason } : {}) }
+          : base;
+      });
     return wait({
       weekLabel: "Тиждень 5–11 жовтня",
       weekStart: "2026-10-05",
       days: CALENDAR_DAYS,
-      masters: MASTERS,
+      masters,
       specialistId,
-      appointments: appointmentsFor(specialistId)
-        .filter((a) => !cancelled.has(a.id))
-        .map((a) => ({ ...a, startsAt: moved.get(a.id) ?? a.startsAt })),
+      appointments,
     });
   },
+
+  getUpcomingAppointmentsCount: async (specialistId) =>
+    wait(
+      appointmentsFor(specialistId).filter(
+        (a) => a.kind !== "break" && !cancelled.has(a.id) && a.startsAt.slice(0, 10) >= todayMock(),
+      ).length,
+    ),
 
   moveAppointment: async (id, startsAt) => {
     moved.set(id, startsAt);
@@ -155,10 +228,16 @@ export const mockBeautyApi: BeautyAdminApi = {
     return wait(cancellationSettings);
   },
 
-  cancelAppointment: async (id) => {
-    cancelled.add(id);
+  cancelAppointment: async (id, reason) => {
+    if (cancelled.has(id)) throw new BeautyApiError(409, "already_cancelled", "already");
+    const text = reason?.trim().slice(0, 300);
+    cancelled.set(id, {
+      at: nowLabel(),
+      by: { type: "staff", ...(isManager() ? { name: "Світлана Коваленко" } : {}) },
+      ...(text ? { reason: text } : {}),
+    });
     // Mock: політика ≤12 год → 50% повернення (рахує backend).
-    const price = ["m", "a", "o"].flatMap(appointmentsFor).find((a) => a.id === id)?.priceFinal ?? 0;
+    const price = allMockAppointments().find((a) => a.id === id)?.priceFinal ?? 0;
     return wait({ refundAmount: Math.round(price * 0.5) });
   },
 
@@ -313,7 +392,7 @@ export const mockBeautyApi: BeautyAdminApi = {
     const factor = (100 - draft.percent) / 100;
     const active = draft.locationIds.length > 0;
     const where =
-      draft.locationIds.length === LOCATIONS.length
+      draft.locationIds.length === activeLocations().length
         ? "Усі заклади"
         : draft.locationIds.map(locationName).join(", ") || "Не вибрано";
     const base = PRICE_LIST[0].price;
