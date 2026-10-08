@@ -10,10 +10,12 @@ public static class BeautyAuthServiceExtensions
     {
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton(options ?? new AuthOptions());
+        services.AddSingleton<LoginAttemptTracker>();
         services.AddScoped<AuthService>();
         services.AddScoped<UserAdminService>();
         services.AddScoped<PlatformTenantService>();
         services.AddScoped<AppointmentAccessService>();
+        services.AddScoped<BeautyCrm.Application.Features.BeautyStaff.StaffInviteService>();
         return services;
     }
 }

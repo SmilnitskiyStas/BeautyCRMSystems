@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Threading.RateLimiting;
 using BeautyCrm.Api.Infrastructure;
 using BeautyCrm.Application.Features.BeautyAuth;
+using BeautyCrm.Application.Features.BeautyStaff;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
@@ -19,6 +20,8 @@ public static class AuthPolicies
     public const string Owner = "Owner";
     public const string PlatformOperator = "PlatformOperator";
     public const string RateLimit = "auth";
+    /// <summary>Ширший ліміт на IP для refresh (клієнти за одним NAT оновлюють токени регулярно); доповнюється RefreshThrottle.</summary>
+    public const string RefreshRateLimit = "auth-refresh";
 }
 
 public static class AuthSetup
@@ -73,6 +76,7 @@ public static class AuthSetup
         });
 
         var permit = config.GetValue("Auth:RateLimit:PermitLimit", 10);
+        var refreshPermit = config.GetValue("Auth:RateLimit:RefreshPermitLimit", 120);
         var window = TimeSpan.FromSeconds(config.GetValue("Auth:RateLimit:WindowSeconds", 60));
         services.AddRateLimiter(o =>
         {
@@ -82,11 +86,23 @@ public static class AuthSetup
                 ctx.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
                 await ctx.HttpContext.Response.WriteAsJsonAsync(new ApiError("rate_limited", "Too many requests. Try again later."), ct);
             };
-            // Ключ — IP клієнта (за reverse proxy потрібен ForwardedHeaders із довіреними проксі).
+            // Ключ — IP клієнта: Connection.RemoteIpAddress уже перезаписано UseForwardedHeaders лише для довірених проксі
+            // (Beauty:TrustedProxies); спуфлений X-Forwarded-For від недовіреного клієнта ігнорується.
             o.AddPolicy(AuthPolicies.RateLimit, http => RateLimitPartition.GetFixedWindowLimiter(
-                http.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                "login:" + (http.Connection.RemoteIpAddress?.ToString() ?? "unknown"),
                 _ => new FixedWindowRateLimiterOptions { PermitLimit = permit, Window = window, QueueLimit = 0 }));
+            o.AddPolicy(AuthPolicies.RefreshRateLimit, http => RateLimitPartition.GetFixedWindowLimiter(
+                "refresh:" + (http.Connection.RemoteIpAddress?.ToString() ?? "unknown"),
+                _ => new FixedWindowRateLimiterOptions { PermitLimit = refreshPermit, Window = window, QueueLimit = 0 }));
         });
+        services.AddSingleton(new RefreshThrottle(
+            config.GetValue("Auth:RateLimit:RefreshPerTokenPermit", 5),
+            config.GetValue("Auth:RateLimit:RefreshPerTenantPermit", 600), window));
+        services.AddSingleton(new AbsenceThrottle(
+            config.GetValue("Staff:AbsenceRateLimit:PermitLimit", 20),
+            TimeSpan.FromSeconds(config.GetValue("Staff:AbsenceRateLimit:WindowSeconds", 60))));
+        services.AddSingleton(config.GetSection("Staff").Get<StaffOptions>() ?? new StaffOptions());
+        services.AddScoped<ActiveSpecialistFilter>();
         return services;
     }
 }

@@ -18,10 +18,27 @@ public sealed class CancellationService(
         var paid = payment is { Status: "paid" } ? payment.Amount : 0m;
         var calc = CancellationPolicy.Calculate(appt.StartsAt, now, paid, await settings.GetAsync(ct));
 
+        // 1) Атомарний claim статусу ПЕРЕД поверненням коштів: з двох паралельних cancel переможе рівно один.
+        if (!await store.TryClaimCancelAsync(appointmentId, now, ct))
+        {
+            var current = await store.GetAppointmentAsync(appointmentId, ct);
+            return current switch
+            {
+                null => Error.NotFound("appointment_not_found", "Appointment not found."),
+                { Status: "cancelled" } => Error.Conflict("already_cancelled", "Appointment is already cancelled."),
+                _ => Error.Validation("cannot_cancel", $"Appointment with status '{current.Status}' cannot be cancelled."),
+            };
+        }
+
+        // 2) Повернення коштів; ключ ідемпотентності провайдера = payment.Id (повтор не поверне двічі).
         if (calc.Amount > 0 && payment is not null)
         {
             var r = await payments.RefundAsync(payment.Id, calc.Amount, ct);
-            if (!r.Success) return Error.PaymentFailed("refund_failed", r.Error ?? "Refund failed.");
+            if (!r.Success)
+            {
+                await store.ReleaseCancelAsync(appointmentId, appt.Status, ct); // компенсація: запис лишається активним
+                return Error.PaymentFailed("refund_failed", r.Error ?? "Refund failed.");
+            }
             await store.UpdatePaymentAsync(payment.Id, "refunded", payment.ProviderPaymentId, null, ct);
         }
 

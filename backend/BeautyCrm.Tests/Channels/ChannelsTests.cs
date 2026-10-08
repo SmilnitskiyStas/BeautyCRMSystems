@@ -5,9 +5,11 @@ using BeautyCrm.Infrastructure.Integrations.Channels;
 
 namespace BeautyCrm.Tests.Channels;
 
-internal sealed class ChCreds(string? token = "123456:ABCDEFtoken", string? secret = "whsecret") : IChannelCredentialsProvider
+internal sealed class ChCreds(
+    string? token = "123456:ABCDEFtoken", string? secret = "whsecret", string? appSecret = "app-secret-1", string? verifyToken = "verify-token-1")
+    : IChannelCredentialsProvider
 {
-    public ChannelCredentials? Get(string channel) => new(token, secret);
+    public ChannelCredentials? Get(string channel) => new(token, secret, appSecret, verifyToken);
 }
 
 internal sealed class ChFakeRepo : IChannelMessageRepository
@@ -65,10 +67,23 @@ public class ChannelsTests
     public void instagramVerify_checks_hmac_and_rejects_tampered_body()
     {
         var a = new InstagramAdapter(new HttpClient(), new ChCreds());
-        Assert.True(a.VerifySignature(Req("X-Hub-Signature-256", Sig("whsecret", IgBody)), IgBody));
-        Assert.False(a.VerifySignature(Req("X-Hub-Signature-256", Sig("whsecret", IgBody)), IgBody + " "));
+        Assert.True(a.VerifySignature(Req("X-Hub-Signature-256", Sig("app-secret-1", IgBody)), IgBody));
+        Assert.False(a.VerifySignature(Req("X-Hub-Signature-256", Sig("app-secret-1", IgBody)), IgBody + " "));
         Assert.False(a.VerifySignature(Req("X-Hub-Signature-256", "sha256=00"), IgBody));
         Assert.False(a.VerifySignature(Req("X-Hub-Signature-256", Sig("other", IgBody)), IgBody));
+    }
+
+    [Fact]
+    public void instagramVerify_does_not_accept_webhookSecret_or_verifyToken_as_hmac_key()
+    {
+        // M5: appSecret (HMAC) і verifyToken (handshake) не змішуються з webhookSecret.
+        var a = new InstagramAdapter(new HttpClient(), new ChCreds());
+        Assert.False(a.VerifySignature(Req("X-Hub-Signature-256", Sig("whsecret", IgBody)), IgBody));
+        Assert.False(a.VerifySignature(Req("X-Hub-Signature-256", Sig("verify-token-1", IgBody)), IgBody));
+        // без appSecret підпис не перевіряється взагалі (fail closed)
+        var none = new InstagramAdapter(new HttpClient(), new ChCreds(appSecret: null));
+        Assert.False(none.VerifySignature(Req("X-Hub-Signature-256", Sig("app-secret-1", IgBody)), IgBody));
+        Assert.False(none.VerifySignature(Req("X-Hub-Signature-256", Sig("", IgBody)), IgBody));
     }
 
     [Fact]
@@ -76,11 +91,50 @@ public class ChannelsTests
     {
         var a = new InstagramAdapter(new HttpClient(), new ChCreds());
         var ok = new WebhookRequest(new Dictionary<string, string>(), new Dictionary<string, string>
-            { ["hub.mode"] = "subscribe", ["hub.verify_token"] = "whsecret", ["hub.challenge"] = "abc" });
+            { ["hub.mode"] = "subscribe", ["hub.verify_token"] = "verify-token-1", ["hub.challenge"] = "abc" });
         var bad = new WebhookRequest(new Dictionary<string, string>(), new Dictionary<string, string>
             { ["hub.mode"] = "subscribe", ["hub.verify_token"] = "x", ["hub.challenge"] = "abc" });
         Assert.Equal("abc", a.VerifyChallenge(ok));
         Assert.Null(a.VerifyChallenge(bad));
+    }
+
+    [Theory]
+    [InlineData("whsecret")]       // webhookSecret не є verifyToken
+    [InlineData("app-secret-1")]   // appSecret не є verifyToken
+    [InlineData("")]
+    public void instagramVerifyChallenge_rejects_other_secrets_and_empty_token(string token)
+    {
+        var a = new InstagramAdapter(new HttpClient(), new ChCreds());
+        var req = new WebhookRequest(new Dictionary<string, string>(), new Dictionary<string, string>
+            { ["hub.mode"] = "subscribe", ["hub.verify_token"] = token, ["hub.challenge"] = "abc" });
+        Assert.Null(a.VerifyChallenge(req));
+        // verifyToken не задано -> handshake завжди відхиляється, навіть із порожнім токеном
+        var none = new InstagramAdapter(new HttpClient(), new ChCreds(verifyToken: null));
+        Assert.Null(none.VerifyChallenge(req));
+    }
+
+    [Fact]
+    public void mockAdapter_has_no_default_secret_and_requires_configured_one()
+    {
+        // H2: немає секрету = відмова (раніше підходив літерал "mock").
+        var noCreds = new MockTelegramAdapter();
+        Assert.False(noCreds.VerifySignature(Req("X-Mock-Signature", "mock"), "{}"));
+        var noSecret = new MockTelegramAdapter(new ChCreds(secret: null));
+        Assert.False(noSecret.VerifySignature(Req("X-Mock-Signature", "mock"), "{}"));
+        Assert.False(noSecret.VerifySignature(Req("X-Mock-Signature", ""), "{}"));
+        var withSecret = new MockTelegramAdapter(new ChCreds());
+        Assert.True(withSecret.VerifySignature(Req("X-Mock-Signature", "whsecret"), "{}"));
+        Assert.False(withSecret.VerifySignature(Req("X-Mock-Signature", "mock"), "{}"));
+    }
+
+    [Fact]
+    public void channelCredentials_toString_masks_all_secrets()
+    {
+        var s = new ChannelCredentials("123456:ABCDEFtoken", "whsecret", "app-secret-1", "verify-token-1").ToString();
+        Assert.DoesNotContain("whsecret", s);
+        Assert.DoesNotContain("app-secret-1", s);
+        Assert.DoesNotContain("verify-token-1", s);
+        Assert.DoesNotContain("123456:ABCDEFtoken", s);
     }
 
     [Fact]
@@ -98,7 +152,7 @@ public class ChannelsTests
     {
         var repo = new ChFakeRepo(); var q = new ChFakeQueue();
         var s = Svc(repo, q, new InstagramAdapter(new HttpClient(), new ChCreds()));
-        var req = Req("X-Hub-Signature-256", Sig("whsecret", IgBody));
+        var req = Req("X-Hub-Signature-256", Sig("app-secret-1", IgBody));
         var r1 = await s.HandleAsync("INSTAGRAM", req, IgBody, default);
         var r2 = await s.HandleAsync("instagram", req, IgBody, default);
         Assert.Equal(1, r1.NewMessages); Assert.Equal(0, r2.NewMessages);
@@ -120,8 +174,8 @@ public class ChannelsTests
     public async Task webhook_returns_bad_payload_for_malformed_json_and_unknown_for_missing_channel()
     {
         var repo = new ChFakeRepo(); var q = new ChFakeQueue();
-        var s = Svc(repo, q, new MockTelegramAdapter());
-        Assert.Equal(WebhookOutcome.BadPayload, (await s.HandleAsync("telegram", Req("X-Mock-Signature", "mock"), "{not json", default)).Outcome);
+        var s = Svc(repo, q, new MockTelegramAdapter(new ChCreds()));
+        Assert.Equal(WebhookOutcome.BadPayload, (await s.HandleAsync("telegram", Req("X-Mock-Signature", "whsecret"), "{not json", default)).Outcome);
         Assert.Equal(WebhookOutcome.UnknownChannel, (await s.HandleAsync("tiktok", Req("a", "b"), "{}", default)).Outcome);
     }
 

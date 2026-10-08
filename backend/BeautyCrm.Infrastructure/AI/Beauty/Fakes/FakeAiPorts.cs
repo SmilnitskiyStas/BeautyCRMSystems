@@ -73,6 +73,17 @@ public sealed class InMemoryAiActionJournal : IAiActionJournal
         lock (_items) return Task.FromResult(_items.FirstOrDefault(x => x.Id == id && x.TenantId == tenantId));
     }
 
+    public Task<bool> TryTransitionAsync(Guid tenantId, Guid id, string from, string to, CancellationToken ct)
+    {
+        lock (_items)
+        {
+            var i = _items.FindIndex(x => x.Id == id && x.TenantId == tenantId && x.Status == from);
+            if (i < 0) return Task.FromResult(false);
+            _items[i] = _items[i] with { Status = to };
+            return Task.FromResult(true);
+        }
+    }
+
     public Task UpdateAsync(AiActionRecord r, CancellationToken ct)
     {
         lock (_items)

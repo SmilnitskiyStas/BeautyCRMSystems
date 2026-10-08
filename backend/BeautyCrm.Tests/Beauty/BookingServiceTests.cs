@@ -246,6 +246,8 @@ public class BookingServiceTests
         public Task<IReadOnlyList<AppointmentDto>> ListAppointmentsAsync(DateTimeOffset f, DateTimeOffset t, Guid? l, Guid? s, CancellationToken ct) => inner.ListAppointmentsAsync(f, t, l, s, ct);
         public Task<StoreResult<AppointmentDto>> RescheduleAsync(Guid id, DateTimeOffset n, DateTimeOffset? r, CancellationToken ct) => inner.RescheduleAsync(id, n, r, ct);
         public Task<AppointmentDto?> SetStatusAsync(Guid id, string s, CancellationToken ct) => inner.SetStatusAsync(id, s, ct);
+        public Task<bool> TryClaimCancelAsync(Guid id, DateTimeOffset at, CancellationToken ct) => inner.TryClaimCancelAsync(id, at, ct);
+        public Task ReleaseCancelAsync(Guid id, string previousStatus, CancellationToken ct) => inner.ReleaseCancelAsync(id, previousStatus, ct);
         public Task<AppointmentDto?> MarkCancelledAsync(Guid id, DateTimeOffset at, CancellationToken ct) => inner.MarkCancelledAsync(id, at, ct);
         public Task<PaymentRecord?> GetPaymentAsync(Guid id, CancellationToken ct) => inner.GetPaymentAsync(id, ct);
         public Task UpdatePaymentAsync(Guid id, string s, string? p, DateTimeOffset? a, CancellationToken ct) => inner.UpdatePaymentAsync(id, s, p, a, ct);

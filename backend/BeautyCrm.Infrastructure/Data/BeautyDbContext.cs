@@ -21,6 +21,8 @@ public class BeautyDbContext : DbContext
     public DbSet<Location> Locations => Set<Location>();
     public DbSet<Specialist> Specialists => Set<Specialist>();
     public DbSet<SpecialistLocation> SpecialistLocations => Set<SpecialistLocation>();
+    public DbSet<SpecialistServiceLink> SpecialistServices => Set<SpecialistServiceLink>();
+    public DbSet<SpecialistAbsence> SpecialistAbsences => Set<SpecialistAbsence>();
     public DbSet<Service> Services => Set<Service>();
     public DbSet<ServicePrice> ServicePrices => Set<ServicePrice>();
     public DbSet<Client> Clients => Set<Client>();
@@ -97,6 +99,7 @@ public class BeautyDbContext : DbContext
             Base(b, "beauty_specialists");
             b.Property(x => x.FullName).HasMaxLength(200);
             b.Property(x => x.Title).HasMaxLength(200);
+            b.Property(x => x.Position).HasMaxLength(200);
             b.Property(x => x.Phone).HasMaxLength(32);
             b.Property(x => x.Email).HasMaxLength(320);
             b.Property(x => x.PhotoUrl).HasMaxLength(2048);
@@ -117,6 +120,42 @@ public class BeautyDbContext : DbContext
                 t.HasCheckConstraint("ck_beauty_services_duration_positive", "duration_minutes > 0"));
             b.Property(x => x.Name).HasMaxLength(200);
             b.Property(x => x.Category).HasMaxLength(100);
+        });
+
+        mb.Entity<SpecialistServiceLink>(b =>
+        {
+            b.ToTable("beauty_specialist_services");
+            b.HasKey(x => new { x.TenantId, x.SpecialistId, x.ServiceId });
+            TenantFk(b, x => x.Specialist, x => new { x.TenantId, x.SpecialistId }, DeleteBehavior.Cascade);
+            TenantFk(b, x => x.Service, x => new { x.TenantId, x.ServiceId }, DeleteBehavior.Cascade);
+            b.HasIndex(x => new { x.TenantId, x.ServiceId });
+        });
+
+        mb.Entity<SpecialistAbsence>(b =>
+        {
+            b.ToTable("beauty_specialist_absences", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_specialist_absences_type", "type IN ('sick', 'vacation', 'day_off', 'other')");
+                t.HasCheckConstraint("ck_beauty_specialist_absences_status", "status IN ('requested', 'approved', 'rejected', 'cancelled')");
+                t.HasCheckConstraint("ck_beauty_specialist_absences_dates", "date_to >= date_from");
+                t.HasCheckConstraint("ck_beauty_specialist_absences_note", "note IS NULL OR char_length(note) <= 500");
+            });
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            b.HasAlternateKey(x => new { x.TenantId, x.Id });
+            b.Property(x => x.Type).HasMaxLength(16);
+            b.Property(x => x.Status).HasMaxLength(16);
+            b.Property(x => x.Note).HasMaxLength(500);
+            TenantFk(b, x => x.Specialist, x => new { x.TenantId, x.SpecialistId }, DeleteBehavior.Restrict);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.RequestedByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.DecidedByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.CancelledByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.SpecialistId, x.DateFrom });
+            // exclusion constraint (немає перетину requested/approved відсутностей майстра) — у SQL міграції
         });
 
         mb.Entity<ServicePrice>(b =>

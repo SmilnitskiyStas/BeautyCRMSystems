@@ -17,6 +17,9 @@ internal sealed class FakeBookingStore : IBookingStore
     public string Timezone = "UTC";
     public string? WorkingHours = Mon9To18;
     public bool SpecialistAtLocation = true;
+    /// <summary>TASK-691: затверджені відсутності й призначені послуги (null = без обмежень).</summary>
+    public List<AbsenceSpan>? Absences;
+    public List<Guid>? AssignedServices;
     public List<PromotionRule> Promotions = [];
     public List<AppointmentDto> Appointments = [];
     public List<(Guid AppointmentId, DateTimeOffset At)> Reminders = [];
@@ -32,7 +35,7 @@ internal sealed class FakeBookingStore : IBookingStore
     public Task<IReadOnlyList<SpecialistSchedule>> GetSchedulesAsync(Guid locationId, Guid? specialistId, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<SpecialistSchedule>>(
             SpecialistAtLocation && locationId == Location && (specialistId is null || specialistId == Specialist)
-                ? [new SpecialistSchedule(Specialist, Timezone, WorkingHours)] : []);
+                ? [new SpecialistSchedule(Specialist, Timezone, WorkingHours, Absences, AssignedServices)] : []);
 
     public Task<IReadOnlyList<(Guid SpecialistId, TimeRange Range)>> GetBusyAsync(
         IReadOnlyCollection<Guid> ids, DateTimeOffset from, DateTimeOffset to, Guid? exclude, CancellationToken ct) =>
@@ -82,6 +85,27 @@ internal sealed class FakeBookingStore : IBookingStore
 
     public Task<AppointmentDto?> SetStatusAsync(Guid id, string status, CancellationToken ct) => Replace(id, a => a with { Status = status });
 
+    public Task<bool> TryClaimCancelAsync(Guid id, DateTimeOffset at, CancellationToken ct)
+    {
+        lock (Appointments)
+        {
+            var a = Appointments.FirstOrDefault(x => x.Id == id);
+            if (a is null || a.Status is not ("pending" or "confirmed")) return Task.FromResult(false);
+            Appointments[Appointments.IndexOf(a)] = a with { Status = "cancelled" };
+            return Task.FromResult(true);
+        }
+    }
+
+    public Task ReleaseCancelAsync(Guid id, string previousStatus, CancellationToken ct)
+    {
+        lock (Appointments)
+        {
+            var a = Appointments.FirstOrDefault(x => x.Id == id);
+            if (a is { Status: "cancelled" }) Appointments[Appointments.IndexOf(a)] = a with { Status = previousStatus };
+        }
+        return Task.CompletedTask;
+    }
+
     public Task<AppointmentDto?> MarkCancelledAsync(Guid id, DateTimeOffset at, CancellationToken ct)
     {
         Reminders.RemoveAll(r => r.AppointmentId == id);
@@ -129,15 +153,20 @@ internal sealed class SpyPayments : IPaymentService
     public bool ChargeOk = true, RefundOk = true;
     public List<decimal> Charges = [];
     public List<decimal> Refunds = [];
+    public List<Guid> RefundKeys = [];
+    /// <summary>Викликається всередині RefundAsync (імітує паралельний cancel під час повернення коштів).</summary>
+    public Func<Task>? DuringRefund;
     public Task<PaymentResult> ChargeAsync(Guid id, decimal amount, CancellationToken ct)
     {
         Charges.Add(amount);
         return Task.FromResult(ChargeOk ? new PaymentResult(true, "p1", null) : new PaymentResult(false, null, "card_declined"));
     }
-    public Task<RefundResult> RefundAsync(Guid id, decimal amount, CancellationToken ct)
+    public async Task<RefundResult> RefundAsync(Guid id, decimal amount, CancellationToken ct)
     {
         Refunds.Add(amount);
-        return Task.FromResult(RefundOk ? new RefundResult(true, "r1", null) : new RefundResult(false, null, "provider_down"));
+        RefundKeys.Add(id);
+        if (DuringRefund is not null) await DuringRefund();
+        return RefundOk ? new RefundResult(true, "r1", null) : new RefundResult(false, null, "provider_down");
     }
 }
 

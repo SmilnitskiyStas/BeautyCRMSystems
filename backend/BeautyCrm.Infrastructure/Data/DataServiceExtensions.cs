@@ -3,6 +3,8 @@ using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Application.Features.BeautyCatalog;
 using BeautyCrm.Application.Features.BeautyChannels;
 using BeautyCrm.Application.Features.BeautyClients;
+using BeautyCrm.Application.Features.BeautyOverview;
+using BeautyCrm.Application.Features.BeautyStaff;
 using BeautyCrm.Infrastructure.Data.Beauty;
 using BeautyCrm.Infrastructure.Data.Tenancy;
 using Microsoft.EntityFrameworkCore;
@@ -49,6 +51,8 @@ public static class DataServiceExtensions
         services.AddScoped<IClientStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<IAnalyticsStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<IChannelSettingsStore>(sp => sp.GetRequiredService<EfBeautyStore>());
+        services.AddScoped<IStaffStore>(sp => sp.GetRequiredService<EfBeautyStore>());
+        services.AddScoped<IOverviewStore>(sp => sp.GetRequiredService<EfBeautyStore>());
 
         return services;
     }

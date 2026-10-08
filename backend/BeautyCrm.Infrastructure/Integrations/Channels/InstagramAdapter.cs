@@ -4,7 +4,10 @@ using System.Text.Json;
 
 namespace BeautyCrm.Infrastructure.Integrations.Channels;
 
-/// <summary>Instagram Direct via Meta Graph API. Signature: X-Hub-Signature-256 = sha256=HMAC(appSecret, body).</summary>
+/// <summary>
+/// Instagram Direct via Meta Graph API. Signature: X-Hub-Signature-256 = sha256=HMAC(appSecret, body).
+/// appSecret (підпис POST) і verifyToken (GET handshake) — РІЗНІ значення й не підміняють одне одного.
+/// </summary>
 public sealed class InstagramAdapter(HttpClient http, IChannelCredentialsProvider creds) : IChannelAdapter
 {
     public const string SignatureHeader = "X-Hub-Signature-256";
@@ -16,7 +19,7 @@ public sealed class InstagramAdapter(HttpClient http, IChannelCredentialsProvide
 
     public bool VerifySignature(WebhookRequest req, string body)
     {
-        var secret = creds.Get(Channel)?.WebhookSecret;
+        var secret = creds.Get(Channel)?.AppSecret;
         var header = req.Header(SignatureHeader);
         if (string.IsNullOrEmpty(secret) || string.IsNullOrEmpty(header)
             || !header.StartsWith("sha256=", StringComparison.OrdinalIgnoreCase))
@@ -28,10 +31,10 @@ public sealed class InstagramAdapter(HttpClient http, IChannelCredentialsProvide
     public string? VerifyChallenge(WebhookRequest req)
     {
         var q = req.Query;
-        var secret = creds.Get(Channel)?.WebhookSecret;
-        if (q is null || string.IsNullOrEmpty(secret)) return null;
+        var verifyToken = creds.Get(Channel)?.VerifyToken;
+        if (q is null || string.IsNullOrEmpty(verifyToken)) return null;
         return q.GetValueOrDefault("hub.mode") == "subscribe"
-            && q.TryGetValue("hub.verify_token", out var t) && Crypto.FixedTimeEquals(secret, t)
+            && q.TryGetValue("hub.verify_token", out var t) && !string.IsNullOrEmpty(t) && Crypto.FixedTimeEquals(verifyToken, t)
             ? q.GetValueOrDefault("hub.challenge") : null;
     }
 

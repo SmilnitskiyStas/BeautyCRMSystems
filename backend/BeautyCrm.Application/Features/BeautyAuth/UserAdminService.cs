@@ -20,6 +20,8 @@ public sealed class UserAdminService(IAuthStore store, AuthOptions options, Time
                 return AuthError.Validation("specialist_required", "specialistId is required for role specialist.");
             if (!await store.SpecialistExistsAsync(specialistId, ct))
                 return AuthError.Validation("specialist_not_found", "Specialist profile not found.");
+            if (!await store.SpecialistIsActiveAsync(specialistId, ct))
+                return AuthError.Conflict("specialist_inactive", "The specialist profile is deactivated; reactivate it first.");
             if (await store.SpecialistHasUserAsync(specialistId, ct))
                 return AuthError.Conflict("specialist_linked", "This specialist profile already has a user.");
         }
@@ -34,6 +36,7 @@ public sealed class UserAdminService(IAuthStore store, AuthOptions options, Time
         var (token, hash) = TokenCodec.Generate(actor.TenantId);
         var invite = await store.AddInviteAsync(
             new NewInvite(email, role, role == Roles.Specialist ? req.SpecialistId : null, hash, now.AddDays(options.InviteDays), actor.UserId), ct);
+        if (invite is null) return AuthError.Conflict("specialist_inactive", "The specialist profile is deactivated; reactivate it first.");
         return new InviteCreatedDto(ToDto(invite, now), token);
     }
 

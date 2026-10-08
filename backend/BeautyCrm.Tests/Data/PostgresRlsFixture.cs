@@ -28,6 +28,8 @@ public sealed class PostgresRlsFixture : IAsyncLifetime
 
     public string? SkipReason { get; private set; }
     public string AppConnectionString { get; private set; } = null!;
+    /// <summary>Superuser-рядок до тестової БД (власник схеми): лише для перевірок захисту (DbRoleGuard) і прямої правки даних.</summary>
+    public string AdminConnectionString { get; private set; } = null!;
 
     public async Task InitializeAsync()
     {
@@ -56,6 +58,7 @@ public sealed class PostgresRlsFixture : IAsyncLifetime
         }
 
         var adminDbCs = new NpgsqlConnectionStringBuilder(_adminServerCs) { Database = DatabaseName }.ConnectionString;
+        AdminConnectionString = adminDbCs;
 
         var migrateOptions = new DbContextOptionsBuilder<BeautyDbContext>();
         migrateOptions.UseBeautyNpgsql(adminDbCs);

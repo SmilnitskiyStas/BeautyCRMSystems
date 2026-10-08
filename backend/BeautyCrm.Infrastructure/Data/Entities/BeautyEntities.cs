@@ -30,10 +30,48 @@ public class Specialist : TenantEntity
 {
     public string FullName { get; set; } = null!;
     public string? Title { get; set; }
+    /// <summary>Посада (керування працівниками, TASK-691); для публічного запису пріоритетніша за Title.</summary>
+    public string? Position { get; set; }
     public string? Phone { get; set; }
     public string? Email { get; set; }
     public string? PhotoUrl { get; set; }
     public bool IsActive { get; set; } = true;
+}
+
+/// <summary>Послуга, призначена майстру. Майстер пропонує лише призначені послуги. PK (tenant_id, specialist_id, service_id).</summary>
+public class SpecialistServiceLink : ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid SpecialistId { get; set; }
+    public Guid ServiceId { get; set; }
+
+    public Specialist? Specialist { get; set; }
+    public Service? Service { get; set; }
+}
+
+/// <summary>
+/// Відсутність майстра повними днями (включно, у часовій зоні закладу). Type: sick|vacation|day_off|other;
+/// Status: requested|approved|rejected|cancelled. Note — ЧУТЛИВІ дані: не логувати, не віддавати без права.
+/// </summary>
+public class SpecialistAbsence : ITenantEntity
+{
+    public Guid Id { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid SpecialistId { get; set; }
+    public string Type { get; set; } = null!;
+    public DateOnly DateFrom { get; set; }
+    public DateOnly DateTo { get; set; }
+    public string Status { get; set; } = null!;
+    public string? Note { get; set; }
+    public Guid RequestedByUserId { get; set; }
+    public Guid? DecidedByUserId { get; set; }
+    public DateTimeOffset? DecidedAt { get; set; }
+    /// <summary>Хто й коли скасував (status = cancelled; TASK-696). null для відсутностей, скасованих до цієї міграції.</summary>
+    public Guid? CancelledByUserId { get; set; }
+    public DateTimeOffset? CancelledAt { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+
+    public Specialist? Specialist { get; set; }
 }
 
 /// <summary>Specialist working at a location + weekly schedule there (jsonb).</summary>

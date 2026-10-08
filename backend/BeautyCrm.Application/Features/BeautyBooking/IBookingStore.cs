@@ -22,6 +22,13 @@ public interface IBookingStore
     /// <summary>Переносить запис і переплановує нагадування (reminderAt null = без нагадування).</summary>
     Task<StoreResult<AppointmentDto>> RescheduleAsync(Guid id, DateTimeOffset newStart, DateTimeOffset? reminderAt, CancellationToken ct);
     Task<AppointmentDto?> SetStatusAsync(Guid id, string status, CancellationToken ct);
+    /// <summary>
+    /// Атомарний claim скасування (умовний UPDATE ... WHERE status IN ('pending','confirmed')): true лише для ОДНОГО з паралельних
+    /// викликів. Виконується ПЕРЕД поверненням коштів, щоб гонка двох cancel не повернула кошти двічі.
+    /// </summary>
+    Task<bool> TryClaimCancelAsync(Guid id, DateTimeOffset at, CancellationToken ct);
+    /// <summary>Компенсація невдалого повернення коштів: status = previousStatus, cancelled_at = null (лише якщо ще cancelled).</summary>
+    Task ReleaseCancelAsync(Guid id, string previousStatus, CancellationToken ct);
     /// <summary>status = cancelled, cancelled_at, нагадування -> cancelled.</summary>
     Task<AppointmentDto?> MarkCancelledAsync(Guid id, DateTimeOffset at, CancellationToken ct);
     Task<PaymentRecord?> GetPaymentAsync(Guid appointmentId, CancellationToken ct);

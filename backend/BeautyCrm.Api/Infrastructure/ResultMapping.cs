@@ -17,6 +17,7 @@ public static class ResultMapping
         {
             ErrorKind.NotFound => c.NotFound(body),
             ErrorKind.Conflict => c.Conflict(body),
+            ErrorKind.Forbidden => c.StatusCode(StatusCodes.Status403Forbidden, body),
             ErrorKind.PaymentFailed => c.StatusCode(StatusCodes.Status402PaymentRequired, body),
             _ => c.UnprocessableEntity(body),
         };
@@ -24,6 +25,13 @@ public static class ResultMapping
 
     public static IActionResult ToResult<T>(this ControllerBase c, Result<T> r, Func<T, IActionResult>? ok = null) =>
         r.IsOk ? (ok is null ? c.Ok(r.Value) : ok(r.Value!)) : c.ToError(r.Error!);
+
+    /// <summary>201 для щойно створеного запрошення: одноразовий токен у тілі не має кешуватися (Cache-Control: no-store).</summary>
+    public static IActionResult InviteCreated<T>(this ControllerBase c, T body)
+    {
+        c.Response.Headers.CacheControl = "no-store";
+        return c.StatusCode(StatusCodes.Status201Created, body);
+    }
 
     /// <summary>Tenant гарантовано встановлений фільтром [RequireModule].</summary>
     public static Guid TenantId(this ControllerBase c) =>

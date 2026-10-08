@@ -32,15 +32,15 @@ public sealed class PublicBookingController(PublicBookingService service) : Cont
     [HttpGet("locations/{locationId:guid}/specialists")]
     [EnableRateLimiting(PublicRateLimit.Read)]
     [ProducesResponseType<IReadOnlyList<PublicSpecialistDto>>(StatusCodes.Status200OK)]
-    public async Task<IActionResult> Specialists(Guid locationId, CancellationToken ct) =>
-        this.ToResult(await service.ListSpecialistsAsync(locationId, ct));
+    public async Task<IActionResult> Specialists(Guid locationId, [FromQuery] Guid? serviceId, CancellationToken ct) =>
+        this.ToResult(await service.ListSpecialistsAsync(locationId, serviceId, ct));
 
     /// <summary>Послуги закладу: ціна з override закладу й акцією, тривалість.</summary>
     [HttpGet("locations/{locationId:guid}/services")]
     [EnableRateLimiting(PublicRateLimit.Read)]
     [ProducesResponseType<IReadOnlyList<PublicServiceDto>>(StatusCodes.Status200OK)]
-    public async Task<IActionResult> Services(Guid locationId, CancellationToken ct) =>
-        this.ToResult(await service.ListServicesAsync(locationId, ct));
+    public async Task<IActionResult> Services(Guid locationId, [FromQuery] Guid? specialistId, CancellationToken ct) =>
+        this.ToResult(await service.ListServicesAsync(locationId, specialistId, ct));
 
     /// <summary>Вільні слоти з умовами скасування (§11) у кожному елементі.</summary>
     [HttpGet("slots")]

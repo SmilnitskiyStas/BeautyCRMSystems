@@ -5,23 +5,28 @@ namespace BeautyCrm.Application.Features.BeautyChannels;
 /// <summary>Секрети ніколи не повертаються: лише маска токена (останні 4 символи) і прапорець наявності webhook-секрету.</summary>
 public sealed record ChannelDto(
     Guid Id, string Type, string Name, Guid? LocationId, bool IsActive, string MaskedToken, bool HasWebhookSecret,
-    string? SettingsJson, string WebhookPath);
+    string? SettingsJson, string WebhookPath, bool HasAppSecret = false, bool HasVerifyToken = false);
 
-/// <summary>Token/WebhookSecret = null: залишити наявне значення.</summary>
+/// <summary>
+/// Token/WebhookSecret/AppSecret/VerifyToken = null: залишити наявне значення. Instagram/Messenger: AppSecret — ключ HMAC підпису
+/// POST, VerifyToken — токен GET-handshake; це РІЗНІ значення (WebhookSecret для них не використовується). Telegram: WebhookSecret.
+/// </summary>
 public sealed record UpsertChannelRequest(
-    string? Type, string Name, Guid? LocationId, bool IsActive, string? Token, string? WebhookSecret, string? SettingsJson);
+    string? Type, string Name, Guid? LocationId, bool IsActive, string? Token, string? WebhookSecret, string? SettingsJson,
+    string? AppSecret = null, string? VerifyToken = null);
 
 /// <summary>Рядок каналу без секретів; Last4 — для маски.</summary>
 public sealed record ChannelRecord(
-    Guid Id, string Type, string Name, Guid? LocationId, bool IsActive, string? Last4, bool HasWebhookSecret, string? SettingsJson);
+    Guid Id, string Type, string Name, Guid? LocationId, bool IsActive, string? Last4, bool HasWebhookSecret, string? SettingsJson,
+    bool HasAppSecret = false, bool HasVerifyToken = false);
 
 public interface IChannelSettingsStore
 {
     Task<IReadOnlyList<ChannelRecord>> ListAsync(CancellationToken ct);
     Task<ChannelRecord?> GetAsync(Guid id, CancellationToken ct);
     Task<bool> LocationExistsAsync(Guid locationId, CancellationToken ct);
-    /// <summary>Шифрує секрети; створює канал, якщо id не існує (тоді Type обов'язковий).</summary>
-    Task<ChannelRecord> UpsertAsync(Guid id, UpsertChannelRequest req, CancellationToken ct);
+    /// <summary>Шифрує секрети; створює канал, якщо id не існує (тоді Type обов'язковий). Null = id уже зайнятий (в іншому tenant).</summary>
+    Task<ChannelRecord?> UpsertAsync(Guid id, UpsertChannelRequest req, CancellationToken ct);
 }
 
 public sealed class ChannelSettingsService(IChannelSettingsStore store)
@@ -41,11 +46,15 @@ public sealed class ChannelSettingsService(IChannelSettingsStore store)
             return Error.Validation("invalid_type", "type is required to create a channel.");
         if (existing is not null && req.Type is not null && req.Type != existing.Type)
             return Error.Validation("type_immutable", "Channel type cannot be changed.");
-        if (req.Token is { Length: > 512 } || req.WebhookSecret is { Length: > 512 })
+        if (req.Token is { Length: > 512 } || req.WebhookSecret is { Length: > 512 }
+            || req.AppSecret is { Length: > 512 } || req.VerifyToken is { Length: > 512 })
             return Error.Validation("invalid_secret", "Secret is too long.");
         if (req.LocationId is { } loc && !await store.LocationExistsAsync(loc, ct))
             return Error.NotFound("location_not_found", "Location not found.");
-        return ToDto(await store.UpsertAsync(id, req, ct));
+        // Не розкриваємо, чи id належить іншому tenant: однакова відповідь 409 для будь-якої колізії PK.
+        return await store.UpsertAsync(id, req, ct) is { } saved
+            ? ToDto(saved)
+            : Error.Conflict("channel_id_conflict", "Channel id is already in use.");
     }
 
     private static bool IsJsonObject(string json)
@@ -57,5 +66,5 @@ public sealed class ChannelSettingsService(IChannelSettingsStore store)
     private static ChannelDto ToDto(ChannelRecord r) => new(
         r.Id, r.Type, r.Name, r.LocationId, r.IsActive,
         string.IsNullOrEmpty(r.Last4) ? string.Empty : "********" + r.Last4,
-        r.HasWebhookSecret, r.SettingsJson, $"/api/beauty/webhooks/{r.Type}/{r.Id}");
+        r.HasWebhookSecret, r.SettingsJson, $"/api/beauty/webhooks/{r.Type}/{r.Id}", r.HasAppSecret, r.HasVerifyToken);
 }

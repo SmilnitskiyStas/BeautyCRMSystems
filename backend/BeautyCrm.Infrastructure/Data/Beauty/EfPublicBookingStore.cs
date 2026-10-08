@@ -1,4 +1,6 @@
+using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Application.Features.BeautyPublicBooking;
+using BeautyCrm.Application.Features.BeautyStaff;
 using BeautyCrm.Infrastructure.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,16 +17,41 @@ public sealed class EfPublicBookingStore(BeautyDbContext db) : IPublicBookingSto
         await db.Locations.AsNoTracking().Where(l => l.IsActive).OrderBy(l => l.Name)
             .Select(l => new PublicLocationDto(l.Id, l.Name, l.Address, l.Phone, l.Timezone)).ToListAsync(ct);
 
-    public async Task<IReadOnlyList<PublicSpecialistDto>> ListSpecialistsAsync(Guid locationId, CancellationToken ct) =>
-        await db.SpecialistLocations.AsNoTracking()
-            .Where(sl => sl.LocationId == locationId && sl.IsActive && sl.Specialist!.IsActive)
-            .OrderBy(sl => sl.Specialist!.FullName)
-            .Select(sl => new PublicSpecialistDto(sl.SpecialistId, sl.Specialist!.FullName, sl.Specialist.Title, sl.Specialist.PhotoUrl))
-            .ToListAsync(ct);
-
-    public async Task<IReadOnlyList<PublicServiceBase>> ListServicesAsync(Guid locationId, CancellationToken ct)
+    /// <summary>
+    /// Придатні до запису майстри закладу: активні, заклад-зв'язок активний, у графіку є робочий інтервал
+    /// і призначена хоча б одна активна послуга (TASK-691). Інших публічно не показуємо.
+    /// </summary>
+    private async Task<List<Guid>> EligibleSpecialistIdsAsync(Guid locationId, CancellationToken ct)
     {
-        var services = await db.Services.AsNoTracking().Where(s => s.IsActive).OrderBy(s => s.Category).ThenBy(s => s.Name).ToListAsync(ct);
+        var rows = await db.SpecialistLocations.AsNoTracking()
+            .Where(sl => sl.LocationId == locationId && sl.IsActive && sl.Specialist!.IsActive
+                         && db.SpecialistServices.Any(x => x.SpecialistId == sl.SpecialistId && x.Service!.IsActive))
+            .Select(sl => new { sl.SpecialistId, sl.WorkingHours }).ToListAsync(ct);
+        return rows.Where(r => SlotCalculator.HasWorkingHours(r.WorkingHours)).Select(r => r.SpecialistId).Distinct().ToList();
+    }
+
+    public async Task<IReadOnlyList<PublicSpecialistDto>> ListSpecialistsAsync(Guid locationId, Guid? serviceId, CancellationToken ct)
+    {
+        var ids = await EligibleSpecialistIdsAsync(locationId, ct);
+        if (serviceId is { } sid)
+        {
+            var offering = await db.SpecialistServices.AsNoTracking().Where(x => x.ServiceId == sid && ids.Contains(x.SpecialistId))
+                .Select(x => x.SpecialistId).ToListAsync(ct);
+            ids = offering;
+        }
+        return await db.Specialists.AsNoTracking().Where(s => ids.Contains(s.Id)).OrderBy(s => s.FullName)
+            .Select(s => new PublicSpecialistDto(s.Id, s.FullName, s.Position ?? s.Title, s.PhotoUrl))
+            .ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<PublicServiceBase>> ListServicesAsync(Guid locationId, Guid? specialistId, CancellationToken ct)
+    {
+        var ids = await EligibleSpecialistIdsAsync(locationId, ct);
+        if (specialistId is { } spid) ids = ids.Where(i => i == spid).ToList();
+        var offered = await db.SpecialistServices.AsNoTracking().Where(x => ids.Contains(x.SpecialistId))
+            .Select(x => x.ServiceId).Distinct().ToListAsync(ct);
+        var services = await db.Services.AsNoTracking().Where(s => s.IsActive && offered.Contains(s.Id))
+            .OrderBy(s => s.Category).ThenBy(s => s.Name).ToListAsync(ct);
         var prices = await db.ServicePrices.AsNoTracking()
             .Where(p => p.LocationId == locationId || p.LocationId == null)
             .Select(p => new { p.ServiceId, p.LocationId, p.Price }).ToListAsync(ct);

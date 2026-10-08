@@ -1362,6 +1362,11 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(2048)")
                         .HasColumnName("photo_url");
 
+                    b.Property<string>("Position")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("position");
+
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid")
                         .HasColumnName("tenant_id");
@@ -1384,6 +1389,103 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasName("ak_beauty_specialists_tenant_id_id");
 
                     b.ToTable("beauty_specialists", (string)null);
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.SpecialistAbsence", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateTimeOffset?>("CancelledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("cancelled_at");
+
+                    b.Property<Guid?>("CancelledByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("cancelled_by_user_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<DateOnly>("DateFrom")
+                        .HasColumnType("date")
+                        .HasColumnName("date_from");
+
+                    b.Property<DateOnly>("DateTo")
+                        .HasColumnType("date")
+                        .HasColumnName("date_to");
+
+                    b.Property<DateTimeOffset?>("DecidedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("decided_at");
+
+                    b.Property<Guid?>("DecidedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("decided_by_user_id");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("note");
+
+                    b.Property<Guid>("RequestedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("requested_by_user_id");
+
+                    b.Property<Guid>("SpecialistId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("specialist_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("status");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("type");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_specialist_absences");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_specialist_absences_tenant_id_id");
+
+                    b.HasIndex("TenantId", "CancelledByUserId")
+                        .HasDatabaseName("ix_beauty_specialist_absences_tenant_id_cancelled_by_user_id");
+
+                    b.HasIndex("TenantId", "DecidedByUserId")
+                        .HasDatabaseName("ix_beauty_specialist_absences_tenant_id_decided_by_user_id");
+
+                    b.HasIndex("TenantId", "RequestedByUserId")
+                        .HasDatabaseName("ix_beauty_specialist_absences_tenant_id_requested_by_user_id");
+
+                    b.HasIndex("TenantId", "SpecialistId", "DateFrom")
+                        .HasDatabaseName("ix_beauty_specialist_absences_tenant_id_specialist_id_date_from");
+
+                    b.ToTable("beauty_specialist_absences", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_specialist_absences_dates", "date_to >= date_from");
+
+                            t.HasCheckConstraint("ck_beauty_specialist_absences_note", "note IS NULL OR char_length(note) <= 500");
+
+                            t.HasCheckConstraint("ck_beauty_specialist_absences_status", "status IN ('requested', 'approved', 'rejected', 'cancelled')");
+
+                            t.HasCheckConstraint("ck_beauty_specialist_absences_type", "type IN ('sick', 'vacation', 'day_off', 'other')");
+                        });
                 });
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.SpecialistLocation", b =>
@@ -1440,6 +1542,29 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasDatabaseName("ix_beauty_specialist_locations_tenant_id_specialist_id_locatio");
 
                     b.ToTable("beauty_specialist_locations", (string)null);
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.SpecialistServiceLink", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("SpecialistId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("specialist_id");
+
+                    b.Property<Guid>("ServiceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("service_id");
+
+                    b.HasKey("TenantId", "SpecialistId", "ServiceId")
+                        .HasName("pk_beauty_specialist_services");
+
+                    b.HasIndex("TenantId", "ServiceId")
+                        .HasDatabaseName("ix_beauty_specialist_services_tenant_id_service_id");
+
+                    b.ToTable("beauty_specialist_services", (string)null);
                 });
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.Tenant", b =>
@@ -1869,6 +1994,41 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.Navigation("Service");
                 });
 
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.SpecialistAbsence", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CancelledByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_specialist_absences_users_tenant_id_cancelled_by_use");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "DecidedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_specialist_absences_users_tenant_id_decided_by_user_");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "RequestedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_specialist_absences_users_tenant_id_requested_by_use");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Specialist", "Specialist")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SpecialistId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_specialist_absences_beauty_specialists_tenant_id_spe");
+
+                    b.Navigation("Specialist");
+                });
+
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.SpecialistLocation", b =>
                 {
                     b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Location", "Location")
@@ -1888,6 +2048,29 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasConstraintName("fk_beauty_specialist_locations_beauty_specialists_tenant_id_sp");
 
                     b.Navigation("Location");
+
+                    b.Navigation("Specialist");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.SpecialistServiceLink", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Service", "Service")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ServiceId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_specialist_services_beauty_services_tenant_id_servic");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Specialist", "Specialist")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SpecialistId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_specialist_services_beauty_specialists_tenant_id_spe");
+
+                    b.Navigation("Service");
 
                     b.Navigation("Specialist");
                 });

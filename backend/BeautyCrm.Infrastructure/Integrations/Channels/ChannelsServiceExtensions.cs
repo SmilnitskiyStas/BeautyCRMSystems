@@ -5,12 +5,13 @@ namespace BeautyCrm.Infrastructure.Integrations.Channels;
 
 public static class ChannelsServiceExtensions
 {
-    /// <param name="useMocks">true (default during development): Mock adapters for Telegram/Instagram; false: real ones.</param>
+    /// <param name="useMocks">false (default): real Telegram/Instagram adapters. true: mock adapters; the caller (Program) allows it
+    /// ONLY in the Development environment — mocks accept any request that carries the configured mock secret.</param>
     /// <remarks>
     /// Ports (Wave B): IChannelCredentialsProvider (ambient, per webhook/outbox call), IChannelMessageRepository (EF),
     /// IChannelQueue (deferred: DB is the source of truth, no Redis producer). Registered with TryAdd so they can be replaced.
     /// </remarks>
-    public static IServiceCollection AddBeautyChannels(this IServiceCollection services, bool useMocks = true)
+    public static IServiceCollection AddBeautyChannels(this IServiceCollection services, bool useMocks = false)
     {
         if (useMocks)
         {

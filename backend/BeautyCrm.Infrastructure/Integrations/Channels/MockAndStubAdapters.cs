@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 
 namespace BeautyCrm.Infrastructure.Integrations.Channels;
 
-/// <summary>Dev/test adapter. Header "X-Mock-Signature" must equal the configured webhook secret ("mock" default).</summary>
+/// <summary>Dev/test adapter (Development only). Header "X-Mock-Signature" must equal the channel's configured webhook secret; no secret = reject (no built-in default).</summary>
 public class MockChannelAdapter(string channel, IChannelCredentialsProvider? creds = null) : IChannelAdapter
 {
     public const string SignatureHeader = "X-Mock-Signature";
@@ -15,9 +15,9 @@ public class MockChannelAdapter(string channel, IChannelCredentialsProvider? cre
 
     public bool VerifySignature(WebhookRequest req, string body)
     {
-        var secret = creds?.Get(Channel)?.WebhookSecret ?? "mock";
+        var secret = creds?.Get(Channel)?.WebhookSecret;
         var got = req.Header(SignatureHeader);
-        return !string.IsNullOrEmpty(got) && Crypto.FixedTimeEquals(secret, got);
+        return !string.IsNullOrEmpty(secret) && !string.IsNullOrEmpty(got) && Crypto.FixedTimeEquals(secret, got);
     }
 
     /// <summary>Body: {"id","chatId","from","name","text"}.</summary>

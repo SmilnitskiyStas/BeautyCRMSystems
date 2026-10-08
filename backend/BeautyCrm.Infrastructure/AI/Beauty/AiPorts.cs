@@ -55,4 +55,9 @@ public interface IAiActionJournal
     Task AppendAsync(AiActionRecord record, CancellationToken ct);
     Task<AiActionRecord?> GetAsync(Guid tenantId, Guid id, CancellationToken ct);
     Task UpdateAsync(AiActionRecord record, CancellationToken ct);
+    /// <summary>
+    /// Атомарний compare-and-swap статусу (UPDATE ... WHERE status = from): true лише для одного з паралельних викликів.
+    /// Захищає approve / reject / revert від подвійного виконання.
+    /// </summary>
+    Task<bool> TryTransitionAsync(Guid tenantId, Guid id, string from, string to, CancellationToken ct);
 }

@@ -113,6 +113,23 @@ public sealed class AiToolExecutor
         if (rec is null || rec.Status != AiActionStatus.PendingConfirmation)
             return new AiToolResult("action_not_pending", true);
 
+        // Атомарний CAS pending -> executing: паралельний approve/reject отримає action_not_pending, дія виконується один раз.
+        if (!await _journal.TryTransitionAsync(tenantId, actionId, AiActionStatus.PendingConfirmation, AiActionStatus.Executing, ct))
+            return new AiToolResult("action_not_pending", true);
+        try
+        {
+            return await ExecuteConfirmedAsync(tenantId, rec, ct);
+        }
+        catch
+        {
+            // Дія не виконалась: повертаємо на підтвердження, щоб людина могла повторити або відхилити.
+            await _journal.TryTransitionAsync(tenantId, actionId, AiActionStatus.Executing, AiActionStatus.PendingConfirmation, CancellationToken.None);
+            throw;
+        }
+    }
+
+    private async Task<AiToolResult> ExecuteConfirmedAsync(Guid tenantId, AiActionRecord rec, CancellationToken ct)
+    {
         using var doc = JsonDocument.Parse(rec.PayloadJson);
         var p = doc.RootElement;
         switch (rec.Action)
@@ -128,7 +145,11 @@ public sealed class AiToolExecutor
             case AiToolNames.SuggestPromotion:
             {
                 var pct = p.GetProperty("discountPercent").GetDecimal();
-                if (pct > _settings.MaxDiscountPercent) return new AiToolResult("discount_limit_exceeded", true);
+                if (pct > _settings.MaxDiscountPercent)
+                {
+                    await _journal.TryTransitionAsync(tenantId, rec.Id, AiActionStatus.Executing, AiActionStatus.PendingConfirmation, ct);
+                    return new AiToolResult("discount_limit_exceeded", true);
+                }
                 var prop = await _promoSuggest.ProposeAsync(tenantId, p.GetProperty("goal").GetString()!, pct, p.GetProperty("text").GetString()!, ct);
                 await _journal.UpdateAsync(rec with { Status = AiActionStatus.Done, Target = $"promotion_proposal:{prop.ProposalId}" }, ct);
                 return new AiToolResult($"promotion_proposed:{prop.ProposalId}", false, AiActionStatus.Done);
@@ -140,6 +161,7 @@ public sealed class AiToolExecutor
                 return new AiToolResult("reply_sent", false, AiActionStatus.Done);
             }
             default:
+                await _journal.TryTransitionAsync(tenantId, rec.Id, AiActionStatus.Executing, AiActionStatus.PendingConfirmation, ct);
                 return new AiToolResult("action_not_confirmable", true);
         }
     }
@@ -148,7 +170,9 @@ public sealed class AiToolExecutor
     {
         var rec = await _journal.GetAsync(tenantId, actionId, ct);
         if (rec is null || rec.Status != AiActionStatus.PendingConfirmation) return new AiToolResult("action_not_pending", true);
-        await _journal.UpdateAsync(rec with { Status = AiActionStatus.Rejected }, ct);
+        // CAS: reject проти паралельного approve/reject — переможе один.
+        if (!await _journal.TryTransitionAsync(tenantId, actionId, AiActionStatus.PendingConfirmation, AiActionStatus.Rejected, ct))
+            return new AiToolResult("action_not_pending", true);
         return new AiToolResult("rejected", false, AiActionStatus.Rejected);
     }
 
@@ -157,7 +181,18 @@ public sealed class AiToolExecutor
         var rec = await _journal.GetAsync(tenantId, actionId, ct);
         if (rec is null || !rec.Revertible || rec.Status != AiActionStatus.Done || !rec.Target.StartsWith("appointment:"))
             return new AiToolResult("not_revertible", true);
-        await _appointments.CancelAsync(tenantId, Guid.Parse(rec.Target["appointment:".Length..]), ct);
+        // CAS done -> reverting: двічі паралельний revert скасовує запис один раз.
+        if (!await _journal.TryTransitionAsync(tenantId, actionId, AiActionStatus.Done, AiActionStatus.Reverting, ct))
+            return new AiToolResult("not_revertible", true);
+        try
+        {
+            await _appointments.CancelAsync(tenantId, Guid.Parse(rec.Target["appointment:".Length..]), ct);
+        }
+        catch
+        {
+            await _journal.TryTransitionAsync(tenantId, actionId, AiActionStatus.Reverting, AiActionStatus.Done, CancellationToken.None);
+            throw;
+        }
         await _journal.UpdateAsync(rec with { Status = AiActionStatus.Reverted, Revertible = false }, ct);
         return new AiToolResult("reverted", false, AiActionStatus.Reverted);
     }

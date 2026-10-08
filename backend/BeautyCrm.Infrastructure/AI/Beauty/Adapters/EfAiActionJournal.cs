@@ -62,6 +62,22 @@ public sealed class EfAiActionJournal(BeautyDbContext db, TenantContext tenant) 
         await db.SaveChangesAsync(ct);
     }
 
+    public async Task<bool> TryTransitionAsync(Guid tenantId, Guid id, string from, string to, CancellationToken ct)
+    {
+        TenantGuard.Ensure(tenant, tenantId);
+        var column = ColumnStatus(to) switch
+        {
+            DbAiStatus.Proposed => "proposed",
+            DbAiStatus.Rejected => "rejected",
+            _ => "executed",
+        };
+        // Умовний UPDATE по статусу в конверті result: рівно один із паралельних викликів отримає 1 рядок.
+        var n = await db.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE beauty_ai_actions SET result = jsonb_set(result, '{{Status}}', to_jsonb({to}::text)), status = {column}, updated_at = now() WHERE id = {id} AND result->>'Status' = {from}",
+            ct);
+        return n == 1;
+    }
+
     public async Task<IReadOnlyList<AiActionRecord>> ListAsync(int take, string? status, CancellationToken ct)
     {
         var rows = await db.AiActions.AsNoTracking().OrderByDescending(a => a.CreatedAt).Take(Math.Clamp(take, 1, 500)).ToListAsync(ct);
@@ -73,14 +89,16 @@ public sealed class EfAiActionJournal(BeautyDbContext db, TenantContext tenant) 
     {
         e.ToolName = r.Action;
         e.Payload = IsJson(r.PayloadJson) ? r.PayloadJson : JsonSerializer.Serialize(r.PayloadJson);
-        e.Status = r.Status switch
-        {
-            Beauty.AiActionStatus.PendingConfirmation or Beauty.AiActionStatus.Drafted => DbAiStatus.Proposed,
-            Beauty.AiActionStatus.Rejected => DbAiStatus.Rejected,
-            _ => DbAiStatus.Executed,
-        };
+        e.Status = ColumnStatus(r.Status);
         e.Result = JsonSerializer.Serialize(new Envelope(r.Target, r.Status, r.Revertible, r.Mode.ToString()));
     }
+
+    private static DbAiStatus ColumnStatus(string status) => status switch
+    {
+        Beauty.AiActionStatus.PendingConfirmation or Beauty.AiActionStatus.Drafted => DbAiStatus.Proposed,
+        Beauty.AiActionStatus.Rejected => DbAiStatus.Rejected,
+        _ => DbAiStatus.Executed,
+    };
 
     private static AiActionRecord ToRecord(AiAction e)
     {

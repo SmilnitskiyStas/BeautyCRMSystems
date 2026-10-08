@@ -56,9 +56,11 @@ public sealed record IdempotencyHit(Guid AppointmentId, string RequestHash);
 public interface IPublicBookingStore
 {
     Task<IReadOnlyList<PublicLocationDto>> ListActiveLocationsAsync(CancellationToken ct);
-    Task<IReadOnlyList<PublicSpecialistDto>> ListSpecialistsAsync(Guid locationId, CancellationToken ct);
+    /// <summary>Лише придатні до запису майстри: активні, зі збереженим графіком у закладі й призначеними послугами; serviceId — що надають цю послугу.</summary>
+    Task<IReadOnlyList<PublicSpecialistDto>> ListSpecialistsAsync(Guid locationId, Guid? serviceId, CancellationToken ct);
     /// <summary>Активні послуги з ціною для закладу (override або мережева); без ціни пропускаються.</summary>
-    Task<IReadOnlyList<PublicServiceBase>> ListServicesAsync(Guid locationId, CancellationToken ct);
+    /// <summary>Лише послуги, призначені хоча б одному придатному майстру закладу (specialistId — саме цьому майстру).</summary>
+    Task<IReadOnlyList<PublicServiceBase>> ListServicesAsync(Guid locationId, Guid? specialistId, CancellationToken ct);
     Task<Guid?> FindAppointmentIdByTokenHashAsync(string tokenHash, CancellationToken ct);
     Task<IdempotencyHit?> FindByIdempotencyKeyAsync(string keyHash, CancellationToken ct);
     /// <summary>Майбутні активні (pending/confirmed) онлайн-записи клієнтів із цим телефоном.</summary>

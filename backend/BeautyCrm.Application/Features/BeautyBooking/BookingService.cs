@@ -28,9 +28,9 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
         var slots = schedules
             .SelectMany(s => SlotCalculator.Compute(
                 s with { Timezone = location.Timezone }, date, service.DurationMinutes,
-                busy.Where(b => b.SpecialistId == s.SpecialistId).Select(b => b.Range).ToList(), now))
+                busy.Where(b => b.SpecialistId == s.SpecialistId).Select(b => b.Range).ToList(), now, service.Id))
             .OrderBy(s => s.StartsAt).ThenBy(s => s.SpecialistId)
-            .Select(s => s with { Cancellation = terms })
+            .Select(s => s with { Cancellation = terms, Timezone = location.Timezone })
             .ToList();
         return Result<IReadOnlyList<FreeSlot>>.Ok(slots);
     }
@@ -59,10 +59,11 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
         var duration = service.DurationMinutes; // duration_minutes завжди з послуги
         var busy = await store.GetBusyAsync([req.SpecialistId], req.StartsAt, req.StartsAt.AddMinutes(duration), null, ct);
         var check = SlotCalculator.Check(schedule with { Timezone = location.Timezone }, req.StartsAt, duration,
-            busy.Select(b => b.Range).ToList(), now);
+            busy.Select(b => b.Range).ToList(), now, service.Id);
         switch (check)
         {
             case SlotCheck.InPast: return Error.Validation("slot_in_past", "Start time is in the past.");
+            case SlotCheck.Unavailable: return Error.Conflict("specialist_unavailable", "The specialist is unavailable on this day or does not offer this service.");
             case SlotCheck.OutsideWorkingHours: return Error.Validation("outside_working_hours", "Outside specialist working hours.");
             case SlotCheck.Busy: return Error.Conflict("slot_unavailable", "The slot overlaps another appointment.");
         }
@@ -83,6 +84,7 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
             quote.Original, quote.Final, quote.PromotionId, req.Reminder, req.PaymentMethod, reminderAt,
             quote.Final > 0 ? new NewPayment(req.PaymentMethod, quote.Final) : null, publicOptions), ct);
         if (added.Duplicate) return Error.Conflict("idempotency_conflict", "A request with this idempotency key is already being processed.");
+        if (added.SpecialistBlocked) return Error.Conflict("specialist_unavailable", "The specialist is unavailable on this day or does not offer this service.");
         if (added.Conflict || added.Value is null) return Error.Conflict("slot_unavailable", "The slot overlaps another appointment.");
         var appt = added.Value;
 
@@ -126,9 +128,10 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
             var now = clock.GetUtcNow();
             var busy = await store.GetBusyAsync([appt.SpecialistId], newStart, newStart.AddMinutes(appt.DurationMinutes), id, ct);
             switch (SlotCalculator.Check(schedule with { Timezone = location.Timezone }, newStart, appt.DurationMinutes,
-                        busy.Select(b => b.Range).ToList(), now))
+                        busy.Select(b => b.Range).ToList(), now, appt.ServiceId))
             {
                 case SlotCheck.InPast: return Error.Validation("slot_in_past", "Start time is in the past.");
+                case SlotCheck.Unavailable: return Error.Conflict("specialist_unavailable", "The specialist is unavailable on this day or does not offer this service.");
                 case SlotCheck.OutsideWorkingHours: return Error.Validation("outside_working_hours", "Outside specialist working hours.");
                 case SlotCheck.Busy: return Error.Conflict("slot_unavailable", "The slot overlaps another appointment.");
             }
@@ -138,6 +141,7 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
             if (reminderAt is not null && reminderAt <= now) reminderAt = null;
 
             var moved = await store.RescheduleAsync(id, newStart, reminderAt, ct);
+            if (moved.SpecialistBlocked) return Error.Conflict("specialist_unavailable", "The specialist is unavailable on this day or does not offer this service.");
             if (moved.Conflict || moved.Value is null) return Error.Conflict("slot_unavailable", "The slot overlaps another appointment.");
             current = moved.Value;
         }

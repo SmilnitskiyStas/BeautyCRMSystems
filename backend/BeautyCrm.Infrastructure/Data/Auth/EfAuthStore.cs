@@ -124,12 +124,24 @@ public sealed class EfAuthStore(BeautyDbContext db, TenantContext tenant, IConfi
     public Task<bool> SpecialistHasUserAsync(Guid specialistId, CancellationToken ct) =>
         Db.Users.AsNoTracking().AnyAsync(u => u.SpecialistId == specialistId, ct);
 
+    public Task<bool> SpecialistIsActiveAsync(Guid specialistId, CancellationToken ct) =>
+        Db.Specialists.AsNoTracking().AnyAsync(s => s.Id == specialistId && s.IsActive, ct);
+
     // ---------- invites ----------
 
-    public async Task<InviteRecord> AddInviteAsync(NewInvite invite, CancellationToken ct)
+    public async Task<InviteRecord?> AddInviteAsync(NewInvite invite, CancellationToken ct)
     {
         await using var tx = await Db.Database.BeginTransactionAsync(ct);
         var now = DateTimeOffset.UtcNow;
+        // Для specialist: lock профілю + відкликання попередніх pending з тим самим specialist_id (рівно одне активне запрошення
+        // на профіль, навіть для іншого email і при паралельних запитах).
+        if (invite.SpecialistId is { } specialistId)
+        {
+            await SpecialistLock.AcquireForInvitesAsync(db, specialistId, ct);
+            if (!await db.Specialists.AnyAsync(s => s.Id == specialistId && s.IsActive, ct)) return null; // деактивовано паралельно
+            await db.Invites.Where(i => i.SpecialistId == specialistId && i.AcceptedAt == null && i.RevokedAt == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(i => i.RevokedAt, now), ct);
+        }
         await db.Invites.Where(i => i.Email == invite.Email && i.AcceptedAt == null && i.RevokedAt == null)
             .ExecuteUpdateAsync(s => s.SetProperty(i => i.RevokedAt, now), ct);
         var entity = new Invite

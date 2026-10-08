@@ -125,11 +125,23 @@ public sealed class DraftReplyAdapter(BeautyDbContext db, TenantContext tenant, 
     public async Task SendAsync(Guid tenantId, Guid draftId, CancellationToken ct)
     {
         TenantGuard.Ensure(tenant, tenantId);
-        var msg = await db.Messages.FirstOrDefaultAsync(m => m.Id == draftId && m.Status == "draft", ct)
-            ?? throw new InvalidOperationException("draft_not_found");
-        msg.Status = "pending";
-        await db.SaveChangesAsync(ct);
-        var outcome = await dispatcher.DispatchAsync(tenantId, draftId, ct);
+        // Атомарний claim draft -> sending (а не pending): воркер бере лише 'pending', тож те саме повідомлення не піде двічі
+        // (inline тут і з воркера). Повторний SendAsync того ж чернеткового id програє claim -> draft_not_found.
+        var claimed = await db.Messages.Where(m => m.Id == draftId && m.Status == "draft")
+            .ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, "sending"), ct);
+        if (claimed != 1) throw new InvalidOperationException("draft_not_found");
+        OutboxResult outcome;
+        try
+        {
+            outcome = await dispatcher.DispatchAsync(tenantId, draftId, ct);
+        }
+        catch
+        {
+            // Збій до результату відправки: віддаємо воркеру на повтор (pending), а не лишаємо у sending назавжди.
+            await db.Messages.Where(m => m.Id == draftId && m.Status == "sending")
+                .ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, "pending"), CancellationToken.None);
+            throw;
+        }
         if (outcome is OutboxResult.Failed or OutboxResult.NotFound) throw new InvalidOperationException($"send_{outcome}");
     }
 }

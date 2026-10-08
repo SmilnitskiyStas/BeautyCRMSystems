@@ -13,6 +13,9 @@ public static class AiActionStatus
     public const string Reverted = "reverted";
     public const string HandedOff = "handed_off";
     public const string Flagged = "flagged";
+    /// <summary>Внутрішні claim-статуси compare-and-swap (M2): дія вже виконується / відкочується, повторний approve/revert не можливий.</summary>
+    public const string Executing = "executing";
+    public const string Reverting = "reverting";
 }
 
 /// <summary>Запис журналу beauty_ai_actions {id, action, target, createdAt, status, revertible}.</summary>

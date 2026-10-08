@@ -13,10 +13,14 @@ namespace BeautyCrm.Api.Controllers;
 [Route("api/beauty")]
 [RequireModule("beauty_booking")]
 [Authorize(Policy = AuthPolicies.Staff)]
+[ServiceFilter(typeof(ActiveSpecialistFilter))] // specialist з деактивованим профілем -> 403 specialist_inactive (TASK-696)
 [ProducesResponseType(StatusCodes.Status401Unauthorized)]
 [ProducesResponseType(StatusCodes.Status403Forbidden)]
 public sealed class BookingController(BookingService booking, CancellationService cancellation, AppointmentAccessService access) : ControllerBase
 {
+    /// <summary>Максимальний діапазон GET /appointments (~2 місяці): календар місяця з запасом на межі тижнів.</summary>
+    public const int MaxRangeDays = 62;
+
     private static readonly ApiError NotFoundBody = new("appointment_not_found", "Appointment not found.");
 
     private Actor? Actor => User.ToActor();
@@ -44,7 +48,12 @@ public sealed class BookingController(BookingService booking, CancellationServic
     {
         if (Actor is not { } actor) return Unauthorized();
         var start = from ?? new DateTimeOffset(DateTime.UtcNow.Date, TimeSpan.Zero); // .Date без Kind дав би локальний зсув
-        return Ok(await booking.ListAsync(start, to ?? start.AddDays(7), locationId,
+        var end = to ?? start.AddDays(7);
+        // Межа діапазону (L8): без неї один запит вичитує весь журнал записів tenant-а.
+        if (end <= start) return UnprocessableEntity(new ApiError("invalid_range", "'to' must be after 'from'."));
+        if (end - start > TimeSpan.FromDays(MaxRangeDays))
+            return UnprocessableEntity(new ApiError("range_too_large", $"The requested range must not exceed {MaxRangeDays} days."));
+        return Ok(await booking.ListAsync(start, end, locationId,
             AppointmentAccessService.EffectiveSpecialistId(actor, specialistId), ct));
     }
 

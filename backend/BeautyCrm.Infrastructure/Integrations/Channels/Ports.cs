@@ -1,11 +1,14 @@
 namespace BeautyCrm.Infrastructure.Integrations.Channels;
 
 /// <summary>Secrets come from integration_configs / .env only. Never log or return Token raw; use MaskedToken.</summary>
-public sealed record ChannelCredentials(string? Token, string? WebhookSecret)
+/// <param name="AppSecret">Instagram/Meta: ключ HMAC підпису тіла (X-Hub-Signature-256). Лише для підпису.</param>
+/// <param name="VerifyToken">Instagram/Meta: токен GET-handshake (hub.verify_token). Лише для handshake; не секрет підпису.</param>
+public sealed record ChannelCredentials(string? Token, string? WebhookSecret, string? AppSecret = null, string? VerifyToken = null)
 {
     public string MaskedToken => SecretMasker.Mask(Token);
     public override string ToString() =>
-        $"ChannelCredentials(Token={MaskedToken}, WebhookSecret={SecretMasker.Mask(WebhookSecret)})";
+        $"ChannelCredentials(Token={MaskedToken}, WebhookSecret={SecretMasker.Mask(WebhookSecret)}, " +
+        $"AppSecret={SecretMasker.Mask(AppSecret)}, VerifyToken={SecretMasker.Mask(VerifyToken)})";
 }
 
 /// <summary>Port: implemented by the Data/config layer.</summary>

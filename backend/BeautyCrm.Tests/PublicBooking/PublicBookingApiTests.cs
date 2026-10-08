@@ -71,6 +71,7 @@ public sealed class PublicBookingApiTests : IClassFixture<AuthApiFixture>, IDisp
         ctx.AddRange(loc, sp, svc);
         await ctx.SaveChangesAsync();
         ctx.Add(new SpecialistLocation { SpecialistId = sp.Id, LocationId = loc.Id, WorkingHours = Hours });
+        ctx.Add(new SpecialistServiceLink { SpecialistId = sp.Id, ServiceId = svc.Id }); // TASK-691: майстер пропонує лише призначені послуги
         ctx.Add(new ServicePrice { ServiceId = svc.Id, LocationId = null, Price = network });
         if (locationPrice is { } lp) ctx.Add(new ServicePrice { ServiceId = svc.Id, LocationId = loc.Id, Price = lp });
         if (promoPercent is { } pp)

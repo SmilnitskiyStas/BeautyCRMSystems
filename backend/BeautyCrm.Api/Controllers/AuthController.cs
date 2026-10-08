@@ -13,7 +13,7 @@ namespace BeautyCrm.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/auth")]
-public sealed class AuthController(AuthService auth) : ControllerBase
+public sealed class AuthController(AuthService auth, RefreshThrottle refreshThrottle) : ControllerBase
 {
     /// <summary>200 токени; 401 invalid_credentials; 423 account_locked; 422 валідація; 429 rate limit.</summary>
     [HttpPost("login")]
@@ -26,10 +26,15 @@ public sealed class AuthController(AuthService auth) : ControllerBase
     /// <summary>Ротація: старий refresh-токен перестає діяти; повторне використання закриває всі сесії користувача.</summary>
     [HttpPost("refresh")]
     [AllowAnonymous]
-    [EnableRateLimiting(AuthPolicies.RateLimit)]
+    [EnableRateLimiting(AuthPolicies.RefreshRateLimit)]
     [ProducesResponseType<TokenResponse>(StatusCodes.Status200OK)]
-    public async Task<IActionResult> Refresh([FromBody] RefreshRequest request, CancellationToken ct) =>
-        this.ToResult(await auth.RefreshAsync(request.RefreshToken, ct));
+    public async Task<IActionResult> Refresh([FromBody] RefreshRequest request, CancellationToken ct)
+    {
+        // Ширший ліміт на IP (політика) + вузький на токен і tenant: токен одноразовий, повтори = replay/перебір.
+        if (TokenCodec.Parse(request.RefreshToken) is { } parsed && !refreshThrottle.TryAcquire(parsed.TenantId, parsed.Hash))
+            return StatusCode(StatusCodes.Status429TooManyRequests, new ApiError("rate_limited", "Too many requests. Try again later."));
+        return this.ToResult(await auth.RefreshAsync(request.RefreshToken, ct));
+    }
 
     [HttpPost("logout")]
     [AllowAnonymous]
@@ -75,9 +80,10 @@ public sealed class UsersController(UserAdminService admin) : ControllerBase
     /// <summary>201 + одноразовий токен запрошення (передати адресату поза API); owner запрошує admin/specialist, admin — specialist.</summary>
     [HttpPost("invites")]
     [ProducesResponseType<InviteCreatedDto>(StatusCodes.Status201Created)]
+    [RequestSizeLimit(64 * 1024)]
     public async Task<IActionResult> CreateInvite([FromBody] CreateInviteRequest request, CancellationToken ct) =>
         User.ToActor() is { } actor
-            ? this.ToResult(await admin.CreateInviteAsync(actor, request, ct), r => StatusCode(StatusCodes.Status201Created, r))
+            ? this.ToResult(await admin.CreateInviteAsync(actor, request, ct), r => this.InviteCreated(r))
             : Unauthorized();
 
     [HttpGet("invites")]

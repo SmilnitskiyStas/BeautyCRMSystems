@@ -80,8 +80,8 @@ public sealed class ChannelDirectory(IConfiguration config, ISecretProtector sec
         var active = reader.GetBoolean(3);
         if (!active || !string.Equals(type, ChannelTypeMap.ToAdapterId(channelType), StringComparison.OrdinalIgnoreCase)) return null;
 
-        var (token, secret) = ChannelSecrets.Read(secrets, encrypted);
-        return new ResolvedChannel(tenantId, channelId, type, new ChannelCredentials(token, secret));
+        var c = ChannelSecrets.Read(secrets, encrypted);
+        return new ResolvedChannel(tenantId, channelId, type, new ChannelCredentials(c.Token, c.WebhookSecret, c.AppSecret, c.VerifyToken));
     }
 }
 
@@ -122,8 +122,9 @@ public sealed class OutboundDispatcher(
         var ch = await db.Messages.AsNoTracking().Where(m => m.Id == messageId)
             .Select(m => m.Conversation!.Channel!).FirstOrDefaultAsync(ct);
         if (ch is null) return OutboxResult.NotFound;
-        var (token, secret) = ChannelSecrets.Read(secrets, ch.CredentialsEncrypted);
-        using var _ = context.Begin(new ResolvedChannel(tenantId, ch.Id, ChannelTypeMap.ToAdapterId(EnumText<ChannelType>.ToDb(ch.Type)), new ChannelCredentials(token, secret)));
+        var c = ChannelSecrets.Read(secrets, ch.CredentialsEncrypted);
+        using var _ = context.Begin(new ResolvedChannel(tenantId, ch.Id, ChannelTypeMap.ToAdapterId(EnumText<ChannelType>.ToDb(ch.Type)),
+            new ChannelCredentials(c.Token, c.WebhookSecret, c.AppSecret, c.VerifyToken)));
         return await processor.ProcessAsync(messageId, ct);
     }
 }
@@ -133,13 +134,18 @@ public sealed class EfChannelMessageRepository(BeautyDbContext db, ChannelReques
 {
     private const string UniqueViolation = "23505";
 
+    /// <summary>"{channel}:{channelId:N}:{externalMessageId}" (&lt;= 300 символів у колонці).</summary>
+    internal static string InboundKey(Guid channelId, InboundMessage m) => $"{m.Channel}:{channelId:N}:{m.ExternalMessageId}";
+
     public async Task<IReadOnlyList<InboundMessage>> SaveInboundAsync(IReadOnlyList<InboundMessage> messages, CancellationToken ct)
     {
         var channel = context.Value ?? throw new InvalidOperationException("No channel context for inbound messages.");
         var fresh = new List<InboundMessage>();
         foreach (var m in messages)
         {
-            if (await db.Messages.AnyAsync(x => x.IdempotencyKey == m.IdempotencyKey, ct)) continue;
+            // Ключ дедуплікації включає channelId: два канали одного tenant (два боти) можуть мати однакові chat_id:message_id.
+            var key = InboundKey(channel.ChannelId, m);
+            if (await db.Messages.AnyAsync(x => x.IdempotencyKey == key, ct)) continue;
 
             var conv = await db.Conversations.FirstOrDefaultAsync(c => c.ChannelId == channel.ChannelId && c.ExternalChatId == m.ExternalConversationId, ct);
             if (conv is null)
@@ -149,7 +155,7 @@ public sealed class EfChannelMessageRepository(BeautyDbContext db, ChannelReques
             {
                 Id = Guid.NewGuid(), ConversationId = conv.Id, Direction = MessageDirection.Inbound, SenderType = MessageSenderType.Client,
                 Body = m.Text, ExternalMessageId = m.ExternalMessageId, SentAt = m.ReceivedAt, Status = "received",
-                IdempotencyKey = m.IdempotencyKey,
+                IdempotencyKey = key,
             });
             try
             {
@@ -175,7 +181,7 @@ public sealed class EfChannelMessageRepository(BeautyDbContext db, ChannelReques
                     .Max(x => (DateTimeOffset?)x.SentAt),
             }).FirstOrDefaultAsync(ct);
         if (row is null) return null;
-        var status = row.Status switch { "pending" => OutboxStatus.Pending, "failed" => OutboxStatus.Failed, _ => OutboxStatus.Sent };
+        var status = row.Status switch { "pending" or "sending" => OutboxStatus.Pending, "failed" => OutboxStatus.Failed, _ => OutboxStatus.Sent };
         return new OutboxItem(
             new OutboundMessage(messageId, ChannelTypeMap.ToAdapterId(EnumText<ChannelType>.ToDb(row.Type)), row.ExternalChatId, row.Body, row.LastInbound),
             status, row.Attempts);

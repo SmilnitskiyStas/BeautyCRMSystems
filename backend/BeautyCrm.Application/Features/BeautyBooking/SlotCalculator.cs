@@ -2,7 +2,8 @@ using System.Text.Json;
 
 namespace BeautyCrm.Application.Features.BeautyBooking;
 
-public enum SlotCheck { Ok, InPast, OutsideWorkingHours, Busy }
+/// <summary>Unavailable = майстер у день відсутності або послуга йому не призначена (409 specialist_unavailable).</summary>
+public enum SlotCheck { Ok, InPast, OutsideWorkingHours, Busy, Unavailable }
 
 public static class SlotCalculator
 {
@@ -19,9 +20,26 @@ public static class SlotCalculator
             .ToList();
     }
 
-    public static IReadOnlyList<FreeSlot> Compute(
-        SpecialistSchedule schedule, DateOnly date, int durationMinutes, IReadOnlyList<TimeRange> busy, DateTimeOffset now)
+    /// <summary>Чи є в графіку бодай один робочий інтервал (майстер без графіка не бронюється).</summary>
+    public static bool HasWorkingHours(string? workingHoursJson)
     {
+        try
+        {
+            for (var d = 0; d < 7; d++)
+                if (IntervalsFor(workingHoursJson, (DayOfWeek)d).Count > 0) return true;
+            return false;
+        }
+        catch (Exception ex) when (ex is JsonException or FormatException or KeyNotFoundException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    public static IReadOnlyList<FreeSlot> Compute(
+        SpecialistSchedule schedule, DateOnly date, int durationMinutes, IReadOnlyList<TimeRange> busy, DateTimeOffset now,
+        Guid? serviceId = null)
+    {
+        if (!schedule.Offers(serviceId) || schedule.IsAbsentOn(date)) return [];
         var tz = TimeZoneInfo.FindSystemTimeZoneById(schedule.Timezone);
         var result = new List<FreeSlot>();
         foreach (var (from, to) in IntervalsFor(schedule.WorkingHoursJson, date.DayOfWeek))
@@ -38,11 +56,13 @@ public static class SlotCalculator
     }
 
     public static SlotCheck Check(
-        SpecialistSchedule schedule, DateTimeOffset start, int durationMinutes, IReadOnlyList<TimeRange> busy, DateTimeOffset now)
+        SpecialistSchedule schedule, DateTimeOffset start, int durationMinutes, IReadOnlyList<TimeRange> busy, DateTimeOffset now,
+        Guid? serviceId = null)
     {
         if (start < now) return SlotCheck.InPast;
         var tz = TimeZoneInfo.FindSystemTimeZoneById(schedule.Timezone);
         var local = TimeZoneInfo.ConvertTime(start, tz);
+        if (!schedule.Offers(serviceId) || schedule.IsAbsentOn(DateOnly.FromDateTime(local.DateTime))) return SlotCheck.Unavailable;
         var from = TimeOnly.FromDateTime(local.DateTime);
         var to = from.AddMinutes(durationMinutes);
         var fits = to > from && IntervalsFor(schedule.WorkingHoursJson, local.DayOfWeek).Any(i => from >= i.From && to <= i.To);

@@ -1,7 +1,8 @@
 namespace BeautyCrm.Application.Features.BeautyAuth;
 
 /// <summary>Логін, refresh з ротацією, вихід, прийняття запрошення. Нічого не логує (паролі/токени).</summary>
-public sealed class AuthService(IAuthStore store, IPasswordHasher hasher, ITokenIssuer tokens, AuthOptions options, TimeProvider clock)
+public sealed class AuthService(
+    IAuthStore store, IPasswordHasher hasher, ITokenIssuer tokens, AuthOptions options, TimeProvider clock, LoginAttemptTracker attempts)
 {
     // Хеш неіснуючого користувача: вирівнює час відповіді, щоб не розкривати наявність облікового запису.
     private string? _dummyHash;
@@ -9,15 +10,17 @@ public sealed class AuthService(IAuthStore store, IPasswordHasher hasher, IToken
     public async Task<AuthResult<TokenResponse>> LoginAsync(LoginRequest req, CancellationToken ct)
     {
         var now = clock.GetUtcNow();
-        var tenant = await store.FindTenantBySlugAsync(req.Tenant.Trim().ToLowerInvariant(), ct);
-        if (tenant is null || !tenant.IsActive) return RejectUnknown(req.Password);
+        var slug = req.Tenant.Trim().ToLowerInvariant();
+        var email = NormalizeEmail(req.Email);
+        var key = LoginAttemptTracker.KeyOf(slug, email);
+        var tenant = await store.FindTenantBySlugAsync(slug, ct);
+        if (tenant is null || !tenant.IsActive) return RejectUnknown(key, req.Password, now);
 
         store.UseTenant(tenant.Id);
-        var user = await store.FindUserByEmailAsync(NormalizeEmail(req.Email), ct);
-        if (user is null) return RejectUnknown(req.Password);
+        var user = await store.FindUserByEmailAsync(email, ct);
+        if (user is null) return RejectUnknown(key, req.Password, now);
 
-        if (user.LockoutUntil is { } until && until > now)
-            return AuthError.Locked("account_locked", "Too many failed attempts. Try again later.");
+        if (user.LockoutUntil is { } until && until > now) return AccountLocked;
         if (user.LockoutUntil is not null)
             await store.ResetLockoutAsync(user.Id, ct); // блокування спливло: починаємо лічильник заново
 
@@ -94,9 +97,18 @@ public sealed class AuthService(IAuthStore store, IPasswordHasher hasher, IToken
 
     private static readonly AuthError InviteInvalid = AuthError.NotFound("invite_invalid", "Invite is invalid, used or expired.");
 
-    private AuthError RejectUnknown(string password)
+    // Єдина відповідь для заблокованого акаунта — і наявного, і неіснуючого (M3).
+    private static readonly AuthError AccountLocked = AuthError.Locked("account_locked", "Too many failed attempts. Try again later.");
+
+    /// <summary>
+    /// Невідомий tenant/email: та сама поведінка, що й у наявного акаунта — 401 до порогу, потім 423 на LockoutMinutes
+    /// (лічильник за slug+email у <see cref="LoginAttemptTracker"/>), а заблокований ключ відповідає без hash-у, як і справжній.
+    /// </summary>
+    private AuthError RejectUnknown(string attemptKey, string password, DateTimeOffset now)
     {
+        if (attempts.IsLocked(attemptKey, now)) return AccountLocked;
         hasher.Verify(password, _dummyHash ??= hasher.Hash(Guid.NewGuid().ToString("N")));
+        attempts.RegisterFailure(attemptKey, now);
         return AuthError.InvalidCredentials;
     }
 

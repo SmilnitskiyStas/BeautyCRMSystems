@@ -171,9 +171,12 @@ public interface IAuthStore
 
     Task<bool> SpecialistExistsAsync(Guid specialistId, CancellationToken ct);
     Task<bool> SpecialistHasUserAsync(Guid specialistId, CancellationToken ct);
+    /// <summary>Профіль існує й активний (деактивованому запрошення не видаються).</summary>
+    Task<bool> SpecialistIsActiveAsync(Guid specialistId, CancellationToken ct);
 
-    /// <summary>Створює запрошення й відкликає попередні активні для того ж email.</summary>
-    Task<InviteRecord> AddInviteAsync(NewInvite invite, CancellationToken ct);
+    /// <summary>Створює запрошення й відкликає попередні активні для того ж email та (для specialist) для того ж specialist_id.</summary>
+    /// <returns>null — профіль майстра деактивовано паралельно (під lock профілю); запрошення не створено.</returns>
+    Task<InviteRecord?> AddInviteAsync(NewInvite invite, CancellationToken ct);
     Task<IReadOnlyList<InviteRecord>> ListInvitesAsync(CancellationToken ct);
     Task<InviteRecord?> FindInviteByHashAsync(string tokenHash, CancellationToken ct);
     Task<bool> RevokeInviteAsync(Guid inviteId, DateTimeOffset now, CancellationToken ct);

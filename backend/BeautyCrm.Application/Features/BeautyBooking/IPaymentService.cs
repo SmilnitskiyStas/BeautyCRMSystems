@@ -7,6 +7,8 @@ public sealed record RefundResult(bool Success, string? ProviderRefundId, string
 public interface IPaymentService
 {
     Task<PaymentResult> ChargeAsync(Guid appointmentId, decimal amount, CancellationToken ct);
+    /// <summary><paramref name="paymentId"/> (beauty_payments.id) є ключем ідемпотентності повернення: повторний виклик з тим самим id
+    /// не повинен повертати кошти вдруге (реальний провайдер передає його як Idempotency-Key).</summary>
     Task<RefundResult> RefundAsync(Guid paymentId, decimal amount, CancellationToken ct);
 }
 

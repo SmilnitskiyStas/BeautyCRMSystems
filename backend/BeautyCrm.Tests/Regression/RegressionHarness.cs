@@ -53,7 +53,17 @@ public sealed class RegressionHarness(AuthApiFixture fx)
         var price = await fx.Send(HttpMethod.Put, $"/api/beauty/services/{serviceId}/prices",
             new { locationId = (Guid?)null, price = networkPrice }, owner.AccessToken);
         Assert.Equal(HttpStatusCode.OK, price.StatusCode);
+        await AssignServicesAsync(tenant.TenantId, spec, serviceId);
         return new Salon(tenant, owner.AccessToken, loc, spec, serviceId);
+    }
+
+    /// <summary>TASK-691: майстер пропонує лише призначені послуги.</summary>
+    public async Task AssignServicesAsync(Guid tenantId, Guid specialistId, params Guid[] serviceIds)
+    {
+        await using var ctx = fx.Db.CreateContext(tenantId);
+        foreach (var id in serviceIds)
+            ctx.Add(new SpecialistServiceLink { SpecialistId = specialistId, ServiceId = id });
+        await ctx.SaveChangesAsync();
     }
 
     public async Task<List<JsonElement>> SlotsAsync(Salon s, string date, Guid? locationId = null, Guid? specialistId = null)

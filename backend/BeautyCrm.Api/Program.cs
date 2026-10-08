@@ -20,15 +20,22 @@ builder.Services.AddControllers().ConfigureApiBehaviorOptions(o =>
         string.Join("; ", ctx.ModelState.Where(e => e.Value?.Errors.Count > 0)
             .Select(e => $"{e.Key}: {e.Value!.Errors[0].ErrorMessage}"))));
 });
+// Mock-адаптери каналів — лише Development (аудит H2): за замовчуванням false, у решті середовищ true = помилка старту.
+var useMocks = builder.Configuration.GetValue("Channels:UseMocks", false);
+if (useMocks && !builder.Environment.IsDevelopment())
+    throw new InvalidOperationException("Channels:UseMocks=true is allowed only in the Development environment.");
+
 builder.Services
     .AddBeautyData()
-    .AddBeautyChannels(useMocks: builder.Configuration.GetValue("Channels:UseMocks", true))
+    .AddBeautyChannels(useMocks)
     .AddBeautyAi()
     .AddBeautyApplication()
     .AddBeautyAuthData()
     .AddBeautyAuthApi(builder.Configuration) // JWT, ролі, rate limit; без Auth:JwtSigningKey додаток не стартує
     .AddBeautyPublicBookingApi(builder.Configuration); // публічний запис /api/public/{slug} (TASK-688)
 builder.Services.AddScoped<ITenantModuleProvider, DbTenantModuleProvider>(); // tenants.modules
+builder.Services.AddBeautyDbRoleGuard(); // старт падає, якщо runtime-роль БД superuser/BYPASSRLS (H1)
+builder.Services.AddBeautyCors(builder.Configuration); // Beauty:AllowedOrigins (адмінка), без credentials
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
@@ -51,6 +58,9 @@ builder.Services.AddSwaggerGen(o =>
 
 var app = builder.Build();
 
+app.UseBeautyForwardedHeaders(); // лише довірені проксі (Beauty:TrustedProxies); першим, щоб IP/схема були справжніми далі
+app.UseBeautySecurityHeaders(app.Environment);
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -59,6 +69,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
+app.UseBeautyCors(); // до автентифікації: preflight (OPTIONS) не несе токена
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseMiddleware<TenantMiddleware>(); // після автентифікації (claim tenant_id), до авторизації й контролерів

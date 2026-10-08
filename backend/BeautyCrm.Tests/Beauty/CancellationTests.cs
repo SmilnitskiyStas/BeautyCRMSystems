@@ -291,3 +291,83 @@ public class CancellationSettingsServiceTests
         Assert.All(list, a => Assert.Equal(expected, a.Cancellation));
     }
 }
+
+/// <summary>M1: скасування атомарне - claim статусу ПЕРЕД поверненням коштів, ключ повернення = payment.Id.</summary>
+public class CancellationAtomicityTests
+{
+    private static readonly DateTimeOffset Now = new(2030, 1, 7, 8, 0, 0, TimeSpan.Zero);
+    private readonly FakeBookingStore _store = new();
+    private readonly SpyPayments _pay = new();
+    private CancellationService Sut() => new(_store, _pay, FakeSettings.Service(), new FakeClock(Now));
+
+    [Fact]
+    public async Task status_is_claimed_before_the_refund_is_requested()
+    {
+        var a = _store.Seed(Now.AddHours(30));
+        string? statusDuringRefund = null;
+        _pay.DuringRefund = async () => statusDuringRefund = (await _store.GetAppointmentAsync(a.Id, default))!.Status;
+        Assert.True((await Sut().CancelAsync(a.Id, default)).IsOk);
+        Assert.Equal("cancelled", statusDuringRefund);
+    }
+
+    [Fact]
+    public async Task cancel_that_races_during_refund_loses_the_claim_and_never_refunds_twice()
+    {
+        var a = _store.Seed(Now.AddHours(30));
+        Result<CancelResult>? second = null;
+        _pay.DuringRefund = async () =>
+        {
+            _pay.DuringRefund = null; // лише перше повернення запускає «паралельний» cancel
+            second = await Sut().CancelAsync(a.Id, default);
+        };
+
+        var first = await Sut().CancelAsync(a.Id, default);
+
+        Assert.True(first.IsOk);
+        Assert.Equal("already_cancelled", second!.Error!.Code);
+        Assert.Equal(ErrorKind.Conflict, second.Error.Kind);
+        Assert.Single(_pay.Refunds);
+    }
+
+    [Fact]
+    public async Task refund_idempotency_key_is_the_payment_id()
+    {
+        var a = _store.Seed(Now.AddHours(30));
+        Assert.True((await Sut().CancelAsync(a.Id, default)).IsOk);
+        Assert.Equal(_store.Payments[a.Id].Id, Assert.Single(_pay.RefundKeys));
+    }
+
+    [Fact]
+    public async Task failed_refund_releases_the_claim_so_the_appointment_stays_active_and_cancellable()
+    {
+        var a = _store.Seed(Now.AddHours(30), status: "confirmed");
+        _pay.RefundOk = false;
+        var failed = await Sut().CancelAsync(a.Id, default);
+        Assert.Equal(ErrorKind.PaymentFailed, failed.Error!.Kind);
+        Assert.Equal("confirmed", (await _store.GetAppointmentAsync(a.Id, default))!.Status);
+        Assert.Equal("paid", _store.Payments[a.Id].Status);
+
+        _pay.RefundOk = true;
+        Assert.True((await Sut().CancelAsync(a.Id, default)).IsOk);
+        Assert.Equal("refunded", _store.Payments[a.Id].Status);
+    }
+
+    [Theory]
+    [InlineData("cancelled", "already_cancelled")]
+    [InlineData("completed", "cannot_cancel")]
+    [InlineData("no_show", "cannot_cancel")]
+    public async Task closed_appointments_are_rejected_without_a_refund(string status, string code)
+    {
+        var a = _store.Seed(Now.AddHours(30), status: status);
+        Assert.Equal(code, (await Sut().CancelAsync(a.Id, default)).Error!.Code);
+        Assert.Empty(_pay.Refunds);
+    }
+
+    [Fact]
+    public async Task pending_appointment_can_be_cancelled_and_cancel_of_unknown_is_404()
+    {
+        var a = _store.Seed(Now.AddHours(30), status: "pending");
+        Assert.True((await Sut().CancelAsync(a.Id, default)).IsOk);
+        Assert.Equal(ErrorKind.NotFound, (await Sut().CancelAsync(Guid.NewGuid(), default)).Error!.Kind);
+    }
+}
