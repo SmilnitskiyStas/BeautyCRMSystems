@@ -1,4 +1,29 @@
+using System.Text.Json.Serialization;
+using BeautyCrm.Application.Features.BeautyAuth;
+using BeautyCrm.Application.Features.BeautyStaff;
+
 namespace BeautyCrm.Application.Features.BeautyBooking;
+
+/// <summary>Хто скасував запис (TASK-697, §16): client (публічний токен) | staff (+ user id) | system (AI revert, збій оплати, backfill).</summary>
+public static class CancelledByTypes
+{
+    public const string Client = "client";
+    public const string Staff = "staff";
+    public const string System = "system";
+}
+
+public sealed record CancelOrigin(string Type, Guid? UserId = null)
+{
+    public static readonly CancelOrigin Client = new(CancelledByTypes.Client);
+    public static readonly CancelOrigin System = new(CancelledByTypes.System);
+    public static CancelOrigin Staff(Guid userId) => new(CancelledByTypes.Staff, userId);
+}
+
+/// <summary>Необов'язкове тіло POST .../cancel (staff і публічний).</summary>
+public sealed record CancelRequest(string? Reason = null);
+
+/// <param name="Name">Ім'я користувача, що скасував (лише staff; лише керівникам).</param>
+public sealed record CancelledByDto(string Type, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Name = null);
 
 // Значення status/source/reminder/paymentMethod — рядки контракту (beauty-contracts.md §2).
 public static class BookingValues
@@ -27,9 +52,23 @@ public sealed record AppointmentDto(
     Guid ServiceId, string ServiceName, Guid ClientId, string ClientName,
     DateTimeOffset StartsAt, DateTimeOffset EndsAt, int DurationMinutes, string Status, string Source,
     decimal PriceOriginal, decimal PriceFinal, Guid? PromotionId, string ReminderOption, string? PaymentMethod,
-    CancellationTerms? Cancellation = null, string? Timezone = null);
+    CancellationTerms? Cancellation = null, string? Timezone = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? CancelledAt = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] CancelledByDto? CancelledBy = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CancelReason = null)
+{
+    /// <summary>
+    /// Видимість деталей скасування (§16): ім'я автора й причину бачать лише керівники; specialist бачить лише тип і час.
+    /// </summary>
+    public AppointmentDto ForViewer(Actor actor) => StaffRoles.IsManager(actor)
+        ? this
+        : this with { CancelledBy = CancelledBy is null ? null : new CancelledByDto(CancelledBy.Type), CancelReason = null };
+}
 
-public sealed record CancelResult(AppointmentDto Appointment, decimal RefundAmount, int RefundPercent, int FeePercent = 0);
+public sealed record CancelResult(AppointmentDto Appointment, decimal RefundAmount, int RefundPercent, int FeePercent = 0)
+{
+    public CancelResult ForViewer(Actor actor) => this with { Appointment = Appointment.ForViewer(actor) };
+}
 
 // ---- дані для сервісу (порт IBookingStore) ----
 public sealed record ServiceInfo(Guid Id, string Name, int DurationMinutes, bool IsActive);

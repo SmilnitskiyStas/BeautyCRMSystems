@@ -1,4 +1,5 @@
 using BeautyCrm.Application.Features.BeautyAnalytics;
+using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Application.Features.BeautyClients;
 using BeautyCrm.Infrastructure.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -23,8 +24,11 @@ public sealed partial class EfBeautyStore
             Visits = db.Appointments.Count(a => a.ClientId == c.Id && a.Status == AppointmentStatus.Completed),
             LastVisit = db.Appointments.Where(a => a.ClientId == c.Id && a.Status == AppointmentStatus.Completed)
                 .Max(a => (DateTimeOffset?)a.StartsAt),
+            Cancelled = db.Appointments.Count(a => a.ClientId == c.Id && a.Status == AppointmentStatus.Cancelled),
+            CancelledByClient = db.Appointments.Count(a => a.ClientId == c.Id && a.Status == AppointmentStatus.Cancelled
+                && a.CancelledByType == CancelledByTypes.Client),
         }).ToListAsync(ct);
-        return rows.Select(r => ToDto(r.Client, r.Visits, r.LastVisit)).ToList();
+        return rows.Select(r => ToDto(r.Client, r.Visits, r.LastVisit, r.Cancelled, r.CancelledByClient)).ToList();
     }
 
     public async Task<ClientDetailDto?> GetDetailAsync(Guid id, CancellationToken ct)
@@ -33,10 +37,12 @@ public sealed partial class EfBeautyStore
         if (c is null) return null;
         var history = await ProjectAsync(db.Appointments.Where(a => a.ClientId == id).OrderByDescending(a => a.StartsAt), ct);
         var completed = history.Where(h => h.Status == "completed").ToList();
+        var cancelled = history.Where(h => h.Status == "cancelled").ToList(); // історія містить і скасовані (§16), дані не видаляються
         var notes = await db.ClientNotes.AsNoTracking().Where(n => n.ClientId == id).OrderByDescending(n => n.CreatedAt)
             .Select(n => new ClientNoteDto(n.Id, n.AuthorUserId, n.Body, n.CreatedAt)).ToListAsync(ct);
         return new ClientDetailDto(
-            ToDto(c, completed.Count, completed.Count == 0 ? null : completed.Max(h => h.StartsAt)), notes, history);
+            ToDto(c, completed.Count, completed.Count == 0 ? null : completed.Max(h => h.StartsAt),
+                cancelled.Count, cancelled.Count(h => h.CancelledBy?.Type == CancelledByTypes.Client)), notes, history);
     }
 
     public Task<bool> PhoneExistsAsync(string phone, CancellationToken ct) =>
@@ -63,8 +69,8 @@ public sealed partial class EfBeautyStore
         return new ClientNoteDto(n.Id, n.AuthorUserId, n.Body, n.CreatedAt);
     }
 
-    private static ClientDto ToDto(Client c, int visits, DateTimeOffset? last) =>
-        new(c.Id, c.FullName, c.Phone, c.Email, c.BirthDate, c.MarketingConsent, c.Unsubscribed, visits, last);
+    private static ClientDto ToDto(Client c, int visits, DateTimeOffset? last, int cancelled = 0, int cancelledByClient = 0) =>
+        new(c.Id, c.FullName, c.Phone, c.Email, c.BirthDate, c.MarketingConsent, c.Unsubscribed, visits, last, cancelled, cancelledByClient);
 
     // ---------- аналітика ----------
 

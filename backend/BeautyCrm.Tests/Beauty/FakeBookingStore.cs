@@ -67,8 +67,8 @@ internal sealed class FakeBookingStore : IBookingStore
     public Task<AppointmentDto?> GetAppointmentAsync(Guid id, CancellationToken ct) =>
         Task.FromResult(Appointments.FirstOrDefault(a => a.Id == id));
 
-    public Task<IReadOnlyList<AppointmentDto>> ListAppointmentsAsync(DateTimeOffset from, DateTimeOffset to, Guid? loc, Guid? spec, CancellationToken ct) =>
-        Task.FromResult<IReadOnlyList<AppointmentDto>>(Appointments.Where(a => a.StartsAt >= from && a.StartsAt < to).ToList());
+    public Task<IReadOnlyList<AppointmentDto>> ListAppointmentsAsync(DateTimeOffset from, DateTimeOffset to, Guid? loc, Guid? spec, bool includeCancelled, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<AppointmentDto>>(Appointments.Where(a => a.StartsAt >= from && a.StartsAt < to && (includeCancelled || a.Status != "cancelled")).ToList());
 
     public Task<StoreResult<AppointmentDto>> RescheduleAsync(Guid id, DateTimeOffset newStart, DateTimeOffset? reminderAt, CancellationToken ct)
     {
@@ -85,13 +85,19 @@ internal sealed class FakeBookingStore : IBookingStore
 
     public Task<AppointmentDto?> SetStatusAsync(Guid id, string status, CancellationToken ct) => Replace(id, a => a with { Status = status });
 
-    public Task<bool> TryClaimCancelAsync(Guid id, DateTimeOffset at, CancellationToken ct)
+    public CancelOrigin? LastCancelOrigin { get; private set; }
+
+    public Task<bool> TryClaimCancelAsync(Guid id, DateTimeOffset at, CancelOrigin origin, string? reason, CancellationToken ct)
     {
         lock (Appointments)
         {
             var a = Appointments.FirstOrDefault(x => x.Id == id);
             if (a is null || a.Status is not ("pending" or "confirmed")) return Task.FromResult(false);
-            Appointments[Appointments.IndexOf(a)] = a with { Status = "cancelled" };
+            Appointments[Appointments.IndexOf(a)] = a with
+            {
+                Status = "cancelled", CancelledAt = at, CancelledBy = new CancelledByDto(origin.Type), CancelReason = reason,
+            };
+            LastCancelOrigin = origin;
             return Task.FromResult(true);
         }
     }
@@ -101,7 +107,8 @@ internal sealed class FakeBookingStore : IBookingStore
         lock (Appointments)
         {
             var a = Appointments.FirstOrDefault(x => x.Id == id);
-            if (a is { Status: "cancelled" }) Appointments[Appointments.IndexOf(a)] = a with { Status = previousStatus };
+            if (a is { Status: "cancelled" })
+                Appointments[Appointments.IndexOf(a)] = a with { Status = previousStatus, CancelledAt = null, CancelledBy = null, CancelReason = null };
         }
         return Task.CompletedTask;
     }
@@ -109,7 +116,7 @@ internal sealed class FakeBookingStore : IBookingStore
     public Task<AppointmentDto?> MarkCancelledAsync(Guid id, DateTimeOffset at, CancellationToken ct)
     {
         Reminders.RemoveAll(r => r.AppointmentId == id);
-        return Replace(id, a => a with { Status = "cancelled" });
+        return Replace(id, a => a with { Status = "cancelled", CancelledAt = a.CancelledAt ?? at, CancelledBy = a.CancelledBy ?? new CancelledByDto("system") });
     }
 
     private Task<AppointmentDto?> Replace(Guid id, Func<AppointmentDto, AppointmentDto> f)

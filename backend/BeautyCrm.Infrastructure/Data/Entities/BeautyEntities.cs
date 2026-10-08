@@ -188,6 +188,12 @@ public class Appointment : TenantEntity
     public ReminderOption ReminderOption { get; set; } = ReminderOption.None;
     public PaymentMethod? PaymentMethod { get; set; }
     public DateTimeOffset? CancelledAt { get; set; }
+    /// <summary>Хто скасував (TASK-697): client | staff | system; null лише для нескасованих.</summary>
+    public string? CancelledByType { get; set; }
+    /// <summary>Користувач-керівник/працівник, що скасував (лише для staff).</summary>
+    public Guid? CancelledByUserId { get; set; }
+    /// <summary>Необов'язкова причина скасування (до 300 символів); чутливе — лише керівникам.</summary>
+    public string? CancelReason { get; set; }
     /// <summary>SHA-256 (hex) публічного токена перегляду/скасування запису (TASK-688); сам токен не зберігається.</summary>
     public string? PublicTokenHash { get; set; }
     /// <summary>SHA-256 (hex) заголовка Idempotency-Key публічного POST; унікальний у межах tenant.</summary>

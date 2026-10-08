@@ -17,8 +17,9 @@ public interface IBookingStore
     /// <summary>Атомарно: запис + нагадування + платіж. Overlap (exclusion constraint) -> Conflict.</summary>
     Task<StoreResult<AppointmentDto>> AddAppointmentAsync(NewAppointment appointment, CancellationToken ct);
     Task<AppointmentDto?> GetAppointmentAsync(Guid id, CancellationToken ct);
+    /// <param name="includeCancelled">false (за замовч. для календаря, §16) — без скасованих; записи лишаються в БД.</param>
     Task<IReadOnlyList<AppointmentDto>> ListAppointmentsAsync(
-        DateTimeOffset from, DateTimeOffset to, Guid? locationId, Guid? specialistId, CancellationToken ct);
+        DateTimeOffset from, DateTimeOffset to, Guid? locationId, Guid? specialistId, bool includeCancelled, CancellationToken ct);
     /// <summary>Переносить запис і переплановує нагадування (reminderAt null = без нагадування).</summary>
     Task<StoreResult<AppointmentDto>> RescheduleAsync(Guid id, DateTimeOffset newStart, DateTimeOffset? reminderAt, CancellationToken ct);
     Task<AppointmentDto?> SetStatusAsync(Guid id, string status, CancellationToken ct);
@@ -26,10 +27,11 @@ public interface IBookingStore
     /// Атомарний claim скасування (умовний UPDATE ... WHERE status IN ('pending','confirmed')): true лише для ОДНОГО з паралельних
     /// викликів. Виконується ПЕРЕД поверненням коштів, щоб гонка двох cancel не повернула кошти двічі.
     /// </summary>
-    Task<bool> TryClaimCancelAsync(Guid id, DateTimeOffset at, CancellationToken ct);
-    /// <summary>Компенсація невдалого повернення коштів: status = previousStatus, cancelled_at = null (лише якщо ще cancelled).</summary>
+    /// <remarks>У тому ж UPDATE фіксується, хто скасував (cancelled_by_*), і причина (§16).</remarks>
+    Task<bool> TryClaimCancelAsync(Guid id, DateTimeOffset at, CancelOrigin origin, string? reason, CancellationToken ct);
+    /// <summary>Компенсація невдалого повернення коштів: status = previousStatus, cancelled_at і cancelled_by_*/reason = null (лише якщо ще cancelled).</summary>
     Task ReleaseCancelAsync(Guid id, string previousStatus, CancellationToken ct);
-    /// <summary>status = cancelled, cancelled_at, нагадування -> cancelled.</summary>
+    /// <summary>status = cancelled, cancelled_at, нагадування -> cancelled. Якщо автор ще не зафіксований — system.</summary>
     Task<AppointmentDto?> MarkCancelledAsync(Guid id, DateTimeOffset at, CancellationToken ct);
     Task<PaymentRecord?> GetPaymentAsync(Guid appointmentId, CancellationToken ct);
     Task UpdatePaymentAsync(Guid paymentId, string status, string? providerPaymentId, DateTimeOffset? paidAt, CancellationToken ct);

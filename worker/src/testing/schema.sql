@@ -1715,3 +1715,123 @@ BEGIN
 END $EF$;
 COMMIT;
 
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261008124507_beauty_locations_and_cancellation_history') THEN
+    ALTER TABLE beauty_appointments ADD cancel_reason character varying(300);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261008124507_beauty_locations_and_cancellation_history') THEN
+    ALTER TABLE beauty_appointments ADD cancelled_by_type character varying(16);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261008124507_beauty_locations_and_cancellation_history') THEN
+    ALTER TABLE beauty_appointments ADD cancelled_by_user_id uuid;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261008124507_beauty_locations_and_cancellation_history') THEN
+    CREATE INDEX ix_beauty_appointments_tenant_id_cancelled_by_user_id ON beauty_appointments (tenant_id, cancelled_by_user_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261008124507_beauty_locations_and_cancellation_history') THEN
+    ALTER TABLE beauty_appointments ADD CONSTRAINT ck_beauty_appointments_cancel_meta_status CHECK ((cancelled_by_type IS NULL AND cancel_reason IS NULL) OR status = 'cancelled');
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261008124507_beauty_locations_and_cancellation_history') THEN
+    ALTER TABLE beauty_appointments ADD CONSTRAINT ck_beauty_appointments_cancel_reason_len CHECK (cancel_reason IS NULL OR char_length(cancel_reason) <= 300);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261008124507_beauty_locations_and_cancellation_history') THEN
+    ALTER TABLE beauty_appointments ADD CONSTRAINT ck_beauty_appointments_cancelled_by_type CHECK (cancelled_by_type IS NULL OR cancelled_by_type IN ('client', 'staff', 'system'));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261008124507_beauty_locations_and_cancellation_history') THEN
+    ALTER TABLE beauty_appointments ADD CONSTRAINT ck_beauty_appointments_cancelled_by_user CHECK (cancelled_by_user_id IS NULL OR cancelled_by_type = 'staff');
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261008124507_beauty_locations_and_cancellation_history') THEN
+    ALTER TABLE beauty_appointments ADD CONSTRAINT fk_beauty_appointments_users_tenant_id_cancelled_by_user_id FOREIGN KEY (tenant_id, cancelled_by_user_id) REFERENCES users (tenant_id, id) ON DELETE RESTRICT;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261008124507_beauty_locations_and_cancellation_history') THEN
+    ALTER TABLE beauty_appointments NO FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261008124507_beauty_locations_and_cancellation_history') THEN
+
+                    UPDATE beauty_appointments
+                    SET cancelled_by_type = 'system'
+                    WHERE status = 'cancelled' AND cancelled_by_type IS NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261008124507_beauty_locations_and_cancellation_history') THEN
+    ALTER TABLE beauty_appointments FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261008124507_beauty_locations_and_cancellation_history') THEN
+
+    DO $$
+    DECLARE
+        t text;
+    BEGIN
+        FOREACH t IN ARRAY ARRAY['beauty_appointments', 'beauty_locations']
+        LOOP
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_class c
+                WHERE c.oid = to_regclass('public.' || t) AND c.relrowsecurity AND c.relforcerowsecurity) THEN
+                RAISE EXCEPTION 'FORCE ROW LEVEL SECURITY is not enabled on %', t;
+            END IF;
+        END LOOP;
+    END
+    $$;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261008124507_beauty_locations_and_cancellation_history') THEN
+    INSERT INTO "__EFMigrationsHistory" (migration_id, product_version)
+    VALUES ('20261008124507_beauty_locations_and_cancellation_history', '8.0.11');
+    END IF;
+END $EF$;
+COMMIT;
+

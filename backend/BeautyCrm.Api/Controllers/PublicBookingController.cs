@@ -86,15 +86,18 @@ public sealed class PublicBookingController(PublicBookingService service) : Cont
         return this.ToResult(await service.GetAsync(publicToken, ct));
     }
 
-    /// <summary>Скасування за політикою §11; відповідь містить refundAmount/refundPercent/feePercent.</summary>
+    /// <summary>Скасування за політикою §11 (необов'язкове `{reason}`; автор = client, у відповіді не розкривається); відповідь містить refundAmount/refundPercent/feePercent.</summary>
     [HttpPost("appointments/{publicToken}/cancel")]
     [EnableRateLimiting(PublicRateLimit.Write)]
     [ProducesResponseType<PublicCancelResultDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
-    public async Task<IActionResult> Cancel(string publicToken, CancellationToken ct)
+    [RequestSizeLimit(16 * 1024)]
+    public async Task<IActionResult> Cancel(
+        string publicToken, CancellationToken ct,
+        [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] CancelRequest? request = null)
     {
         NoStore();
-        return this.ToResult(await service.CancelAsync(publicToken, ct));
+        return this.ToResult(await service.CancelAsync(publicToken, ct, request?.Reason));
     }
 
     private void NoStore()

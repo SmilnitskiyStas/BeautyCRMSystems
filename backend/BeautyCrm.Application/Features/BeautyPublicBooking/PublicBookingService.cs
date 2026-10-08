@@ -158,10 +158,10 @@ public sealed partial class PublicBookingService(
         return await ToPublicAsync(appt, ct);
     }
 
-    public async Task<Result<PublicCancelResultDto>> CancelAsync(string? token, CancellationToken ct)
+    public async Task<Result<PublicCancelResultDto>> CancelAsync(string? token, CancellationToken ct, string? reason = null)
     {
         if (await FindAsync(token, ct) is not { } appt) return TokenNotFound;
-        var result = await cancellation.CancelAsync(appt.Id, ct);
+        var result = await cancellation.CancelAsync(appt.Id, ct, CancelOrigin.Client, reason);
         if (!result.IsOk) return result.Error!.Kind == ErrorKind.NotFound ? TokenNotFound : result.Error;
         var r = result.Value!;
         return new PublicCancelResultDto(await ToPublicAsync(r.Appointment, ct), r.RefundAmount, r.RefundPercent, r.FeePercent);

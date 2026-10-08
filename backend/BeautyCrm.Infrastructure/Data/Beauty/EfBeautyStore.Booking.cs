@@ -3,6 +3,7 @@ using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Application.Features.BeautyCatalog;
 using BeautyCrm.Application.Features.BeautyChannels;
 using BeautyCrm.Application.Features.BeautyClients;
+using BeautyCrm.Application.Features.BeautyLocations;
 using BeautyCrm.Application.Features.BeautyStaff;
 using BeautyCrm.Infrastructure.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -16,7 +17,7 @@ namespace BeautyCrm.Infrastructure.Data.Beauty;
 /// не фільтрують за tenant_id вручну. Один scoped екземпляр на запит.
 /// </summary>
 public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector secrets)
-    : IBookingStore, ICancellationSettingsStore, ICatalogStore, IClientStore, IAnalyticsStore, IChannelSettingsStore
+    : IBookingStore, ICancellationSettingsStore, ICatalogStore, IClientStore, IAnalyticsStore, IChannelSettingsStore, ILocationStore
 {
     private const string ExclusionViolation = "23P01";
 
@@ -133,7 +134,8 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
         if (a.Public is not null)
             await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock(hashtextextended({a.Public.IdempotencyKeyHash}, 0))", ct);
         await SpecialistLock.AcquireAsync(db, a.SpecialistId, ct);
-        if (await IsSpecialistBlockedAsync(a.SpecialistId, a.LocationId, a.ServiceId, a.StartsAt, ct))
+        // TASK-697: FOR SHARE на заклад - паралельна деактивація/зміна часової зони (FOR UPDATE) дочекається коміту запису й побачить його.
+        if (!await LockLocationActiveAsync(a.LocationId, ct) || await IsSpecialistBlockedAsync(a.SpecialistId, a.LocationId, a.ServiceId, a.StartsAt, ct))
         {
             db.ChangeTracker.Clear();
             return StoreResult<AppointmentDto>.Blocked();
@@ -151,8 +153,9 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
         (await ProjectAsync(db.Appointments.Where(a => a.Id == id), ct)).FirstOrDefault();
 
     public async Task<IReadOnlyList<AppointmentDto>> ListAppointmentsAsync(
-        DateTimeOffset from, DateTimeOffset to, Guid? locationId, Guid? specialistId, CancellationToken ct) =>
+        DateTimeOffset from, DateTimeOffset to, Guid? locationId, Guid? specialistId, bool includeCancelled, CancellationToken ct) =>
         await ProjectAsync(db.Appointments.Where(a => a.StartsAt >= from.ToUniversalTime() && a.StartsAt < to.ToUniversalTime()
+            && (includeCancelled || a.Status != AppointmentStatus.Cancelled)
             && (locationId == null || a.LocationId == locationId) && (specialistId == null || a.SpecialistId == specialistId))
             .OrderBy(a => a.StartsAt), ct);
 
@@ -162,7 +165,7 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
         // TASK-696: lock майстра + повторна перевірка відсутності під локом (див. AddAppointmentAsync).
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await SpecialistLock.AcquireAsync(db, appt.SpecialistId, ct);
-        if (await IsSpecialistBlockedAsync(appt.SpecialistId, appt.LocationId, appt.ServiceId, newStart, ct))
+        if (!await LockLocationActiveAsync(appt.LocationId, ct) || await IsSpecialistBlockedAsync(appt.SpecialistId, appt.LocationId, appt.ServiceId, newStart, ct))
         {
             db.ChangeTracker.Clear();
             return StoreResult<AppointmentDto>.Blocked();
@@ -177,6 +180,11 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
         await tx.CommitAsync(ct);
         return StoreResult<AppointmentDto>.Ok((await GetAppointmentAsync(id, ct))!);
     }
+
+    /// <summary>Блокує рядок закладу (FOR SHARE) до кінця транзакції; false, якщо заклад деактивовано (чи недоступний).</summary>
+    private async Task<bool> LockLocationActiveAsync(Guid locationId, CancellationToken ct) =>
+        (await db.Database.SqlQuery<bool>($"""SELECT is_active AS "Value" FROM beauty_locations WHERE id = {locationId} FOR SHARE""").ToListAsync(ct))
+        .FirstOrDefault();
 
     /// <summary>
     /// Під advisory-lock майстра: чи день запису тепер зайнятий затвердженою відсутністю, послугу знято з майстра або
@@ -198,12 +206,16 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
         return await GetAppointmentAsync(id, ct);
     }
 
-    public async Task<bool> TryClaimCancelAsync(Guid id, DateTimeOffset at, CancellationToken ct)
+    public async Task<bool> TryClaimCancelAsync(Guid id, DateTimeOffset at, CancelOrigin origin, string? reason, CancellationToken ct)
     {
         var atUtc = at.ToUniversalTime();
+        var type = origin.Type;
+        var userId = type == CancelledByTypes.Staff ? origin.UserId : null; // user id лише для staff (CHECK у БД)
         return await db.Appointments
             .Where(a => a.Id == id && (a.Status == AppointmentStatus.Pending || a.Status == AppointmentStatus.Confirmed))
-            .ExecuteUpdateAsync(s => s.SetProperty(a => a.Status, AppointmentStatus.Cancelled).SetProperty(a => a.CancelledAt, atUtc), ct) == 1;
+            .ExecuteUpdateAsync(s => s.SetProperty(a => a.Status, AppointmentStatus.Cancelled).SetProperty(a => a.CancelledAt, atUtc)
+                .SetProperty(a => a.CancelledByType, type).SetProperty(a => a.CancelledByUserId, userId)
+                .SetProperty(a => a.CancelReason, reason), ct) == 1;
     }
 
     public async Task ReleaseCancelAsync(Guid id, string previousStatus, CancellationToken ct)
@@ -212,7 +224,9 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
         try
         {
             await db.Appointments.Where(a => a.Id == id && a.Status == AppointmentStatus.Cancelled)
-                .ExecuteUpdateAsync(s => s.SetProperty(a => a.Status, prev).SetProperty(a => a.CancelledAt, (DateTimeOffset?)null), ct);
+                .ExecuteUpdateAsync(s => s.SetProperty(a => a.Status, prev).SetProperty(a => a.CancelledAt, (DateTimeOffset?)null)
+                    .SetProperty(a => a.CancelledByType, (string?)null).SetProperty(a => a.CancelledByUserId, (Guid?)null)
+                    .SetProperty(a => a.CancelReason, (string?)null), ct);
         }
         catch (PostgresException ex) when (ex.SqlState == ExclusionViolation)
         {
@@ -227,6 +241,7 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
         if (appt is null) return null;
         appt.Status = AppointmentStatus.Cancelled;
         appt.CancelledAt = at;
+        appt.CancelledByType ??= CancelledByTypes.System; // збій оплати при створенні тощо; автор staff/client вже зафіксований claim-ом
         foreach (var r in await db.Reminders.Where(r => r.AppointmentId == id && r.Status == ReminderStatus.Scheduled).ToListAsync(ct))
             r.Status = ReminderStatus.Cancelled;
         await db.SaveChangesAsync(ct);
@@ -285,7 +300,7 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
         }
     }
 
-    private static async Task<IReadOnlyList<AppointmentDto>> ProjectAsync(IQueryable<Appointment> q, CancellationToken ct)
+    private async Task<IReadOnlyList<AppointmentDto>> ProjectAsync(IQueryable<Appointment> q, CancellationToken ct)
     {
         var rows = await q.AsNoTracking().Select(a => new
         {
@@ -293,11 +308,17 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
             a.ServiceId, ServiceName = a.Service!.Name, a.ClientId, ClientName = a.Client!.FullName,
             a.StartsAt, a.EndsAt, a.DurationMinutes, a.Status, a.Source, a.PriceOriginal, a.PriceFinal, a.PromotionId,
             a.ReminderOption, a.PaymentMethod, LocationTimezone = a.Location!.Timezone,
+            a.CancelledAt, a.CancelledByType, a.CancelReason,
+            CancelledByName = a.CancelledByUserId == null ? null
+                : db.Users.Where(u => u.Id == a.CancelledByUserId).Select(u => u.FullName).FirstOrDefault(),
         }).ToListAsync(ct);
         return rows.Select(r => new AppointmentDto(
             r.Id, r.LocationId, r.LocationName, r.SpecialistId, r.SpecialistName, r.ServiceId, r.ServiceName, r.ClientId, r.ClientName,
             r.StartsAt, r.EndsAt, r.DurationMinutes, EnumText<AppointmentStatus>.ToDb(r.Status), EnumText<AppointmentSource>.ToDb(r.Source),
             r.PriceOriginal, r.PriceFinal, r.PromotionId, EnumText<ReminderOption>.ToDb(r.ReminderOption),
-            r.PaymentMethod is { } m ? EnumText<Ent.PaymentMethod>.ToDb(m) : null, null, r.LocationTimezone)).ToList();
+            r.PaymentMethod is { } m ? EnumText<Ent.PaymentMethod>.ToDb(m) : null, null, r.LocationTimezone,
+            r.Status == AppointmentStatus.Cancelled ? r.CancelledAt : null,
+            r.Status == AppointmentStatus.Cancelled ? new CancelledByDto(r.CancelledByType ?? CancelledByTypes.System, r.CancelledByName) : null,
+            r.Status == AppointmentStatus.Cancelled ? r.CancelReason : null)).ToList();
     }
 }

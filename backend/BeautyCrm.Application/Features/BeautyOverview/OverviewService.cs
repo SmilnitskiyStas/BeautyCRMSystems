@@ -4,7 +4,7 @@ using BeautyCrm.Application.Features.BeautyCommon;
 namespace BeautyCrm.Application.Features.BeautyOverview;
 
 /// <summary>Заклад для адмінки (GET /locations). Address може бути null.</summary>
-public sealed record LocationDto(Guid Id, string Name, string? Address, string Timezone, bool IsActive);
+public sealed record LocationDto(Guid Id, string Name, string? Address, string Timezone, bool IsActive, string? Phone = null);
 
 /// <summary>
 /// KPI дня. AppointmentsCount — усі записи дня, крім скасованих; Revenue — сума price_final завершених (як в аналітиці);
@@ -57,7 +57,7 @@ public sealed class OverviewService(IOverviewStore overview, IBookingStore booki
             var tz = TimeZoneInfo.FindSystemTimeZoneById(location.Timezone);
             var from = SlotCalculator.ToOffset(day, TimeOnly.MinValue, tz);
             var to = SlotCalculator.ToOffset(day.AddDays(1), TimeOnly.MinValue, tz);
-            appointments.AddRange((await booking.ListAppointmentsAsync(from, to, location.Id, null, ct))
+            appointments.AddRange((await booking.ListAppointmentsAsync(from, to, location.Id, null, includeCancelled: true, ct))
                 .Select(a => a with { Cancellation = terms }));
 
             var schedules = await booking.GetSchedulesAsync(location.Id, null, ct);

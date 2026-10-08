@@ -3,6 +3,7 @@ using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Application.Features.BeautyCatalog;
 using BeautyCrm.Application.Features.BeautyChannels;
 using BeautyCrm.Application.Features.BeautyClients;
+using BeautyCrm.Application.Features.BeautyLocations;
 using BeautyCrm.Application.Features.BeautyOverview;
 using BeautyCrm.Application.Features.BeautyStaff;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,6 +30,7 @@ public static class BeautyServiceExtensions
         services.AddScoped<StaffService>();
         services.AddScoped<AbsenceService>();
         services.AddScoped<OverviewService>();
+        services.AddScoped<LocationService>();
         return services;
     }
 }

@@ -5,8 +5,15 @@ namespace BeautyCrm.Application.Features.BeautyBooking;
 public sealed class CancellationService(
     IBookingStore store, IPaymentService payments, CancellationSettingsService settings, TimeProvider clock)
 {
-    public async Task<Result<CancelResult>> CancelAsync(Guid appointmentId, CancellationToken ct)
+    public const int MaxReasonLength = 300;
+
+    /// <param name="origin">Хто скасовує (за замовч. system: AI/система); <paramref name="reason"/> — необов'язкова, до 300 символів.</param>
+    public async Task<Result<CancelResult>> CancelAsync(
+        Guid appointmentId, CancellationToken ct, CancelOrigin? origin = null, string? reason = null)
     {
+        var cleanReason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
+        if (cleanReason is { Length: > MaxReasonLength })
+            return Error.Validation("invalid_reason", $"Reason must be at most {MaxReasonLength} characters.");
         var appt = await store.GetAppointmentAsync(appointmentId, ct);
         if (appt is null) return Error.NotFound("appointment_not_found", "Appointment not found.");
         if (appt.Status == "cancelled") return Error.Conflict("already_cancelled", "Appointment is already cancelled.");
@@ -19,7 +26,7 @@ public sealed class CancellationService(
         var calc = CancellationPolicy.Calculate(appt.StartsAt, now, paid, await settings.GetAsync(ct));
 
         // 1) Атомарний claim статусу ПЕРЕД поверненням коштів: з двох паралельних cancel переможе рівно один.
-        if (!await store.TryClaimCancelAsync(appointmentId, now, ct))
+        if (!await store.TryClaimCancelAsync(appointmentId, now, origin ?? CancelOrigin.System, cleanReason, ct))
         {
             var current = await store.GetAppointmentAsync(appointmentId, ct);
             return current switch

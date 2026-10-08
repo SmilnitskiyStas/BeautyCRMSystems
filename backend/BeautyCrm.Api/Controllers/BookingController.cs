@@ -39,12 +39,15 @@ public sealed class BookingController(BookingService booking, CancellationServic
         Actor is not { } actor ? Unauthorized()
         : this.ToResult(await booking.GetSlotsAsync(locationId, AppointmentAccessService.EffectiveSpecialistId(actor, specialistId), serviceId, date, ct));
 
-    /// <summary>Календар: записи за період (за замовчуванням — найближчі 7 днів).</summary>
+    /// <summary>
+    /// Календар: записи за період (за замовчуванням — найближчі 7 днів, БЕЗ скасованих; `includeCancelled=true` повертає і їх, §16).
+    /// Ім'я автора скасування та причину бачать лише керівники.
+    /// </summary>
     [HttpGet("appointments")]
     [ProducesResponseType<IReadOnlyList<AppointmentDto>>(StatusCodes.Status200OK)]
     public async Task<IActionResult> List(
         [FromQuery] DateTimeOffset? from, [FromQuery] DateTimeOffset? to, [FromQuery] Guid? locationId, [FromQuery] Guid? specialistId,
-        CancellationToken ct)
+        CancellationToken ct, [FromQuery] bool includeCancelled = false)
     {
         if (Actor is not { } actor) return Unauthorized();
         var start = from ?? new DateTimeOffset(DateTime.UtcNow.Date, TimeSpan.Zero); // .Date без Kind дав би локальний зсув
@@ -53,15 +56,15 @@ public sealed class BookingController(BookingService booking, CancellationServic
         if (end <= start) return UnprocessableEntity(new ApiError("invalid_range", "'to' must be after 'from'."));
         if (end - start > TimeSpan.FromDays(MaxRangeDays))
             return UnprocessableEntity(new ApiError("range_too_large", $"The requested range must not exceed {MaxRangeDays} days."));
-        return Ok(await booking.ListAsync(start, end, locationId,
-            AppointmentAccessService.EffectiveSpecialistId(actor, specialistId), ct));
+        return Ok((await booking.ListAsync(start, end, locationId,
+            AppointmentAccessService.EffectiveSpecialistId(actor, specialistId), ct, includeCancelled)).Select(a => a.ForViewer(actor)).ToList());
     }
 
     [HttpGet("appointments/{id:guid}")]
     [ProducesResponseType<AppointmentDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Get(Guid id, CancellationToken ct) =>
-        await GuardAsync(id, ct) ?? this.ToResult(await booking.GetAsync(id, ct));
+        await GuardAsync(id, ct) ?? this.ToResult(await booking.GetAsync(id, ct), a => Ok(a.ForViewer(Actor!)));
 
     /// <summary>201; 409 slot_unavailable при перетині; 422 валідація; 402 payment_failed.</summary>
     [HttpPost("appointments")]
@@ -81,9 +84,16 @@ public sealed class BookingController(BookingService booking, CancellationServic
     public async Task<IActionResult> Patch(Guid id, [FromBody] PatchAppointmentRequest request, CancellationToken ct) =>
         await GuardAsync(id, ct) ?? this.ToResult(await booking.PatchAsync(id, request, ct));
 
-    /// <summary>Скасування; refundAmount рахується за налаштуваннями tenant-а (/settings/cancellation).</summary>
+    /// <summary>
+    /// Скасування; refundAmount рахується за налаштуваннями tenant-а (/settings/cancellation). Необов'язкове тіло `{reason}` (до 300);
+    /// фіксується хто (staff + user id) і коли скасував (§16).
+    /// </summary>
     [HttpPost("appointments/{id:guid}/cancel")]
+    [RequestSizeLimit(16 * 1024)]
     [ProducesResponseType<CancelResult>(StatusCodes.Status200OK)]
-    public async Task<IActionResult> Cancel(Guid id, CancellationToken ct) =>
-        await GuardAsync(id, ct) ?? this.ToResult(await cancellation.CancelAsync(id, ct));
+    public async Task<IActionResult> Cancel(
+        Guid id, CancellationToken ct, [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] CancelRequest? request = null) =>
+        await GuardAsync(id, ct) ?? this.ToResult(
+            await cancellation.CancelAsync(id, ct, CancelOrigin.Staff(Actor!.UserId), request?.Reason),
+            r => Ok(r.ForViewer(Actor!)));
 }

@@ -5,7 +5,8 @@ namespace BeautyCrm.Application.Features.BeautyClients;
 
 public sealed record ClientDto(
     Guid Id, string FullName, string? Phone, string? Email, DateOnly? BirthDate, bool MarketingConsent, bool Unsubscribed,
-    int Visits, DateTimeOffset? LastVisitAt);
+    int Visits, DateTimeOffset? LastVisitAt,
+    int CancelledCount = 0, int CancelledByClientCount = 0); // TASK-697: зведення скасувань (усі / ініційовані клієнтом)
 public sealed record ClientNoteDto(Guid Id, Guid? AuthorUserId, string Body, DateTimeOffset CreatedAt);
 public sealed record ClientDetailDto(ClientDto Client, IReadOnlyList<ClientNoteDto> Notes, IReadOnlyList<AppointmentDto> History);
 public sealed record CreateClientRequest(

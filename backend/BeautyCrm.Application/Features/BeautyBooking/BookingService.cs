@@ -152,10 +152,10 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
     }
 
     public async Task<IReadOnlyList<AppointmentDto>> ListAsync(
-        DateTimeOffset from, DateTimeOffset to, Guid? locationId, Guid? specialistId, CancellationToken ct)
+        DateTimeOffset from, DateTimeOffset to, Guid? locationId, Guid? specialistId, CancellationToken ct, bool includeCancelled = false)
     {
         var terms = await cancellation.GetTermsAsync(ct);
-        return (await store.ListAppointmentsAsync(from, to, locationId, specialistId, ct))
+        return (await store.ListAppointmentsAsync(from, to, locationId, specialistId, includeCancelled, ct))
             .Select(a => a with { Cancellation = terms }).ToList();
     }
 

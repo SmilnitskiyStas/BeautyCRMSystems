@@ -1,3 +1,4 @@
+using BeautyCrm.Application.Features.BeautyLocations;
 using BeautyCrm.Application.Features.BeautyAnalytics;
 using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Application.Features.BeautyCatalog;
@@ -53,6 +54,7 @@ public static class DataServiceExtensions
         services.AddScoped<IChannelSettingsStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<IStaffStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<IOverviewStore>(sp => sp.GetRequiredService<EfBeautyStore>());
+        services.AddScoped<ILocationStore>(sp => sp.GetRequiredService<EfBeautyStore>());
 
         return services;
     }

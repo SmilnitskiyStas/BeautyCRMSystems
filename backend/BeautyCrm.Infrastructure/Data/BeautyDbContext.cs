@@ -228,6 +228,15 @@ public class BeautyDbContext : DbContext
                 t.HasCheckConstraint("ck_beauty_appointments_payment_method",
                     $"payment_method IS NULL OR {EnumText<PaymentMethod>.CheckSql("payment_method")}");
                 t.HasCheckConstraint("ck_beauty_appointments_duration_positive", "duration_minutes > 0");
+                // TASK-697: хто скасував. Колонки заповнюються лише для скасованих; user id — лише для staff.
+                t.HasCheckConstraint("ck_beauty_appointments_cancelled_by_type",
+                    "cancelled_by_type IS NULL OR cancelled_by_type IN ('client', 'staff', 'system')");
+                t.HasCheckConstraint("ck_beauty_appointments_cancelled_by_user",
+                    "cancelled_by_user_id IS NULL OR cancelled_by_type = 'staff'");
+                t.HasCheckConstraint("ck_beauty_appointments_cancel_meta_status",
+                    "(cancelled_by_type IS NULL AND cancel_reason IS NULL) OR status = 'cancelled'");
+                t.HasCheckConstraint("ck_beauty_appointments_cancel_reason_len",
+                    "cancel_reason IS NULL OR char_length(cancel_reason) <= 300");
                 t.HasCheckConstraint("ck_beauty_appointments_prices_non_negative", "price_original >= 0 AND price_final >= 0");
             });
             Enum(b.Property(x => x.Status)).HasDefaultValue(AppointmentStatus.Pending);
@@ -236,6 +245,10 @@ public class BeautyDbContext : DbContext
             b.Property(x => x.PaymentMethod).HasConversion(new EnumMemberConverter<PaymentMethod>()).HasMaxLength(32);
             b.Property(x => x.PriceOriginal).HasPrecision(12, 2);
             b.Property(x => x.PriceFinal).HasPrecision(12, 2);
+            b.Property(x => x.CancelledByType).HasMaxLength(16);
+            b.Property(x => x.CancelReason).HasMaxLength(300);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.CancelledByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
             // maintained by trigger beauty_appointments_set_ends_at (migration SQL)
             b.Property(x => x.EndsAt).ValueGeneratedOnAddOrUpdate();
 

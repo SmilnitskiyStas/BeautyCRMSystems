@@ -15,12 +15,6 @@ namespace BeautyCrm.Api.Controllers;
 [ProducesResponseType(StatusCodes.Status403Forbidden)]
 public sealed class OverviewController(OverviewService overview) : ControllerBase
 {
-    /// <summary>Заклади tenant-а (id, name, address, timezone, isActive) — для всіх ролей персоналу.</summary>
-    [HttpGet("locations")]
-    [Authorize(Policy = AuthPolicies.Staff)]
-    [ProducesResponseType<IReadOnlyList<LocationDto>>(StatusCodes.Status200OK)]
-    public async Task<IActionResult> Locations(CancellationToken ct) => Ok(await overview.ListLocationsAsync(ct));
-
     /// <summary>
     /// Записи дня + KPI (кількість записів, виручка за день, нові клієнти, вільні слоти). Лише owner/admin (містить виручку).
     /// date — локальна дата закладу (за замовчуванням сьогодні); locationId — необов'язково (інакше всі активні заклади).
