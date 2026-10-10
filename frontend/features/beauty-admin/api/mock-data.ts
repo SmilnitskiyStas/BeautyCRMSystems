@@ -11,6 +11,7 @@ import type {
   StaffMember,
   WorkingHours,
   BeautyLocation,
+  LocationClosure,
   AiRequest,
   AiSegment,
 } from "../types";
@@ -18,10 +19,17 @@ import type {
 /** Демо-дані для mock-клієнта. Не імпортувати поза `api/`. */
 
 export const LOCATIONS: BeautyLocation[] = [
-  { id: "c", name: "Центр", address: "вул. Хрещатик, 22, Київ", phone: "+380 44 000 11 22", timezone: "Europe/Kyiv", isActive: true },
-  { id: "p", name: "Поділ", address: "вул. Сагайдачного, 10, Київ", phone: "+380 44 000 33 44", timezone: "Europe/Kyiv", isActive: true },
-  { id: "k", name: "Печерськ", address: "вул. Лаврська, 5, Київ", phone: null, timezone: "Europe/Kyiv", isActive: true },
-  { id: "l", name: "Лівий берег (закрито)", address: "просп. Мира, 3, Київ", phone: null, timezone: "Europe/Kyiv", isActive: false },
+  // Центр: неділя вихідна (§17) - демо різниці між графіком майстра (Нд працює) і вихідним закладу.
+  { id: "c", name: "Центр", address: "вул. Хрещатик, 22, Київ", phone: "+380 44 000 11 22", timezone: "Europe/Kyiv", isActive: true, closedWeekdays: ["sun"] },
+  { id: "p", name: "Поділ", address: "вул. Сагайдачного, 10, Київ", phone: "+380 44 000 33 44", timezone: "Europe/Kyiv", isActive: true, closedWeekdays: [] },
+  { id: "k", name: "Печерськ", address: "вул. Лаврська, 5, Київ", phone: null, timezone: "Europe/Kyiv", isActive: true, closedWeekdays: [] },
+  { id: "l", name: "Лівий берег (закрито)", address: "просп. Мира, 3, Київ", phone: null, timezone: "Europe/Kyiv", isActive: false, closedWeekdays: [] },
+];
+
+/** Закриття закладів на дати (§17). Поділ: 8 жовтня (чт) - у календарному тижні демо. */
+export const CLOSURES_SEED: LocationClosure[] = [
+  { id: "cl1", locationId: "p", dateFrom: "2026-10-08", dateTo: "2026-10-08", reason: "Санітарний день" },
+  { id: "cl2", locationId: "c", dateFrom: "2026-12-31", dateTo: "2027-01-02", reason: "Новорічні свята" },
 ];
 
 export const PRICE_LIST: PriceListRow[] = [
@@ -73,7 +81,6 @@ const RAW: Record<string, Tuple[]> = {
     [4, 15, 1.5, "Вероніка С.", "Манікюр + гель-лак", "promo", 720],
     [5, 10, 1.5, "Лілія Д.", "Манікюр + гель-лак", "visit", 900],
     [5, 12, 1.5, "Алла Ф.", "Манікюр + гель-лак", "promo", 720],
-    [6, 9, 12, "Вихідний", "", "break", 0],
   ],
   a: [
     [0, 11, 2.5, "Катерина Л.", "Фарбування", "visit", 2400],
@@ -84,7 +91,6 @@ const RAW: Record<string, Tuple[]> = {
     [3, 14, 1, "Яна Б.", "Стрижка", "visit", 650],
     [4, 10, 2.5, "Людмила Г.", "Фарбування", "visit", 2400],
     [5, 11, 2, "Поліна Е.", "Тонування", "new", 1800],
-    [6, 9, 12, "Вихідний", "", "break", 0],
   ],
   o: [
     [0, 16, 1.25, "Софія М.", "Чистка обличчя", "promo", 1120],
@@ -94,7 +100,6 @@ const RAW: Record<string, Tuple[]> = {
     [4, 13, 1, "Перерва", "", "break", 0],
     [4, 16, 1.25, "Раїса Т.", "Чистка обличчя", "visit", 1400],
     [5, 10, 1.25, "Олена К.", "Чистка обличчя", "visit", 1400],
-    [6, 9, 12, "Вихідний", "", "break", 0],
   ],
   // Неактивна майстриня з нескасованими записами: має зʼявитися в селекторі з попередженням.
   ng: [
@@ -216,7 +221,7 @@ export const STAFF_SEED: StaffMember[] = [
     isActive: true,
     services: svc("mn", "mn2", "pd"),
     locations: [
-      { locationId: "c", locationName: "Центр", workingHours: weekdays("10:00", "19:00", ["mon", "tue", "wed", "fri"]) },
+      { locationId: "c", locationName: "Центр", workingHours: weekdays("10:00", "19:00", ["mon", "tue", "wed", "fri", "sun"]) },
       { locationId: "k", locationName: "Печерськ", workingHours: weekdays("10:00", "18:00", ["thu", "sat"]) },
     ],
   },
@@ -227,7 +232,7 @@ export const STAFF_SEED: StaffMember[] = [
     position: "Колорист",
     isActive: true,
     services: svc("col", "ton", "hc"),
-    locations: [{ locationId: "c", locationName: "Центр", workingHours: weekdays("09:00", "18:00", ["mon", "tue", "wed", "thu", "fri", "sat"]) }],
+    locations: [{ locationId: "c", locationName: "Центр", workingHours: weekdays("09:00", "18:00", ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]) }],
   },
   {
     id: "o",
@@ -236,7 +241,7 @@ export const STAFF_SEED: StaffMember[] = [
     position: "Косметолог",
     isActive: true,
     services: svc("cl"),
-    locations: [{ locationId: "c", locationName: "Центр", workingHours: weekdays("10:00", "19:00", ["mon", "tue", "wed", "thu", "fri", "sat"]) }],
+    locations: [{ locationId: "c", locationName: "Центр", workingHours: weekdays("10:00", "19:00", ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]) }],
   },
   {
     id: "im",
@@ -245,7 +250,7 @@ export const STAFF_SEED: StaffMember[] = [
     position: "Стиліст",
     isActive: true,
     services: svc("hc", "br"),
-    locations: [{ locationId: "p", locationName: "Поділ", workingHours: weekdays("09:00", "18:00", ["mon", "tue", "wed", "thu", "fri"]) }],
+    locations: [{ locationId: "p", locationName: "Поділ", workingHours: weekdays("09:00", "18:00", ["mon", "tue", "wed", "thu", "fri", "sun"]) }],
   },
   {
     id: "ng",
@@ -254,7 +259,7 @@ export const STAFF_SEED: StaffMember[] = [
     position: "Майстер манікюру",
     isActive: false,
     services: svc("mn2"),
-    locations: [{ locationId: "k", locationName: "Печерськ", workingHours: weekdays("10:00", "18:00", ["tue", "thu"]) }],
+    locations: [{ locationId: "k", locationName: "Печерськ", workingHours: weekdays("10:00", "18:00", ["tue", "thu", "sun"]) }],
   },
 ];
 

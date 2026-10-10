@@ -7,7 +7,9 @@ import type {
   ChannelConfig,
   ChannelId,
   ChannelPatch,
+  ClosureInput,
   LocationId,
+  Weekday,
   LocationInput,
   PromoDraft,
   PromoGoalId,
@@ -20,6 +22,7 @@ import type {
 export const beautyKeys = {
   locations: ["beauty", "locations"] as const,
   managedLocations: ["beauty", "locations", "manage"] as const,
+  closures: (id: LocationId, from: string, to: string) => ["beauty", "closures", id, from, to] as const,
   overview: (loc: LocationId | null) => ["beauty", "overview", loc] as const,
   calendar: (id: string, includeCancelled = false) => ["beauty", "calendar", id, includeCancelled] as const,
   upcoming: (id: string) => ["beauty", "upcoming", id] as const,
@@ -65,6 +68,43 @@ export function useCreateLocation() {
 export function useUpdateLocation(id: string) {
   const invalidate = useInvalidateLocations();
   return useMutation({ mutationFn: (input: LocationInput) => beautyApi.updateLocation(id, input), onSuccess: invalidate });
+}
+
+/** Закриття закладу на дати (§17); `reason` у відповіді лише для керівників. */
+export const useClosures = (locationId: LocationId, range: { from: string; to: string }, enabled = true) =>
+  useQuery({
+    queryKey: beautyKeys.closures(locationId, range.from, range.to),
+    queryFn: () => beautyApi.getClosures(locationId, range),
+    enabled,
+  });
+
+/** Вихідні/закриття змінюють календар (затінені дні), довідник закладів і слоти. */
+function useInvalidateClosedDays() {
+  const qc = useQueryClient();
+  return () => {
+    void qc.invalidateQueries({ queryKey: ["beauty", "closures"] });
+    void qc.invalidateQueries({ queryKey: beautyKeys.locations });
+    void qc.invalidateQueries({ queryKey: ["beauty", "calendar"] });
+  };
+}
+
+export function useSetClosedWeekdays(locationId: LocationId) {
+  const invalidate = useInvalidateClosedDays();
+  return useMutation({
+    mutationFn: ({ weekdays, confirm }: { weekdays: Weekday[]; confirm?: boolean }) =>
+      beautyApi.setClosedWeekdays(locationId, weekdays, confirm),
+    onSuccess: invalidate,
+  });
+}
+
+export function useAddClosure(locationId: LocationId) {
+  const invalidate = useInvalidateClosedDays();
+  return useMutation({ mutationFn: (input: ClosureInput) => beautyApi.addClosure(locationId, input), onSuccess: invalidate });
+}
+
+export function useDeleteClosure(locationId: LocationId) {
+  const invalidate = useInvalidateClosedDays();
+  return useMutation({ mutationFn: (closureId: string) => beautyApi.deleteClosure(locationId, closureId), onSuccess: invalidate });
 }
 
 export const useOverview = (locationId: LocationId | null) =>

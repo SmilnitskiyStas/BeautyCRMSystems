@@ -19,6 +19,7 @@ public class BeautyDbContext : DbContext
         : base(options) => _tenant = tenant;
 
     public DbSet<Location> Locations => Set<Location>();
+    public DbSet<LocationClosure> LocationClosures => Set<LocationClosure>();
     public DbSet<Specialist> Specialists => Set<Specialist>();
     public DbSet<SpecialistLocation> SpecialistLocations => Set<SpecialistLocation>();
     public DbSet<SpecialistServiceLink> SpecialistServices => Set<SpecialistServiceLink>();
@@ -87,11 +88,33 @@ public class BeautyDbContext : DbContext
 
         mb.Entity<Location>(b =>
         {
-            Base(b, "beauty_locations");
+            Base(b, "beauty_locations", t =>
+                t.HasCheckConstraint("ck_beauty_locations_closed_weekdays",
+                    "closed_weekdays <@ ARRAY['mon','tue','wed','thu','fri','sat','sun']::text[]"));
             b.Property(x => x.Name).HasMaxLength(200);
             b.Property(x => x.Address).HasMaxLength(500);
             b.Property(x => x.Phone).HasMaxLength(32);
             b.Property(x => x.Timezone).HasMaxLength(64);
+            b.Property(x => x.ClosedWeekdays).HasColumnType("text[]").HasDefaultValueSql("'{}'");
+        });
+
+        mb.Entity<LocationClosure>(b =>
+        {
+            b.ToTable("beauty_location_closures", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_location_closures_dates", "date_to >= date_from");
+                t.HasCheckConstraint("ck_beauty_location_closures_reason", "reason IS NULL OR char_length(reason) <= 200");
+            });
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            b.HasAlternateKey(x => new { x.TenantId, x.Id });
+            b.Property(x => x.Reason).HasMaxLength(200);
+            TenantFk(b, x => x.Location, x => new { x.TenantId, x.LocationId }, DeleteBehavior.Cascade);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.CreatedByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.LocationId, x.DateFrom });
+            // exclusion constraint (немає перетину закриттів одного закладу) — у SQL міграції
         });
 
         mb.Entity<Specialist>(b =>

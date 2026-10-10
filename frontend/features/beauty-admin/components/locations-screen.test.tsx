@@ -16,6 +16,7 @@ vi.mock("../api", () => ({
     getManagedLocations: () => getManagedLocations(),
     createLocation: (i: LocationInput) => createLocation(i),
     updateLocation: (id: string, i: LocationInput) => updateLocation(id, i),
+    getClosures: () => Promise.resolve([]),
   },
 }));
 

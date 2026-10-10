@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { toSlots } from "./api/http-client";
 import { describeCancellation, estimateRefundPercent, hoursLabel } from "./content";
-import { dateOptions, todayIn } from "./dates";
+import { dateOptions, isClosedDate, todayIn } from "./dates";
 import { humanizeBookingError } from "./errors";
 import { createKeyHolder } from "./idempotency";
 import { appointmentHref, resolveTenant } from "./tenant";
@@ -80,6 +80,32 @@ describe("дати", () => {
     expect(d).toHaveLength(7);
     expect(d[0]).toMatchObject({ iso: "2026-10-11", label: "Сьогодні" });
     expect(d[6].iso).toBe("2026-10-17");
+  });
+});
+
+describe("закриті дні закладу (§17)", () => {
+  const rules = { closedWeekdays: ["sun"], closures: [{ dateFrom: "2026-10-14", dateTo: "2026-10-15" }] };
+  it("щотижневий вихідний і закриття за датою (включно з межами)", () => {
+    expect(isClosedDate("2026-10-11", rules)).toBe(true); // неділя
+    expect(isClosedDate("2026-10-12", rules)).toBe(false);
+    expect(isClosedDate("2026-10-14", rules)).toBe(true);
+    expect(isClosedDate("2026-10-15", rules)).toBe(true);
+    expect(isClosedDate("2026-10-16", rules)).toBe(false);
+  });
+  it("без правил заклад працює 7 днів", () => {
+    expect(isClosedDate("2026-10-11")).toBe(false);
+    expect(isClosedDate("2026-10-11", { closedWeekdays: [], closures: [] })).toBe(false);
+  });
+  it("dateOptions позначає закриті дні за календарем закладу (зона)", () => {
+    const now = new Date("2026-10-10T22:30:00Z"); // Київ: вже неділя, 11 жовтня
+    const d = dateOptions("Europe/Kyiv", 3, now, rules);
+    expect(d.map((x) => [x.iso, x.closed])).toEqual([
+      ["2026-10-11", true],
+      ["2026-10-12", false],
+      ["2026-10-13", false],
+    ]);
+    // у UTC той самий момент - ще субота
+    expect(dateOptions("UTC", 2, now, rules).map((x) => x.closed)).toEqual([false, true]);
   });
 });
 

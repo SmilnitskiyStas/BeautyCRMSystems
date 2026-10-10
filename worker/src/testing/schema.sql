@@ -1835,3 +1835,124 @@ BEGIN
 END $EF$;
 COMMIT;
 
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261010130434_beauty_location_closures') THEN
+    ALTER TABLE beauty_locations ADD closed_weekdays text[] NOT NULL DEFAULT ('{}');
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261010130434_beauty_location_closures') THEN
+    CREATE TABLE beauty_location_closures (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        tenant_id uuid NOT NULL,
+        location_id uuid NOT NULL,
+        date_from date NOT NULL,
+        date_to date NOT NULL,
+        reason character varying(200),
+        created_by_user_id uuid,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_location_closures PRIMARY KEY (id),
+        CONSTRAINT ak_beauty_location_closures_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT ck_beauty_location_closures_dates CHECK (date_to >= date_from),
+        CONSTRAINT ck_beauty_location_closures_reason CHECK (reason IS NULL OR char_length(reason) <= 200),
+        CONSTRAINT fk_beauty_location_closures_beauty_locations_tenant_id_locatio FOREIGN KEY (tenant_id, location_id) REFERENCES beauty_locations (tenant_id, id) ON DELETE CASCADE,
+        CONSTRAINT fk_beauty_location_closures_users_tenant_id_created_by_user_id FOREIGN KEY (tenant_id, created_by_user_id) REFERENCES users (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261010130434_beauty_location_closures') THEN
+    ALTER TABLE beauty_locations ADD CONSTRAINT ck_beauty_locations_closed_weekdays CHECK (closed_weekdays <@ ARRAY['mon','tue','wed','thu','fri','sat','sun']::text[]);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261010130434_beauty_location_closures') THEN
+    CREATE INDEX ix_beauty_location_closures_tenant_id_created_by_user_id ON beauty_location_closures (tenant_id, created_by_user_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261010130434_beauty_location_closures') THEN
+    CREATE INDEX ix_beauty_location_closures_tenant_id_location_id_date_from ON beauty_location_closures (tenant_id, location_id, date_from);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261010130434_beauty_location_closures') THEN
+
+                    ALTER TABLE beauty_location_closures
+                        ADD CONSTRAINT ex_beauty_location_closures_no_overlap
+                        EXCLUDE USING gist (
+                            tenant_id WITH =,
+                            location_id WITH =,
+                            daterange(date_from, date_to, '[]') WITH &&
+                        );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261010130434_beauty_location_closures') THEN
+    ALTER TABLE beauty_location_closures ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261010130434_beauty_location_closures') THEN
+    ALTER TABLE beauty_location_closures FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261010130434_beauty_location_closures') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_location_closures
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261010130434_beauty_location_closures') THEN
+
+    DO $$
+    DECLARE
+        t text;
+    BEGIN
+        FOREACH t IN ARRAY ARRAY['beauty_locations', 'beauty_location_closures']
+        LOOP
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_class c
+                WHERE c.oid = to_regclass('public.' || t) AND c.relrowsecurity AND c.relforcerowsecurity) THEN
+                RAISE EXCEPTION 'FORCE ROW LEVEL SECURITY is not enabled on %', t;
+            END IF;
+        END LOOP;
+    END
+    $$;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261010130434_beauty_location_closures') THEN
+    INSERT INTO "__EFMigrationsHistory" (migration_id, product_version)
+    VALUES ('20261010130434_beauty_location_closures', '8.0.11');
+    END IF;
+END $EF$;
+COMMIT;
+

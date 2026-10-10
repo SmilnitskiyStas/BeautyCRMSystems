@@ -238,6 +238,9 @@ export function WorkingHoursEditor({
 
   return (
     <div className="flex flex-col gap-3">
+      <p className="text-[13px] text-(--muted)">
+        Вихідні дні закладу перекривають цей графік: у закритий день слотів немає, навіть якщо тут день робочий.
+      </p>
       {WEEKDAYS.map((d) => {
         const list = value[d.key] ?? [];
         const works = list.length > 0;

@@ -79,11 +79,19 @@ public sealed record TimeRange(DateTimeOffset Start, DateTimeOffset End);
 /// Повні дні відсутності (включно, у часовій зоні закладу). Absences/ServiceIds = null — обмежень немає
 /// (джерело даних їх не надає); ServiceIds порожній = майстру не призначено жодної послуги (TASK-691).
 /// </summary>
+/// <remarks>
+/// ClosedWeekdays/Closures — вихідні закладу (TASK-701, §17): день закритий, якщо його день тижня (mon..sun) у ClosedWeekdays
+/// або дата потрапляє в Closures; закритий день перекриває графік майстра. null = обмежень немає.
+/// </remarks>
 public sealed record SpecialistSchedule(Guid SpecialistId, string Timezone, string? WorkingHoursJson,
-    IReadOnlyList<AbsenceSpan>? Absences = null, IReadOnlyList<Guid>? ServiceIds = null)
+    IReadOnlyList<AbsenceSpan>? Absences = null, IReadOnlyList<Guid>? ServiceIds = null,
+    IReadOnlyList<string>? ClosedWeekdays = null, IReadOnlyList<AbsenceSpan>? Closures = null)
 {
     public bool Offers(Guid? serviceId) => serviceId is null || ServiceIds is null || ServiceIds.Contains(serviceId.Value);
     public bool IsAbsentOn(DateOnly localDate) => Absences?.Any(a => localDate >= a.From && localDate <= a.To) == true;
+    public bool IsClosedOn(DateOnly localDate) =>
+        ClosedWeekdays?.Contains(SlotCalculator.DayKey(localDate.DayOfWeek)) == true
+        || Closures?.Any(c => localDate >= c.From && localDate <= c.To) == true;
 }
 public sealed record AbsenceSpan(DateOnly From, DateOnly To);
 public sealed record PaymentRecord(Guid Id, Guid AppointmentId, decimal Amount, string Method, string Status, string? ProviderPaymentId);
@@ -97,8 +105,10 @@ public sealed record NewAppointment(
 /// <summary>Публічний запис (TASK-688): id наперед (токен виводиться з нього), хеші токена й Idempotency-Key.</summary>
 public sealed record PublicCreateOptions(Guid AppointmentId, string TokenHash, string IdempotencyKeyHash, string RequestHash);
 
-public sealed record StoreResult<T>(T? Value, bool Conflict, bool Duplicate = false, bool SpecialistBlocked = false)
+public sealed record StoreResult<T>(T? Value, bool Conflict, bool Duplicate = false, bool SpecialistBlocked = false, bool LocationClosed = false)
 {
+    /// <summary>Під блокуванням закладу виявлено, що день запису тепер закритий (вихідний/закриття) - 409 location_closed.</summary>
+    public static StoreResult<T> Closed() => new(default, false, false, false, true);
     public static StoreResult<T> Ok(T value) => new(value, false);
     public static StoreResult<T> Overlap() => new(default, true);
     /// <summary>

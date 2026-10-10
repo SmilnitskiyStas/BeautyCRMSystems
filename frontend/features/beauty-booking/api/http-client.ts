@@ -28,6 +28,9 @@ interface PublicLocationDto {
   address: string | null;
   phone: string | null;
   timezone: string;
+  /** §17 */
+  closedWeekdays?: string[] | null;
+  closures?: { dateFrom: string; dateTo: string }[] | null;
 }
 interface PublicSpecialistDto {
   id: string;
@@ -88,7 +91,15 @@ interface PublicCancelResultDto {
 const STATUSES: AppointmentStatus[] = ["pending", "confirmed", "in_progress", "completed", "cancelled", "no_show"];
 
 export function toLocation(l: PublicLocationDto): Location {
-  return { id: l.id, name: l.name, address: l.address ?? undefined, phone: l.phone ?? undefined, timezone: l.timezone };
+  return {
+    id: l.id,
+    name: l.name,
+    address: l.address ?? undefined,
+    phone: l.phone ?? undefined,
+    timezone: l.timezone,
+    closedWeekdays: l.closedWeekdays ?? [],
+    closures: (l.closures ?? []).map((c) => ({ dateFrom: c.dateFrom.slice(0, 10), dateTo: c.dateTo.slice(0, 10) })),
+  };
 }
 
 export const toSpecialist = (s: PublicSpecialistDto): Specialist => ({ id: s.id, name: s.name, role: s.title ?? "" });

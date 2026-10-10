@@ -13,9 +13,30 @@ namespace BeautyCrm.Infrastructure.Data.Beauty;
 /// </summary>
 public sealed class EfPublicBookingStore(BeautyDbContext db) : IPublicBookingStore
 {
-    public async Task<IReadOnlyList<PublicLocationDto>> ListActiveLocationsAsync(CancellationToken ct) =>
-        await db.Locations.AsNoTracking().Where(l => l.IsActive).OrderBy(l => l.Name)
-            .Select(l => new PublicLocationDto(l.Id, l.Name, l.Address, l.Phone, l.Timezone)).ToListAsync(ct);
+    public async Task<IReadOnlyList<PublicLocationDto>> ListActiveLocationsAsync(DateTimeOffset now, CancellationToken ct)
+    {
+        var rows = await db.Locations.AsNoTracking().Where(l => l.IsActive).OrderBy(l => l.Name)
+            .Select(l => new { l.Id, l.Name, l.Address, l.Phone, l.Timezone, l.ClosedWeekdays }).ToListAsync(ct);
+        if (rows.Count == 0) return [];
+
+        // Закриття на майбутні 366 днів у зоні кожного закладу; причина (reason) навмисно не вибирається.
+        var since = DateOnly.FromDateTime(now.UtcDateTime.AddDays(-2));
+        var until = DateOnly.FromDateTime(now.UtcDateTime.AddDays(369));
+        var ids = rows.Select(r => r.Id).ToList();
+        var closures = (await db.LocationClosures.AsNoTracking()
+                .Where(c => ids.Contains(c.LocationId) && c.DateTo >= since && c.DateFrom <= until)
+                .Select(c => new { c.LocationId, c.DateFrom, c.DateTo }).ToListAsync(ct))
+            .ToLookup(c => c.LocationId);
+
+        return rows.Select(r =>
+        {
+            var today = SlotCalculator.LocalDate(now, r.Timezone);
+            var last = today.AddDays(366);
+            var list = closures[r.Id].Where(c => c.DateTo >= today && c.DateFrom <= last).OrderBy(c => c.DateFrom)
+                .Select(c => new PublicClosureDto(c.DateFrom, c.DateTo)).ToList();
+            return new PublicLocationDto(r.Id, r.Name, r.Address, r.Phone, r.Timezone, r.ClosedWeekdays, list);
+        }).ToList();
+    }
 
     /// <summary>
     /// Придатні до запису майстри закладу: активні, заклад-зв'язок активний, у графіку є робочий інтервал

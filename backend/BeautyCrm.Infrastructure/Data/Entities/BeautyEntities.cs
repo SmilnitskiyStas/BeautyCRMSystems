@@ -24,6 +24,23 @@ public class Location : TenantEntity
     /// <summary>IANA timezone id, e.g. "Europe/Kyiv".</summary>
     public string Timezone { get; set; } = null!;
     public bool IsActive { get; set; } = true;
+    /// <summary>Щотижневі вихідні закладу (TASK-701, §17): підмножина mon..sun; порожньо = працює 7 днів.</summary>
+    public string[] ClosedWeekdays { get; set; } = [];
+}
+
+/// <summary>Конкретні дати закриття закладу (повні дні в зоні закладу, включно; без автоповтору). TASK-701, §17.</summary>
+public class LocationClosure : ITenantEntity
+{
+    public Guid Id { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid LocationId { get; set; }
+    public DateOnly DateFrom { get; set; }
+    public DateOnly DateTo { get; set; }
+    public string? Reason { get; set; }
+    public Guid? CreatedByUserId { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+
+    public Location? Location { get; set; }
 }
 
 public class Specialist : TenantEntity

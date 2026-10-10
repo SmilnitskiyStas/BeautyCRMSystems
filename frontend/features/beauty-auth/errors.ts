@@ -1,10 +1,20 @@
-/** Помилка API: `{ code, message }` (контракт §9/§10) + HTTP-статус. */
+/** Запис, який блокує зміну (`conflicts[]` у 409, §17): без клієнтських даних. */
+export interface ApiConflict {
+  appointmentId: string;
+  /** ISO зі зсувом/Z (backend) або локальний `YYYY-MM-DDTHH:mm` (mock). */
+  startsAt: string;
+  serviceName: string;
+  specialistName?: string;
+}
+
+/** Помилка API: `{ code, message }` (контракт §9/§10) + HTTP-статус; для 409 §17 - ще `conflicts[]`. */
 export class BeautyApiError extends Error {
   constructor(
     public readonly status: number,
     public readonly code: string,
     message: string,
     public readonly retryAfterSeconds?: number,
+    public readonly conflicts?: ApiConflict[],
   ) {
     super(message);
     this.name = "BeautyApiError";
@@ -46,6 +56,14 @@ const BY_CODE: Record<string, string> = {
   location_name_taken: "Заклад із такою назвою вже існує. Оберіть іншу назву.",
   invalid_timezone: "Невідома часова зона. Оберіть зону зі списку, наприклад Europe/Kyiv.",
   location_not_found: "Заклад не знайдено.",
+  closure_overlap: "На ці дати вже є закриття закладу. Змініть діапазон або видаліть наявне закриття.",
+  location_closed: "Заклад у цей день не працює (вихідний або закриття). Оберіть інший день.",
+  has_appointments_on_closed_days:
+    "У вихідні дні є активні записи. Перегляньте їх, перенесіть або підтвердіть збереження вихідного.",
+  invalid_dates: "Перевірте дати: кінець не раніше початку, період до 366 днів, не давніше року й не далі ніж на 2 роки вперед.",
+  invalid_range: "Некоректний діапазон дат (до 366 днів).",
+  invalid_reason: "Причина занадто довга: закриття - до 200 символів, скасування запису - до 300.",
+  invalid_closed_weekdays: "Некоректний перелік вихідних днів тижня.",
   api_unreachable: "Сервер недоступний. Перевірте з'єднання й спробуйте ще раз.",
   not_supported: "Ця можливість ще не підключена до сервера.",
 };
@@ -68,17 +86,33 @@ export function humanizeError(e: unknown, fallback = "Щось пішло не �
   return fallback;
 }
 
+function parseConflict(raw: unknown): ApiConflict[] {
+  if (!raw || typeof raw !== "object") return [];
+  const c = raw as Record<string, unknown>;
+  if (typeof c.appointmentId !== "string" || typeof c.startsAt !== "string") return [];
+  return [
+    {
+      appointmentId: c.appointmentId,
+      startsAt: c.startsAt,
+      serviceName: typeof c.serviceName === "string" ? c.serviceName : "",
+      ...(typeof c.specialistName === "string" && c.specialistName ? { specialistName: c.specialistName } : {}),
+    },
+  ];
+}
+
 /** Розбір тіла помилки `{code,message}`; безпечний до не-JSON відповіді. */
 export async function readApiError(res: Response): Promise<BeautyApiError> {
   let code = "";
   let message = res.statusText;
+  let conflicts: ApiConflict[] | undefined;
   try {
-    const body = (await res.json()) as { code?: unknown; message?: unknown };
+    const body = (await res.json()) as { code?: unknown; message?: unknown; conflicts?: unknown };
     if (typeof body.code === "string") code = body.code;
     if (typeof body.message === "string") message = body.message;
+    if (Array.isArray(body.conflicts)) conflicts = body.conflicts.flatMap(parseConflict);
   } catch {
     /* не JSON */
   }
   const retry = Number(res.headers.get("Retry-After"));
-  return new BeautyApiError(res.status, code, message, Number.isFinite(retry) && retry > 0 ? retry : undefined);
+  return new BeautyApiError(res.status, code, message, Number.isFinite(retry) && retry > 0 ? retry : undefined, conflicts);
 }

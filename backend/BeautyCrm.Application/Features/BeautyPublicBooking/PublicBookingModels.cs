@@ -18,7 +18,13 @@ public sealed class PublicBookingOptions
     public byte[] TokenKey { get; set; } = [];
 }
 
-public sealed record PublicLocationDto(Guid Id, string Name, string? Address, string? Phone, string Timezone);
+/// <summary>Закриття закладу для публічного каталогу: лише дати, БЕЗ причини (§17).</summary>
+public sealed record PublicClosureDto(DateOnly DateFrom, DateOnly DateTo);
+
+/// <param name="ClosedWeekdays">Щотижневі вихідні (mon..sun).</param>
+/// <param name="Closures">Закриття на майбутні 366 днів (у зоні закладу), без причини.</param>
+public sealed record PublicLocationDto(Guid Id, string Name, string? Address, string? Phone, string Timezone,
+    IReadOnlyList<string>? ClosedWeekdays = null, IReadOnlyList<PublicClosureDto>? Closures = null);
 public sealed record PublicSpecialistDto(Guid Id, string Name, string? Title, string? PhotoUrl);
 
 /// <summary>Послуга закладу: ціна з override закладу й акцією, що діє зараз.</summary>
@@ -55,7 +61,8 @@ public sealed record IdempotencyHit(Guid AppointmentId, string RequestHash);
 /// <summary>Порт даних публічного запису. Усе виконується під RLS tenant-а, визначеного за slug.</summary>
 public interface IPublicBookingStore
 {
-    Task<IReadOnlyList<PublicLocationDto>> ListActiveLocationsAsync(CancellationToken ct);
+    /// <param name="now">Для відліку «майбутніх 366 днів» закриттів у зоні кожного закладу.</param>
+    Task<IReadOnlyList<PublicLocationDto>> ListActiveLocationsAsync(DateTimeOffset now, CancellationToken ct);
     /// <summary>Лише придатні до запису майстри: активні, зі збереженим графіком у закладі й призначеними послугами; serviceId — що надають цю послугу.</summary>
     Task<IReadOnlyList<PublicSpecialistDto>> ListSpecialistsAsync(Guid locationId, Guid? serviceId, CancellationToken ct);
     /// <summary>Активні послуги з ціною для закладу (override або мережева); без ціни пропускаються.</summary>

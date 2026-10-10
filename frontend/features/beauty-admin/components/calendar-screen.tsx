@@ -5,6 +5,7 @@ import { useId, useState } from "react";
 import { useAuth } from "@/features/beauty-auth/components/auth-provider";
 import { humanizeError } from "@/features/beauty-auth/errors";
 import { useAbsences, useCalendarWeek, useCancelAppointment, useMoveAppointment } from "../hooks/use-beauty-admin";
+import { canSeeClosureReason, closedDayLabel } from "../closed-days";
 import { MAX_CANCEL_REASON, cancelledByLabel, cancelledByShort } from "../cancellation";
 import { addDaysIso, clock, dateTimeLabel, dayIndex, durationLabel, minutesOfDay, money } from "../format";
 import type { Absence, Appointment, CalendarKind } from "../types";
@@ -16,6 +17,8 @@ const END_HOUR = 20;
 /** Висота години в px. Висота блоку = тривалість послуги × PX_PER_HOUR. */
 const PX_PER_HOUR = 56;
 const MIN_BLOCK_PX = 28;
+/** Затінення закритого дня закладу (штрих + тло). */
+const CLOSED_STRIPES = "repeating-linear-gradient(135deg, transparent 0 8px, rgba(63,58,85,0.14) 8px 10px)";
 const GRID_HEIGHT = (END_HOUR + 1 - START_HOUR) * PX_PER_HOUR;
 
 const KIND_VIEW: Record<CalendarKind, { label: string; swatch: string; block: string }> = {
@@ -199,6 +202,9 @@ export function CalendarScreen() {
       (a) => a.specialistId === masterId && (a.status === "approved" || a.status === "requested") && a.dateFrom <= day && a.dateTo >= day,
     );
   };
+  // Закритий день закладу (§17): причину закриття бачать лише керівники.
+  const showReason = canSeeClosureReason(user.role);
+  const closedDay = (d: number) => data?.closedDays?.[d] ?? null;
   const real = data?.appointments.filter((a) => a.kind !== "break" && a.status !== "cancelled") ?? [];
   const bookedMinutes = real.reduce((s, a) => s + a.durationMinutes, 0);
   const selected = data?.appointments.find((a) => a.id === selectedId && a.kind !== "break") ?? null;
@@ -249,6 +255,10 @@ export function CalendarScreen() {
             {KIND_VIEW[k].label}
           </li>
         ))}
+        <li className="flex items-center gap-1.5">
+          <span className="size-3.5 rounded bg-[#E4E0EC]" style={{ backgroundImage: CLOSED_STRIPES }} aria-hidden="true" />
+          Вихідний закладу
+        </li>
       </ul>
 
       <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
@@ -292,9 +302,28 @@ export function CalendarScreen() {
                         backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${PX_PER_HOUR - 1}px, #ECE8F2 ${PX_PER_HOUR - 1}px, #ECE8F2 ${PX_PER_HOUR}px)`,
                       }}
                       role="group"
-                      aria-label={dayAbsences(d).length ? `${day}. ${dayAbsences(d).map((a) => `${a.status === "requested" ? "Запит: " : ""}${ABSENCE_TYPE_LABEL[a.type]}`).join(", ")}${dayAbsences(d).some((a) => a.status === "approved") ? ", слоти недоступні" : ""}` : day}
+                      data-closed={closedDay(d)?.source}
+                      aria-label={
+                        closedDay(d)
+                          ? `${day}. ${closedDayLabel(closedDay(d)!, showReason)}, слоти недоступні`
+                          : dayAbsences(d).length
+                            ? `${day}. ${dayAbsences(d).map((a) => `${a.status === "requested" ? "Запит: " : ""}${ABSENCE_TYPE_LABEL[a.type]}`).join(", ")}${dayAbsences(d).some((a) => a.status === "approved") ? ", слоти недоступні" : ""}`
+                            : day
+                      }
                     >
-                      {dayAbsences(d).map((a) => {
+                      {closedDay(d) ? (
+                        <div
+                          data-testid="closed-day"
+                          className="pointer-events-none absolute inset-0 overflow-hidden bg-[#E4E0EC] px-1.5 py-1 text-[11px] leading-tight font-semibold text-[#3F3A55]"
+                          style={{ backgroundImage: CLOSED_STRIPES }}
+                        >
+                          <span className="block">Вихідний</span>
+                          {showReason && closedDay(d)?.source === "closure" && closedDay(d)?.reason ? (
+                            <span className="block font-normal">{closedDay(d)?.reason}</span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {(closedDay(d) ? [] : dayAbsences(d)).map((a) => {
                         const pending = a.status === "requested";
                         return (
                           <div

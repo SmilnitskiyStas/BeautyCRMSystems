@@ -30,10 +30,10 @@ export const useServices = (locationId?: string, specialistId?: string) => {
   });
 };
 
-export const useSlots = (q: { locationId?: string; specialistId?: string; serviceId?: string; date: string }) => {
+export const useSlots = (q: { locationId?: string; specialistId?: string; serviceId?: string; date: string; enabled?: boolean }) => {
   const tenant = useTenant();
   return useQuery({
-    queryKey: ["booking", tenant, "slots", q],
+    queryKey: ["booking", tenant, "slots", { locationId: q.locationId, specialistId: q.specialistId, serviceId: q.serviceId, date: q.date }],
     queryFn: () =>
       bookingApi.getSlots(tenant, {
         locationId: q.locationId!,
@@ -41,7 +41,7 @@ export const useSlots = (q: { locationId?: string; specialistId?: string; servic
         serviceId: q.serviceId!,
         date: q.date,
       }),
-    enabled: !!q.locationId && !!q.specialistId && !!q.serviceId,
+    enabled: !!q.locationId && !!q.specialistId && !!q.serviceId && q.enabled !== false,
     // Слоти швидко застарівають (їх можуть зайняти): не кешуємо між відвідинами кроку.
     staleTime: 0,
   });

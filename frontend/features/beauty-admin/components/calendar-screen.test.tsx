@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Appointment, CalendarWeek } from "../types";
@@ -123,5 +123,56 @@ describe("календар (розділ 16 контракту)", () => {
     await user.click(await screen.findByRole("button", { name: /Олена К\./ }));
     await user.click(screen.getByRole("button", { name: "Скасувати запис" }));
     expect(screen.getByLabelText(/Причина/)).toHaveAttribute("maxlength", "300");
+  });
+});
+
+describe("календар: вихідні дні закладу (§17)", () => {
+  const closedDays = [null, null, { date: "2026-10-07", source: "closure" as const, reason: "Санітарний день" }, null, null, null, { date: "2026-10-11", source: "weekday" as const }];
+
+  it("закриті дні (за датою й щотижневі) - затінені колонки з підписом Вихідний", async () => {
+    getCalendarWeek.mockImplementation(async () => week({ closedDays }));
+    renderScreen();
+    await screen.findByRole("button", { name: /Олена К\./ });
+    const shaded = screen.getAllByTestId("closed-day");
+    expect(shaded).toHaveLength(2);
+    shaded.forEach((s) => expect(s).toHaveTextContent("Вихідний"));
+    expect(screen.getByRole("group", { name: /Ср 7.*Вихідний: Санітарний день.*слоти недоступні/ })).toHaveAttribute("data-closed", "closure");
+    expect(screen.getByRole("group", { name: /Нд 11.*Вихідний, слоти недоступні/ })).toHaveAttribute("data-closed", "weekday");
+  });
+
+  it("керівник бачить причину закриття, specialist - ні", async () => {
+    getCalendarWeek.mockImplementation(async () => week({ closedDays }));
+    const owner = renderScreen();
+    await screen.findByRole("button", { name: /Олена К\./ });
+    expect(screen.getAllByText("Санітарний день").length).toBeGreaterThan(0);
+    owner.unmount();
+
+    auth.user.role = "specialist";
+    auth.user.specialistId = "m";
+    renderScreen();
+    await screen.findByRole("button", { name: /Олена К\./ });
+    expect(screen.getAllByTestId("closed-day")).toHaveLength(2);
+    expect(screen.queryByText(/Санітарний день/)).not.toBeInTheDocument();
+    auth.user.specialistId = null;
+  });
+
+  it("у закритій колонці немає елементів створення запису, а наявні записи лишаються клікабельними", async () => {
+    const onClosed: Appointment = { ...live, id: "a3", clientName: "Софія М.", startsAt: "2026-10-11T11:00" };
+    getCalendarWeek.mockImplementation(async () => week({ closedDays, appointments: [live, onClosed] }));
+    const user = userEvent.setup();
+    renderScreen();
+    const col = await screen.findByRole("group", { name: /Нд 11/ });
+    expect(screen.getAllByTestId("closed-day")[1]).toHaveClass("pointer-events-none");
+    // нічого, крім записів, не клікабельне: слот для створення відсутній
+    const buttons = within(col).getAllByRole("button");
+    expect(buttons).toHaveLength(1);
+    await user.click(buttons[0]);
+    expect(screen.getByText("Профіль клієнта")).toBeInTheDocument();
+  });
+
+  it("без closedDays (старий backend) календар працює як раніше", async () => {
+    renderScreen();
+    await screen.findByRole("button", { name: /Олена К\./ });
+    expect(screen.queryAllByTestId("closed-day")).toHaveLength(0);
   });
 });

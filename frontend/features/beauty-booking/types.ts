@@ -14,6 +14,10 @@ export interface Location {
   phone?: string;
   /** IANA-зона закладу: від неї рахуємо «сьогодні» для вибору дати. */
   timezone: string;
+  /** Щотижневі вихідні закладу (§17): ключі `mon..sun`. Відсутнє = працює 7 днів. */
+  closedWeekdays?: string[];
+  /** Закриття на дати (§17, повні дні в зоні закладу, включно) на майбутні 366 днів. Причини публічний API не віддає. */
+  closures?: { dateFrom: string; dateTo: string }[];
 }
 
 export interface Specialist {

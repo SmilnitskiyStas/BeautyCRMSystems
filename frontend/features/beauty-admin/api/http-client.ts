@@ -1,6 +1,7 @@
 import { BeautyApiError } from "@/features/beauty-auth/errors";
 import { apiJson, getUser } from "@/features/beauty-auth/session";
 import { mastersForCalendar } from "../calendar-masters";
+import { closedDayForMaster, type MasterLocationRules } from "../closed-days";
 import { dateTimeLabel, money } from "../format";
 import type {
   AiRequest,
@@ -11,6 +12,9 @@ import type {
   CancelledBy,
   CancellationSettings,
   ChannelConfig,
+  ClosedDay,
+  LocationClosure,
+  Weekday,
   ChannelId,
   ClientProfile,
   ClientSummary,
@@ -82,6 +86,16 @@ interface LocationDto {
   phone?: string | null;
   timezone: string;
   isActive: boolean;
+  /** §17: підмножина mon..sun. */
+  closedWeekdays?: string[] | null;
+}
+/** §17: закриття закладу; `reason` лише керівникам. */
+interface ClosureDto {
+  id: string;
+  locationId?: string;
+  dateFrom: string;
+  dateTo: string;
+  reason?: string | null;
 }
 interface ClientDto {
   id: string;
@@ -165,6 +179,10 @@ const localOf = (iso: string) => iso.slice(0, 16);
 const offsetOf = (iso: string) => /(Z|[+-]\d{2}:\d{2})$/.exec(iso)?.[1];
 const dayLabel = (iso: string) =>
   new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString("uk-UA", { day: "numeric", month: "long" });
+const addDaysYmd = (s: string, n: number) => {
+  const d = new Date(Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10) + n));
+  return d.toISOString().slice(0, 10);
+};
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 const addDays = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
 const mondayOf = (d: Date) => addDays(startOfDay(d), -((d.getDay() + 6) % 7));
@@ -191,8 +209,21 @@ function toCancelledBy(a: AppointmentDto): CancelledBy | undefined {
   return name ? { type: t, name } : { type: t };
 }
 
+const WEEKDAY_KEYS: Weekday[] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+const toWeekdays = (v: string[] | null | undefined): Weekday[] =>
+  WEEKDAY_KEYS.filter((k) => (v ?? []).includes(k));
+
+const toClosure = (c: ClosureDto, locationId: string): LocationClosure => ({
+  id: c.id,
+  locationId: c.locationId ?? locationId,
+  dateFrom: c.dateFrom.slice(0, 10),
+  dateTo: c.dateTo.slice(0, 10),
+  ...(typeof c.reason === "string" && c.reason.trim() ? { reason: c.reason } : {}),
+});
+
 const toLocation = (l: LocationDto): BeautyLocation => ({
   id: l.id,
+  closedWeekdays: toWeekdays(l.closedWeekdays),
   name: l.name,
   address: l.address ?? null,
   phone: l.phone ?? null,
@@ -424,6 +455,34 @@ const toAbsenceResult = (a: AbsenceDto): AbsenceResult => ({
   })),
 });
 
+/**
+ * Закриті дні тижня для майстра (§17): `closedWeekdays` із `GET /locations`, закриття - `GET /locations/{id}/closures`.
+ * Збій цих запитів не ламає календар (записи важливіші): тоді день просто не затіняється.
+ */
+async function loadClosedDays(weekStart: string, master: SpecialistDto | undefined): Promise<(ClosedDay | null)[]> {
+  const none = Array.from({ length: 7 }, () => null);
+  if (!master || master.locations.length === 0) return none;
+  const weekEnd = addDaysYmd(weekStart, 6);
+  try {
+    const known = await get<LocationDto[]>("/locations");
+    const rules: MasterLocationRules[] = await Promise.all(
+      master.locations.map(async (l) => {
+        const closures = await get<ClosureDto[]>(
+          `/locations/${encodeURIComponent(l.locationId)}/closures?from=${weekStart}&to=${weekEnd}`,
+        );
+        return {
+          workingHours: l.workingHours ?? {},
+          closedWeekdays: toWeekdays(known.find((k) => k.id === l.locationId)?.closedWeekdays),
+          closures: closures.map((c) => toClosure(c, l.locationId)),
+        };
+      }),
+    );
+    return Array.from({ length: 7 }, (_, i) => closedDayForMaster(addDaysYmd(weekStart, i), rules));
+  } catch {
+    return none;
+  }
+}
+
 export const httpBeautyApi: BeautyAdminApi = {
   // `GET /locations` (§14.5/§16) доступний усім ролям; без `includeInactive` віддає лише активні.
   getLocations: async () => (await get<LocationDto[]>("/locations")).map(toLocation),
@@ -450,6 +509,32 @@ export const httpBeautyApi: BeautyAdminApi = {
         isActive: input.isActive,
       }),
     ),
+
+  setClosedWeekdays: async (id, weekdays, confirm) => {
+    const r = await send<LocationDto | undefined>("PUT", `/locations/${encodeURIComponent(id)}/closed-weekdays`, {
+      closedWeekdays: weekdays,
+      ...(confirm ? { confirm: true } : {}),
+    });
+    return Array.isArray(r?.closedWeekdays) ? toWeekdays(r.closedWeekdays) : weekdays;
+  },
+
+  getClosures: async (id, { from, to }) =>
+    (await get<ClosureDto[]>(`/locations/${encodeURIComponent(id)}/closures?from=${from}&to=${to}`)).map((c) => toClosure(c, id)),
+
+  addClosure: async (id, input) =>
+    toClosure(
+      await send<ClosureDto>("POST", `/locations/${encodeURIComponent(id)}/closures`, {
+        dateFrom: input.dateFrom,
+        dateTo: input.dateTo,
+        reason: input.reason?.trim() ? input.reason.trim() : null,
+        ...(input.confirm ? { confirm: true } : {}),
+      }),
+      id,
+    ),
+
+  deleteClosure: async (id, closureId) => {
+    await apiJson<void>(`${B}/locations/${encodeURIComponent(id)}/closures/${encodeURIComponent(closureId)}`, { method: "DELETE" });
+  },
 
   getOverview: async (locationId: LocationId | null) => {
     const today = startOfDay(new Date());
@@ -499,6 +584,10 @@ export const httpBeautyApi: BeautyAdminApi = {
       me?.role === "specialist" ? me.specialistId : null,
     );
     const effective = masters.find((m) => m.id === specialistId)?.id ?? masters[0]?.id ?? specialistId;
+    const closedDays = await loadClosedDays(
+      ymd(monday),
+      roster.find((r) => r.id === effective),
+    );
     const shown = includeCancelled ? await weeklyAppointments(monday, addDays(monday, 7), "&includeCancelled=true") : live;
     const fmt = (d: Date) => d.toLocaleDateString("uk-UA", { day: "numeric", month: "long" });
     return {
@@ -510,6 +599,7 @@ export const httpBeautyApi: BeautyAdminApi = {
       }),
       masters,
       specialistId: effective,
+      closedDays,
       appointments: shown
         .filter((a) => a.specialistId === effective && (includeCancelled || a.status !== "cancelled"))
         .map(toAppointment),

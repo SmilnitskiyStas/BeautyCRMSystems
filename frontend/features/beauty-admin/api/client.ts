@@ -5,6 +5,9 @@ import type {
   BeautyLocation,
   CancellationSettings,
   CalendarWeek,
+  ClosureInput,
+  LocationClosure,
+  Weekday,
   ChannelConfig,
   ChannelId,
   ChannelPatch,
@@ -47,6 +50,18 @@ export interface BeautyAdminApi {
   createLocation(input: LocationInput): Promise<BeautyLocation>;
   /** PUT /locations/{id} (owner, admin) - 409 has_future_appointments | timezone_locked | location_name_taken */
   updateLocation(id: LocationId, input: LocationInput): Promise<BeautyLocation>;
+  /**
+   * PUT /locations/{id}/closed-weekdays (owner, admin; §17) - повна заміна переліку. Без `confirm` і з активними записами
+   * на нові вихідні: 409 `has_appointments_on_closed_days` (`BeautyApiError.conflicts`), змін немає.
+   * Повертає застосований перелік.
+   */
+  setClosedWeekdays(id: LocationId, weekdays: Weekday[], confirm?: boolean): Promise<Weekday[]>;
+  /** GET /locations/{id}/closures?from&to (staff читає; `reason` лише керівникам; діапазон ≤ 366 днів) */
+  getClosures(id: LocationId, q: { from: string; to: string }): Promise<LocationClosure[]>;
+  /** POST /locations/{id}/closures (owner, admin) - 409 closure_overlap | has_appointments_on_closed_days (+conflicts), 422 */
+  addClosure(id: LocationId, input: ClosureInput): Promise<LocationClosure>;
+  /** DELETE /locations/{id}/closures/{closureId} (owner, admin) */
+  deleteClosure(id: LocationId, closureId: string): Promise<void>;
   /** GET /appointments?date&locationId (огляд дня) + /clients (останні) */
   getOverview(locationId: LocationId | null): Promise<Overview>;
   /**

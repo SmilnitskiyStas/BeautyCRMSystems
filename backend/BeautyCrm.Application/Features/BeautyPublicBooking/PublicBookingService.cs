@@ -23,7 +23,7 @@ public sealed partial class PublicBookingService(
     // ---------- каталог ----------
 
     public async Task<IReadOnlyList<PublicLocationDto>> ListLocationsAsync(CancellationToken ct) =>
-        await pub.ListActiveLocationsAsync(ct);
+        await pub.ListActiveLocationsAsync(clock.GetUtcNow(), ct);
 
     public async Task<Result<IReadOnlyList<PublicSpecialistDto>>> ListSpecialistsAsync(Guid locationId, Guid? serviceId, CancellationToken ct) =>
         await store.GetLocationAsync(locationId, ct) is { IsActive: true }
@@ -130,7 +130,8 @@ public sealed partial class PublicBookingService(
         }
         // Публічний API не розкриває ПРИЧИНУ недоступності майстра (лікарняний/відпустка/послуга не призначена): внутрішній
         // specialist_unavailable віддається як звичайний зайнятий слот (той самий код, статус і тіло). Різниця — лише у staff API.
-        if (created.Error is { Code: "specialist_unavailable" })
+        // Те саме для закритого дня закладу (вихідний/закриття, §17): причина не розкривається.
+        if (created.Error is { Code: "specialist_unavailable" or "location_closed" })
             return Error.Conflict("slot_unavailable", "The slot overlaps another appointment.");
         if (!created.IsOk) return created.Error!;
 

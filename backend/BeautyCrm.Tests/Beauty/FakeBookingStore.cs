@@ -20,6 +20,9 @@ internal sealed class FakeBookingStore : IBookingStore
     /// <summary>TASK-691: затверджені відсутності й призначені послуги (null = без обмежень).</summary>
     public List<AbsenceSpan>? Absences;
     public List<Guid>? AssignedServices;
+    /// <summary>TASK-701: вихідні закладу (mon..sun) і закриття (null = без обмежень).</summary>
+    public List<string>? ClosedWeekdays;
+    public List<AbsenceSpan>? Closures;
     public List<PromotionRule> Promotions = [];
     public List<AppointmentDto> Appointments = [];
     public List<(Guid AppointmentId, DateTimeOffset At)> Reminders = [];
@@ -35,7 +38,7 @@ internal sealed class FakeBookingStore : IBookingStore
     public Task<IReadOnlyList<SpecialistSchedule>> GetSchedulesAsync(Guid locationId, Guid? specialistId, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<SpecialistSchedule>>(
             SpecialistAtLocation && locationId == Location && (specialistId is null || specialistId == Specialist)
-                ? [new SpecialistSchedule(Specialist, Timezone, WorkingHours, Absences, AssignedServices)] : []);
+                ? [new SpecialistSchedule(Specialist, Timezone, WorkingHours, Absences, AssignedServices, ClosedWeekdays, Closures)] : []);
 
     public Task<IReadOnlyList<(Guid SpecialistId, TimeRange Range)>> GetBusyAsync(
         IReadOnlyCollection<Guid> ids, DateTimeOffset from, DateTimeOffset to, Guid? exclude, CancellationToken ct) =>

@@ -1,6 +1,7 @@
 import { BeautyApiError } from "@/features/beauty-auth/errors";
 import { money } from "../format";
 import { mastersForCalendar } from "../calendar-masters";
+import { closedDayForMaster, closedDayInfo, localDateIn, validateClosure, weekdayOf } from "../closed-days";
 import { isValidTimeZone } from "../locations-logic";
 import { normalizeHours, validateHours } from "../working-hours";
 import type { BeautyAdminApi } from "./client";
@@ -13,6 +14,7 @@ import {
   ANALYTICS_WEEKS,
   CALENDAR_DAYS,
   CLIENTS,
+  CLOSURES_SEED,
   DEFAULT_GREETING,
   INITIAL_CHANNELS,
   LOCATIONS,
@@ -36,6 +38,8 @@ import type {
   CancellationSettings,
   ChannelConfig,
   ClientNote,
+  ClosedDayConflict,
+  LocationClosure,
   LocationId,
   Overview,
   PromoDraft,
@@ -68,6 +72,35 @@ const hasFutureAt = (locationId: string) =>
   allMockAppointments().some(
     (a) => a.locationId === locationId && a.kind !== "break" && !cancelled.has(a.id) && a.startsAt.slice(0, 10) >= todayMock(),
   );
+/** Закриття закладів на дати (§17). */
+const closures: LocationClosure[] = structuredClone(CLOSURES_SEED);
+
+const locationRules = (locationId: string) => ({
+  closedWeekdays: locations.find((l) => l.id === locationId)?.closedWeekdays ?? [],
+  closures: closures.filter((c) => c.locationId === locationId),
+});
+
+/**
+ * Активні записи закладу, що потрапляють на НОВІ закриті дні (`isNewlyClosed`) - без клієнтських даних (§17).
+ * Тиждень mock-даних статичний, тому всі нескасовані записи вважаємо майбутніми.
+ */
+function conflictsOnNewClosedDays(locationId: string, isNewlyClosed: (date: string) => boolean): ClosedDayConflict[] {
+  const tz = locations.find((l) => l.id === locationId)?.timezone;
+  return allMockAppointments()
+    .filter((a) => a.locationId === locationId && a.kind !== "break" && !cancelled.has(a.id))
+    .map((a) => ({ a, startsAt: moved.get(a.id) ?? a.startsAt }))
+    .filter(({ startsAt }) => isNewlyClosed(localDateIn(startsAt, tz)))
+    .map(({ a, startsAt }) => ({
+      appointmentId: a.id,
+      startsAt,
+      serviceName: a.serviceName,
+      specialistName: staff.find((m) => m.id === a.specialistId)?.name ?? "",
+    }));
+}
+
+const confirmNeeded = (conflicts: ClosedDayConflict[]) =>
+  new BeautyApiError(409, "has_appointments_on_closed_days", "appointments on closed days", undefined, conflicts);
+
 const nowLabel = () => new Date().toISOString();
 const moved = new Map<string, string>();
 let cancellationSettings: CancellationSettings = {
@@ -165,6 +198,66 @@ export const mockBeautyApi: BeautyAdminApi = {
     return wait(loc);
   },
 
+  setClosedWeekdays: async (id, weekdays, confirm) => {
+    if (!isManager()) throw forbid();
+    const loc = locations.find((l) => l.id === id);
+    if (!loc) throw new BeautyApiError(404, "location_not_found", "not found");
+    const next = [...new Set(weekdays)];
+    const old = loc.closedWeekdays ?? [];
+    const added = next.filter((d) => !old.includes(d));
+    if (added.length > 0 && !confirm) {
+      // Дні, що вже закриті закриттям за датою, не є «новими».
+      const conflicts = conflictsOnNewClosedDays(id, (date) => added.includes(weekdayOf(date)) && !closedDayInfo(date, locationRules(id)));
+      if (conflicts.length > 0) throw confirmNeeded(conflicts);
+    }
+    loc.closedWeekdays = next;
+    return wait(next);
+  },
+
+  getClosures: async (id, { from, to }) => {
+    const list = closures.filter((c) => c.locationId === id && c.dateTo >= from && c.dateFrom <= to);
+    // `reason` лише керівникам (§17).
+    return wait(list.map((c) => (isManager() ? c : { id: c.id, locationId: c.locationId, dateFrom: c.dateFrom, dateTo: c.dateTo })));
+  },
+
+  addClosure: async (id, input) => {
+    if (!isManager()) throw forbid();
+    if (!locations.some((l) => l.id === id)) throw new BeautyApiError(404, "location_not_found", "not found");
+    if (validateClosure(input)) {
+      const tooLong = (input.reason ?? "").trim().length > 200;
+      throw new BeautyApiError(422, tooLong ? "invalid_reason" : "invalid_dates", "invalid");
+    }
+    if (closures.some((c) => c.locationId === id && c.dateFrom <= input.dateTo && c.dateTo >= input.dateFrom)) {
+      throw new BeautyApiError(409, "closure_overlap", "overlap");
+    }
+    if (!input.confirm) {
+      const before = locationRules(id);
+      const conflicts = conflictsOnNewClosedDays(
+        id,
+        (date) => date >= input.dateFrom && date <= input.dateTo && !closedDayInfo(date, before),
+      );
+      if (conflicts.length > 0) throw confirmNeeded(conflicts);
+    }
+    const reason = input.reason?.trim();
+    const created: LocationClosure = {
+      id: `cl${Date.now()}`,
+      locationId: id,
+      dateFrom: input.dateFrom,
+      dateTo: input.dateTo,
+      ...(reason ? { reason } : {}),
+    };
+    closures.push(created);
+    return wait(created);
+  },
+
+  deleteClosure: async (id, closureId) => {
+    if (!isManager()) throw forbid();
+    const k = closures.findIndex((c) => c.id === closureId && c.locationId === id);
+    if (k < 0) throw notFound();
+    closures.splice(k, 1);
+    await wait(null);
+  },
+
   getOverview: (locationId) => {
     const rows = OVERVIEW_ROWS.filter((r) => !locationId || r.locationId === locationId).map((r) => ({ ...r }));
     return wait({
@@ -199,9 +292,21 @@ export const mockBeautyApi: BeautyAdminApi = {
           ? { ...base, status: "cancelled" as const, cancelledAt: c.at, cancelledBy: c.by, ...(c.reason && isManager() ? { cancelReason: c.reason } : {}) }
           : base;
       });
+    const weekStart = "2026-10-05";
+    const rules = (staff.find((m) => m.id === specialistId)?.locations ?? []).map((l) => ({
+      ...locationRules(l.locationId),
+      workingHours: l.workingHours,
+    }));
+    const closedDays = Array.from({ length: 7 }, (_, i) => {
+      const date = new Date(Date.UTC(2026, 9, 5 + i)).toISOString().slice(0, 10);
+      const info = closedDayForMaster(date, rules);
+      // `reason` лише керівникам: specialist отримує закритий день без причини.
+      return info && !isManager() ? { date: info.date, source: info.source } : info;
+    });
     return wait({
       weekLabel: "Тиждень 5–11 жовтня",
-      weekStart: "2026-10-05",
+      weekStart,
+      closedDays,
       days: CALENDAR_DAYS,
       masters,
       specialistId,
@@ -217,6 +322,11 @@ export const mockBeautyApi: BeautyAdminApi = {
     ),
 
   moveAppointment: async (id, startsAt) => {
+    // Закритий день закладу (вихідний або закриття) перекриває графік майстра (§17).
+    const locationId = allMockAppointments().find((a) => a.id === id)?.locationId;
+    if (locationId && closedDayInfo(startsAt.slice(0, 10), locationRules(locationId))) {
+      throw new BeautyApiError(409, "location_closed", "closed");
+    }
     moved.set(id, startsAt);
     await wait(null);
   },

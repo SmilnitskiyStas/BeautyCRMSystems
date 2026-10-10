@@ -3,8 +3,12 @@ using BeautyCrm.Application.Features.BeautyCommon;
 
 namespace BeautyCrm.Application.Features.BeautyOverview;
 
-/// <summary>Заклад для адмінки (GET /locations). Address може бути null.</summary>
-public sealed record LocationDto(Guid Id, string Name, string? Address, string Timezone, bool IsActive, string? Phone = null);
+/// <summary>
+/// Заклад для адмінки (GET /locations). Address може бути null. ClosedWeekdays — щотижневі вихідні (mon..sun, §17;
+/// порожньо = працює 7 днів).
+/// </summary>
+public sealed record LocationDto(Guid Id, string Name, string? Address, string Timezone, bool IsActive, string? Phone = null,
+    IReadOnlyList<string>? ClosedWeekdays = null);
 
 /// <summary>
 /// KPI дня. AppointmentsCount — усі записи дня, крім скасованих; Revenue — сума price_final завершених (як в аналітиці);

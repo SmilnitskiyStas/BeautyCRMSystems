@@ -4,6 +4,8 @@
  * Деталі полів уточнює backend; зміни вносити тут і в `api/`.
  */
 
+import type { ApiConflict } from "@/features/beauty-auth/errors";
+
 export type LocationId = string;
 
 export interface BeautyLocation {
@@ -15,6 +17,37 @@ export interface BeautyLocation {
   timezone?: string;
   /** Відсутнє = активний. Неактивні віддає лише `GET /locations?includeInactive=true` (керівники). */
   isActive?: boolean;
+  /** Щотижневі вихідні закладу (§17); відсутнє/порожнє = працює 7 днів. */
+  closedWeekdays?: Weekday[];
+}
+
+/** Закриття закладу на дати (§17): повні дні в зоні закладу, включно. `reason` приходить лише керівникам. */
+export interface LocationClosure {
+  id: string;
+  locationId: LocationId;
+  /** `YYYY-MM-DD` */
+  dateFrom: string;
+  dateTo: string;
+  reason?: string;
+}
+
+export interface ClosureInput {
+  dateFrom: string;
+  dateTo: string;
+  /** ≤ 200 символів. */
+  reason?: string;
+  /** `true` - повторний запит після підтвердження конфліктів. */
+  confirm?: boolean;
+}
+
+/** Активний запис на день, що стає вихідним (409 `has_appointments_on_closed_days`, §17). */
+export type ClosedDayConflict = ApiConflict;
+
+/** Закритий день у колонці календаря. `reason` - лише для closures і лише керівникам. */
+export interface ClosedDay {
+  date: string;
+  source: "weekday" | "closure";
+  reason?: string;
 }
 
 /** Тіло POST/PUT /locations (§16). `isActive` — лише для PUT. */
@@ -282,6 +315,8 @@ export interface CalendarWeek {
   masters: CalendarMaster[];
   specialistId: string;
   appointments: Appointment[];
+  /** 7 елементів (пн..нд): закритий день закладу майстра (§17) або `null`. Відсутнє = жодного закритого дня. */
+  closedDays?: (ClosedDay | null)[];
 }
 
 export interface PriceListRow {

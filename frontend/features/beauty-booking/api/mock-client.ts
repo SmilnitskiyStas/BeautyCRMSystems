@@ -8,6 +8,7 @@ import {
   type Specialist,
   createAppointmentSchema,
 } from "../types";
+import { isClosedDate } from "../dates";
 import type { BookingApi } from "./client";
 
 /** Mock публічного API (`NEXT_PUBLIC_USE_MOCK=1`): ті самі сигнатури, що й у http-клієнта. Запис адресується токеном. */
@@ -24,9 +25,20 @@ const TERMS: CancellationTerms = {
 
 const TZ = "Europe/Kyiv";
 
+/** Закриття через `from`..`to` днів від сьогодні (календар Києва) для демо. */
+function soon(from: number, to: number): { dateFrom: string; dateTo: string } {
+  const [y, m, d] = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" })
+    .format(new Date())
+    .split("-")
+    .map(Number);
+  const iso = (n: number) => new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+  return { dateFrom: iso(from), dateTo: iso(to) };
+}
+
 const locations: Location[] = [
-  { id: "c", name: "Beauty Lab · Центр", address: "вул. Хрещатик, 22", phone: "+380441112233", timezone: TZ },
-  { id: "p", name: "Beauty Lab · Поділ", address: "вул. Сагайдачного, 10", timezone: TZ },
+  // Центр: неділя вихідна; Поділ: закриття на 3 дні попереду (демо §17).
+  { id: "c", name: "Beauty Lab · Центр", address: "вул. Хрещатик, 22", phone: "+380441112233", timezone: TZ, closedWeekdays: ["sun"], closures: [] },
+  { id: "p", name: "Beauty Lab · Поділ", address: "вул. Сагайдачного, 10", timezone: TZ, closedWeekdays: [], closures: [soon(2, 4)] },
   { id: "k", name: "Beauty Lab · Печерськ", address: "вул. Лаврська, 7", phone: "+380445556677", timezone: TZ },
 ];
 
@@ -114,6 +126,8 @@ export const mockBookingApi: BookingApi = {
       )
       .map((a) => a.startsAt);
     const now = Date.now();
+    // Закритий день перекриває графіки (§17): слотів немає.
+    if (isClosedDate(date, locations.find((l) => l.id === locationId))) return delay([]);
     const slots = SLOT_TIMES.map((label) => ({ label, startsAt: slotIso(date, label), specialistId, cancellation: TERMS }))
       .filter((s) => new Date(s.startsAt).getTime() > now)
       .filter((s) => !taken.includes(s.startsAt));
@@ -128,6 +142,8 @@ export const mockBookingApi: BookingApi = {
     const location = locations.find((l) => l.id === r.locationId);
     const service = services.find((s) => s.id === r.serviceId);
     if (!location || !service) throw new BookingApiError(422, "invalid_request");
+    // Публічний API віддає узагальнену відповідь без причини закриття (§17).
+    if (isClosedDate(r.startsAt.slice(0, 10), location)) throw new BookingApiError(409, "slot_unavailable");
 
     const pool = specialists[r.locationId] ?? [];
     const store = loadStore();

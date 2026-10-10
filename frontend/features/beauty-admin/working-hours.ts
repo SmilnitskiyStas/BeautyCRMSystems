@@ -14,13 +14,12 @@ export const WEEKDAYS: { key: Weekday; label: string; short: string }[] = [
 export const DEFAULT_INTERVAL: TimeInterval = { from: "09:00", to: "18:00" };
 export const MAX_INTERVALS_PER_DAY = 4;
 
-export const defaultHours = (): WorkingHours => ({
-  mon: [{ ...DEFAULT_INTERVAL }],
-  tue: [{ ...DEFAULT_INTERVAL }],
-  wed: [{ ...DEFAULT_INTERVAL }],
-  thu: [{ ...DEFAULT_INTERVAL }],
-  fri: [{ ...DEFAULT_INTERVAL }],
-});
+/**
+ * Шаблон нового графіка: усі 7 днів 09:00-18:00 (§17). Вихідні задає заклад (closedWeekdays/closures), а не відсутність
+ * ключа `sun` у графіку; незручні дні майстер знімає вручну.
+ */
+export const defaultHours = (): WorkingHours =>
+  Object.fromEntries(WEEKDAYS.map((d) => [d.key, [{ ...DEFAULT_INTERVAL }]])) as WorkingHours;
 
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 

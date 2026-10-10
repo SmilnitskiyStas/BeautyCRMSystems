@@ -2,13 +2,19 @@ using System.Text.Json;
 
 namespace BeautyCrm.Application.Features.BeautyBooking;
 
-/// <summary>Unavailable = майстер у день відсутності або послуга йому не призначена (409 specialist_unavailable).</summary>
-public enum SlotCheck { Ok, InPast, OutsideWorkingHours, Busy, Unavailable }
+/// <summary>
+/// Unavailable = майстер у день відсутності або послуга йому не призначена (409 specialist_unavailable);
+/// LocationClosed = день закритий для закладу (вихідний тиждня / дата закриття, 409 location_closed; §17).
+/// </summary>
+public enum SlotCheck { Ok, InPast, OutsideWorkingHours, Busy, Unavailable, LocationClosed }
 
 public static class SlotCalculator
 {
     public const int StepMinutes = 15;
     private static readonly string[] DayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+    /// <summary>Ключ дня тижня в графіку й закритих днях закладу (mon..sun).</summary>
+    public static string DayKey(DayOfWeek day) => DayKeys[(int)day];
 
     public static IReadOnlyList<(TimeOnly From, TimeOnly To)> IntervalsFor(string? workingHoursJson, DayOfWeek day)
     {
@@ -39,7 +45,7 @@ public static class SlotCalculator
         SpecialistSchedule schedule, DateOnly date, int durationMinutes, IReadOnlyList<TimeRange> busy, DateTimeOffset now,
         Guid? serviceId = null)
     {
-        if (!schedule.Offers(serviceId) || schedule.IsAbsentOn(date)) return [];
+        if (schedule.IsClosedOn(date) || !schedule.Offers(serviceId) || schedule.IsAbsentOn(date)) return [];
         var tz = TimeZoneInfo.FindSystemTimeZoneById(schedule.Timezone);
         var result = new List<FreeSlot>();
         foreach (var (from, to) in IntervalsFor(schedule.WorkingHoursJson, date.DayOfWeek))
@@ -62,7 +68,9 @@ public static class SlotCalculator
         if (start < now) return SlotCheck.InPast;
         var tz = TimeZoneInfo.FindSystemTimeZoneById(schedule.Timezone);
         var local = TimeZoneInfo.ConvertTime(start, tz);
-        if (!schedule.Offers(serviceId) || schedule.IsAbsentOn(DateOnly.FromDateTime(local.DateTime))) return SlotCheck.Unavailable;
+        var localDate = DateOnly.FromDateTime(local.DateTime);
+        if (schedule.IsClosedOn(localDate)) return SlotCheck.LocationClosed;
+        if (!schedule.Offers(serviceId) || schedule.IsAbsentOn(localDate)) return SlotCheck.Unavailable;
         var from = TimeOnly.FromDateTime(local.DateTime);
         var to = from.AddMinutes(durationMinutes);
         var fits = to > from && IntervalsFor(schedule.WorkingHoursJson, local.DayOfWeek).Any(i => from >= i.From && to <= i.To);

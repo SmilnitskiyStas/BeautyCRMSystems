@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasWorkingDays, normalizeHours, summarizeHours, validateDay, validateHours } from "./working-hours";
+import { WEEKDAYS, defaultHours, hasWorkingDays, normalizeHours, summarizeHours, validateDay, validateHours } from "./working-hours";
 
 describe("validateDay", () => {
   it("порожній день або відсутній - валідний (вихідний)", () => {
@@ -44,5 +44,19 @@ describe("validateHours / normalizeHours", () => {
     expect(hasWorkingDays({})).toBe(false);
     expect(summarizeHours({})).toBe("Немає робочих днів");
     expect(summarizeHours({ mon: [{ from: "09:00", to: "18:00" }] })).toBe("Пн 09:00–18:00");
+  });
+});
+
+describe("defaultHours (§17)", () => {
+  it("новий графік - усі 7 днів 09:00-18:00, включно з сб і нд", () => {
+    const h = defaultHours();
+    expect(Object.keys(h).sort()).toEqual(WEEKDAYS.map((d) => d.key).sort());
+    for (const d of WEEKDAYS) expect(h[d.key]).toEqual([{ from: "09:00", to: "18:00" }]);
+    expect(validateHours(h)).toEqual({});
+  });
+  it("кожен виклик віддає незалежну копію", () => {
+    const a = defaultHours();
+    a.sun![0].from = "10:00";
+    expect(defaultHours().sun![0].from).toBe("09:00");
   });
 });

@@ -4,8 +4,10 @@ import { useId, useState, type FormEvent } from "react";
 import { useAuth } from "@/features/beauty-auth/components/auth-provider";
 import { humanizeError } from "@/features/beauty-auth/errors";
 import { useCreateLocation, useManagedLocations, useUpdateLocation } from "../hooks/use-beauty-admin";
+import { canSeeClosureReason } from "../closed-days";
 import { DEFAULT_TIMEZONE, timeZoneOptions, validateLocation, type LocationErrors } from "../locations-logic";
 import type { BeautyLocation, LocationInput } from "../types";
+import { ClosedDaysSection } from "./closed-days";
 import { CheckRow, ErrorBanner, SuccessBanner, TextField, ERROR_TEXT } from "./staff-parts";
 import { Badge, Card, EmptyState, FIELD_INPUT, FIELD_LABEL, PageHeader, PrimaryButton, QueryState, SecondaryButton } from "./ui";
 
@@ -154,7 +156,7 @@ function LocationForm({ location, onClose }: { location: BeautyLocation | null; 
   );
 }
 
-function LocationRow({ l, onEdit }: { l: BeautyLocation; onEdit: () => void }) {
+function LocationRow({ l, onEdit, role }: { l: BeautyLocation; onEdit: () => void; role: string }) {
   const update = useUpdateLocation(l.id);
   const active = l.isActive !== false;
   const [confirming, setConfirming] = useState(false);
@@ -191,6 +193,7 @@ function LocationRow({ l, onEdit }: { l: BeautyLocation; onEdit: () => void }) {
           <dd className="m-0 min-w-0">{l.timezone ?? "—"}</dd>
         </div>
       </dl>
+      <ClosedDaysSection location={l} canEdit={role === "owner" || role === "admin"} showReason={canSeeClosureReason(role)} />
       {error ? <ErrorBanner>{error}</ErrorBanner> : null}
       {confirming ? (
         <div role="alertdialog" aria-label={`Деактивувати «${l.name}»`} className="flex flex-col gap-3 rounded-xl bg-[#FFF1CC] p-4 text-[#5C3900]">
@@ -265,7 +268,7 @@ export function LocationsScreen() {
         ) : (
           <ul className="m-0 grid list-none gap-4 p-0" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 320px), 1fr))" }} aria-label="Заклади">
             {sorted.map((l) => (
-              <LocationRow key={l.id} l={l} onEdit={() => setForm({ location: l })} />
+              <LocationRow key={l.id} l={l} role={user.role} onEdit={() => setForm({ location: l })} />
             ))}
           </ul>
         )}
