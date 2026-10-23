@@ -144,9 +144,9 @@ export function SecondaryButton({ children, ...rest }: ButtonHTMLAttributes<HTML
   );
 }
 
-export function LinkButton({ href, children }: { href: string; children: ReactNode }) {
+export function LinkButton({ href, children, ariaLabel }: { href: string; children: ReactNode; ariaLabel?: string }) {
   return (
-    <Link href={href} className="inline-flex min-h-11 items-center rounded-[22px] bg-(--accent) px-5 text-sm font-semibold text-white no-underline">
+    <Link href={href} aria-label={ariaLabel} className="inline-flex min-h-11 items-center rounded-[22px] bg-(--accent) px-5 text-sm font-semibold text-white no-underline">
       {children}
     </Link>
   );

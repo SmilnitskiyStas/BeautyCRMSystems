@@ -31,6 +31,8 @@ interface PublicLocationDto {
   /** §17 */
   closedWeekdays?: string[] | null;
   closures?: { dateFrom: string; dateTo: string }[] | null;
+  /** §18.1 */
+  workingHours?: Partial<Record<string, { from: string; to: string }[]>> | null;
 }
 interface PublicSpecialistDto {
   id: string;
@@ -99,6 +101,7 @@ export function toLocation(l: PublicLocationDto): Location {
     timezone: l.timezone,
     closedWeekdays: l.closedWeekdays ?? [],
     closures: (l.closures ?? []).map((c) => ({ dateFrom: c.dateFrom.slice(0, 10), dateTo: c.dateTo.slice(0, 10) })),
+    workingHours: l.workingHours ?? null,
   };
 }
 

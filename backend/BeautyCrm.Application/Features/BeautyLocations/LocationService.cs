@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using BeautyCrm.Application.Features.BeautyAuth;
@@ -43,6 +44,18 @@ public sealed record ClosedWeekdaysWriteResult(
 public sealed record ClosureWriteResult(
     ClosureWriteOutcome Outcome, ClosureDto? Closure = null, IReadOnlyList<ClosureConflictDto>? Conflicts = null);
 
+// ---- години роботи закладу (TASK-703, §18.1) ----
+
+/// <summary>
+/// PUT /locations/{id}/working-hours. WorkingHours: об'єкт формату §9 або явний null (скинути в «не задано»); пропущене поле = 422.
+/// Confirm=true застосовує зміну попри майбутні записи, що опиняються поза новими годинами.
+/// </summary>
+public sealed record WorkingHoursRequest(JsonElement WorkingHours, bool? Confirm = null);
+
+/// <param name="Conflicts">Записи, що опиняються поза новими годинами (ті самі 4 поля, що й у §17; без даних клієнта).</param>
+public sealed record WorkingHoursWriteResult(
+    ClosureWriteOutcome Outcome, LocationDto? Location = null, IReadOnlyList<ClosureConflictDto>? Conflicts = null);
+
 /// <summary>
 /// Порт даних закладів (§16). Перевірки унікальності імені та «майбутніх активних записів» виконує реалізація атомарно
 /// (advisory-lock + блокування рядка закладу), щоб паралельний запис не розминувся з деактивацією/зміною часової зони.
@@ -55,6 +68,14 @@ public interface ILocationStore
     Task<LocationWriteResult> UpdateAsync(Guid id, LocationChange change, DateTimeOffset now, CancellationToken ct);
 
     Task<LocationDto?> GetAsync(Guid id, CancellationToken ct);
+
+    /// <summary>
+    /// Атомарно (FOR UPDATE на рядок закладу): майбутні pending/confirmed записи цього закладу, що стають недоступними саме
+    /// цією зміною (вміщувались у старі години й не вміщуються в нові; дні, вже закриті вихідними/закриттями, не рахуються),
+    /// без confirm -> NeedsConfirmation + conflicts, зміни немає. null = скинути години.
+    /// </summary>
+    Task<WorkingHoursWriteResult> SetWorkingHoursAsync(
+        Guid id, string? workingHoursJson, bool confirm, DateTimeOffset now, CancellationToken ct);
 
     /// <summary>
     /// Атомарно (блокування рядка закладу FOR UPDATE, як у TASK-697): нові вихідні дні тижня без confirm і з майбутніми
@@ -126,6 +147,35 @@ public sealed partial class LocationService(ILocationStore store, TimeProvider c
             ClosureWriteOutcome.Ok => r.Location!,
             ClosureWriteOutcome.NotFound => LocationNotFound,
             _ => ClosedDayConflict(r.Conflicts),
+        };
+    }
+
+    // ---------- години роботи закладу (§18.1) ----------
+
+    public async Task<Result<LocationDto>> SetWorkingHoursAsync(Actor actor, Guid id, WorkingHoursRequest req, CancellationToken ct)
+    {
+        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        string? normalized = null;
+        switch (req.WorkingHours.ValueKind)
+        {
+            case JsonValueKind.Null: break; // явний null скидає години
+            case JsonValueKind.Object:
+                normalized = WorkingHoursValidator.TryNormalize(req.WorkingHours);
+                if (normalized is null)
+                    return Error.Validation("invalid_working_hours", "workingHours must be an object with keys mon..sun, HH:mm intervals, from < to, no overlaps.");
+                break;
+            default:
+                return Error.Validation("invalid_working_hours", "workingHours must be an object or null.");
+        }
+
+        var r = await store.SetWorkingHoursAsync(id, normalized, req.Confirm == true, clock.GetUtcNow(), ct);
+        return r.Outcome switch
+        {
+            ClosureWriteOutcome.Ok => r.Location!,
+            ClosureWriteOutcome.NotFound => LocationNotFound,
+            _ => Error.ConflictWith("has_appointments_outside_hours",
+                "There are upcoming pending or confirmed appointments outside the new working hours; move or cancel them, or confirm the change.",
+                r.Conflicts ?? []),
         };
     }
 

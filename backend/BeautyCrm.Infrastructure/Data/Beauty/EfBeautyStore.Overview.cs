@@ -7,8 +7,7 @@ namespace BeautyCrm.Infrastructure.Data.Beauty;
 public sealed partial class EfBeautyStore : IOverviewStore
 {
     public async Task<IReadOnlyList<LocationDto>> ListLocationsAsync(CancellationToken ct) =>
-        await db.Locations.AsNoTracking().OrderBy(l => l.Name).ThenBy(l => l.Id)
-            .Select(l => new LocationDto(l.Id, l.Name, l.Address, l.Timezone, l.IsActive, l.Phone, l.ClosedWeekdays)).ToListAsync(ct);
+        (await db.Locations.AsNoTracking().OrderBy(l => l.Name).ThenBy(l => l.Id).ToListAsync(ct)).Select(ToLocationDto).ToList();
 
     public async Task<IReadOnlyDictionary<Guid, int>> GetActiveServiceDurationsAsync(CancellationToken ct) =>
         await db.Services.AsNoTracking().Where(s => s.IsActive).ToDictionaryAsync(s => s.Id, s => s.DurationMinutes, ct);

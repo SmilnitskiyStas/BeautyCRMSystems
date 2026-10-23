@@ -56,6 +56,12 @@ export interface BeautyAdminApi {
    * Повертає застосований перелік.
    */
   setClosedWeekdays(id: LocationId, weekdays: Weekday[], confirm?: boolean): Promise<Weekday[]>;
+  /**
+   * PUT /locations/{id}/working-hours (owner, admin; §18.1) - `null` скидає в «не задано». Без `confirm` і з активними
+   * записами поза новими годинами: 409 `has_appointments_outside_hours` (`BeautyApiError.conflicts`), змін немає.
+   * Повертає застосовані години.
+   */
+  setLocationWorkingHours(id: LocationId, workingHours: WorkingHours | null, confirm?: boolean): Promise<WorkingHours | null>;
   /** GET /locations/{id}/closures?from&to (staff читає; `reason` лише керівникам; діапазон ≤ 366 днів) */
   getClosures(id: LocationId, q: { from: string; to: string }): Promise<LocationClosure[]>;
   /** POST /locations/{id}/closures (owner, admin) - 409 closure_overlap | has_appointments_on_closed_days (+conflicts), 422 */

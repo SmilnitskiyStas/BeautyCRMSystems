@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { StaffMember } from "../types";
 
 const auth = { user: { id: "u", email: "e", fullName: "n", role: "admin", specialistId: null as string | null } };
-vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: vi.fn() }), usePathname: () => "/beauty/staff/s1" }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: vi.fn() }), usePathname: () => "/beauty/staff/s1", useSearchParams: () => new URLSearchParams() }));
 vi.mock("@/features/beauty-auth/components/auth-provider", () => ({ useAuth: () => auth }));
 
 const member: StaffMember = { id: "s1", name: "Марина", phone: null, position: null, isActive: true, services: [], locations: [] };

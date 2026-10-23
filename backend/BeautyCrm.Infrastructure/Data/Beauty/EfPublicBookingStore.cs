@@ -16,7 +16,7 @@ public sealed class EfPublicBookingStore(BeautyDbContext db) : IPublicBookingSto
     public async Task<IReadOnlyList<PublicLocationDto>> ListActiveLocationsAsync(DateTimeOffset now, CancellationToken ct)
     {
         var rows = await db.Locations.AsNoTracking().Where(l => l.IsActive).OrderBy(l => l.Name)
-            .Select(l => new { l.Id, l.Name, l.Address, l.Phone, l.Timezone, l.ClosedWeekdays }).ToListAsync(ct);
+            .Select(l => new { l.Id, l.Name, l.Address, l.Phone, l.Timezone, l.ClosedWeekdays, l.WorkingHours }).ToListAsync(ct);
         if (rows.Count == 0) return [];
 
         // Закриття на майбутні 366 днів у зоні кожного закладу; причина (reason) навмисно не вибирається.
@@ -34,7 +34,8 @@ public sealed class EfPublicBookingStore(BeautyDbContext db) : IPublicBookingSto
             var last = today.AddDays(366);
             var list = closures[r.Id].Where(c => c.DateTo >= today && c.DateFrom <= last).OrderBy(c => c.DateFrom)
                 .Select(c => new PublicClosureDto(c.DateFrom, c.DateTo)).ToList();
-            return new PublicLocationDto(r.Id, r.Name, r.Address, r.Phone, r.Timezone, r.ClosedWeekdays, list);
+            return new PublicLocationDto(r.Id, r.Name, r.Address, r.Phone, r.Timezone, r.ClosedWeekdays, list,
+                WorkingHoursValidator.Parse(r.WorkingHours));
         }).ToList();
     }
 

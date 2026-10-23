@@ -3,6 +3,7 @@ import { money } from "../format";
 import { mastersForCalendar } from "../calendar-masters";
 import { closedDayForMaster, closedDayInfo, localDateIn, validateClosure, weekdayOf } from "../closed-days";
 import { isValidTimeZone } from "../locations-logic";
+import { outsideHours } from "../location-hours";
 import { normalizeHours, validateHours } from "../working-hours";
 import type { BeautyAdminApi } from "./client";
 import {
@@ -180,6 +181,8 @@ export const mockBeautyApi: BeautyAdminApi = {
       phone: input.phone.trim() || null,
       timezone: input.timezone.trim(),
       isActive: true,
+      closedWeekdays: [],
+      workingHours: null,
     };
     locations.push(created);
     return wait(created);
@@ -211,6 +214,36 @@ export const mockBeautyApi: BeautyAdminApi = {
       if (conflicts.length > 0) throw confirmNeeded(conflicts);
     }
     loc.closedWeekdays = next;
+    return wait(next);
+  },
+
+  setLocationWorkingHours: async (id, workingHours, confirm) => {
+    if (!isManager()) throw forbid();
+    const loc = locations.find((l) => l.id === id);
+    if (!loc) throw new BeautyApiError(404, "location_not_found", "not found");
+    if (workingHours && Object.keys(validateHours(workingHours)).length > 0) {
+      throw new BeautyApiError(422, "invalid_working_hours", "invalid");
+    }
+    const next = workingHours ? normalizeHours(workingHours) : null;
+    if (next && !confirm) {
+      // Як і для вихідних: тиждень mock-даних статичний, тому всі нескасовані записи закладу вважаємо майбутніми.
+      const rows = allMockAppointments()
+        .filter((a) => a.locationId === id && a.kind !== "break" && !cancelled.has(a.id))
+        .map((a) => ({ a, startsAt: moved.get(a.id) ?? a.startsAt }));
+      const bad = new Set(outsideHours(rows, next, loc.timezone).map((r) => r.a.id));
+      const conflicts = rows
+        .filter((r) => bad.has(r.a.id))
+        .map(({ a, startsAt }) => ({
+          appointmentId: a.id,
+          startsAt,
+          serviceName: a.serviceName,
+          specialistName: staff.find((m) => m.id === a.specialistId)?.name ?? "",
+        }));
+      if (conflicts.length > 0) {
+        throw new BeautyApiError(409, "has_appointments_outside_hours", "appointments outside hours", undefined, conflicts);
+      }
+    }
+    loc.workingHours = next;
     return wait(next);
   },
 

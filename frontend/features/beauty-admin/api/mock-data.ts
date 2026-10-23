@@ -18,11 +18,17 @@ import type {
 
 /** Демо-дані для mock-клієнта. Не імпортувати поза `api/`. */
 
+const hrs = (from: string, to: string, days: ("mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun")[]): WorkingHours =>
+  Object.fromEntries(days.map((d) => [d, [{ from, to }]]));
+/** Години закладів (§18.1): Поділ без годин - демо «Години не задано». */
+const LOC_HOURS_CENTER = { ...hrs("09:00", "20:00", ["mon", "tue", "wed", "thu", "fri", "sat"]) } as WorkingHours;
+const LOC_HOURS_PECHERSK = { ...hrs("10:00", "19:00", ["mon", "tue", "wed", "thu", "fri"]), sat: [{ from: "10:00", to: "16:00" }] } as WorkingHours;
+
 export const LOCATIONS: BeautyLocation[] = [
   // Центр: неділя вихідна (§17) - демо різниці між графіком майстра (Нд працює) і вихідним закладу.
-  { id: "c", name: "Центр", address: "вул. Хрещатик, 22, Київ", phone: "+380 44 000 11 22", timezone: "Europe/Kyiv", isActive: true, closedWeekdays: ["sun"] },
-  { id: "p", name: "Поділ", address: "вул. Сагайдачного, 10, Київ", phone: "+380 44 000 33 44", timezone: "Europe/Kyiv", isActive: true, closedWeekdays: [] },
-  { id: "k", name: "Печерськ", address: "вул. Лаврська, 5, Київ", phone: null, timezone: "Europe/Kyiv", isActive: true, closedWeekdays: [] },
+  { id: "c", name: "Центр", address: "вул. Хрещатик, 22, Київ", phone: "+380 44 000 11 22", timezone: "Europe/Kyiv", isActive: true, closedWeekdays: ["sun"], workingHours: LOC_HOURS_CENTER },
+  { id: "p", name: "Поділ", address: "вул. Сагайдачного, 10, Київ", phone: "+380 44 000 33 44", timezone: "Europe/Kyiv", isActive: true, closedWeekdays: [], workingHours: null },
+  { id: "k", name: "Печерськ", address: "вул. Лаврська, 5, Київ", phone: null, timezone: "Europe/Kyiv", isActive: true, closedWeekdays: [], workingHours: LOC_HOURS_PECHERSK },
   { id: "l", name: "Лівий берег (закрито)", address: "просп. Мира, 3, Київ", phone: null, timezone: "Europe/Kyiv", isActive: false, closedWeekdays: [] },
 ];
 

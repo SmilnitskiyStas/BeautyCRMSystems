@@ -49,7 +49,7 @@ public sealed class CreateAppointmentAdapter(
                 loc, staffId, serviceId, start, new ClientInput(clientId, null, null, null), "none", "cash", "online"), ct);
             if (r.IsOk) return new AppointmentCreated(r.Value!.Id);
             lastError = r.Error!.Code;
-            if (r.Error.Code is not ("outside_working_hours" or "specialist_not_at_location")) break;
+            if (r.Error.Code is not ("outside_working_hours" or "outside_location_hours" or "specialist_not_at_location")) break;
         }
         throw new InvalidOperationException(lastError ?? "specialist_not_at_location");
     }

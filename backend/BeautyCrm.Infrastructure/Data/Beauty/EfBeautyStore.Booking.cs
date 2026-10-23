@@ -37,7 +37,11 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
         var rows = await db.SpecialistLocations.AsNoTracking()
             .Where(sl => sl.LocationId == locationId && sl.IsActive && sl.Specialist!.IsActive
                          && (specialistId == null || sl.SpecialistId == specialistId))
-            .Select(sl => new { sl.SpecialistId, Timezone = sl.Location!.Timezone, sl.WorkingHours, ClosedWeekdays = sl.Location!.ClosedWeekdays })
+            .Select(sl => new
+            {
+                sl.SpecialistId, Timezone = sl.Location!.Timezone, sl.WorkingHours, ClosedWeekdays = sl.Location!.ClosedWeekdays,
+                LocationHours = sl.Location!.WorkingHours,
+            })
             .ToListAsync(ct);
         if (rows.Count == 0) return [];
 
@@ -57,7 +61,7 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
 
         return rows.Select(r => new SpecialistSchedule(
             r.SpecialistId, r.Timezone, r.WorkingHours, absences[r.SpecialistId].ToList(), services[r.SpecialistId].ToList(),
-            r.ClosedWeekdays, closures)).ToList();
+            r.ClosedWeekdays, closures, r.LocationHours)).ToList();
     }
 
     public async Task<IReadOnlyList<(Guid SpecialistId, TimeRange Range)>> GetBusyAsync(
@@ -146,9 +150,10 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
             db.ChangeTracker.Clear();
             return StoreResult<AppointmentDto>.Blocked();
         }
-        switch (await BlockReasonAsync(a.SpecialistId, a.LocationId, a.ServiceId, a.StartsAt, ct))
+        switch (await BlockReasonAsync(a.SpecialistId, a.LocationId, a.ServiceId, a.StartsAt, a.DurationMinutes, ct))
         {
             case BlockReason.LocationClosed: db.ChangeTracker.Clear(); return StoreResult<AppointmentDto>.Closed();
+            case BlockReason.OutsideLocationHours: db.ChangeTracker.Clear(); return StoreResult<AppointmentDto>.OutsideHours();
             case BlockReason.SpecialistUnavailable: db.ChangeTracker.Clear(); return StoreResult<AppointmentDto>.Blocked();
         }
         switch (await TrySaveAsync(ct, concurrentRetryable: a.Public is not null))
@@ -181,9 +186,10 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
             db.ChangeTracker.Clear();
             return StoreResult<AppointmentDto>.Blocked();
         }
-        switch (await BlockReasonAsync(appt.SpecialistId, appt.LocationId, appt.ServiceId, newStart, ct))
+        switch (await BlockReasonAsync(appt.SpecialistId, appt.LocationId, appt.ServiceId, newStart, appt.DurationMinutes, ct))
         {
             case BlockReason.LocationClosed: db.ChangeTracker.Clear(); return StoreResult<AppointmentDto>.Closed();
+            case BlockReason.OutsideLocationHours: db.ChangeTracker.Clear(); return StoreResult<AppointmentDto>.OutsideHours();
             case BlockReason.SpecialistUnavailable: db.ChangeTracker.Clear(); return StoreResult<AppointmentDto>.Blocked();
         }
         appt.StartsAt = newStart.ToUniversalTime();
@@ -202,20 +208,29 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
         (await db.Database.SqlQuery<bool>($"""SELECT is_active AS "Value" FROM beauty_locations WHERE id = {locationId} FOR SHARE""").ToListAsync(ct))
         .FirstOrDefault();
 
-    private enum BlockReason { None, SpecialistUnavailable, LocationClosed }
+    private enum BlockReason { None, SpecialistUnavailable, LocationClosed, OutsideLocationHours }
 
     /// <summary>
     /// Під advisory-lock майстра й блокуванням рядка закладу: чи день запису тепер закритий для закладу (вихідний/закриття,
     /// TASK-701), зайнятий затвердженою відсутністю, послугу знято з майстра або майстра/заклад вимкнено (стан міг змінитися
     /// після перевірки в сервісі). Закритий день має пріоритет, як і в SlotCalculator.Check.
     /// </summary>
-    private async Task<BlockReason> BlockReasonAsync(Guid specialistId, Guid locationId, Guid serviceId, DateTimeOffset startsAt, CancellationToken ct)
+    private async Task<BlockReason> BlockReasonAsync(
+        Guid specialistId, Guid locationId, Guid serviceId, DateTimeOffset startsAt, int durationMinutes, CancellationToken ct)
     {
         var schedule = (await GetSchedulesAsync(locationId, specialistId, ct)).FirstOrDefault();
         if (schedule is null) return BlockReason.SpecialistUnavailable;
         var localDate = SlotCalculator.LocalDate(startsAt, schedule.Timezone);
         if (schedule.IsClosedOn(localDate)) return BlockReason.LocationClosed;
-        return !schedule.Offers(serviceId) || schedule.IsAbsentOn(localDate) ? BlockReason.SpecialistUnavailable : BlockReason.None;
+        if (!schedule.Offers(serviceId) || schedule.IsAbsentOn(localDate)) return BlockReason.SpecialistUnavailable;
+        // §18.1: години закладу читаються вже під FOR SHARE на рядку закладу - PUT working-hours (FOR UPDATE) їх не змінить посеред запису
+        if (schedule.HasLocationHours)
+        {
+            var local = TimeZoneInfo.ConvertTime(startsAt, TimeZoneInfo.FindSystemTimeZoneById(schedule.Timezone));
+            if (!SlotCalculator.FitsHours(schedule.LocationHoursJson, local.DayOfWeek, TimeOnly.FromDateTime(local.DateTime), durationMinutes))
+                return BlockReason.OutsideLocationHours;
+        }
+        return BlockReason.None;
     }
 
     public async Task<AppointmentDto?> SetStatusAsync(Guid id, string status, CancellationToken ct)

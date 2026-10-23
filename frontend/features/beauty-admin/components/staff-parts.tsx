@@ -116,7 +116,7 @@ export function CheckRow({
 }) {
   const id = useId();
   return (
-    <label htmlFor={id} className="flex min-h-11 cursor-pointer items-center gap-3 text-sm has-disabled:cursor-not-allowed">
+    <label htmlFor={id} className="flex min-h-11 min-w-0 cursor-pointer items-center gap-3 text-sm has-disabled:cursor-not-allowed">
       <input
         id={id}
         type="checkbox"
@@ -125,7 +125,7 @@ export function CheckRow({
         onChange={(e) => onChange(e.target.checked)}
         className="size-5 flex-none accent-(--accent)"
       />
-      <span>
+      <span className="min-w-0 break-words">
         {label}
         {hint ? <span className="block text-[13px] text-(--muted)">{hint}</span> : null}
       </span>
@@ -228,19 +228,20 @@ export function WorkingHoursEditor({
   value,
   onChange,
   disabled,
+  hint = "Вихідні дні закладу перекривають цей графік: у закритий день слотів немає, навіть якщо тут день робочий.",
 }: {
   value: WorkingHours;
   onChange: (next: WorkingHours) => void;
   disabled?: boolean;
+  /** Підказка над редактором; `null` - без підказки (годин роботи закладу вона не стосується). */
+  hint?: string | null;
 }) {
   const uid = useId();
   const setDay = (day: Weekday, list: TimeInterval[]) => onChange({ ...value, [day]: list });
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-[13px] text-(--muted)">
-        Вихідні дні закладу перекривають цей графік: у закритий день слотів немає, навіть якщо тут день робочий.
-      </p>
+      {hint ? <p className="text-[13px] text-(--muted)">{hint}</p> : null}
       {WEEKDAYS.map((d) => {
         const list = value[d.key] ?? [];
         const works = list.length > 0;

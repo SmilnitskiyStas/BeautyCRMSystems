@@ -18,6 +18,8 @@ export interface Location {
   closedWeekdays?: string[];
   /** Закриття на дати (§17, повні дні в зоні закладу, включно) на майбутні 366 днів. Причини публічний API не віддає. */
   closures?: { dateFrom: string; dateTo: string }[];
+  /** Години роботи закладу (§18.1): `mon..sun` -> інтервали `HH:mm`; `null`/відсутнє = не задано. Слоти вже враховують їх. */
+  workingHours?: Partial<Record<string, { from: string; to: string }[]>> | null;
 }
 
 export interface Specialist {
