@@ -8,18 +8,25 @@ import { useAbsences, useCalendarWeek, useCancelAppointment, useMoveAppointment 
 import { canSeeClosureReason, closedDayLabel } from "../closed-days";
 import { MAX_CANCEL_REASON, cancelledByLabel, cancelledByShort } from "../cancellation";
 import { addDaysIso, clock, dateTimeLabel, dayIndex, durationLabel, minutesOfDay, money } from "../format";
-import type { Absence, Appointment, CalendarKind } from "../types";
+import { bookableAt } from "../../beauty-shared/availability";
+import type { Absence, Appointment, CalendarKind, DayAvailability, MinuteInterval } from "../types";
 import { ABSENCE_TYPE_LABEL, CheckRow } from "./staff-parts";
 import { Badge, Card, Chip, FIELD_INPUT, FIELD_LABEL, PageHeader, PrimaryButton, QueryState, SecondaryButton, TextLink } from "./ui";
 
-const START_HOUR = 9;
-const END_HOUR = 20;
+/** Діапазон сітки за замовчуванням (години доби [start, end)); реальний приходить із `gridStartHour/gridEndHour` (F1). */
+const DEFAULT_START_HOUR = 9;
+const DEFAULT_END_HOUR = 21;
 /** Висота години в px. Висота блоку = тривалість послуги × PX_PER_HOUR. */
 const PX_PER_HOUR = 56;
 const MIN_BLOCK_PX = 28;
-/** Затінення закритого дня закладу (штрих + тло). */
+/** Вихідний закладу: діагональний штрих + тло. */
 const CLOSED_STRIPES = "repeating-linear-gradient(135deg, transparent 0 8px, rgba(63,58,85,0.14) 8px 10px)";
-const GRID_HEIGHT = (END_HOUR + 1 - START_HOUR) * PX_PER_HOUR;
+/** Відсутність майстра: діагональний штрих. */
+const ABSENCE_STRIPES = "repeating-linear-gradient(135deg, transparent 0 8px, rgba(74,69,96,0.12) 8px 10px)";
+/** Майстер не працює (поза графіком): крапковий візерунок на світлому тлі. */
+const OFF_DOTS = "radial-gradient(rgba(74,69,96,0.32) 1px, transparent 1.2px)";
+/** Поза годинами закладу: горизонтальні лінії на темнішому тлі. */
+const HOURS_LINES = "repeating-linear-gradient(0deg, transparent 0 5px, rgba(63,58,85,0.2) 5px 6px)";
 
 const KIND_VIEW: Record<CalendarKind, { label: string; swatch: string; block: string }> = {
   visit: { label: "Звичайний візит", swatch: "bg-[#EADCF2]", block: "bg-[#EADCF2] text-[#3B1A4D]" },
@@ -29,8 +36,8 @@ const KIND_VIEW: Record<CalendarKind, { label: string; swatch: string; block: st
   break: { label: "Перерва / закрито", swatch: "bg-[#E9E6EF]", block: "bg-[#E9E6EF] text-[#4A4560]" },
 };
 
-function blockGeometry(a: Appointment) {
-  const top = ((minutesOfDay(a.startsAt) - START_HOUR * 60) / 60) * PX_PER_HOUR + 1;
+function blockGeometry(a: Appointment, startHour: number) {
+  const top = ((minutesOfDay(a.startsAt) - startHour * 60) / 60) * PX_PER_HOUR + 1;
   const height = Math.max((a.durationMinutes / 60) * PX_PER_HOUR - 2, MIN_BLOCK_PX);
   return { top, height };
 }
@@ -40,18 +47,89 @@ function timeRange(a: Appointment) {
   return `${clock(s)}–${clock(s + a.durationMinutes)}`;
 }
 
+const rangeLabel = (i: MinuteInterval) => `${clock(i.from)}–${clock(i.to)}`;
+
+/**
+ * Затінення недоступного часу в колонці дня (F1): «Заклад не працює» / «Не працює» на весь день або сегменти
+ * «Заклад зачинено» (поза годинами закладу) і «Не працює» (поза графіком майстра). Кліків не перехоплює.
+ */
+function AvailabilityShade({ day, startHour, endHour }: { day: DayAvailability; startHour: number; endHour: number }) {
+  if (day.state === "location_hours_off") {
+    return (
+      <div
+        data-testid="hours-day-off"
+        className="pointer-events-none absolute inset-0 overflow-hidden bg-[#D9D3E6] px-1.5 py-1 text-[11px] leading-tight font-semibold text-[#3F3A55]"
+        style={{ backgroundImage: HOURS_LINES }}
+      >
+        <span className="block">Заклад не працює</span>
+        <span className="block font-normal">поза годинами закладу</span>
+      </div>
+    );
+  }
+  if (day.state === "master_off") {
+    return (
+      <div
+        data-testid="master-off"
+        className="pointer-events-none absolute inset-0 overflow-hidden bg-[#F3F0F8] px-1.5 py-1 text-[11px] leading-tight font-semibold text-[#4A4560]"
+        style={{ backgroundImage: OFF_DOTS, backgroundSize: "7px 7px" }}
+      >
+        <span className="block">Не працює</span>
+        <span className="block font-normal">вихідний за графіком</span>
+      </div>
+    );
+  }
+  if (day.state !== "open") return null;
+  const lo = startHour * 60;
+  const hi = endHour * 60;
+  const seg = (list: MinuteInterval[]) =>
+    list
+      .map((i) => ({ from: Math.max(i.from, lo), to: Math.min(i.to, hi) }))
+      .filter((i) => i.to > i.from)
+      .map((i) => ({ ...i, top: ((i.from - lo) / 60) * PX_PER_HOUR, height: ((i.to - i.from) / 60) * PX_PER_HOUR }));
+  return (
+    <>
+      {seg(day.hoursOff).map((i) => (
+        <div
+          key={`h${i.from}`}
+          data-testid="shade-hours"
+          className="pointer-events-none absolute right-0 left-0 overflow-hidden bg-[#D9D3E6] px-1.5 py-0.5 text-[11px] leading-tight font-semibold text-[#3F3A55]"
+          style={{ top: i.top, height: i.height, backgroundImage: HOURS_LINES }}
+        >
+          {i.height >= 30 ? "Заклад зачинено" : null}
+        </div>
+      ))}
+      {seg(day.masterOff).map((i) => (
+        <div
+          key={`m${i.from}`}
+          data-testid="shade-master"
+          className="pointer-events-none absolute right-0 left-0 overflow-hidden bg-[#F3F0F8] px-1.5 py-0.5 text-[11px] leading-tight font-semibold text-[#4A4560]"
+          style={{ top: i.top, height: i.height, backgroundImage: OFF_DOTS, backgroundSize: "7px 7px" }}
+        >
+          {i.height >= 30 ? "Не працює" : null}
+        </div>
+      ))}
+    </>
+  );
+}
+
 function AppointmentPanel({
   appt,
   dayLabel,
   specialistId,
   onCancelled,
   onMoved,
+  moveProblem,
+  outOfHours,
 }: {
   appt: Appointment;
   dayLabel: string;
   specialistId: string;
   onCancelled: (refund: number) => void;
   onMoved: () => void;
+  /** Чому новий час недоступний (F1: у недоступні клітинки записи не переносяться) або `null`. */
+  moveProblem?: (startsAt: string, durationMinutes: number) => string | null;
+  /** Поточний запис припадає на недоступний час (залишається видимим із попередженням). */
+  outOfHours?: boolean;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [moving, setMoving] = useState(false);
@@ -63,6 +141,7 @@ function AppointmentPanel({
   const [reason, setReason] = useState("");
   const closed = appt.status === "completed" || appt.status === "cancelled" || appt.status === "no_show";
   const terms = appt.cancellation;
+  const problem = moving && newStart && newStart !== appt.startsAt ? (moveProblem?.(newStart, appt.durationMinutes) ?? null) : null;
 
   return (
     <>
@@ -79,6 +158,11 @@ function AppointmentPanel({
           {appt.cancelReason ? <span>Причина: {appt.cancelReason}</span> : null}
         </div>
       ) : null}
+      {outOfHours ? (
+        <p role="status" data-testid="out-of-hours-note" className="rounded-xl bg-[#FFF1CC] px-3 py-2 text-[13px] text-[#5C3900]">
+          Запис припадає на час, коли майстер або заклад недоступні (поза графіком, годинами закладу, вихідним чи відсутністю). Його можна перенести.
+        </p>
+      ) : null}
       {appt.clientId ? <TextLink href={`/beauty/clients/${appt.clientId}`}>Профіль клієнта</TextLink> : null}
       {appt.kind === "promo" ? <Badge tone="promo" className="self-start">Акція: {appt.promotionName}</Badge> : null}
       {appt.kind === "online" ? <Badge tone="now" className="self-start">Створено клієнтом онлайн</Badge> : null}
@@ -92,7 +176,7 @@ function AppointmentPanel({
           className="flex flex-col gap-2 rounded-xl bg-(--page) p-3"
           onSubmit={(e) => {
             e.preventDefault();
-            if (!newStart || newStart === appt.startsAt) return;
+            if (!newStart || newStart === appt.startsAt || problem) return;
             move.mutate({ id: appt.id, startsAt: newStart }, { onSuccess: onMoved });
           }}
         >
@@ -108,13 +192,18 @@ function AppointmentPanel({
             onChange={(e) => setNewStart(e.target.value)}
             className={FIELD_INPUT}
           />
+          {problem ? (
+            <p role="alert" data-testid="move-problem" className="text-sm text-[#8A1F1F]">
+              {problem}
+            </p>
+          ) : null}
           {move.isError ? (
             <p role="alert" className="text-sm text-[#8A1F1F]">
               {humanizeError(move.error, "Не вдалося перенести запис. Спробуйте ще раз.")}
             </p>
           ) : null}
           <div className="flex flex-wrap gap-2">
-            <PrimaryButton type="submit" disabled={move.isPending || !newStart || newStart === appt.startsAt}>
+            <PrimaryButton type="submit" disabled={move.isPending || !newStart || newStart === appt.startsAt || !!problem}>
               {move.isPending ? "Переносимо…" : "Зберегти час"}
             </PrimaryButton>
             <SecondaryButton onClick={() => setMoving(false)}>Не переносити</SecondaryButton>
@@ -175,6 +264,13 @@ function AppointmentPanel({
   );
 }
 
+function availabilityAria(day: string, a: DayAvailability): string {
+  if (a.state === "location_hours_off") return `${day}. Заклад не працює, слоти недоступні`;
+  if (a.state === "master_off") return `${day}. Майстер не працює, слоти недоступні`;
+  if (a.state === "open" && a.free.length > 0) return `${day}. Доступно: ${a.free.map(rangeLabel).join(", ")}`;
+  return day;
+}
+
 export function CalendarScreen() {
   const { user } = useAuth();
   const isSpecialist = user.role === "specialist";
@@ -184,7 +280,9 @@ export function CalendarScreen() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showCancelled, setShowCancelled] = useState(false);
-  const week = useCalendarWeek(chosenId, showCancelled);
+  // Заклад, обраний у календарі (майстер може працювати в кількох): порожній = перший активний заклад майстра.
+  const [chosenLoc, setChosenLoc] = useState("");
+  const week = useCalendarWeek(chosenId, showCancelled, chosenLoc);
   const data = week.data;
   const masterId = data?.specialistId ?? chosenId;
 
@@ -205,12 +303,48 @@ export function CalendarScreen() {
   // Закритий день закладу (§17): причину закриття бачать лише керівники.
   const showReason = canSeeClosureReason(user.role);
   const closedDay = (d: number) => data?.closedDays?.[d] ?? null;
+  const avail = data?.availability;
+  // Затверджена відсутність блокує день (запит `requested` ні, §13).
+  const absentDay = (d: number) => dayAbsences(d).some((a) => a.status === "approved");
+  const dayBlocked = (d: number) => !!closedDay(d) || absentDay(d);
   const real = data?.appointments.filter((a) => a.kind !== "break" && a.status !== "cancelled") ?? [];
   const bookedMinutes = real.reduce((s, a) => s + a.durationMinutes, 0);
   const selected = data?.appointments.find((a) => a.id === selectedId && a.kind !== "break") ?? null;
 
+  // Запис у недоступній клітинці лишається видимим із попередженням (F1).
+  const outOfHours = (a: Appointment) => {
+    if (a.kind === "break" || a.status === "cancelled" || !data) return false;
+    const d = dayIndex(a.startsAt, data.weekStart);
+    if (d < 0 || d > 6) return false;
+    if (dayBlocked(d)) return true;
+    return avail ? !bookableAt(avail[d], minutesOfDay(a.startsAt), a.durationMinutes) : false;
+  };
+  const moveProblem = (startsAt: string, durationMinutes: number): string | null => {
+    if (!data || !avail) return null;
+    const d = dayIndex(startsAt, data.weekStart);
+    if (d < 0 || d > 6) return null; // інший тиждень: перевіряє backend
+    if (closedDay(d)) return "У цей день заклад не працює.";
+    if (absentDay(d)) return "У цей день майстер відсутній.";
+    if (!bookableAt(avail[d], minutesOfDay(startsAt), durationMinutes)) return "Цей час поза графіком майстра або годинами закладу.";
+    return null;
+  };
+  // Місткість тижня - з доступних хвилин (графік ∩ години ∩ вихідні ∩ відсутності), не з фіксованих 6×11 годин.
+  const capacityMinutes = avail
+    ? avail.reduce((sum, day, d) => (dayBlocked(d) ? sum : sum + day.free.reduce((x, f) => x + (f.to - f.from), 0)), 0)
+    : 6 * 11 * 60;
+  const loadLabel = capacityMinutes > 0 ? `${Math.min(100, Math.round((bookedMinutes / capacityMinutes) * 100))}%` : "—";
+
+  // Діапазон сітки: за графіком/годинами закладу, розширений так, щоб жоден запис не вийшов за межі колонки.
+  let startHour = data?.gridStartHour ?? DEFAULT_START_HOUR;
+  let endHour = data?.gridEndHour ?? DEFAULT_END_HOUR;
+  for (const a of data?.appointments ?? []) {
+    startHour = Math.min(startHour, Math.floor(minutesOfDay(a.startsAt) / 60));
+    endHour = Math.max(endHour, Math.min(24, Math.ceil((minutesOfDay(a.startsAt) + a.durationMinutes) / 60)));
+  }
+  const gridHeight = (endHour - startHour) * PX_PER_HOUR;
   const hours: number[] = [];
-  for (let h = START_HOUR; h <= END_HOUR; h++) hours.push(h);
+  for (let h = startHour; h < endHour; h++) hours.push(h);
+  const chosenLocationName = data?.locations?.find((l) => l.id === data.locationId)?.name ?? master?.locationName;
 
   return (
     <>
@@ -218,7 +352,7 @@ export function CalendarScreen() {
         title="Календар майстра"
         subtitle={
           <>
-            {data?.weekLabel ?? "Тиждень"} · {master ? `${master.name}, ${master.locationName}` : "…"}
+            {data?.weekLabel ?? "Тиждень"} · {master ? `${master.name}, ${chosenLocationName}` : "…"}
             {isSpecialist ? null : (
               <>
                 {" · "}
@@ -236,6 +370,7 @@ export function CalendarScreen() {
                 pressed={m.id === masterId}
                 onClick={() => {
                   setChosenId(m.id);
+                  setChosenLoc("");
                   setSelectedId(null);
                 }}
               >
@@ -259,7 +394,51 @@ export function CalendarScreen() {
           <span className="size-3.5 rounded bg-[#E4E0EC]" style={{ backgroundImage: CLOSED_STRIPES }} aria-hidden="true" />
           Вихідний закладу
         </li>
+        <li className="flex items-center gap-1.5">
+          <span className="size-3.5 rounded bg-[#E9E6EF]" style={{ backgroundImage: ABSENCE_STRIPES }} aria-hidden="true" />
+          Відсутність майстра
+        </li>
+        <li className="flex items-center gap-1.5">
+          <span className="size-3.5 rounded border border-[#CFC9DD] bg-[#F3F0F8]" style={{ backgroundImage: OFF_DOTS, backgroundSize: "5px 5px" }} aria-hidden="true" />
+          Не працює (поза графіком майстра)
+        </li>
+        <li className="flex items-center gap-1.5">
+          <span className="size-3.5 rounded bg-[#D9D3E6]" style={{ backgroundImage: HOURS_LINES }} aria-hidden="true" />
+          Заклад зачинено (поза годинами закладу)
+        </li>
+        <li className="flex items-center gap-1.5">
+          <span className="size-3.5 rounded border-2 border-[#C77700] bg-white" aria-hidden="true" />
+          Запис поза доступним часом
+        </li>
       </ul>
+
+      {data?.locations && data.locations.length > 1 ? (
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Заклад">
+          <span className="text-sm text-(--muted)">Заклад:</span>
+          {data.locations.map((l) => (
+            <Chip
+              key={l.id}
+              variant="soft"
+              pressed={l.id === data.locationId}
+              onClick={() => {
+                setChosenLoc(l.id);
+                setSelectedId(null);
+              }}
+            >
+              {l.name}
+            </Chip>
+          ))}
+          {data.otherLocationsCount ? (
+            <span className="text-[13px] text-(--muted)">Записів в іншому закладі цього тижня: {data.otherLocationsCount}</span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {data?.availabilityWarning ? (
+        <p role="status" data-testid="availability-warning" className="rounded-xl bg-[#FFF1CC] px-3.5 py-2.5 text-sm text-[#5C3900]">
+          Не вдалося завантажити вихідні та закриття закладу. Календар може показувати закриті дні як робочі.
+        </p>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
         <CheckRow label="Показати скасовані" checked={showCancelled} onChange={setShowCancelled} />
@@ -286,9 +465,9 @@ export function CalendarScreen() {
                   ))}
                 </div>
                 <div className="grid grid-cols-[56px_repeat(7,minmax(0,1fr))]">
-                  <div className="relative" style={{ height: GRID_HEIGHT }} aria-hidden="true">
+                  <div className="relative" style={{ height: gridHeight }} aria-hidden="true">
                     {hours.map((h) => (
-                      <div key={h} className="absolute left-0 -translate-y-2 text-xs text-(--muted)" style={{ top: (h - START_HOUR) * PX_PER_HOUR }}>
+                      <div key={h} className="absolute left-0 -translate-y-2 text-xs text-(--muted)" style={{ top: (h - startHour) * PX_PER_HOUR }}>
                         {h}:00
                       </div>
                     ))}
@@ -298,7 +477,7 @@ export function CalendarScreen() {
                       key={day}
                       className="relative border-l border-(--line)"
                       style={{
-                        height: GRID_HEIGHT,
+                        height: gridHeight,
                         backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${PX_PER_HOUR - 1}px, #ECE8F2 ${PX_PER_HOUR - 1}px, #ECE8F2 ${PX_PER_HOUR}px)`,
                       }}
                       role="group"
@@ -308,7 +487,9 @@ export function CalendarScreen() {
                           ? `${day}. ${closedDayLabel(closedDay(d)!, showReason)}, слоти недоступні`
                           : dayAbsences(d).length
                             ? `${day}. ${dayAbsences(d).map((a) => `${a.status === "requested" ? "Запит: " : ""}${ABSENCE_TYPE_LABEL[a.type]}`).join(", ")}${dayAbsences(d).some((a) => a.status === "approved") ? ", слоти недоступні" : ""}`
-                            : day
+                            : avail
+                              ? availabilityAria(day, avail[d])
+                              : day
                       }
                     >
                       {closedDay(d) ? (
@@ -347,10 +528,12 @@ export function CalendarScreen() {
                           </div>
                         );
                       })}
+                      {avail && !dayBlocked(d) ? <AvailabilityShade day={avail[d]} startHour={startHour} endHour={endHour} /> : null}
                       {data.appointments
                         .filter((a) => dayIndex(a.startsAt, data.weekStart) === d)
                         .map((a) => {
-                          const { top, height } = blockGeometry(a);
+                          const { top, height } = blockGeometry(a, startHour);
+                          const warn = outOfHours(a);
                           const gone = a.status === "cancelled";
                           const base = `absolute right-1 left-1 box-border overflow-hidden rounded-lg px-2 py-0.5 text-left text-[11px] leading-tight ${gone ? "bg-[#F4F2F8] text-[#4A4560]" : KIND_VIEW[a.kind].block}`;
                           if (a.kind === "break") {
@@ -366,15 +549,21 @@ export function CalendarScreen() {
                               key={a.id}
                               type="button"
                               aria-pressed={on}
-                              aria-label={`${a.clientName}, ${a.serviceName}, ${timeRange(a)}${gone ? `, скасовано. ${cancelledByLabel(a.cancelledBy)}` : ""}`}
+                              aria-label={`${a.clientName}, ${a.serviceName}, ${timeRange(a)}${gone ? `, скасовано. ${cancelledByLabel(a.cancelledBy)}` : ""}${warn ? ", поза доступним часом" : ""}`}
                               onClick={() => {
                                 setSelectedId(a.id);
                                 setNotice(null);
                               }}
                               data-cancelled={gone ? "true" : undefined}
-                              className={`${base} cursor-pointer border-2 ${gone ? "border-dashed" : ""} ${on ? "border-(--accent)" : gone ? "border-[#6F6985]" : "border-transparent"}`}
+                              data-out-of-hours={warn ? "true" : undefined}
+                              className={`${base} cursor-pointer border-2 ${gone ? "border-dashed" : ""} ${on ? "border-(--accent)" : gone ? "border-[#6F6985]" : warn ? "border-[#C77700]" : "border-transparent"}`}
                               style={{ top, height }}
                             >
+                              {warn ? (
+                                <span aria-hidden="true" title="Поза доступним часом" className="absolute top-0 right-1 text-xs font-bold text-[#C77700]">
+                                  !
+                                </span>
+                              ) : null}
                               <span className={`block font-semibold ${gone ? "line-through" : ""}`}>{a.clientName}</span>
                               <span className="block">
                                 {timeRange(a)} · {durationLabel(a.durationMinutes)}
@@ -403,6 +592,8 @@ export function CalendarScreen() {
                     appt={selected}
                     dayLabel={data.days[dayIndex(selected.startsAt, data.weekStart)] ?? ""}
                     specialistId={masterId}
+                    moveProblem={moveProblem}
+                    outOfHours={outOfHours(selected)}
                     onMoved={() => {
                       setSelectedId(null);
                       setNotice("Запис перенесено.");
@@ -420,7 +611,7 @@ export function CalendarScreen() {
                 <h2 className="text-lg font-semibold">Тиждень майстра</h2>
                 <div className="flex justify-between text-sm"><span className="text-(--muted)">Записів</span><span className="font-semibold">{real.length}</span></div>
                 <div className="flex justify-between text-sm"><span className="text-(--muted)">З них по акції</span><span className="font-semibold">{real.filter((a) => a.kind === "promo").length}</span></div>
-                <div className="flex justify-between text-sm"><span className="text-(--muted)">Завантаження</span><span className="font-semibold">{Math.round((bookedMinutes / 60 / (6 * 11)) * 100)}%</span></div>
+                <div className="flex justify-between text-sm"><span className="text-(--muted)">Завантаження</span><span className="font-semibold">{loadLabel}</span></div>
               </Card>
             </aside>
           </div>

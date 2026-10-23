@@ -10,8 +10,16 @@ import {
 } from "../types";
 import { isClosedDate } from "../dates";
 import type { BookingApi } from "./client";
+import { CATALOG, DEMO_LOCATIONS, PROMO_PERCENT, STAFF, absencesSeed, appointmentsSeed, blocksOn, closuresSeed, demoToday, promoPrice } from "@/features/beauty-shared/demo-seed";
+import { dayAvailability, hhmm, slotStarts, toMinutes } from "@/features/beauty-shared/availability";
+import { instantToLocal, localToUtcIso } from "@/features/beauty-shared/zone-time";
+import type { Weekday } from "@/features/beauty-admin/types";
 
-/** Mock публічного API (`NEXT_PUBLIC_USE_MOCK=1`): ті самі сигнатури, що й у http-клієнта. Запис адресується токеном. */
+/**
+ * Mock публічного API (`NEXT_PUBLIC_USE_MOCK=1`): ті самі сигнатури, що й у http-клієнта. Запис адресується токеном.
+ * Заклади, майстри, послуги, закриття й години беруться з ЄДИНОГО демо-набору адмінки (`beauty-shared/demo-seed.ts`),
+ * а слоти рахуються за тим самим правилом: графік майстра ∩ години закладу ∩ не вихідний ∩ без відсутності (F3/F4/F8).
+ */
 
 const delay = <T>(v: T, ms = 250) => new Promise<T>((r) => setTimeout(() => r(v), ms));
 
@@ -23,48 +31,47 @@ const TERMS: CancellationTerms = {
   feePercent: 0,
 };
 
-const TZ = "Europe/Kyiv";
-
-/** Закриття через `from`..`to` днів від сьогодні (календар Києва) для демо. */
-function soon(from: number, to: number): { dateFrom: string; dateTo: string } {
-  const [y, m, d] = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" })
-    .format(new Date())
-    .split("-")
-    .map(Number);
-  const iso = (n: number) => new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
-  return { dateFrom: iso(from), dateTo: iso(to) };
-}
-
-const locations: Location[] = [
-  // Центр: неділя вихідна; Поділ: закриття на 3 дні попереду (демо §17).
-  { id: "c", name: "Beauty Lab · Центр", address: "вул. Хрещатик, 22", phone: "+380441112233", timezone: TZ, closedWeekdays: ["sun"], closures: [] },
-  { id: "p", name: "Beauty Lab · Поділ", address: "вул. Сагайдачного, 10", timezone: TZ, closedWeekdays: [], closures: [soon(2, 4)] },
-  { id: "k", name: "Beauty Lab · Печерськ", address: "вул. Лаврська, 7", phone: "+380445556677", timezone: TZ },
-];
-
-const specialists: Record<string, Specialist[]> = {
-  c: [
-    { id: "m", name: "Марина Бойко", role: "Майстер манікюру", nextFree: "Найближчий запис: 15:30" },
-    { id: "a", name: "Анна Шевчук", role: "Стиліст-колорист", nextFree: "Найближчий запис: 17:00" },
-    { id: "o", name: "Оксана Лис", role: "Косметолог", nextFree: "Найближчий запис: 16:00" },
-  ],
-  p: [
-    { id: "d", name: "Дарина Коваль", role: "Майстер манікюру", nextFree: "Найближчий запис: 14:00" },
-    { id: "i", name: "Ірина Мельник", role: "Барбер-стиліст", nextFree: "Найближчий запис: 15:00" },
-  ],
-  k: [
-    { id: "v", name: "Вікторія Руда", role: "Косметолог", nextFree: "Найближчий запис: 16:30" },
-    { id: "n", name: "Наталя Гук", role: "Майстер манікюру", nextFree: "Найближчий запис: 18:00" },
-  ],
+/** Публічний каталог закладів: активні, без причин закриття (§17). */
+const locations = (now: Date = new Date()): Location[] => {
+  const closures = closuresSeed(demoToday(now));
+  return DEMO_LOCATIONS.filter((l) => l.isActive !== false).map((l) => ({
+    id: l.id,
+    name: l.name,
+    address: l.address ?? undefined,
+    phone: l.phone ?? undefined,
+    timezone: l.timezone ?? "UTC",
+    closedWeekdays: l.closedWeekdays ?? [],
+    closures: closures.filter((c) => c.locationId === l.id).map(({ dateFrom, dateTo }) => ({ dateFrom, dateTo })),
+    workingHours: l.workingHours ?? null,
+  }));
 };
 
-const services: Service[] = [
-  { id: "mn", name: "Манікюр + гель-лак", durationMinutes: 90, priceOriginal: 900, priceFinal: 700, promoLabel: "−20% до кінця тижня", promotionId: "promo-week" },
-  { id: "hc", name: "Жіноча стрижка", durationMinutes: 60, priceOriginal: 650, priceFinal: 650 },
-  { id: "cl", name: "Чистка обличчя", durationMinutes: 75, priceOriginal: 1400, priceFinal: 1100, promoLabel: "−20% для нових клієнтів", promotionId: "promo-new" },
-];
+/** «Придатний» майстер закладу (§13): активний профіль і зв'язок, у графіку закладу є робочий інтервал, призначена послуга. */
+function suitableMasters(locationId: string) {
+  const loc = DEMO_LOCATIONS.find((l) => l.id === locationId);
+  if (!loc || loc.isActive === false) return [];
+  return STAFF.filter(
+    (m) =>
+      m.isActive &&
+      m.services.length > 0 &&
+      m.locations.some((l) => l.locationId === locationId && l.isActive !== false && Object.values(l.workingHours).some((d) => (d?.length ?? 0) > 0)),
+  );
+}
 
-const SLOT_TIMES = ["11:30", "14:00", "17:00", "18:30"];
+const serviceView = (id: string): Service | null => {
+  const s = CATALOG.find((x) => x.id === id);
+  if (!s) return null;
+  return {
+    id: s.id,
+    name: s.name,
+    category: s.category,
+    durationMinutes: s.durationMinutes,
+    priceOriginal: s.price,
+    priceFinal: s.promo ? promoPrice(s.price) : s.price,
+    ...(s.promo ? { promoLabel: `−${PROMO_PERCENT}% · ${s.promo}`, promotionId: `promo-${s.id}` } : {}),
+  };
+};
+
 const STORE_KEY = "beauty-booking-mock-appointments";
 
 interface Stored extends Appointment {
@@ -85,11 +92,47 @@ function saveStore(s: Record<string, Stored>) {
   window.sessionStorage.setItem(STORE_KEY, JSON.stringify(s));
 }
 
-function slotIso(date: string, hhmm: string): string {
-  const [h, m] = hhmm.split(":").map(Number);
-  const d = new Date(`${date}T00:00:00`);
-  d.setHours(h, m, 0, 0);
-  return d.toISOString();
+/**
+ * Слоти за правилами графік ∩ години ∩ вихідні ∩ відсутності; зайняте - записи демо-набору і цього сеансу.
+ * Для «будь-якого майстра» однаковий час різних майстрів дедуплікується (перший придатний).
+ */
+export function mockSlots(q: { locationId: string; specialistId: string; serviceId: string; date: string }, now: Date = new Date()) {
+  const loc = locations(now).find((l) => l.id === q.locationId);
+  const svc = CATALOG.find((s) => s.id === q.serviceId);
+  if (!loc || !svc) return [];
+  const today = demoToday(now);
+  const absences = absencesSeed(today);
+  const seed = appointmentsSeed(today, now).filter((a) => a.status !== "cancelled");
+  const stored = Object.values(loadStore()).filter((a) => a.status !== "cancelled");
+  const nowLocal = instantToLocal(now.toISOString(), loc.timezone);
+  const minStart = q.date < nowLocal.slice(0, 10) ? 1440 : q.date === nowLocal.slice(0, 10) ? toMinutes(nowLocal.slice(11, 16)) : 0;
+  const out: { specialistId: string; start: number }[] = [];
+  for (const m of suitableMasters(q.locationId)) {
+    if (q.specialistId !== ANY_SPECIALIST_ID && m.id !== q.specialistId) continue;
+    if (!m.services.some((s) => s.id === q.serviceId)) continue;
+    const link = m.locations.find((l) => l.locationId === q.locationId && l.isActive !== false)!;
+    const day = dayAvailability(
+      q.date,
+      { masterHours: link.workingHours, locationHours: loc.workingHours, closedWeekdays: loc.closedWeekdays as Weekday[], closures: loc.closures },
+      blocksOn(absences, m.id, q.date),
+    );
+    const busy = [
+      ...seed
+        .filter((a) => a.specialistId === m.id && a.startsAt.slice(0, 10) === q.date)
+        .map((a) => ({ from: toMinutes(a.startsAt.slice(11, 16)), to: toMinutes(a.startsAt.slice(11, 16)) + a.durationMinutes })),
+      ...stored
+        .filter((a) => a.specialistId === m.id)
+        .map((a) => ({ local: instantToLocal(a.startsAt, loc.timezone), dur: a.durationMinutes }))
+        .filter((a) => a.local.slice(0, 10) === q.date)
+        .map((a) => ({ from: toMinutes(a.local.slice(11, 16)), to: toMinutes(a.local.slice(11, 16)) + a.dur })),
+    ];
+    for (const start of slotStarts(day, svc.durationMinutes, { busy, minStart })) out.push({ specialistId: m.id, start });
+  }
+  const seen = new Set<number>();
+  return out
+    .sort((a, b) => a.start - b.start)
+    .filter((s) => (seen.has(s.start) ? false : (seen.add(s.start), true)))
+    .map((s) => ({ ...s, label: hhmm(s.start), startsAt: localToUtcIso(`${q.date}T${hhmm(s.start)}`, loc.timezone) }));
 }
 
 const publicView = (s: Stored): Appointment => {
@@ -100,38 +143,27 @@ const publicView = (s: Stored): Appointment => {
 };
 
 export const mockBookingApi: BookingApi = {
-  getLocations: () => delay(locations),
+  getLocations: () => delay(locations()),
 
   getSpecialists: (_t, locationId) =>
-    delay([
+    delay<Specialist[]>([
       {
         id: ANY_SPECIALIST_ID,
         name: "Будь-який спеціаліст",
         role: "Підберемо найближчий вільний час",
         nextFree: "Швидший запис",
       },
-      ...(specialists[locationId] ?? []),
+      ...suitableMasters(locationId).map((m) => ({ id: m.id, name: m.name, role: m.position ?? "" })),
     ]),
 
-  getServices: () => delay(services),
+  getServices: (_t, locationId, specialistId) => {
+    const masters = suitableMasters(locationId).filter((m) => specialistId === ANY_SPECIALIST_ID || m.id === specialistId);
+    const ids = [...new Set(masters.flatMap((m) => m.services.map((s) => s.id)))];
+    return delay(ids.map(serviceView).filter((s): s is Service => s !== null));
+  },
 
-  async getSlots(_t, { locationId, specialistId, serviceId, date }) {
-    const taken = Object.values(loadStore())
-      .filter(
-        (a) =>
-          a.locationId === locationId &&
-          a.status !== "cancelled" &&
-          a.serviceName === services.find((s) => s.id === serviceId)?.name &&
-          (specialistId === ANY_SPECIALIST_ID || a.specialistId === specialistId),
-      )
-      .map((a) => a.startsAt);
-    const now = Date.now();
-    // Закритий день перекриває графіки (§17): слотів немає.
-    if (isClosedDate(date, locations.find((l) => l.id === locationId))) return delay([]);
-    const slots = SLOT_TIMES.map((label) => ({ label, startsAt: slotIso(date, label), specialistId, cancellation: TERMS }))
-      .filter((s) => new Date(s.startsAt).getTime() > now)
-      .filter((s) => !taken.includes(s.startsAt));
-    return delay(slots);
+  async getSlots(_t, q) {
+    return delay(mockSlots(q).map((s) => ({ label: s.label, startsAt: s.startsAt, specialistId: s.specialistId, cancellation: TERMS })));
   },
 
   async createAppointment(_t, req) {
@@ -139,22 +171,20 @@ export const mockBookingApi: BookingApi = {
     if (!parsed.success) throw new BookingApiError(422, "invalid_request");
     const r = parsed.data;
     if (r.website) throw new BookingApiError(422, "invalid_request");
-    const location = locations.find((l) => l.id === r.locationId);
-    const service = services.find((s) => s.id === r.serviceId);
+    const location = locations().find((l) => l.id === r.locationId);
+    const service = serviceView(r.serviceId);
     if (!location || !service) throw new BookingApiError(422, "invalid_request");
-    // Публічний API віддає узагальнену відповідь без причини закриття (§17).
-    if (isClosedDate(r.startsAt.slice(0, 10), location)) throw new BookingApiError(409, "slot_unavailable");
-
-    const pool = specialists[r.locationId] ?? [];
-    const store = loadStore();
-    const busy = (specId: string) =>
-      Object.values(store).some((a) => a.specialistId === specId && a.startsAt === r.startsAt && a.status !== "cancelled");
-    const specialist =
-      r.specialistId === ANY_SPECIALIST_ID
-        ? pool.find((s) => !busy(s.id))
-        : pool.find((s) => s.id === r.specialistId && !busy(s.id));
+    const local = instantToLocal(r.startsAt, location.timezone);
+    // Публічний API віддає узагальнену відповідь без причини (закритий день, години, відсутність, зайнято - §17/§18).
+    if (isClosedDate(local.slice(0, 10), location)) throw new BookingApiError(409, "slot_unavailable");
+    const start = toMinutes(local.slice(11, 16));
+    const match = mockSlots({ locationId: r.locationId, specialistId: r.specialistId, serviceId: r.serviceId, date: local.slice(0, 10) }).find(
+      (s) => s.start === start,
+    );
+    const specialist = match ? STAFF.find((m) => m.id === match.specialistId) : undefined;
     if (!specialist) throw new BookingApiError(409, "slot_unavailable");
 
+    const store = loadStore();
     const token = `mock${crypto.randomUUID().replace(/-/g, "")}`;
     const durationMs = service.durationMinutes * 60_000;
     store[token] = {

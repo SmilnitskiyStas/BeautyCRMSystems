@@ -223,6 +223,8 @@ export interface StaffLocation {
   locationId: LocationId;
   locationName: string;
   workingHours: WorkingHours;
+  /** `false` = зв'язок знято (графік збережено, але слотів і записів у закладі немає). Відсутнє = активний. */
+  isActive?: boolean;
 }
 
 /** Працівник (§13). `phone` відсутній для ролі specialist (довідник). */
@@ -311,6 +313,37 @@ export interface CalendarMaster {
   toMoveCount: number;
 }
 
+/** Інтервал у хвилинах від початку доби (локальний час закладу). */
+export interface MinuteInterval {
+  from: number;
+  to: number;
+}
+
+/** Чому день повністю недоступний (або `open`). Пріоритет як у backend: закритий день -> відсутність -> години -> графік. */
+export type DayState = "open" | "location_closed" | "absence" | "location_hours_off" | "master_off";
+
+/** Доступність майстра в закладі на один день: графік ∩ години закладу ∩ не вихідний (§18.1). */
+export interface DayAvailability {
+  /** `YYYY-MM-DD` */
+  date: string;
+  state: DayState;
+  /** Графік майстра в цьому закладі. */
+  master: MinuteInterval[];
+  /** Години закладу; `null` = не задано (обмеження немає). */
+  location: MinuteInterval[] | null;
+  /** Перетин (де можна записати); порожньо для закритого дня й відсутності. */
+  free: MinuteInterval[];
+  /** Заклад працює, а майстер ні: підпис «Не працює». */
+  masterOff: MinuteInterval[];
+  /** Поза годинами закладу: підпис «Заклад зачинено». */
+  hoursOff: MinuteInterval[];
+}
+
+export interface CalendarLocation {
+  id: LocationId;
+  name: string;
+}
+
 export interface CalendarWeek {
   weekLabel: string;
   /** Понеділок тижня, `YYYY-MM-DD`. */
@@ -322,6 +355,19 @@ export interface CalendarWeek {
   appointments: Appointment[];
   /** 7 елементів (пн..нд): закритий день закладу майстра (§17) або `null`. Відсутнє = жодного закритого дня. */
   closedDays?: (ClosedDay | null)[];
+  /** Активні заклади майстра (чипи вибору закладу). Відсутнє = один заклад без вибору. */
+  locations?: CalendarLocation[];
+  /** Вибраний заклад: доступність і записи показані саме для нього. */
+  locationId?: LocationId;
+  /** 7 елементів (пн..нд). Відсутнє (старий клієнт) = календар без затінення доступності. */
+  availability?: DayAvailability[];
+  /** Діапазон сітки, години доби [start, end); підлаштований під години закладу/графік. */
+  gridStartHour?: number;
+  gridEndHour?: number;
+  /** Не вдалося завантажити закриття/вихідні закладу: календар може показувати закриті дні робочими. */
+  availabilityWarning?: boolean;
+  /** Скільки записів майстра цього тижня в інших його закладах (не показані). */
+  otherLocationsCount?: number;
 }
 
 export interface PriceListRow {

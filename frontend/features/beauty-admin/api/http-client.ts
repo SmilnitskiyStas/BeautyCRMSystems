@@ -1,9 +1,11 @@
 import { BeautyApiError } from "@/features/beauty-auth/errors";
 import { apiJson, getUser } from "@/features/beauty-auth/session";
 import { mastersForCalendar } from "../calendar-masters";
-import { closedDayForMaster, type MasterLocationRules } from "../closed-days";
-import { dateTimeLabel, money } from "../format";
+import { dateTimeLabel, money, weekDayLabels, weekRangeLabel } from "../format";
+import { isLinkActive } from "../staff-links";
 import { normalizeHours } from "../working-hours";
+import { buildWeekAvailability } from "../../beauty-shared/availability";
+import { instantToLocal, localToUtcIso, weekInZone } from "../../beauty-shared/zone-time";
 import type {
   AiRequest,
   Appointment,
@@ -13,7 +15,6 @@ import type {
   CancelledBy,
   CancellationSettings,
   ChannelConfig,
-  ClosedDay,
   LocationClosure,
   Weekday,
   ChannelId,
@@ -79,6 +80,13 @@ interface AppointmentDto {
   cancelledAt?: string | null;
   cancelledBy?: { type?: string; name?: string | null } | null;
   cancelReason?: string | null;
+}
+/** `GET /overview` (§14.5): доба в зоні закладу, усі статуси записів, KPI. */
+interface OverviewResponse {
+  date: string;
+  timezone: string;
+  appointments: AppointmentDto[];
+  kpi: { appointmentsCount: number; revenue: number; newClients: number; freeSlots: number };
 }
 interface LocationDto {
   id: string;
@@ -176,23 +184,18 @@ interface AiActionDto {
 
 // ---------- дати ----------
 
-const pad = (n: number) => String(n).padStart(2, "0");
-const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const localOf = (iso: string) => iso.slice(0, 16);
-const offsetOf = (iso: string) => /(Z|[+-]\d{2}:\d{2})$/.exec(iso)?.[1];
 const dayLabel = (iso: string) =>
   new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString("uk-UA", { day: "numeric", month: "long" });
-const addDaysYmd = (s: string, n: number) => {
-  const d = new Date(Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10) + n));
-  return d.toISOString().slice(0, 10);
-};
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 const addDays = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
 const mondayOf = (d: Date) => addDays(startOfDay(d), -((d.getDay() + 6) % 7));
 const range = (from: Date, to: Date) => `from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`;
 
-/** Зсуви часової зони записів, щоб перенос зберігав зону закладу. */
-const offsets = new Map<string, string>();
+/**
+ * Зона закладу кожного завантаженого запису: backend віддає `startsAt` у UTC (F2), тож для показу переводимо момент у
+ * зону закладу, а при переносі збираємо UTC-момент із локального часу саме цієї зони.
+ */
+const zones = new Map<string, string>();
 
 // ---------- мапінг ----------
 
@@ -235,9 +238,9 @@ const toLocation = (l: LocationDto): BeautyLocation => ({
   isActive: l.isActive,
 });
 
-function toAppointment(a: AppointmentDto): Appointment {
-  const off = offsetOf(a.startsAt);
-  if (off) offsets.set(a.id, off);
+function toAppointment(a: AppointmentDto, fallbackZone?: string): Appointment {
+  const zone = a.timezone ?? fallbackZone;
+  if (zone) zones.set(a.id, zone);
   return {
     id: a.id,
     locationId: a.locationId,
@@ -246,7 +249,7 @@ function toAppointment(a: AppointmentDto): Appointment {
     clientId: a.clientId,
     clientName: a.clientName,
     serviceName: a.serviceName,
-    startsAt: localOf(a.startsAt),
+    startsAt: instantToLocal(a.startsAt, zone),
     durationMinutes: a.durationMinutes,
     status: statusOf(a.status),
     source: (["admin", "online", "telegram", "instagram"].includes(a.source) ? a.source : "admin") as Appointment["source"],
@@ -274,6 +277,12 @@ const clientSummary = (c: ClientDto): ClientSummary => ({
   meta: c.lastVisitAt ? `Візитів: ${c.visits} · останній ${dayLabel(c.lastVisitAt)}` : "Ще не було візитів",
   tag: clientTag(c),
 });
+
+/** «5 жовтня, 10:00» у зоні закладу запису (F2: `startsAt` приходить у UTC). */
+function historyLabel(a: AppointmentDto): string {
+  const local = instantToLocal(a.startsAt, a.timezone);
+  return `${dayLabel(local)}, ${local.slice(11, 16)}`;
+}
 
 const TYPE_BY_ID: Record<ChannelId, string> = {
   tg: "telegram",
@@ -436,6 +445,8 @@ const toStaff = (r: SpecialistDto): StaffMember => ({
     locationId: l.locationId,
     locationName: l.locationName,
     workingHours: l.workingHours ?? {},
+    // F5: знятий зв'язок (`isActive=false`) не відкидаємо - інакше він виглядає як чинний заклад майстра.
+    isActive: l.isActive !== false,
   })),
 });
 
@@ -459,31 +470,13 @@ const toAbsenceResult = (a: AbsenceDto): AbsenceResult => ({
   })),
 });
 
-/**
- * Закриті дні тижня для майстра (§17): `closedWeekdays` із `GET /locations`, закриття - `GET /locations/{id}/closures`.
- * Збій цих запитів не ламає календар (записи важливіші): тоді день просто не затіняється.
- */
-async function loadClosedDays(weekStart: string, master: SpecialistDto | undefined): Promise<(ClosedDay | null)[]> {
-  const none = Array.from({ length: 7 }, () => null);
-  if (!master || master.locations.length === 0) return none;
-  const weekEnd = addDaysYmd(weekStart, 6);
+/** Закриття закладу на тиждень (§17). Збій не ламає календар, але про нього треба повідомити (F9): `failed`. */
+async function loadClosures(locationId: string, weekStart: string, weekEnd: string): Promise<{ list: LocationClosure[]; failed: boolean }> {
   try {
-    const known = await get<LocationDto[]>("/locations");
-    const rules: MasterLocationRules[] = await Promise.all(
-      master.locations.map(async (l) => {
-        const closures = await get<ClosureDto[]>(
-          `/locations/${encodeURIComponent(l.locationId)}/closures?from=${weekStart}&to=${weekEnd}`,
-        );
-        return {
-          workingHours: l.workingHours ?? {},
-          closedWeekdays: toWeekdays(known.find((k) => k.id === l.locationId)?.closedWeekdays),
-          closures: closures.map((c) => toClosure(c, l.locationId)),
-        };
-      }),
-    );
-    return Array.from({ length: 7 }, (_, i) => closedDayForMaster(addDaysYmd(weekStart, i), rules));
+    const rows = await get<ClosureDto[]>(`/locations/${encodeURIComponent(locationId)}/closures?from=${weekStart}&to=${weekEnd}`);
+    return { list: rows.map((c) => toClosure(c, locationId)), failed: false };
   } catch {
-    return none;
+    return { list: [], failed: true };
   }
 }
 
@@ -550,72 +543,97 @@ export const httpBeautyApi: BeautyAdminApi = {
   },
 
   getOverview: async (locationId: LocationId | null) => {
-    const today = startOfDay(new Date());
-    const q = locationId ? `&locationId=${locationId}` : "";
-    const [appts, clients, net] = await Promise.all([
-      weeklyAppointments(today, addDays(today, 1), q),
-      get<ClientDto[]>("/clients?pageSize=6"),
-      get<NetworkDto>(`/analytics/network?${range(today, addDays(today, 1))}`),
-    ]);
-    const live = appts.filter((a) => a.status !== "cancelled");
+    // F9: `GET /overview` (§14.5) віддає записи доби в зоні закладу й KPI з урахуванням годин/вихідних/відсутностей.
+    // Доступний owner/admin - саме їм належить екран «Огляд» (specialist на нього не потрапляє, див. `canOpen`).
+    const q = locationId ? `?locationId=${encodeURIComponent(locationId)}` : "";
+    const [o, clients] = await Promise.all([get<OverviewResponse>(`/overview${q}`), get<ClientDto[]>("/clients?pageSize=6")]);
+    const live = o.appointments.filter((a) => a.status !== "cancelled").sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
+    const completed = live.filter((a) => a.status === "completed").length;
     const overview: Overview = {
-      dateLabel: today.toLocaleDateString("uk-UA", { day: "numeric", month: "long" }),
+      dateLabel: new Date(`${o.date.slice(0, 10)}T00:00:00Z`).toLocaleDateString("uk-UA", { day: "numeric", month: "long", timeZone: "UTC" }),
       kpis: [
-        { label: "Записів сьогодні", value: String(live.length), note: `завершено: ${net.completed}` },
-        { label: "Виручка за день", value: money(net.revenue), note: "завершені візити" },
-        { label: "Нові клієнти", value: String(net.newClients), note: "за добу" },
-        { label: "Скасовано", value: String(net.cancelled), note: `не прийшли: ${net.noShow}` },
+        { label: "Записів сьогодні", value: String(o.kpi.appointmentsCount), note: `завершено: ${completed}` },
+        { label: "Виручка за день", value: money(o.kpi.revenue), note: "завершені візити" },
+        { label: "Нові клієнти", value: String(o.kpi.newClients), note: "за добу" },
+        { label: "Вільних слотів", value: String(o.kpi.freeSlots), note: "до кінця дня" },
       ],
-      rows: live
-        .sort((a, b) => a.startsAt.localeCompare(b.startsAt))
-        .map((a) => ({
-          id: a.id,
-          time: a.startsAt.slice(11, 16),
-          clientId: a.clientId,
-          clientName: a.clientName,
-          serviceName: a.serviceName,
-          specialistId: a.specialistId,
-          specialistName: a.specialistName,
-          locationId: a.locationId,
-          locationName: a.locationName,
-          status: statusOf(a.status),
-        })),
+      rows: live.map((a) => ({
+        id: a.id,
+        time: instantToLocal(a.startsAt, a.timezone ?? o.timezone).slice(11, 16),
+        clientId: a.clientId,
+        clientName: a.clientName,
+        serviceName: a.serviceName,
+        specialistId: a.specialistId,
+        specialistName: a.specialistName,
+        locationId: a.locationId,
+        locationName: a.locationName,
+        status: statusOf(a.status),
+      })),
       clients: clients.map(clientSummary),
     };
     return overview;
   },
 
-  getCalendarWeek: async (specialistId, includeCancelled = false) => {
-    const monday = mondayOf(new Date());
-    const sunday = addDays(monday, 6);
+  getCalendarWeek: async (specialistId, includeCancelled = false, requestedLocationId) => {
+    const [roster, known] = await Promise.all([get<SpecialistDto[]>("/specialists"), get<LocationDto[]>("/locations")]);
+    const zoneOf = (id: string | undefined) => known.find((k) => k.id === id)?.timezone;
+    const fetchWeek = (w: { from: Date; to: Date }, extra = "") => weeklyAppointments(w.from, w.to, extra);
+    // Тиждень рахуємо у зоні закладу; спершу - у зоні першого закладу (майстер, а отже й заклад, ще не відомі).
+    let week = weekInZone(known[0]?.timezone);
     // Без скасованих (дефолт API): за ними будуємо селектор майстрів; неактивним потрібні перенесення.
-    const [live, roster] = await Promise.all([weeklyAppointments(monday, addDays(monday, 7)), get<SpecialistDto[]>("/specialists")]);
+    let live = await fetchWeek(week);
     const me = getUser();
-    const masters = mastersForCalendar(
-      roster.map((r) => ({ id: r.id, name: r.name, isActive: r.isActive, locationNames: r.locations.map((l) => l.locationName) })),
-      live.map((a) => ({ specialistId: a.specialistId, status: statusOf(a.status) })),
-      me?.role === "specialist" ? me.specialistId : null,
-    );
+    const buildMasters = () =>
+      mastersForCalendar(
+        roster.map((r) => ({ id: r.id, name: r.name, isActive: r.isActive, locationNames: r.locations.filter(isLinkActive).map((l) => l.locationName) })),
+        live.map((a) => ({ specialistId: a.specialistId, status: statusOf(a.status) })),
+        me?.role === "specialist" ? me.specialistId : null,
+      );
+    let masters = buildMasters();
     const effective = masters.find((m) => m.id === specialistId)?.id ?? masters[0]?.id ?? specialistId;
-    const closedDays = await loadClosedDays(
-      ymd(monday),
-      roster.find((r) => r.id === effective),
-    );
-    const shown = includeCancelled ? await weeklyAppointments(monday, addDays(monday, 7), "&includeCancelled=true") : live;
-    const fmt = (d: Date) => d.toLocaleDateString("uk-UA", { day: "numeric", month: "long" });
+    const master = roster.find((r) => r.id === effective);
+    const links = master ? master.locations.filter(isLinkActive) : [];
+    const chosen = links.find((l) => l.locationId === requestedLocationId) ?? links[0];
+    const zone = zoneOf(chosen?.locationId) ?? known[0]?.timezone;
+    const right = weekInZone(zone);
+    if (right.monday !== week.monday || right.from.getTime() !== week.from.getTime()) {
+      week = right;
+      live = await fetchWeek(week);
+      masters = buildMasters();
+    }
+    const shown = includeCancelled ? await fetchWeek(week, "&includeCancelled=true") : live;
+
+    // Доступність: графік майстра в обраному закладі ∩ години закладу ∩ вихідні/закриття (§17, §18.1).
+    let availability: ReturnType<typeof buildWeekAvailability> | null = null;
+    let availabilityWarning = false;
+    if (chosen) {
+      const loc = known.find((k) => k.id === chosen.locationId);
+      const closures = await loadClosures(chosen.locationId, week.monday, week.sunday);
+      availabilityWarning = closures.failed || !loc;
+      availability = buildWeekAvailability(week.monday, {
+        masterHours: chosen.workingHours ?? {},
+        locationHours: loc?.workingHours && typeof loc.workingHours === "object" ? normalizeHours(loc.workingHours) : null,
+        closedWeekdays: toWeekdays(loc?.closedWeekdays),
+        closures: closures.list,
+      });
+    }
+    const mine = shown.filter((a) => a.specialistId === effective && (includeCancelled || a.status !== "cancelled"));
+    const here = mine.filter((a) => !chosen || a.locationId === chosen.locationId);
     return {
-      weekLabel: `Тиждень ${fmt(monday)} – ${fmt(sunday)}`,
-      weekStart: ymd(monday),
-      days: Array.from({ length: 7 }, (_, i) => {
-        const d = addDays(monday, i);
-        return `${d.toLocaleDateString("uk-UA", { weekday: "short" }).replace(/^./, (c) => c.toUpperCase())} ${d.getDate()}`;
-      }),
+      weekLabel: weekRangeLabel(week.monday),
+      weekStart: week.monday,
+      days: weekDayLabels(week.monday),
       masters,
       specialistId: effective,
-      closedDays,
-      appointments: shown
-        .filter((a) => a.specialistId === effective && (includeCancelled || a.status !== "cancelled"))
-        .map(toAppointment),
+      closedDays: availability?.closedDays ?? [null, null, null, null, null, null, null],
+      appointments: here.map((a) => toAppointment(a, zoneOf(a.locationId) ?? zone)),
+      locations: links.map((l) => ({ id: l.locationId, name: l.locationName })),
+      ...(chosen ? { locationId: chosen.locationId } : {}),
+      ...(availability
+        ? { availability: availability.availability, gridStartHour: availability.gridStartHour, gridEndHour: availability.gridEndHour }
+        : {}),
+      ...(availabilityWarning ? { availabilityWarning: true } : {}),
+      otherLocationsCount: mine.length - here.length,
     };
   },
 
@@ -632,9 +650,9 @@ export const httpBeautyApi: BeautyAdminApi = {
   },
 
   moveAppointment: async (id, startsAt) => {
+    // `startsAt` - локальний час закладу; на backend йде UTC-момент, зібраний у зоні закладу саме цього запису.
     const local = startsAt.length === 16 ? `${startsAt}:00` : startsAt;
-    const offset = offsets.get(id) ?? offsetFromBrowser(startsAt);
-    await send("PATCH", `/appointments/${id}`, { startsAt: `${local}${offset}` });
+    await send("PATCH", `/appointments/${id}`, { startsAt: localToUtcIso(local, zones.get(id)) });
   },
 
   getCancellationSettings: () => get<CancellationSettings>("/settings/cancellation"),
@@ -672,7 +690,7 @@ export const httpBeautyApi: BeautyAdminApi = {
         d.client.cancelledByClientCount ?? cancelledRows.filter((a) => a.cancelledBy?.type === "client").length,
       visits: d.history.map((a) => ({
         id: a.id,
-        dateLabel: `${dayLabel(a.startsAt)}, ${a.startsAt.slice(11, 16)}`,
+        dateLabel: historyLabel(a),
         serviceName: a.serviceName,
         specialistId: a.specialistId,
         specialistName: a.specialistName,
@@ -939,10 +957,3 @@ export const httpBeautyApi: BeautyAdminApi = {
   getAiPromoPlan: () => Promise.resolve(unsupported("AI promo plan")),
   launchAiCampaign: () => Promise.resolve(unsupported("AI campaign")),
 };
-
-/** Зсув браузера як запасний варіант (`+03:00`), якщо запис не завантажувався в цій сесії. */
-function offsetFromBrowser(local: string): string {
-  const off = -new Date(local).getTimezoneOffset();
-  const sign = off >= 0 ? "+" : "-";
-  return `${sign}${pad(Math.floor(Math.abs(off) / 60))}:${pad(Math.abs(off) % 60)}`;
-}

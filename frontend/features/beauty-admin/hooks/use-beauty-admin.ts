@@ -24,7 +24,7 @@ export const beautyKeys = {
   managedLocations: ["beauty", "locations", "manage"] as const,
   closures: (id: LocationId, from: string, to: string) => ["beauty", "closures", id, from, to] as const,
   overview: (loc: LocationId | null) => ["beauty", "overview", loc] as const,
-  calendar: (id: string, includeCancelled = false) => ["beauty", "calendar", id, includeCancelled] as const,
+  calendar: (id: string, includeCancelled = false, locationId = "") => ["beauty", "calendar", id, includeCancelled, locationId] as const,
   upcoming: (id: string) => ["beauty", "upcoming", id] as const,
   clients: ["beauty", "clients"] as const,
   client: (id: string) => ["beauty", "client", id] as const,
@@ -124,10 +124,10 @@ export const useOverview = (locationId: LocationId | null) =>
     placeholderData: keepPreviousData,
   });
 
-export const useCalendarWeek = (specialistId: string, includeCancelled = false) =>
+export const useCalendarWeek = (specialistId: string, includeCancelled = false, locationId = "") =>
   useQuery({
-    queryKey: beautyKeys.calendar(specialistId, includeCancelled),
-    queryFn: () => beautyApi.getCalendarWeek(specialistId, includeCancelled),
+    queryKey: beautyKeys.calendar(specialistId, includeCancelled, locationId),
+    queryFn: () => beautyApi.getCalendarWeek(specialistId, includeCancelled, locationId || undefined),
     placeholderData: keepPreviousData,
   });
 
@@ -296,10 +296,11 @@ export const useCreatePromotion = () =>
 export const useNetworkAnalytics = () =>
   useQuery({ queryKey: beautyKeys.network, queryFn: () => beautyApi.getNetworkAnalytics() });
 
-export const useLocationAnalytics = (id: LocationId) =>
+export const useLocationAnalytics = (id: LocationId, enabled = true) =>
   useQuery({
     queryKey: beautyKeys.locationAnalytics(id),
     queryFn: () => beautyApi.getLocationAnalytics(id),
+    enabled: enabled && id !== "",
     placeholderData: keepPreviousData,
   });
 

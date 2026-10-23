@@ -68,13 +68,15 @@ export interface BeautyAdminApi {
   addClosure(id: LocationId, input: ClosureInput): Promise<LocationClosure>;
   /** DELETE /locations/{id}/closures/{closureId} (owner, admin) */
   deleteClosure(id: LocationId, closureId: string): Promise<void>;
-  /** GET /appointments?date&locationId (огляд дня) + /clients (останні) */
+  /** GET /overview?date&locationId (§14.5, owner/admin) + /clients (останні) */
   getOverview(locationId: LocationId | null): Promise<Overview>;
   /**
    * GET /appointments?from&to[&includeCancelled=true]; порожній `specialistId` = перший майстер зі списку.
    * За замовчуванням БЕЗ скасованих (§16); `includeCancelled` додає їх до записів вибраного майстра.
+   * `locationId` - заклад, обраний у календарі (майстер може працювати в кількох); порожній = перший активний заклад майстра.
+   * Час записів - локальний час закладу; тиждень і «сьогодні» - за зоною закладу (аудит TASK-705).
    */
-  getCalendarWeek(specialistId: string, includeCancelled?: boolean): Promise<CalendarWeek>;
+  getCalendarWeek(specialistId: string, includeCancelled?: boolean, locationId?: LocationId): Promise<CalendarWeek>;
   /** GET /appointments?specialistId (найближчі 60 днів): кількість майбутніх pending/confirmed записів майстра */
   getUpcomingAppointmentsCount(specialistId: string): Promise<number>;
   /** PATCH /appointments/{id} { startsAt } — перенос. `startsAt` = локальний час закладу `YYYY-MM-DDTHH:mm` */

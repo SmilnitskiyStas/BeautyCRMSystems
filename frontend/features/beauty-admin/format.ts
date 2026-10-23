@@ -92,3 +92,18 @@ export function dateTimeLabel(startsAt: string, timeZone?: string): string {
   }
   return `${shortDate(startsAt.slice(0, 10))}, ${startsAt.slice(11, 16)}`;
 }
+
+/** Підписи 7 днів тижня «Пн 26»... від понеділка `weekStart` (`YYYY-MM-DD`). */
+export function weekDayLabels(weekStart: string): string[] {
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(UTC(addDaysIso(weekStart, i)));
+    const wd = d.toLocaleDateString("uk-UA", { weekday: "short", timeZone: "UTC" }).replace(/^./, (c) => c.toUpperCase());
+    return `${wd} ${d.getUTCDate()}`;
+  });
+}
+
+/** «Тиждень 26 жовтня – 1 листопада». */
+export function weekRangeLabel(weekStart: string): string {
+  const f = (ymd: string) => new Date(UTC(ymd)).toLocaleDateString("uk-UA", { day: "numeric", month: "long", timeZone: "UTC" });
+  return `Тиждень ${f(weekStart)} – ${f(addDaysIso(weekStart, 6))}`;
+}

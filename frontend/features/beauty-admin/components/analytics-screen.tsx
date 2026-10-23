@@ -50,9 +50,15 @@ function NetworkTab() {
 }
 
 function LocationsTab() {
-  const [loc, setLoc] = useState("c");
+  // F6: не стартуємо з вигаданого id (`GET /appointments?locationId=c` -> 422): початковий заклад = перший реальний.
+  const [chosen, setLoc] = useState<string | null>(null);
   const locations = useLocations();
-  const q = useLocationAnalytics(loc);
+  const list = locations.data ?? [];
+  const loc = (chosen !== null && list.some((l) => l.id === chosen) ? chosen : list[0]?.id) ?? "";
+  const q = useLocationAnalytics(loc, loc !== "");
+  if (locations.isSuccess && list.length === 0) {
+    return <p className="text-sm text-(--muted)">Закладів ще немає: додайте заклад, щоб побачити аналітику по закладах.</p>;
+  }
   return (
     <>
       <div className="flex flex-wrap gap-2" role="group" aria-label="Заклад">
@@ -62,7 +68,7 @@ function LocationsTab() {
           </Chip>
         ))}
       </div>
-      <QueryState isPending={q.isPending} isError={q.isError} onRetry={() => q.refetch()}>
+      <QueryState isPending={locations.isPending || q.isPending} isError={locations.isError || q.isError} onRetry={() => { void locations.refetch(); void q.refetch(); }}>
         {q.data ? (
           <>
             <KpiGrid items={q.data.kpis} />

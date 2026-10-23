@@ -1,10 +1,14 @@
 import { BeautyApiError } from "@/features/beauty-auth/errors";
-import { money } from "../format";
+import { money, dayIndex, weekDayLabels, weekRangeLabel } from "../format";
 import { mastersForCalendar } from "../calendar-masters";
-import { closedDayForMaster, closedDayInfo, localDateIn, validateClosure, weekdayOf } from "../closed-days";
+import { closedDayInfo, localDateIn, validateClosure, weekdayOf } from "../closed-days";
 import { isValidTimeZone } from "../locations-logic";
 import { outsideHours } from "../location-hours";
+import { activeLinks } from "../staff-links";
 import { normalizeHours, validateHours } from "../working-hours";
+import { DEMO_TZ, blocksOn, demoToday } from "../../beauty-shared/demo-seed";
+import { buildWeekAvailability, countFreeSlots, dayAvailability, slotStarts, toMinutes, type PlaceRules } from "../../beauty-shared/availability";
+import { instantToLocal, mondayOfYmd } from "../../beauty-shared/zone-time";
 import type { BeautyAdminApi } from "./client";
 import {
   AI_GOALS,
@@ -13,18 +17,17 @@ import {
   ANALYTICS_LOCS,
   ANALYTICS_PROMOS,
   ANALYTICS_WEEKS,
-  CALENDAR_DAYS,
-  CLIENTS,
   CLOSURES_SEED,
   DEFAULT_GREETING,
   INITIAL_CHANNELS,
   LOCATIONS,
-  OVERVIEW_ROWS,
   PRICE_LIST,
   ABSENCES_SEED,
   SERVICES,
   STAFF_SEED,
-  appointmentsFor,
+  clientProfileFor,
+  clientSummaries,
+  demoAppointments,
   type MockAbsence,
 } from "./mock-data";
 import type {
@@ -34,6 +37,7 @@ import type {
   AbsenceConflict,
   AbsenceResult,
   AiPromoPlan,
+  Appointment,
   BeautyLocation,
   CancelledBy,
   CancellationSettings,
@@ -59,41 +63,67 @@ const channels: ChannelConfig[] = INITIAL_CHANNELS.map((c) => ({ ...c, greeting:
 const requests = AI_REQUESTS.map((r) => ({ ...r }));
 const chatMessages: AiChatMessage[] = [
   { from: "client", text: "Привіт! Нагадайте, о котрій мій запис?" },
-  { from: "staff", text: "Добрий день, Олено! Ваш запис 19 жовтня о 15:00 до Марини." },
+  { from: "staff", text: "Добрий день, Олено! Ваш запис найближчим часом у Марини." },
   { from: "client", text: "Чудово, дякую! А чи буде знижка на педикюр?" },
 ];
 /** Скасовані записи: хто, коли й чому (§16) - дані не видаляються. */
 const cancelled = new Map<string, { at: string; by: CancelledBy; reason?: string }>();
-const MOCK_APPT_OWNERS = ["m", "a", "o", "ng"];
-const allMockAppointments = () => MOCK_APPT_OWNERS.flatMap(appointmentsFor);
+const moved = new Map<string, string>();
 const locations: BeautyLocation[] = structuredClone(LOCATIONS);
-const todayMock = () => new Date().toISOString().slice(0, 10);
-/** Майбутні активні (pending/confirmed) записи закладу - для правил has_future_appointments / timezone_locked. */
-const hasFutureAt = (locationId: string) =>
-  allMockAppointments().some(
-    (a) => a.locationId === locationId && a.kind !== "break" && !cancelled.has(a.id) && a.startsAt.slice(0, 10) >= todayMock(),
-  );
 /** Закриття закладів на дати (§17). */
-const closures: LocationClosure[] = structuredClone(CLOSURES_SEED);
+const closures: LocationClosure[] = structuredClone(CLOSURES_SEED());
+
+/** Локальний «зараз» закладу `YYYY-MM-DDTHH:mm`. */
+const nowLocal = () => instantToLocal(new Date().toISOString(), DEMO_TZ);
+
+/** Роль демо-користувача збігається з `auth-provider` (NEXT_PUBLIC_MOCK_ROLE, за замовчуванням owner). */
+const mockRole = () => process.env.NEXT_PUBLIC_MOCK_ROLE ?? "owner";
+const isManager = () => mockRole() !== "specialist";
+const MOCK_SPECIALIST_ID = "m";
+
+/** Запис із урахуванням перенесень і скасувань; `cancelReason` лише керівникам (§16). */
+function viewOf(a: Appointment): Appointment {
+  const base = { ...a, startsAt: moved.get(a.id) ?? a.startsAt };
+  const c = cancelled.get(a.id);
+  return c
+    ? { ...base, status: "cancelled" as const, cancelledAt: c.at, cancelledBy: c.by, ...(c.reason && isManager() ? { cancelReason: c.reason } : {}) }
+    : base;
+}
+const allMockAppointments = (): Appointment[] => demoAppointments().map(viewOf);
+/** Майбутні активні (pending/confirmed) записи: правила has_future_appointments / timezone_locked / конфлікти. */
+const isUpcoming = (a: Appointment) =>
+  !cancelled.has(a.id) && (a.status === "pending" || a.status === "confirmed") && a.startsAt > nowLocal();
+const upcomingAt = (locationId: string) => allMockAppointments().filter((a) => a.locationId === locationId && isUpcoming(a));
+const hasFutureAt = (locationId: string) => upcomingAt(locationId).length > 0;
 
 const locationRules = (locationId: string) => ({
   closedWeekdays: locations.find((l) => l.id === locationId)?.closedWeekdays ?? [],
   closures: closures.filter((c) => c.locationId === locationId),
 });
 
+const staff: StaffMember[] = structuredClone(STAFF_SEED);
+const absences: MockAbsence[] = ABSENCES_SEED();
+const mockInvites: { staffId: string; id: string; email: string; expiresAt: string }[] = [];
+
+/** Правила доступності майстра в закладі (графік ∩ години ∩ вихідні) за поточним станом mock. */
+function placeOf(master: StaffMember | undefined, locationId: string): PlaceRules | null {
+  const link = master?.locations.find((l) => l.locationId === locationId && l.isActive !== false);
+  const loc = locations.find((l) => l.id === locationId);
+  if (!link || !loc) return null;
+  return { masterHours: link.workingHours, locationHours: loc.workingHours, ...locationRules(locationId) };
+}
+
 /**
  * Активні записи закладу, що потрапляють на НОВІ закриті дні (`isNewlyClosed`) - без клієнтських даних (§17).
- * Тиждень mock-даних статичний, тому всі нескасовані записи вважаємо майбутніми.
+ * Враховуються лише майбутні pending/confirmed записи (як у backend).
  */
 function conflictsOnNewClosedDays(locationId: string, isNewlyClosed: (date: string) => boolean): ClosedDayConflict[] {
   const tz = locations.find((l) => l.id === locationId)?.timezone;
-  return allMockAppointments()
-    .filter((a) => a.locationId === locationId && a.kind !== "break" && !cancelled.has(a.id))
-    .map((a) => ({ a, startsAt: moved.get(a.id) ?? a.startsAt }))
-    .filter(({ startsAt }) => isNewlyClosed(localDateIn(startsAt, tz)))
-    .map(({ a, startsAt }) => ({
+  return upcomingAt(locationId)
+    .filter((a) => isNewlyClosed(localDateIn(a.startsAt, tz)))
+    .map((a) => ({
       appointmentId: a.id,
-      startsAt,
+      startsAt: a.startsAt,
       serviceName: a.serviceName,
       specialistName: staff.find((m) => m.id === a.specialistId)?.name ?? "",
     }));
@@ -103,7 +133,6 @@ const confirmNeeded = (conflicts: ClosedDayConflict[]) =>
   new BeautyApiError(409, "has_appointments_on_closed_days", "appointments on closed days", undefined, conflicts);
 
 const nowLabel = () => new Date().toISOString();
-const moved = new Map<string, string>();
 let cancellationSettings: CancellationSettings = {
   windowHours: 12,
   refundPercentInWindow: 50,
@@ -111,16 +140,7 @@ let cancellationSettings: CancellationSettings = {
   deductFee: false,
   feePercent: 0,
 };
-const addedNotes:Record<string, ClientNote[]> = {};
-
-const staff: StaffMember[] = structuredClone(STAFF_SEED);
-const absences: MockAbsence[] = ABSENCES_SEED();
-const mockInvites: { staffId: string; id: string; email: string; expiresAt: string }[] = [];
-
-/** Роль демо-користувача збігається з `auth-provider` (NEXT_PUBLIC_MOCK_ROLE, за замовчуванням owner). */
-const mockRole = () => process.env.NEXT_PUBLIC_MOCK_ROLE ?? "owner";
-const isManager = () => mockRole() !== "specialist";
-const MOCK_SPECIALIST_ID = "m";
+const addedNotes: Record<string, ClientNote[]> = {};
 
 const forbid = () => new BeautyApiError(403, "forbidden_role", "forbidden");
 const notFound = () => new BeautyApiError(404, "not_found", "not found");
@@ -133,8 +153,8 @@ function view(a: MockAbsence): Absence {
 
 function conflictsFor(a: MockAbsence): AbsenceConflict[] {
   if (!isManager()) return [];
-  return appointmentsFor(a.specialistId)
-    .filter((x) => x.kind !== "break" && !cancelled.has(x.id))
+  return allMockAppointments()
+    .filter((x) => x.specialistId === a.specialistId && isUpcoming(x))
     .filter((x) => x.startsAt.slice(0, 10) >= a.dateFrom && x.startsAt.slice(0, 10) <= a.dateTo)
     .map((x) => ({ appointmentId: x.id, startsAt: x.startsAt, serviceName: x.serviceName }));
 }
@@ -160,6 +180,49 @@ function locationName(id: string): string {
 }
 
 const activeLocations = () => locations.filter((l) => l.isActive !== false);
+
+/** Перевірки переносу в порядку backend (§17-§18): slot_in_past, location_closed, specialist_unavailable, outside_location_hours, outside_working_hours, slot_unavailable. */
+function checkMove(a: Appointment, startsAt: string): void {
+  if (startsAt <= nowLocal()) throw new BeautyApiError(409, "slot_in_past", "past");
+  const date = startsAt.slice(0, 10);
+  const place = placeOf(staff.find((m) => m.id === a.specialistId), a.locationId);
+  if (!place) throw new BeautyApiError(422, "specialist_not_at_location", "not at location");
+  const day = dayAvailability(date, place, blocksOn(absences, a.specialistId, date));
+  if (day.state === "location_closed") throw new BeautyApiError(409, "location_closed", "closed");
+  if (day.state === "absence") throw new BeautyApiError(409, "specialist_unavailable", "absent");
+  const start = toMinutes(startsAt.slice(11, 16));
+  const inside = (list: { from: number; to: number }[]) => list.some((i) => i.from <= start && start + a.durationMinutes <= i.to);
+  if (day.location && !inside(day.location)) throw new BeautyApiError(409, "outside_location_hours", "outside location hours");
+  if (!inside(day.master)) throw new BeautyApiError(422, "outside_working_hours", "outside working hours");
+  const clash = allMockAppointments().some((x) => {
+    if (x.id === a.id || x.specialistId !== a.specialistId || x.status === "cancelled" || x.startsAt.slice(0, 10) !== date) return false;
+    const s = toMinutes(x.startsAt.slice(11, 16));
+    return start < s + x.durationMinutes && start + a.durationMinutes > s;
+  });
+  if (clash) throw new BeautyApiError(409, "slot_unavailable", "busy");
+}
+
+/** Вільні слоти сьогодні (KPI огляду): за найкоротшою послугою майстра, з урахуванням годин, відсутностей і зайнятого. */
+function freeSlotsToday(locationId: LocationId | null): number {
+  const today = demoToday();
+  const now = nowLocal();
+  const minStart = toMinutes(now.slice(11, 16));
+  const appts = allMockAppointments().filter((a) => a.startsAt.slice(0, 10) === today && a.status !== "cancelled");
+  let total = 0;
+  for (const m of staff.filter((x) => x.isActive)) {
+    const shortest = Math.min(...m.services.map((s) => SERVICES.find((x) => x.id === s.id)?.durationMinutes ?? 60), 600);
+    for (const link of activeLinks(m).filter((l) => !locationId || l.locationId === locationId)) {
+      const place = placeOf(m, link.locationId);
+      if (!place) continue;
+      const day = dayAvailability(today, place, blocksOn(absences, m.id, today));
+      const busy = appts
+        .filter((a) => a.specialistId === m.id && a.locationId === link.locationId)
+        .map((a) => ({ from: toMinutes(a.startsAt.slice(11, 16)), to: toMinutes(a.startsAt.slice(11, 16)) + a.durationMinutes }));
+      total += countFreeSlots(slotStarts(day, shortest, { busy, minStart }), shortest);
+    }
+  }
+  return total;
+}
 
 export const mockBeautyApi: BeautyAdminApi = {
   getLocations: () => wait(activeLocations()),
@@ -226,10 +289,7 @@ export const mockBeautyApi: BeautyAdminApi = {
     }
     const next = workingHours ? normalizeHours(workingHours) : null;
     if (next && !confirm) {
-      // Як і для вихідних: тиждень mock-даних статичний, тому всі нескасовані записи закладу вважаємо майбутніми.
-      const rows = allMockAppointments()
-        .filter((a) => a.locationId === id && a.kind !== "break" && !cancelled.has(a.id))
-        .map((a) => ({ a, startsAt: moved.get(a.id) ?? a.startsAt }));
+      const rows = upcomingAt(id).map((a) => ({ a, startsAt: a.startsAt }));
       const bad = new Set(outsideHours(rows, next, loc.timezone).map((r) => r.a.id));
       const conflicts = rows
         .filter((r) => bad.has(r.a.id))
@@ -292,74 +352,83 @@ export const mockBeautyApi: BeautyAdminApi = {
   },
 
   getOverview: (locationId) => {
-    const rows = OVERVIEW_ROWS.filter((r) => !locationId || r.locationId === locationId).map((r) => ({ ...r }));
-    return wait({
-      dateLabel: "Мережа закладів · 5 жовтня",
+    const today = demoToday();
+    const todays = allMockAppointments()
+      .filter((a) => a.startsAt.slice(0, 10) === today && a.status !== "cancelled" && (!locationId || a.locationId === locationId))
+      .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+    const revenue = todays.filter((a) => a.status === "completed").reduce((sum, a) => sum + a.priceFinal, 0);
+    const dateLabel = new Date(`${today}T00:00:00Z`).toLocaleDateString("uk-UA", { day: "numeric", month: "long", timeZone: "UTC" });
+    const overview: Overview = {
+      dateLabel: locationId ? `${locationName(locationId)} · ${dateLabel}` : `Мережа закладів · ${dateLabel}`,
       kpis: [
-        { label: "Записів сьогодні", value: String(locationId ? rows.length : 42), note: "з них 6 онлайн за останню годину" },
-        { label: "Виручка за день", value: "38 400 ₴", note: "очікується до закриття" },
-        { label: "Нові клієнти", value: "9", note: "за добу" },
-        { label: "Вільних слотів", value: "14", note: "до 21:00 по мережі" },
+        { label: "Записів сьогодні", value: String(todays.length), note: `завершено: ${todays.filter((a) => a.status === "completed").length}` },
+        { label: "Виручка за день", value: money(revenue), note: "завершені візити" },
+        { label: "Нові клієнти", value: String(new Set(todays.filter((a) => a.kind === "new").map((a) => a.clientId)).size), note: "за добу" },
+        { label: "Вільних слотів", value: String(freeSlotsToday(locationId)), note: "до кінця дня" },
       ],
-      rows: rows as Overview["rows"],
-      clients: CLIENTS.map(({ id, name, meta, tag }) => ({ id, name, meta, tag })),
-    });
+      rows: todays.map((a) => ({
+        id: a.id,
+        time: a.startsAt.slice(11, 16),
+        clientId: a.clientId,
+        clientName: a.clientName,
+        serviceName: a.serviceName,
+        specialistId: a.specialistId,
+        specialistName: staff.find((m) => m.id === a.specialistId)?.name ?? "",
+        locationId: a.locationId,
+        locationName: locationName(a.locationId),
+        status: a.status,
+      })),
+      clients: clientSummaries(allMockAppointments()),
+    };
+    return wait(overview);
   },
 
-  getCalendarWeek: (requestedId, includeCancelled = false) => {
-    const live = allMockAppointments().filter((a) => !cancelled.has(a.id));
+  getCalendarWeek: (requestedId, includeCancelled = false, requestedLocationId) => {
+    const weekStart = mondayOfYmd(demoToday());
+    const inWeek = (a: Appointment) => {
+      const d = dayIndex(a.startsAt, weekStart);
+      return d >= 0 && d <= 6;
+    };
+    const weekAppts = allMockAppointments().filter(inWeek);
+    const live = weekAppts.filter((a) => a.status !== "cancelled");
     const me = isManager() ? null : MOCK_SPECIALIST_ID;
     const masters = mastersForCalendar(
-      staff.map((m) => ({ id: m.id, name: m.name, isActive: m.isActive, locationNames: m.locations.map((l) => l.locationName) })),
+      staff.map((m) => ({ id: m.id, name: m.name, isActive: m.isActive, locationNames: activeLinks(m).map((l) => l.locationName) })),
       live,
       me,
     );
     const specialistId = masters.find((m) => m.id === requestedId)?.id ?? masters[0]?.id ?? requestedId;
-    const appointments = appointmentsFor(specialistId)
-      .filter((a) => includeCancelled || !cancelled.has(a.id))
-      .map((a) => {
-        const c = cancelled.get(a.id);
-        const base = { ...a, startsAt: moved.get(a.id) ?? a.startsAt };
-        // `cancelReason` лише керівникам (§16).
-        return c
-          ? { ...base, status: "cancelled" as const, cancelledAt: c.at, cancelledBy: c.by, ...(c.reason && isManager() ? { cancelReason: c.reason } : {}) }
-          : base;
-      });
-    const weekStart = "2026-10-05";
-    const rules = (staff.find((m) => m.id === specialistId)?.locations ?? []).map((l) => ({
-      ...locationRules(l.locationId),
-      workingHours: l.workingHours,
-    }));
-    const closedDays = Array.from({ length: 7 }, (_, i) => {
-      const date = new Date(Date.UTC(2026, 9, 5 + i)).toISOString().slice(0, 10);
-      const info = closedDayForMaster(date, rules);
-      // `reason` лише керівникам: specialist отримує закритий день без причини.
-      return info && !isManager() ? { date: info.date, source: info.source } : info;
-    });
+    const master = staff.find((m) => m.id === specialistId);
+    // Заклад, обраний у календарі: доступність і записи рахуються для нього (майстер може працювати в кількох закладах).
+    const links = activeLinks(master ?? { locations: [] }).filter((l) => locations.some((x) => x.id === l.locationId && x.isActive !== false));
+    const chosen = links.find((l) => l.locationId === requestedLocationId) ?? links[0];
+    const place = chosen ? placeOf(master, chosen.locationId) : null;
+    const wa = place ? buildWeekAvailability(weekStart, place) : null;
+    const mine = weekAppts.filter((a) => a.specialistId === specialistId && (includeCancelled || a.status !== "cancelled"));
+    const appointments = mine.filter((a) => !chosen || a.locationId === chosen.locationId);
     return wait({
-      weekLabel: "Тиждень 5–11 жовтня",
+      weekLabel: weekRangeLabel(weekStart),
       weekStart,
-      closedDays,
-      days: CALENDAR_DAYS,
+      // `reason` лише керівникам: specialist отримує закритий день без причини.
+      closedDays: wa?.closedDays.map((info) => (info && !isManager() ? { date: info.date, source: info.source } : info)),
+      days: weekDayLabels(weekStart),
       masters,
       specialistId,
       appointments,
+      locations: links.map((l) => ({ id: l.locationId, name: l.locationName })),
+      ...(chosen ? { locationId: chosen.locationId } : {}),
+      ...(wa ? { availability: wa.availability, gridStartHour: wa.gridStartHour, gridEndHour: wa.gridEndHour } : {}),
+      otherLocationsCount: mine.length - appointments.length,
     });
   },
 
   getUpcomingAppointmentsCount: async (specialistId) =>
-    wait(
-      appointmentsFor(specialistId).filter(
-        (a) => a.kind !== "break" && !cancelled.has(a.id) && a.startsAt.slice(0, 10) >= todayMock(),
-      ).length,
-    ),
+    wait(allMockAppointments().filter((a) => a.specialistId === specialistId && isUpcoming(a)).length),
 
   moveAppointment: async (id, startsAt) => {
-    // Закритий день закладу (вихідний або закриття) перекриває графік майстра (§17).
-    const locationId = allMockAppointments().find((a) => a.id === id)?.locationId;
-    if (locationId && closedDayInfo(startsAt.slice(0, 10), locationRules(locationId))) {
-      throw new BeautyApiError(409, "location_closed", "closed");
-    }
+    const appt = allMockAppointments().find((a) => a.id === id);
+    if (!appt) throw notFound();
+    checkMove(appt, startsAt);
     moved.set(id, startsAt);
     await wait(null);
   },
@@ -384,17 +453,18 @@ export const mockBeautyApi: BeautyAdminApi = {
     return wait({ refundAmount: Math.round(price * 0.5) });
   },
 
-  getClients: () => wait(CLIENTS.map(({ id, name, meta, tag }) => ({ id, name, meta, tag }))),
+  getClients: () => wait(clientSummaries(allMockAppointments())),
 
   getClient: (id) => {
-    const c = CLIENTS.find((x) => x.id === id);
-    if (!c) return wait(null);
+    const profile = clientProfileFor(id, allMockAppointments());
+    const seed = clientSummaries(allMockAppointments()).find((x) => x.id === id);
+    if (!profile || !seed) return wait(null);
     return wait({
-      id: c.id,
-      name: c.name,
-      tag: c.tag,
-      ...c.profile,
-      notes: [...(addedNotes[id] ?? []), ...c.profile.notes],
+      id,
+      name: seed.name,
+      tag: seed.tag,
+      ...profile,
+      notes: [...(addedNotes[id] ?? []), ...profile.notes],
     });
   },
 
@@ -422,6 +492,7 @@ export const mockBeautyApi: BeautyAdminApi = {
       locations: input.locationIds.map((id) => ({
         locationId: id,
         locationName: locationName(id),
+        isActive: true,
         workingHours: normalizeHours(input.workingHours),
       })),
     };
