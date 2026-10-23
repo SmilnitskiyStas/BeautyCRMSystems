@@ -45,8 +45,8 @@ export const beautyKeys = {
   aiPlan: (goal: PromoGoalId) => ["beauty", "ai", "plan", goal] as const,
 };
 
-export const useLocations = () =>
-  useQuery({ queryKey: beautyKeys.locations, queryFn: () => beautyApi.getLocations() });
+export const useLocations = (enabled = true) =>
+  useQuery({ queryKey: beautyKeys.locations, queryFn: () => beautyApi.getLocations(), enabled });
 
 export const useManagedLocations = (enabled = true) =>
   useQuery({ queryKey: beautyKeys.managedLocations, queryFn: () => beautyApi.getManagedLocations(), enabled });
@@ -93,6 +93,16 @@ export function useSetClosedWeekdays(locationId: LocationId) {
   return useMutation({
     mutationFn: ({ weekdays, confirm }: { weekdays: Weekday[]; confirm?: boolean }) =>
       beautyApi.setClosedWeekdays(locationId, weekdays, confirm),
+    onSuccess: invalidate,
+  });
+}
+
+/** Години роботи закладу (§18.1): впливають на слоти, календар і довідник закладів. */
+export function useSetLocationWorkingHours(locationId: LocationId) {
+  const invalidate = useInvalidateClosedDays();
+  return useMutation({
+    mutationFn: ({ workingHours, confirm }: { workingHours: WorkingHours | null; confirm?: boolean }) =>
+      beautyApi.setLocationWorkingHours(locationId, workingHours, confirm),
     onSuccess: invalidate,
   });
 }

@@ -5,6 +5,7 @@ namespace BeautyCrm.Application.Features.BeautyBooking;
 public sealed class BookingService(IBookingStore store, IPaymentService payments, CancellationSettingsService cancellation, TimeProvider clock)
 {
     private const string ClosedMessage = "The location is closed on this day.";
+    private const string OutsideLocationHoursMessage = "Outside the working hours of the location.";
 
     // ---------- слоти ----------
 
@@ -67,6 +68,7 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
             case SlotCheck.InPast: return Error.Validation("slot_in_past", "Start time is in the past.");
             case SlotCheck.LocationClosed: return Error.Conflict("location_closed", ClosedMessage);
             case SlotCheck.Unavailable: return Error.Conflict("specialist_unavailable", "The specialist is unavailable on this day or does not offer this service.");
+            case SlotCheck.OutsideLocationHours: return Error.Conflict("outside_location_hours", OutsideLocationHoursMessage);
             case SlotCheck.OutsideWorkingHours: return Error.Validation("outside_working_hours", "Outside specialist working hours.");
             case SlotCheck.Busy: return Error.Conflict("slot_unavailable", "The slot overlaps another appointment.");
         }
@@ -88,6 +90,7 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
             quote.Final > 0 ? new NewPayment(req.PaymentMethod, quote.Final) : null, publicOptions), ct);
         if (added.Duplicate) return Error.Conflict("idempotency_conflict", "A request with this idempotency key is already being processed.");
         if (added.LocationClosed) return Error.Conflict("location_closed", ClosedMessage);
+        if (added.OutsideLocationHours) return Error.Conflict("outside_location_hours", OutsideLocationHoursMessage);
         if (added.SpecialistBlocked) return Error.Conflict("specialist_unavailable", "The specialist is unavailable on this day or does not offer this service.");
         if (added.Conflict || added.Value is null) return Error.Conflict("slot_unavailable", "The slot overlaps another appointment.");
         var appt = added.Value;
@@ -137,6 +140,7 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
                 case SlotCheck.InPast: return Error.Validation("slot_in_past", "Start time is in the past.");
                 case SlotCheck.LocationClosed: return Error.Conflict("location_closed", ClosedMessage);
                 case SlotCheck.Unavailable: return Error.Conflict("specialist_unavailable", "The specialist is unavailable on this day or does not offer this service.");
+                case SlotCheck.OutsideLocationHours: return Error.Conflict("outside_location_hours", OutsideLocationHoursMessage);
                 case SlotCheck.OutsideWorkingHours: return Error.Validation("outside_working_hours", "Outside specialist working hours.");
                 case SlotCheck.Busy: return Error.Conflict("slot_unavailable", "The slot overlaps another appointment.");
             }
@@ -147,6 +151,7 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
 
             var moved = await store.RescheduleAsync(id, newStart, reminderAt, ct);
             if (moved.LocationClosed) return Error.Conflict("location_closed", ClosedMessage);
+            if (moved.OutsideLocationHours) return Error.Conflict("outside_location_hours", OutsideLocationHoursMessage);
             if (moved.SpecialistBlocked) return Error.Conflict("specialist_unavailable", "The specialist is unavailable on this day or does not offer this service.");
             if (moved.Conflict || moved.Value is null) return Error.Conflict("slot_unavailable", "The slot overlaps another appointment.");
             current = moved.Value;

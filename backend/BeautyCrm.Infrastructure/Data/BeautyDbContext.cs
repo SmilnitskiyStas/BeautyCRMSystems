@@ -96,6 +96,7 @@ public class BeautyDbContext : DbContext
             b.Property(x => x.Phone).HasMaxLength(32);
             b.Property(x => x.Timezone).HasMaxLength(64);
             b.Property(x => x.ClosedWeekdays).HasColumnType("text[]").HasDefaultValueSql("'{}'");
+            b.Property(x => x.WorkingHours).HasColumnType("jsonb");
         });
 
         mb.Entity<LocationClosure>(b =>

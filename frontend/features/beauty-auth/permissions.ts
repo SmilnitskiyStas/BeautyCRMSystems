@@ -31,9 +31,12 @@ export function navFor(role: Role): NavItem[] {
   );
 }
 
+/** Сторінка конкретного закладу `/beauty/locations/{id}` (§18.3): specialist бачить її без редагування; список - ні. */
+const LOCATION_PAGE = /^\/beauty\/locations\/[^/]+\/?$/;
+
 export function canOpen(role: Role, pathname: string): boolean {
   if (role !== "specialist") return true;
-  return SPECIALIST_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+  return LOCATION_PAGE.test(pathname) || SPECIALIST_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
 export const homeFor = (role: Role) => (role === "specialist" ? "/beauty/calendar" : "/beauty");

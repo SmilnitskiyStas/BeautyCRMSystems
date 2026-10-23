@@ -23,8 +23,10 @@ public sealed record PublicClosureDto(DateOnly DateFrom, DateOnly DateTo);
 
 /// <param name="ClosedWeekdays">Щотижневі вихідні (mon..sun).</param>
 /// <param name="Closures">Закриття на майбутні 366 днів (у зоні закладу), без причини.</param>
+/// <param name="WorkingHours">Години роботи закладу (§18.1, формат §9); null = не задано.</param>
 public sealed record PublicLocationDto(Guid Id, string Name, string? Address, string? Phone, string Timezone,
-    IReadOnlyList<string>? ClosedWeekdays = null, IReadOnlyList<PublicClosureDto>? Closures = null);
+    IReadOnlyList<string>? ClosedWeekdays = null, IReadOnlyList<PublicClosureDto>? Closures = null,
+    System.Text.Json.JsonElement? WorkingHours = null);
 public sealed record PublicSpecialistDto(Guid Id, string Name, string? Title, string? PhotoUrl);
 
 /// <summary>Послуга закладу: ціна з override закладу й акцією, що діє зараз.</summary>

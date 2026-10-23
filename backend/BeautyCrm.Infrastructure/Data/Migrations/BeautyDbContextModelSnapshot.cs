@@ -784,6 +784,10 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnName("updated_at")
                         .HasDefaultValueSql("now()");
 
+                    b.Property<string>("WorkingHours")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("working_hours");
+
                     b.HasKey("Id")
                         .HasName("pk_beauty_locations");
 

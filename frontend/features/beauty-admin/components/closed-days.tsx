@@ -29,9 +29,16 @@ export function ClosedDaysConflictDialog({
   busy,
   onConfirm,
   onCancel,
+  description = "Записи не скасовуються автоматично: після збереження їх потрібно перенести або скасувати вручну. Нові слоти й онлайн-запис на ці дні вимкнуться одразу.",
+  confirmLabel = "Підтвердити й зберегти вихідний",
+  listLabel = "Записи на вихідних днях",
 }: {
   conflicts: ClosedDayConflict[];
   timezone?: string;
+  /** Тексти параметризовані: той самий діалог показує і конфлікти годин роботи закладу (§18.1). */
+  description?: string;
+  confirmLabel?: string;
+  listLabel?: string;
   busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -50,11 +57,10 @@ export function ClosedDaysConflictDialog({
         На ці дні є активні записи ({conflicts.length})
       </h4>
       <p id={`${id}-desc`} className="text-sm">
-        Записи не скасовуються автоматично: після збереження їх потрібно перенести або скасувати вручну. Нові слоти й
-        онлайн-запис на ці дні вимкнуться одразу.
+        {description}
       </p>
       {conflicts.length > 0 ? (
-        <ul className="m-0 flex max-h-64 list-none flex-col gap-1.5 overflow-y-auto p-0 text-sm" aria-label="Записи на вихідних днях">
+        <ul className="m-0 flex max-h-64 list-none flex-col gap-1.5 overflow-y-auto p-0 text-sm" aria-label={listLabel}>
           {conflicts.map((c) => (
             <li key={c.appointmentId} className="rounded-lg bg-white/70 px-3 py-2">
               <span className="font-semibold">{dateTimeLabel(c.startsAt, timezone)}</span>
@@ -67,7 +73,7 @@ export function ClosedDaysConflictDialog({
       ) : null}
       <div className="flex flex-wrap gap-2">
         <PrimaryButton disabled={busy} onClick={onConfirm}>
-          {busy ? "Зберігаємо…" : "Підтвердити й зберегти вихідний"}
+          {busy ? "Зберігаємо…" : confirmLabel}
         </PrimaryButton>
         <SecondaryButton disabled={busy} onClick={onCancel}>
           Скасувати
@@ -91,10 +97,13 @@ export function ClosedDaysSection({
   location,
   canEdit,
   showReason,
+  className = "border-t border-(--line) pt-4",
 }: {
   location: BeautyLocation;
   canEdit: boolean;
   showReason: boolean;
+  /** Обрамлення секції: у картці закладу - верхня риска, на сторінці закладу (власна картка) - порожньо. */
+  className?: string;
 }) {
   const saved = useMemo(() => location.closedWeekdays ?? [], [location.closedWeekdays]);
   const [draft, setDraft] = useState<Weekday[] | null>(null);
@@ -187,18 +196,19 @@ export function ClosedDaysSection({
   const list = [...(closures.data ?? [])].sort((a, b) => a.dateFrom.localeCompare(b.dateFrom));
 
   return (
-    <section aria-labelledby={`${ids}-h`} className="flex flex-col gap-4 border-t border-(--line) pt-4">
+    <section aria-labelledby={`${ids}-h`} className={`flex min-w-0 flex-col gap-4 ${className}`}>
       <h3 id={`${ids}-h`} className="text-sm font-semibold">
         Вихідні дні
       </h3>
 
-      <fieldset className="m-0 flex flex-col gap-1 border-0 p-0" disabled={!canEdit}>
+      <fieldset className="m-0 flex min-w-0 flex-col gap-1 border-0 p-0" disabled={!canEdit}>
         <legend className="mb-1 text-[13px] font-semibold">Щотижневі вихідні</legend>
         <p className="text-[13px] text-(--muted)">
           Позначені дні заклад не працює: слотів і онлайн-запису немає незалежно від графіків майстрів. Нічого не
           позначено — заклад працює 7 днів.
         </p>
-        <div className="grid grid-cols-2 gap-x-4 sm:grid-cols-4">
+        {/* Адаптивна сітка за шириною самого контейнера: підпис «Понеділок» не налазить на сусідній чекбокс (320-1280 px). */}
+        <div className="grid gap-x-4 gap-y-1" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 9.5rem), 1fr))" }}>
           {WEEKDAYS.map((d) => (
             <CheckRow
               key={d.key}

@@ -19,6 +19,8 @@ export interface BeautyLocation {
   isActive?: boolean;
   /** Щотижневі вихідні закладу (§17); відсутнє/порожнє = працює 7 днів. */
   closedWeekdays?: Weekday[];
+  /** Години роботи закладу (§18.1, формат §9). `null`/відсутнє = години не задано (обмеження немає). */
+  workingHours?: WorkingHours | null;
 }
 
 /** Закриття закладу на дати (§17): повні дні в зоні закладу, включно. `reason` приходить лише керівникам. */
@@ -42,6 +44,9 @@ export interface ClosureInput {
 
 /** Активний запис на день, що стає вихідним (409 `has_appointments_on_closed_days`, §17). */
 export type ClosedDayConflict = ApiConflict;
+
+/** Активний запис поза новими годинами закладу (409 `has_appointments_outside_hours`, §18.1). */
+export type OutsideHoursConflict = ApiConflict;
 
 /** Закритий день у колонці календаря. `reason` - лише для closures і лише керівникам. */
 export interface ClosedDay {

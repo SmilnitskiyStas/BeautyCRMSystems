@@ -5,8 +5,9 @@ namespace BeautyCrm.Application.Features.BeautyBooking;
 /// <summary>
 /// Unavailable = майстер у день відсутності або послуга йому не призначена (409 specialist_unavailable);
 /// LocationClosed = день закритий для закладу (вихідний тиждня / дата закриття, 409 location_closed; §17).
+/// OutsideLocationHours = запис не вміщується в години роботи закладу (409 outside_location_hours; §18.1).
 /// </summary>
-public enum SlotCheck { Ok, InPast, OutsideWorkingHours, Busy, Unavailable, LocationClosed }
+public enum SlotCheck { Ok, InPast, OutsideWorkingHours, Busy, Unavailable, LocationClosed, OutsideLocationHours }
 
 public static class SlotCalculator
 {
@@ -41,6 +42,15 @@ public static class SlotCalculator
         }
     }
 
+    /// <summary>
+    /// Чи вміщується [from, from+duration] в один із інтервалів дня (години закладу, §18.1). Запис через північ не вміщується.
+    /// </summary>
+    public static bool FitsHours(string? hoursJson, DayOfWeek day, TimeOnly from, int durationMinutes)
+    {
+        var to = from.AddMinutes(durationMinutes);
+        return to > from && IntervalsFor(hoursJson, day).Any(i => from >= i.From && to <= i.To);
+    }
+
     public static IReadOnlyList<FreeSlot> Compute(
         SpecialistSchedule schedule, DateOnly date, int durationMinutes, IReadOnlyList<TimeRange> busy, DateTimeOffset now,
         Guid? serviceId = null)
@@ -52,6 +62,8 @@ public static class SlotCalculator
         {
             for (var t = from; t.AddMinutes(durationMinutes) <= to && t.AddMinutes(durationMinutes) > t; t = t.AddMinutes(StepMinutes))
             {
+                // §18.1: перетин із годинами закладу (null = без обмеження); сітка слотів лишається прив'язаною до графіка майстра
+                if (schedule.HasLocationHours && !FitsHours(schedule.LocationHoursJson, date.DayOfWeek, t, durationMinutes)) continue;
                 var start = ToOffset(date, t, tz);
                 var end = start.AddMinutes(durationMinutes);
                 if (start < now || Overlaps(busy, start, end)) continue;
@@ -72,9 +84,9 @@ public static class SlotCalculator
         if (schedule.IsClosedOn(localDate)) return SlotCheck.LocationClosed;
         if (!schedule.Offers(serviceId) || schedule.IsAbsentOn(localDate)) return SlotCheck.Unavailable;
         var from = TimeOnly.FromDateTime(local.DateTime);
-        var to = from.AddMinutes(durationMinutes);
-        var fits = to > from && IntervalsFor(schedule.WorkingHoursJson, local.DayOfWeek).Any(i => from >= i.From && to <= i.To);
-        if (!fits) return SlotCheck.OutsideWorkingHours;
+        if (schedule.HasLocationHours && !FitsHours(schedule.LocationHoursJson, local.DayOfWeek, from, durationMinutes))
+            return SlotCheck.OutsideLocationHours;
+        if (!FitsHours(schedule.WorkingHoursJson, local.DayOfWeek, from, durationMinutes)) return SlotCheck.OutsideWorkingHours;
         return Overlaps(busy, start, start.AddMinutes(durationMinutes)) ? SlotCheck.Busy : SlotCheck.Ok;
     }
 

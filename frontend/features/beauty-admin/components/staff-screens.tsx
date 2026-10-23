@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 import { z } from "zod";
 import { useAuth } from "@/features/beauty-auth/components/auth-provider";
@@ -568,6 +568,9 @@ export function StaffProfileScreen({ id }: { id: string }) {
   const [absFormOpen, setAbsFormOpen] = useState(false);
   const q = useStaffProfile(id);
   const m = q.data;
+  // Перехід зі сторінки закладу (§18.3): `?from=location&locationId=...` -> «← Заклад».
+  const search = useSearchParams();
+  const fromLocationId = search.get("from") === "location" ? search.get("locationId")?.trim() || null : null;
 
   // Specialist бачить лише власний профіль.
   const blocked = !isManager && !isSelf;
@@ -585,7 +588,12 @@ export function StaffProfileScreen({ id }: { id: string }) {
 
   return (
     <>
-      {isManager ? <TextLink href="/beauty/staff">← Усі спеціалісти</TextLink> : null}
+      {fromLocationId || isManager ? (
+        <div className="flex flex-wrap gap-x-5">
+          {fromLocationId ? <TextLink href={`/beauty/locations/${encodeURIComponent(fromLocationId)}`}>← Заклад</TextLink> : null}
+          {isManager ? <TextLink href="/beauty/staff">← Усі спеціалісти</TextLink> : null}
+        </div>
+      ) : null}
       <QueryState isPending={q.isPending} isError={q.isError} onRetry={() => q.refetch()}>
         {m === null ? (
           <Card>

@@ -44,6 +44,12 @@ describe("рольова навігація", () => {
     expect(canOpen("specialist", "/beauty/locations")).toBe(false);
     expect(canOpen("admin", "/beauty/locations")).toBe(true);
   });
+  it("сторінка конкретного закладу відкрита для specialist (перегляд), список і вкладені шляхи - ні", () => {
+    expect(canOpen("specialist", "/beauty/locations/abc")).toBe(true);
+    expect(canOpen("specialist", "/beauty/locations/abc/")).toBe(true);
+    expect(canOpen("specialist", "/beauty/locations/abc/x")).toBe(false);
+    expect(canOpen("specialist", "/beauty/locations/")).toBe(false);
+  });
   it("owner/admin бачать усе", () => {
     expect(canOpen("owner", "/beauty/analytics")).toBe(true);
     expect(canOpen("admin", "/beauty/channels")).toBe(true);

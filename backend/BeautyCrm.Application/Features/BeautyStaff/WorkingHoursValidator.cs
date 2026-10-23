@@ -67,6 +67,14 @@ public static class WorkingHoursValidator
         return Encoding.UTF8.GetString(ms.ToArray());
     }
 
+    /// <summary>Збережений (вже нормалізований) JSON графіка -> елемент для DTO; null/порожньо -> null.</summary>
+    public static JsonElement? Parse(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.Clone();
+    }
+
     private static bool TryTime(string? s, out TimeOnly t)
     {
         t = default;

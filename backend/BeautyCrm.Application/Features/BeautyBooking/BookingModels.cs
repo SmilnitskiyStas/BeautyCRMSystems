@@ -82,11 +82,14 @@ public sealed record TimeRange(DateTimeOffset Start, DateTimeOffset End);
 /// <remarks>
 /// ClosedWeekdays/Closures — вихідні закладу (TASK-701, §17): день закритий, якщо його день тижня (mon..sun) у ClosedWeekdays
 /// або дата потрапляє в Closures; закритий день перекриває графік майстра. null = обмежень немає.
+/// LocationHoursJson — години роботи закладу (TASK-703, §18.1, формат §9): ефективний час = графік ∩ години закладу;
+/// null/порожньо = години не задано, обмеження немає.
 /// </remarks>
 public sealed record SpecialistSchedule(Guid SpecialistId, string Timezone, string? WorkingHoursJson,
     IReadOnlyList<AbsenceSpan>? Absences = null, IReadOnlyList<Guid>? ServiceIds = null,
-    IReadOnlyList<string>? ClosedWeekdays = null, IReadOnlyList<AbsenceSpan>? Closures = null)
+    IReadOnlyList<string>? ClosedWeekdays = null, IReadOnlyList<AbsenceSpan>? Closures = null, string? LocationHoursJson = null)
 {
+    public bool HasLocationHours => !string.IsNullOrWhiteSpace(LocationHoursJson);
     public bool Offers(Guid? serviceId) => serviceId is null || ServiceIds is null || ServiceIds.Contains(serviceId.Value);
     public bool IsAbsentOn(DateOnly localDate) => Absences?.Any(a => localDate >= a.From && localDate <= a.To) == true;
     public bool IsClosedOn(DateOnly localDate) =>
@@ -105,10 +108,13 @@ public sealed record NewAppointment(
 /// <summary>Публічний запис (TASK-688): id наперед (токен виводиться з нього), хеші токена й Idempotency-Key.</summary>
 public sealed record PublicCreateOptions(Guid AppointmentId, string TokenHash, string IdempotencyKeyHash, string RequestHash);
 
-public sealed record StoreResult<T>(T? Value, bool Conflict, bool Duplicate = false, bool SpecialistBlocked = false, bool LocationClosed = false)
+public sealed record StoreResult<T>(T? Value, bool Conflict, bool Duplicate = false, bool SpecialistBlocked = false, bool LocationClosed = false,
+    bool OutsideLocationHours = false)
 {
     /// <summary>Під блокуванням закладу виявлено, що день запису тепер закритий (вихідний/закриття) - 409 location_closed.</summary>
     public static StoreResult<T> Closed() => new(default, false, false, false, true);
+    /// <summary>Під блокуванням закладу виявлено, що запис не вміщується в нові години закладу (§18.1) - 409 outside_location_hours.</summary>
+    public static StoreResult<T> OutsideHours() => new(default, false, false, false, false, true);
     public static StoreResult<T> Ok(T value) => new(value, false);
     public static StoreResult<T> Overlap() => new(default, true);
     /// <summary>

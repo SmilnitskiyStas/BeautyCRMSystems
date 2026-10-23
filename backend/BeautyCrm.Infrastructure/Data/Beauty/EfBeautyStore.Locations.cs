@@ -1,6 +1,7 @@
 using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Application.Features.BeautyLocations;
 using BeautyCrm.Application.Features.BeautyOverview;
+using BeautyCrm.Application.Features.BeautyStaff;
 using BeautyCrm.Infrastructure.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -11,9 +12,8 @@ namespace BeautyCrm.Infrastructure.Data.Beauty;
 public sealed partial class EfBeautyStore
 {
     public async Task<IReadOnlyList<LocationDto>> ListAsync(bool includeInactive, CancellationToken ct) =>
-        await db.Locations.AsNoTracking().Where(l => includeInactive || l.IsActive)
-            .OrderBy(l => l.Name).ThenBy(l => l.Id)
-            .Select(l => new LocationDto(l.Id, l.Name, l.Address, l.Timezone, l.IsActive, l.Phone, l.ClosedWeekdays)).ToListAsync(ct);
+        (await db.Locations.AsNoTracking().Where(l => includeInactive || l.IsActive)
+            .OrderBy(l => l.Name).ThenBy(l => l.Id).ToListAsync(ct)).Select(ToLocationDto).ToList();
 
     public async Task<LocationWriteResult> CreateAsync(LocationChange change, CancellationToken ct)
     {
@@ -57,16 +57,15 @@ public sealed partial class EfBeautyStore
         return new(LocationWriteOutcome.Ok, ToLocationDto(l));
     }
 
-    private static LocationDto ToLocationDto(Location l) => new(l.Id, l.Name, l.Address, l.Timezone, l.IsActive, l.Phone, l.ClosedWeekdays);
+    private static LocationDto ToLocationDto(Location l) =>
+        new(l.Id, l.Name, l.Address, l.Timezone, l.IsActive, l.Phone, l.ClosedWeekdays, WorkingHoursValidator.Parse(l.WorkingHours));
 
     // ---------- вихідні дні закладу (TASK-701, §17) ----------
 
     private const int MaxConflicts = 500;
 
     public async Task<LocationDto?> GetAsync(Guid id, CancellationToken ct) =>
-        await db.Locations.AsNoTracking().Where(l => l.Id == id)
-            .Select(l => new LocationDto(l.Id, l.Name, l.Address, l.Timezone, l.IsActive, l.Phone, l.ClosedWeekdays))
-            .FirstOrDefaultAsync(ct);
+        await db.Locations.AsNoTracking().Where(l => l.Id == id).FirstOrDefaultAsync(ct) is { } l ? ToLocationDto(l) : null;
 
     /// <summary>Блокує рядок закладу FOR UPDATE (як PUT /locations): запис/перенос тримають на ньому FOR SHARE.</summary>
     private async Task<Location?> LockLocationForUpdateAsync(Guid id, CancellationToken ct) =>
@@ -92,6 +91,54 @@ public sealed partial class EfBeautyStore
         }
 
         l.ClosedWeekdays = weekdays.ToArray();
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return new(ClosureWriteOutcome.Ok, ToLocationDto(l));
+    }
+
+    // ---------- години роботи закладу (TASK-703, §18.1) ----------
+
+    public async Task<WorkingHoursWriteResult> SetWorkingHoursAsync(
+        Guid id, string? workingHoursJson, bool confirm, DateTimeOffset now, CancellationToken ct)
+    {
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        // FOR UPDATE: створення/перенос запису (FOR SHARE на цьому рядку) або встигне до вибірки конфліктів і потрапить у conflicts[],
+        // або побачить уже нові години й отримає 409 outside_location_hours.
+        var l = await LockLocationForUpdateAsync(id, ct);
+        if (l is null) return new(ClosureWriteOutcome.NotFound);
+
+        // Записів, що ставали б недоступними, немає, коли обмеження знімається (null) або години не змінились.
+        if (workingHoursJson is not null && !string.Equals(workingHoursJson, l.WorkingHours, StringComparison.Ordinal))
+        {
+            var since = SinceDate(now);
+            var closures = await db.LocationClosures.AsNoTracking().Where(c => c.LocationId == id && c.DateTo >= since)
+                .Select(c => new { c.DateFrom, c.DateTo }).ToListAsync(ct);
+            var weekly = l.ClosedWeekdays.ToHashSet();
+            var nowUtc = now.ToUniversalTime();
+            var rows = await db.Appointments.AsNoTracking().Where(a => a.LocationId == id && a.StartsAt > nowUtc
+                    && (a.Status == AppointmentStatus.Pending || a.Status == AppointmentStatus.Confirmed))
+                .OrderBy(a => a.StartsAt).ThenBy(a => a.Id)
+                .Select(a => new { a.Id, a.StartsAt, a.DurationMinutes, ServiceName = a.Service!.Name, SpecialistName = a.Specialist!.FullName })
+                .ToListAsync(ct);
+            var tz = TimeZoneInfo.FindSystemTimeZoneById(l.Timezone);
+            var conflicts = rows.Where(r =>
+                {
+                    var local = TimeZoneInfo.ConvertTime(r.StartsAt, tz);
+                    var date = DateOnly.FromDateTime(local.DateTime);
+                    // дні, закриті вихідним/закриттям, недоступні й без цієї зміни - не рахуються (як у §17)
+                    if (weekly.Contains(SlotCalculator.DayKey(date.DayOfWeek)) || closures.Any(c => date >= c.DateFrom && date <= c.DateTo))
+                        return false;
+                    var from = TimeOnly.FromDateTime(local.DateTime);
+                    var fitsBefore = l.WorkingHours is null || SlotCalculator.FitsHours(l.WorkingHours, local.DayOfWeek, from, r.DurationMinutes);
+                    return fitsBefore && !SlotCalculator.FitsHours(workingHoursJson, local.DayOfWeek, from, r.DurationMinutes);
+                })
+                .Take(MaxConflicts)
+                .Select(r => new ClosureConflictDto(r.Id, r.StartsAt, r.ServiceName, r.SpecialistName))
+                .ToList();
+            if (conflicts.Count > 0 && !confirm) return new(ClosureWriteOutcome.NeedsConfirmation, null, conflicts);
+        }
+
+        l.WorkingHours = workingHoursJson;
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
         return new(ClosureWriteOutcome.Ok, ToLocationDto(l));

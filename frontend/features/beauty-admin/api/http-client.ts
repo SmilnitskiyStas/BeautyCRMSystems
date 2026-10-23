@@ -3,6 +3,7 @@ import { apiJson, getUser } from "@/features/beauty-auth/session";
 import { mastersForCalendar } from "../calendar-masters";
 import { closedDayForMaster, type MasterLocationRules } from "../closed-days";
 import { dateTimeLabel, money } from "../format";
+import { normalizeHours } from "../working-hours";
 import type {
   AiRequest,
   Appointment,
@@ -88,6 +89,8 @@ interface LocationDto {
   isActive: boolean;
   /** §17: підмножина mon..sun. */
   closedWeekdays?: string[] | null;
+  /** §18.1: формат §9; `null` = не задано. */
+  workingHours?: WorkingHours | null;
 }
 /** §17: закриття закладу; `reason` лише керівникам. */
 interface ClosureDto {
@@ -224,6 +227,7 @@ const toClosure = (c: ClosureDto, locationId: string): LocationClosure => ({
 const toLocation = (l: LocationDto): BeautyLocation => ({
   id: l.id,
   closedWeekdays: toWeekdays(l.closedWeekdays),
+  workingHours: l.workingHours && typeof l.workingHours === "object" ? normalizeHours(l.workingHours) : null,
   name: l.name,
   address: l.address ?? null,
   phone: l.phone ?? null,
@@ -516,6 +520,15 @@ export const httpBeautyApi: BeautyAdminApi = {
       ...(confirm ? { confirm: true } : {}),
     });
     return Array.isArray(r?.closedWeekdays) ? toWeekdays(r.closedWeekdays) : weekdays;
+  },
+
+  setLocationWorkingHours: async (id, workingHours, confirm) => {
+    const r = await send<LocationDto | undefined>("PUT", `/locations/${encodeURIComponent(id)}/working-hours`, {
+      workingHours: workingHours ? normalizeHours(workingHours) : null,
+      ...(confirm ? { confirm: true } : {}),
+    });
+    if (r && "workingHours" in r) return r.workingHours ? normalizeHours(r.workingHours) : null;
+    return workingHours ? normalizeHours(workingHours) : null;
   },
 
   getClosures: async (id, { from, to }) =>

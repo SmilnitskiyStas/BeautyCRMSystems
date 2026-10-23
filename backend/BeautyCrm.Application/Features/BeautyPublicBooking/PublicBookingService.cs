@@ -130,8 +130,8 @@ public sealed partial class PublicBookingService(
         }
         // Публічний API не розкриває ПРИЧИНУ недоступності майстра (лікарняний/відпустка/послуга не призначена): внутрішній
         // specialist_unavailable віддається як звичайний зайнятий слот (той самий код, статус і тіло). Різниця — лише у staff API.
-        // Те саме для закритого дня закладу (вихідний/закриття, §17): причина не розкривається.
-        if (created.Error is { Code: "specialist_unavailable" or "location_closed" })
+        // Те саме для закритого дня закладу (вихідний/закриття, §17) і часу поза годинами закладу (§18.1): причина не розкривається.
+        if (created.Error is { Code: "specialist_unavailable" or "location_closed" or "outside_location_hours" })
             return Error.Conflict("slot_unavailable", "The slot overlaps another appointment.");
         if (!created.IsOk) return created.Error!;
 

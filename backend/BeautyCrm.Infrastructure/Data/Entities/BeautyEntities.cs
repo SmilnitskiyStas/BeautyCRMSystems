@@ -26,6 +26,8 @@ public class Location : TenantEntity
     public bool IsActive { get; set; } = true;
     /// <summary>Щотижневі вихідні закладу (TASK-701, §17): підмножина mon..sun; порожньо = працює 7 днів.</summary>
     public string[] ClosedWeekdays { get; set; } = [];
+    /// <summary>Години роботи закладу (TASK-703, §18.1; формат §9, нормалізований JSON). null = не задано, обмеження немає.</summary>
+    public string? WorkingHours { get; set; }
 }
 
 /// <summary>Конкретні дати закриття закладу (повні дні в зоні закладу, включно; без автоповтору). TASK-701, §17.</summary>

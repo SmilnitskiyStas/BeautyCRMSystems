@@ -63,6 +63,20 @@ public sealed class LocationsController(LocationService locations) : ControllerB
     public async Task<IActionResult> SetClosedWeekdays(Guid id, [FromBody] ClosedWeekdaysRequest request, CancellationToken ct) =>
         User.ToActor() is { } actor ? this.ToResult(await locations.SetClosedWeekdaysAsync(actor, id, request, ct)) : Unauthorized();
 
+    /// <summary>
+    /// Години роботи закладу (§18.1, TASK-703): `{workingHours: {...}|null, confirm?}`. 409 has_appointments_outside_hours +
+    /// conflicts[] (без даних клієнта), якщо майбутні активні записи опиняються поза новими годинами й не передано confirm=true.
+    /// </summary>
+    [HttpPut("{id:guid}/working-hours")]
+    [Authorize(Policy = AuthPolicies.Management)]
+    [RequestSizeLimit(16 * 1024)]
+    [ProducesResponseType<LocationDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> SetWorkingHours(Guid id, [FromBody] WorkingHoursRequest request, CancellationToken ct) =>
+        User.ToActor() is { } actor ? this.ToResult(await locations.SetWorkingHoursAsync(actor, id, request, ct)) : Unauthorized();
+
     /// <summary>Закриття закладу (`reason` лише керівникам). Діапазон до 366 днів; за замовчуванням від сьогодні на 366 днів.</summary>
     [HttpGet("{id:guid}/closures")]
     [ProducesResponseType<IReadOnlyList<ClosureDto>>(StatusCodes.Status200OK)]
