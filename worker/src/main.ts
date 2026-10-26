@@ -1,12 +1,14 @@
 import pg from "pg";
 import { HttpChannelSender } from "./adapters/channel-sender";
 import { loadKey } from "./adapters/channel-crypto";
+import { MockChannelSender, useMockChannels } from "./adapters/mock-channel-sender";
 import { PgBeautyData } from "./adapters/pg-data";
 import { DEFAULT_WINDOW, PgPollStore } from "./adapters/pg-poll-store";
 import { LoggerNotificationLog, PgAdvisoryIdempotency, PgQueuePort, consoleLogger } from "./adapters/pg-support";
 import { TenantDb } from "./db/tenant-db";
 import { StaticTenantDirectory, type TenantDirectory } from "./db/tenants";
 import { DEFAULT_MARKETING_DAILY_LIMIT } from "./jobs/beauty-common";
+import { DEFAULT_MIN_LEAD_MINUTES } from "./jobs/beauty-reminder";
 import type { BeautyDeps } from "./ports";
 import { Scheduler } from "./scheduler/scheduler";
 import { pollOutbox, pollReminders, pollReviews, pollWinback, type PollContext } from "./scheduler/pollers";
@@ -26,14 +28,24 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
   const deps: BeautyDeps = {
     now,
     data: new PgBeautyData(db, now),
-    sender: new HttpChannelSender(db, loadKey(env["Channels__EncryptionKey"]), fetch, now),
+    // Channels__UseMocks=true (Development only) -> no real Telegram/Instagram HTTP, as in the API.
+    sender: useMockChannels(env) ? new MockChannelSender() : new HttpChannelSender(db, loadKey(env["Channels__EncryptionKey"]), fetch, now),
     idempotency: new PgAdvisoryIdempotency(lockPool),
     log: new LoggerNotificationLog(consoleLogger),
     queue: new PgQueuePort(),
     marketingDailyLimit: Number(env.WORKER_MARKETING_DAILY_LIMIT) > 0 ? Number(env.WORKER_MARKETING_DAILY_LIMIT) : DEFAULT_MARKETING_DAILY_LIMIT,
   };
   const store = new PgPollStore(db, { ...DEFAULT_WINDOW, defaultTimezone: env.WORKER_DEFAULT_TIMEZONE ?? DEFAULT_WINDOW.defaultTimezone });
-  const ctx: PollContext = { deps, store, tenants: tenants ?? StaticTenantDirectory.fromEnv(env.WORKER_TENANT_IDS), logger: consoleLogger };
+  const lead = Number(env.WORKER_REMINDER_MIN_LEAD_MINUTES);
+  const ctx: PollContext = {
+    deps, store, tenants: tenants ?? StaticTenantDirectory.fromEnv(env.WORKER_TENANT_IDS), logger: consoleLogger,
+    // §22.2: without an explicit "true" reminders are not sent (rows wait); legal gate §22.14 p. 1 outside dev.
+    remindersEnabled: /^true$/i.test(env.WORKER_REMINDERS_ENABLED ?? ""),
+    // TASK-760 (M2): review requests only with an explicit WORKER_REVIEWS_ENABLED=true.
+    reviewsEnabled: /^true$/i.test(env.WORKER_REVIEWS_ENABLED ?? ""),
+    reminderButtonsEnabled: /^true$/i.test(env.WORKER_REMINDER_BUTTONS_ENABLED ?? ""),
+    reminderMinLeadMinutes: Number.isFinite(lead) && lead >= 0 && env.WORKER_REMINDER_MIN_LEAD_MINUTES ? lead : DEFAULT_MIN_LEAD_MINUTES,
+  };
   const scheduler = new Scheduler([
     { name: "beauty.reminders", everyMs: 1 * MIN, run: () => pollReminders(ctx) },
     { name: "beauty.outbox", everyMs: 30_000, run: () => pollOutbox(ctx) },

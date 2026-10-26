@@ -1975,3 +1975,1378 @@ BEGIN
 END $EF$;
 COMMIT;
 
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    CREATE TABLE beauty_ai_provider_keys (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        provider character varying(32) NOT NULL,
+        key_encrypted text NOT NULL,
+        key_kid character varying(32) NOT NULL,
+        key_last4 character varying(4) NOT NULL,
+        created_by_user_id uuid NOT NULL,
+        updated_by_user_id uuid NOT NULL,
+        tenant_id uuid NOT NULL,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        updated_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_ai_provider_keys PRIMARY KEY (id),
+        CONSTRAINT ak_beauty_ai_provider_keys_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT ck_beauty_ai_provider_keys_key_encrypted CHECK (key_encrypted LIKE 'v2:%'),
+        CONSTRAINT ck_beauty_ai_provider_keys_key_kid CHECK (key_kid ~ '^[a-z0-9-]{1,32}$'),
+        CONSTRAINT ck_beauty_ai_provider_keys_provider CHECK (provider ~ '^[a-z][a-z0-9_]{1,31}$'),
+        CONSTRAINT fk_beauty_ai_provider_keys_users_tenant_id_created_by_user_id FOREIGN KEY (tenant_id, created_by_user_id) REFERENCES users (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_ai_provider_keys_users_tenant_id_updated_by_user_id FOREIGN KEY (tenant_id, updated_by_user_id) REFERENCES users (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    CREATE TABLE beauty_ai_settings (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        key_source character varying(16) NOT NULL DEFAULT 'platform',
+        chat_provider character varying(32) NOT NULL DEFAULT 'anthropic',
+        chat_model character varying(100) NOT NULL,
+        analytics_provider character varying(32) NOT NULL DEFAULT 'anthropic',
+        analytics_model character varying(100) NOT NULL,
+        mode character varying(16) NOT NULL DEFAULT 'confirm',
+        prompt_addendum text,
+        monthly_token_limit bigint,
+        monthly_request_limit integer,
+        max_output_tokens integer NOT NULL DEFAULT 1024,
+        platform_enabled boolean,
+        platform_monthly_token_quota bigint,
+        platform_monthly_request_quota integer,
+        updated_by_user_id uuid,
+        tenant_id uuid NOT NULL,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        updated_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_ai_settings PRIMARY KEY (id),
+        CONSTRAINT ak_beauty_ai_settings_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT ck_beauty_ai_settings_analytics_model CHECK (char_length(analytics_model) BETWEEN 1 AND 100),
+        CONSTRAINT ck_beauty_ai_settings_analytics_provider CHECK (analytics_provider ~ '^[a-z][a-z0-9_]{1,31}$'),
+        CONSTRAINT ck_beauty_ai_settings_chat_model CHECK (char_length(chat_model) BETWEEN 1 AND 100),
+        CONSTRAINT ck_beauty_ai_settings_chat_provider CHECK (chat_provider ~ '^[a-z][a-z0-9_]{1,31}$'),
+        CONSTRAINT ck_beauty_ai_settings_key_source CHECK (key_source IN ('own', 'platform')),
+        CONSTRAINT ck_beauty_ai_settings_max_output_tokens CHECK (max_output_tokens BETWEEN 64 AND 8192),
+        CONSTRAINT ck_beauty_ai_settings_mode CHECK (mode IN ('suggest', 'confirm', 'auto')),
+        CONSTRAINT ck_beauty_ai_settings_monthly_request_limit CHECK (monthly_request_limit IS NULL OR monthly_request_limit BETWEEN 1 AND 10000000),
+        CONSTRAINT ck_beauty_ai_settings_monthly_token_limit CHECK (monthly_token_limit IS NULL OR monthly_token_limit BETWEEN 1 AND 100000000000),
+        CONSTRAINT ck_beauty_ai_settings_platform_quotas CHECK ((platform_monthly_token_quota IS NULL OR platform_monthly_token_quota >= 0) AND (platform_monthly_request_quota IS NULL OR platform_monthly_request_quota >= 0)),
+        CONSTRAINT ck_beauty_ai_settings_prompt_addendum CHECK (prompt_addendum IS NULL OR char_length(prompt_addendum) <= 4000),
+        CONSTRAINT fk_beauty_ai_settings_users_tenant_id_updated_by_user_id FOREIGN KEY (tenant_id, updated_by_user_id) REFERENCES users (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    CREATE TABLE beauty_ai_settings_audit (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        tenant_id uuid NOT NULL,
+        user_id uuid,
+        action character varying(32) NOT NULL,
+        provider character varying(32),
+        changed_fields text[] NOT NULL DEFAULT ('{}'),
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_ai_settings_audit PRIMARY KEY (id),
+        CONSTRAINT ak_beauty_ai_settings_audit_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT ck_beauty_ai_settings_audit_action CHECK (action IN ('settings_updated', 'key_source_changed', 'key_set', 'key_replaced', 'key_deleted', 'key_tested', 'prompt_reset', 'platform_quota_changed')),
+        CONSTRAINT ck_beauty_ai_settings_audit_provider CHECK (provider IS NULL OR provider ~ '^[a-z][a-z0-9_]{1,31}$'),
+        CONSTRAINT fk_beauty_ai_settings_audit_users_tenant_id_user_id FOREIGN KEY (tenant_id, user_id) REFERENCES users (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    CREATE TABLE beauty_ai_usage (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        period_start date NOT NULL,
+        role character varying(16) NOT NULL,
+        provider character varying(32) NOT NULL,
+        model character varying(100) NOT NULL,
+        key_source character varying(16) NOT NULL,
+        request_count integer NOT NULL DEFAULT 0,
+        error_count integer NOT NULL DEFAULT 0,
+        input_tokens bigint NOT NULL DEFAULT 0,
+        output_tokens bigint NOT NULL DEFAULT 0,
+        tenant_id uuid NOT NULL,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        updated_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_ai_usage PRIMARY KEY (id),
+        CONSTRAINT ak_beauty_ai_usage_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT ck_beauty_ai_usage_counters CHECK (request_count >= 0 AND error_count >= 0 AND input_tokens >= 0 AND output_tokens >= 0),
+        CONSTRAINT ck_beauty_ai_usage_key_source CHECK (key_source IN ('own', 'platform')),
+        CONSTRAINT ck_beauty_ai_usage_period_start CHECK (extract(day from period_start) = 1),
+        CONSTRAINT ck_beauty_ai_usage_provider CHECK (provider ~ '^[a-z][a-z0-9_]{1,31}$'),
+        CONSTRAINT ck_beauty_ai_usage_role CHECK (role IN ('chat', 'analytics'))
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    CREATE INDEX ix_beauty_ai_provider_keys_key_kid ON beauty_ai_provider_keys (key_kid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    CREATE INDEX ix_beauty_ai_provider_keys_tenant_id_created_by_user_id ON beauty_ai_provider_keys (tenant_id, created_by_user_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    CREATE UNIQUE INDEX ix_beauty_ai_provider_keys_tenant_id_provider ON beauty_ai_provider_keys (tenant_id, provider);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    CREATE INDEX ix_beauty_ai_provider_keys_tenant_id_updated_by_user_id ON beauty_ai_provider_keys (tenant_id, updated_by_user_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    CREATE UNIQUE INDEX ix_beauty_ai_settings_tenant_id ON beauty_ai_settings (tenant_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    CREATE INDEX ix_beauty_ai_settings_tenant_id_updated_by_user_id ON beauty_ai_settings (tenant_id, updated_by_user_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    CREATE INDEX ix_beauty_ai_settings_audit_tenant_id_created_at ON beauty_ai_settings_audit (tenant_id, created_at DESC);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    CREATE INDEX ix_beauty_ai_settings_audit_tenant_id_user_id ON beauty_ai_settings_audit (tenant_id, user_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    CREATE UNIQUE INDEX ix_beauty_ai_usage_tenant_id_period_start_role_provider_model_ ON beauty_ai_usage (tenant_id, period_start, role, provider, model, key_source);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    ALTER TABLE beauty_ai_settings ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    ALTER TABLE beauty_ai_settings FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_ai_settings
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    ALTER TABLE beauty_ai_provider_keys ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    ALTER TABLE beauty_ai_provider_keys FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_ai_provider_keys
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    ALTER TABLE beauty_ai_usage ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    ALTER TABLE beauty_ai_usage FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_ai_usage
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    ALTER TABLE beauty_ai_settings_audit ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    ALTER TABLE beauty_ai_settings_audit FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_ai_settings_audit
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+
+    DO $$
+    DECLARE
+        t text;
+    BEGIN
+        FOREACH t IN ARRAY ARRAY['beauty_ai_settings', 'beauty_ai_provider_keys', 'beauty_ai_usage', 'beauty_ai_settings_audit']
+        LOOP
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_class c
+                WHERE c.oid = to_regclass('public.' || t) AND c.relrowsecurity AND c.relforcerowsecurity) THEN
+                RAISE EXCEPTION 'FORCE ROW LEVEL SECURITY is not enabled on %', t;
+            END IF;
+        END LOOP;
+    END
+    $$;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024091314_beauty_ai_settings_and_usage') THEN
+    INSERT INTO "__EFMigrationsHistory" (migration_id, product_version)
+    VALUES ('20261024091314_beauty_ai_settings_and_usage', '8.0.11');
+    END IF;
+END $EF$;
+COMMIT;
+
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    ALTER TABLE beauty_messages ADD kind character varying(16) NOT NULL DEFAULT 'text';
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    ALTER TABLE beauty_conversations ADD ai_lease_owner uuid;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    ALTER TABLE beauty_conversations ADD ai_lease_until timestamp with time zone;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    ALTER TABLE beauty_conversations ADD ai_paused_until timestamp with time zone;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    ALTER TABLE beauty_conversations ADD ai_state character varying(16) NOT NULL DEFAULT 'active';
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    ALTER TABLE beauty_conversations ADD handoff_reason character varying(32);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    CREATE TABLE beauty_channel_poll_state (
+        tenant_id uuid NOT NULL,
+        channel_id uuid NOT NULL,
+        last_update_id bigint NOT NULL DEFAULT 0,
+        lease_until timestamp with time zone,
+        lease_owner uuid,
+        updated_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_channel_poll_state PRIMARY KEY (tenant_id, channel_id),
+        CONSTRAINT ck_beauty_channel_poll_state_last_update_id CHECK (last_update_id >= 0),
+        CONSTRAINT fk_beauty_channel_poll_state_beauty_channels_tenant_id_channel FOREIGN KEY (tenant_id, channel_id) REFERENCES beauty_channels (tenant_id, id) ON DELETE CASCADE
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    CREATE TABLE beauty_chat_booking_proposals (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        conversation_id uuid NOT NULL,
+        client_id uuid,
+        location_id uuid NOT NULL,
+        specialist_id uuid NOT NULL,
+        service_id uuid NOT NULL,
+        starts_at timestamp with time zone NOT NULL,
+        duration_minutes integer NOT NULL,
+        price_original numeric(10,2) NOT NULL,
+        price_final numeric(10,2) NOT NULL,
+        promotion_id uuid,
+        status character varying(16) NOT NULL DEFAULT 'prepared',
+        confirmation_token_hash character(64) NOT NULL,
+        summary_message_id uuid,
+        expires_at timestamp with time zone NOT NULL,
+        appointment_id uuid,
+        failure_code character varying(64),
+        decided_at timestamp with time zone,
+        tenant_id uuid NOT NULL,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        updated_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_chat_booking_proposals PRIMARY KEY (id),
+        CONSTRAINT ak_beauty_chat_booking_proposals_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT ck_beauty_chat_booking_proposals_duration CHECK (duration_minutes > 0),
+        CONSTRAINT ck_beauty_chat_booking_proposals_failure_code CHECK (failure_code IS NULL OR char_length(failure_code) BETWEEN 1 AND 64),
+        CONSTRAINT ck_beauty_chat_booking_proposals_prices CHECK (price_original >= 0 AND price_final >= 0),
+        CONSTRAINT ck_beauty_chat_booking_proposals_status CHECK (status IN ('prepared', 'shown', 'confirmed', 'rejected', 'expired', 'superseded', 'failed')),
+        CONSTRAINT ck_beauty_chat_booking_proposals_token_hash CHECK (confirmation_token_hash ~ '^[0-9a-f]{64}$'),
+        CONSTRAINT fk_beauty_chat_booking_proposals_beauty_appointments_tenant_id FOREIGN KEY (tenant_id, appointment_id) REFERENCES beauty_appointments (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_chat_booking_proposals_beauty_clients_tenant_id_clie FOREIGN KEY (tenant_id, client_id) REFERENCES beauty_clients (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_chat_booking_proposals_beauty_conversations_tenant_i FOREIGN KEY (tenant_id, conversation_id) REFERENCES beauty_conversations (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_chat_booking_proposals_beauty_locations_tenant_id_lo FOREIGN KEY (tenant_id, location_id) REFERENCES beauty_locations (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_chat_booking_proposals_beauty_messages_tenant_id_sum FOREIGN KEY (tenant_id, summary_message_id) REFERENCES beauty_messages (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_chat_booking_proposals_beauty_promotions_tenant_id_p FOREIGN KEY (tenant_id, promotion_id) REFERENCES beauty_promotions (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_chat_booking_proposals_beauty_services_tenant_id_ser FOREIGN KEY (tenant_id, service_id) REFERENCES beauty_services (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_chat_booking_proposals_beauty_specialists_tenant_id_ FOREIGN KEY (tenant_id, specialist_id) REFERENCES beauty_specialists (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    CREATE INDEX ix_beauty_messages_inbound_received ON beauty_messages (tenant_id, conversation_id, sent_at) WHERE direction = 'inbound' AND status = 'received';
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    ALTER TABLE beauty_messages ADD CONSTRAINT ck_beauty_messages_kind CHECK (kind IN ('text', 'command', 'unsupported'));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    CREATE INDEX ix_beauty_conversations_tenant_id_ai_state ON beauty_conversations (tenant_id, ai_state);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    ALTER TABLE beauty_conversations ADD CONSTRAINT ck_beauty_conversations_ai_state CHECK (ai_state IN ('active', 'handoff'));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    CREATE INDEX ix_beauty_chat_booking_proposals_tenant_id_appointment_id ON beauty_chat_booking_proposals (tenant_id, appointment_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    CREATE INDEX ix_beauty_chat_booking_proposals_tenant_id_client_id ON beauty_chat_booking_proposals (tenant_id, client_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    CREATE INDEX ix_beauty_chat_booking_proposals_tenant_id_conversation_id_cre ON beauty_chat_booking_proposals (tenant_id, conversation_id, created_at);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    CREATE INDEX ix_beauty_chat_booking_proposals_tenant_id_location_id ON beauty_chat_booking_proposals (tenant_id, location_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    CREATE INDEX ix_beauty_chat_booking_proposals_tenant_id_promotion_id ON beauty_chat_booking_proposals (tenant_id, promotion_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    CREATE INDEX ix_beauty_chat_booking_proposals_tenant_id_service_id ON beauty_chat_booking_proposals (tenant_id, service_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    CREATE INDEX ix_beauty_chat_booking_proposals_tenant_id_specialist_id ON beauty_chat_booking_proposals (tenant_id, specialist_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    CREATE INDEX ix_beauty_chat_booking_proposals_tenant_id_summary_message_id ON beauty_chat_booking_proposals (tenant_id, summary_message_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    CREATE UNIQUE INDEX ux_beauty_chat_booking_proposals_active ON beauty_chat_booking_proposals (tenant_id, conversation_id) WHERE status IN ('prepared', 'shown');
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    CREATE UNIQUE INDEX ux_beauty_chat_booking_proposals_token ON beauty_chat_booking_proposals (tenant_id, confirmation_token_hash);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    ALTER TABLE beauty_chat_booking_proposals ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    ALTER TABLE beauty_chat_booking_proposals FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_chat_booking_proposals
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    ALTER TABLE beauty_channel_poll_state ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    ALTER TABLE beauty_channel_poll_state FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_channel_poll_state
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+
+    DO $$
+    DECLARE
+        t text;
+    BEGIN
+        FOREACH t IN ARRAY ARRAY['beauty_chat_booking_proposals', 'beauty_channel_poll_state', 'beauty_conversations', 'beauty_messages']
+        LOOP
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_class c
+                WHERE c.oid = to_regclass('public.' || t) AND c.relrowsecurity AND c.relforcerowsecurity) THEN
+                RAISE EXCEPTION 'FORCE ROW LEVEL SECURITY is not enabled on %', t;
+            END IF;
+        END LOOP;
+    END
+    $$;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024102153_beauty_chat_assistant') THEN
+    INSERT INTO "__EFMigrationsHistory" (migration_id, product_version)
+    VALUES ('20261024102153_beauty_chat_assistant', '8.0.11');
+    END IF;
+END $EF$;
+COMMIT;
+
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_reminders DROP CONSTRAINT ck_beauty_reminders_status;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_appointments DROP CONSTRAINT ck_beauty_appointments_reminder_option;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_reminders ADD message_id uuid;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_reminders ADD method character varying(16);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_reminders ADD offset_minutes smallint;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_reminders ADD planned_starts_at timestamp with time zone;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_reminders ADD skip_reason character varying(32);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_messages ADD sender_user_id uuid;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_conversations ADD awaiting_staff_since timestamp with time zone;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_conversations ADD handoff_at timestamp with time zone;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_conversations ADD pending_prompt character varying(32);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_conversations ADD pending_prompt_appointment_id uuid;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_conversations ADD pending_prompt_expires_at timestamp with time zone;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_conversations ADD reminders_stop_at timestamp with time zone;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_conversations ADD staff_last_read_at timestamp with time zone;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_conversations ADD staff_replied_at timestamp with time zone;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_appointments ADD reminder_method character varying(16) NOT NULL DEFAULT 'none';
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_appointments ADD reminder_offsets smallint[] NOT NULL DEFAULT ('{}');
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE TABLE beauty_call_tasks (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        appointment_id uuid NOT NULL,
+        client_id uuid NOT NULL,
+        location_id uuid NOT NULL,
+        reminder_id uuid,
+        reason character varying(16) NOT NULL,
+        offset_minutes smallint,
+        due_at timestamp with time zone NOT NULL,
+        status character varying(16) NOT NULL DEFAULT 'open',
+        closed_reason character varying(32),
+        completed_by_user_id uuid,
+        completed_at timestamp with time zone,
+        note character varying(300),
+        tenant_id uuid NOT NULL,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        updated_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_call_tasks PRIMARY KEY (id),
+        CONSTRAINT ak_beauty_call_tasks_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT ck_beauty_call_tasks_completed CHECK ((status IN ('done', 'skipped') AND completed_by_user_id IS NOT NULL AND completed_at IS NOT NULL) OR (status NOT IN ('done', 'skipped') AND completed_by_user_id IS NULL AND completed_at IS NULL)),
+        CONSTRAINT ck_beauty_call_tasks_reason CHECK (reason IN ('reminder', 'delivery_failed')),
+        CONSTRAINT ck_beauty_call_tasks_status CHECK (status IN ('open', 'done', 'skipped', 'cancelled')),
+        CONSTRAINT fk_beauty_call_tasks_beauty_appointments_tenant_id_appointment FOREIGN KEY (tenant_id, appointment_id) REFERENCES beauty_appointments (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_call_tasks_beauty_clients_tenant_id_client_id FOREIGN KEY (tenant_id, client_id) REFERENCES beauty_clients (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_call_tasks_beauty_locations_tenant_id_location_id FOREIGN KEY (tenant_id, location_id) REFERENCES beauty_locations (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_call_tasks_beauty_reminders_tenant_id_reminder_id FOREIGN KEY (tenant_id, reminder_id) REFERENCES beauty_reminders (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_call_tasks_users_tenant_id_completed_by_user_id FOREIGN KEY (tenant_id, completed_by_user_id) REFERENCES users (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE TABLE beauty_client_contact_preferences (
+        tenant_id uuid NOT NULL,
+        client_id uuid NOT NULL,
+        method character varying(16) NOT NULL,
+        offsets_minutes smallint[] NOT NULL DEFAULT ('{}'),
+        telegram_conversation_id uuid,
+        source character varying(16) NOT NULL,
+        updated_by_user_id uuid,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        updated_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_client_contact_preferences PRIMARY KEY (tenant_id, client_id),
+        CONSTRAINT ck_beauty_client_contact_preferences_call_single CHECK (method <> 'call' OR cardinality(offsets_minutes) = 1),
+        CONSTRAINT ck_beauty_client_contact_preferences_method CHECK (method IN ('none', 'telegram', 'call')),
+        CONSTRAINT ck_beauty_client_contact_preferences_none_empty CHECK ((method = 'none') = (cardinality(offsets_minutes) = 0)),
+        CONSTRAINT ck_beauty_client_contact_preferences_offsets CHECK (offsets_minutes <@ ARRAY[60, 120, 1440]::smallint[] AND cardinality(offsets_minutes) <= 3),
+        CONSTRAINT ck_beauty_client_contact_preferences_source CHECK (source IN ('chat', 'admin', 'stop', 'web')),
+        CONSTRAINT ck_beauty_client_contact_preferences_updated_by CHECK (updated_by_user_id IS NULL OR source = 'admin'),
+        CONSTRAINT fk_beauty_client_contact_preferences_beauty_clients_tenant_id_ FOREIGN KEY (tenant_id, client_id) REFERENCES beauty_clients (tenant_id, id) ON DELETE CASCADE,
+        CONSTRAINT fk_beauty_client_contact_preferences_beauty_conversations_tena FOREIGN KEY (tenant_id, telegram_conversation_id) REFERENCES beauty_conversations (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_client_contact_preferences_users_tenant_id_updated_b FOREIGN KEY (tenant_id, updated_by_user_id) REFERENCES users (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE TABLE beauty_reminder_settings (
+        tenant_id uuid NOT NULL,
+        telegram_enabled boolean NOT NULL DEFAULT TRUE,
+        call_enabled boolean NOT NULL DEFAULT TRUE,
+        quiet_start time without time zone NOT NULL DEFAULT ('22:00'),
+        quiet_end time without time zone NOT NULL DEFAULT ('08:00'),
+        updated_by_user_id uuid,
+        updated_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_reminder_settings PRIMARY KEY (tenant_id),
+        CONSTRAINT ck_beauty_reminder_settings_quiet CHECK (quiet_start <> quiet_end),
+        CONSTRAINT fk_beauty_reminder_settings_users_tenant_id_updated_by_user_id FOREIGN KEY (tenant_id, updated_by_user_id) REFERENCES users (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE INDEX ix_beauty_reminders_tenant_id_message_id ON beauty_reminders (tenant_id, message_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE UNIQUE INDEX ux_beauty_reminders_point ON beauty_reminders (tenant_id, appointment_id, offset_minutes) WHERE status = 'scheduled' AND offset_minutes IS NOT NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_reminders ADD CONSTRAINT ck_beauty_reminders_method CHECK (method IS NULL OR method IN ('telegram', 'auto'));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_reminders ADD CONSTRAINT ck_beauty_reminders_status CHECK (status IN ('scheduled', 'sent', 'failed', 'cancelled', 'skipped'));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE INDEX ix_beauty_messages_tenant_id_sender_user_id ON beauty_messages (tenant_id, sender_user_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_messages ADD CONSTRAINT ck_beauty_messages_sender_user CHECK (sender_user_id IS NULL OR sender_type = 'staff');
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE INDEX ix_beauty_conversations_awaiting_staff ON beauty_conversations (tenant_id, awaiting_staff_since) WHERE awaiting_staff_since IS NOT NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE INDEX ix_beauty_conversations_last_message_desc ON beauty_conversations (tenant_id, last_message_at DESC);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE INDEX ix_beauty_conversations_tenant_id_pending_prompt_appointment_id ON beauty_conversations (tenant_id, pending_prompt_appointment_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_conversations ADD CONSTRAINT ck_beauty_conversations_pending_prompt CHECK (pending_prompt IS NULL OR pending_prompt IN ('reminder_choice'));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_conversations ADD CONSTRAINT ck_beauty_conversations_pending_prompt_all_or_none CHECK ((pending_prompt IS NULL) = (pending_prompt_appointment_id IS NULL) AND (pending_prompt IS NULL) = (pending_prompt_expires_at IS NULL));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_appointments ADD CONSTRAINT ck_beauty_appointments_reminder_call_single CHECK (reminder_method <> 'call' OR cardinality(reminder_offsets) = 1);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_appointments ADD CONSTRAINT ck_beauty_appointments_reminder_method CHECK (reminder_method IN ('none', 'auto', 'telegram', 'call'));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_appointments ADD CONSTRAINT ck_beauty_appointments_reminder_none_empty CHECK ((reminder_method = 'none') = (cardinality(reminder_offsets) = 0));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_appointments ADD CONSTRAINT ck_beauty_appointments_reminder_offsets CHECK (reminder_offsets <@ ARRAY[60, 120, 1440]::smallint[] AND cardinality(reminder_offsets) <= 3);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_appointments ADD CONSTRAINT ck_beauty_appointments_reminder_option CHECK (reminder_option IN ('none', '1h', '2h', 'custom'));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE INDEX ix_beauty_call_tasks_tenant_id_client_id ON beauty_call_tasks (tenant_id, client_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE INDEX ix_beauty_call_tasks_tenant_id_completed_by_user_id ON beauty_call_tasks (tenant_id, completed_by_user_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE INDEX ix_beauty_call_tasks_tenant_id_location_id_due_at ON beauty_call_tasks (tenant_id, location_id, due_at);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE INDEX ix_beauty_call_tasks_tenant_id_status_due_at ON beauty_call_tasks (tenant_id, status, due_at);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE UNIQUE INDEX ux_beauty_call_tasks_open_reminder ON beauty_call_tasks (tenant_id, appointment_id) WHERE status = 'open' AND reason = 'reminder';
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE UNIQUE INDEX ux_beauty_call_tasks_reminder ON beauty_call_tasks (tenant_id, reminder_id) WHERE reminder_id IS NOT NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE INDEX ix_beauty_client_contact_preferences_tenant_id_telegram_conver ON beauty_client_contact_preferences (tenant_id, telegram_conversation_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE INDEX ix_beauty_client_contact_preferences_tenant_id_updated_by_user ON beauty_client_contact_preferences (tenant_id, updated_by_user_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    CREATE INDEX ix_beauty_reminder_settings_tenant_id_updated_by_user_id ON beauty_reminder_settings (tenant_id, updated_by_user_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_conversations ADD CONSTRAINT fk_beauty_conversations_beauty_appointments_tenant_id_pending_ FOREIGN KEY (tenant_id, pending_prompt_appointment_id) REFERENCES beauty_appointments (tenant_id, id) ON DELETE RESTRICT;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_messages ADD CONSTRAINT fk_beauty_messages_users_tenant_id_sender_user_id FOREIGN KEY (tenant_id, sender_user_id) REFERENCES users (tenant_id, id) ON DELETE RESTRICT;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_reminders ADD CONSTRAINT fk_beauty_reminders_beauty_messages_tenant_id_message_id FOREIGN KEY (tenant_id, message_id) REFERENCES beauty_messages (tenant_id, id) ON DELETE RESTRICT;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_appointments NO FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_reminders NO FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+
+                    UPDATE beauty_appointments
+                    SET reminder_method = 'auto',
+                        reminder_offsets = CASE reminder_option WHEN '1h' THEN ARRAY[60]::smallint[] ELSE ARRAY[120]::smallint[] END
+                    WHERE reminder_option IN ('1h', '2h') AND reminder_method = 'none';
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+
+                    UPDATE beauty_reminders r
+                    SET method = 'auto', planned_starts_at = a.starts_at
+                    FROM beauty_appointments a
+                    WHERE r.status = 'scheduled' AND r.method IS NULL
+                      AND a.tenant_id = r.tenant_id AND a.id = r.appointment_id;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+
+                    WITH pick AS (
+                        SELECT DISTINCT ON (r.tenant_id, r.appointment_id)
+                               r.tenant_id, r.id,
+                               (CASE a.reminder_option WHEN '1h' THEN 60 ELSE 120 END)::smallint AS off
+                        FROM beauty_reminders r
+                        JOIN beauty_appointments a ON a.tenant_id = r.tenant_id AND a.id = r.appointment_id
+                        WHERE r.status = 'scheduled' AND r.offset_minutes IS NULL AND a.reminder_option IN ('1h', '2h')
+                        ORDER BY r.tenant_id, r.appointment_id, r.scheduled_at DESC, r.id)
+                    UPDATE beauty_reminders r
+                    SET offset_minutes = pick.off
+                    FROM pick
+                    WHERE r.tenant_id = pick.tenant_id AND r.id = pick.id;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_appointments FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_reminders FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_client_contact_preferences ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_client_contact_preferences FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_client_contact_preferences
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_call_tasks ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_call_tasks FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_call_tasks
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_reminder_settings ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    ALTER TABLE beauty_reminder_settings FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_reminder_settings
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+
+    DO $$
+    DECLARE
+        t text;
+    BEGIN
+        FOREACH t IN ARRAY ARRAY['beauty_client_contact_preferences', 'beauty_call_tasks', 'beauty_reminder_settings',
+                                 'beauty_appointments', 'beauty_reminders', 'beauty_conversations', 'beauty_messages', 'beauty_clients']
+        LOOP
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_class c
+                WHERE c.oid = to_regclass('public.' || t) AND c.relrowsecurity AND c.relforcerowsecurity) THEN
+                RAISE EXCEPTION 'FORCE ROW LEVEL SECURITY is not enabled on %', t;
+            END IF;
+        END LOOP;
+    END
+    $$;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261024193048_beauty_reminders_contacts_inbox') THEN
+    INSERT INTO "__EFMigrationsHistory" (migration_id, product_version)
+    VALUES ('20261024193048_beauty_reminders_contacts_inbox', '8.0.11');
+    END IF;
+END $EF$;
+COMMIT;
+
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    ALTER TABLE beauty_messages DROP CONSTRAINT ck_beauty_messages_kind;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    ALTER TABLE beauty_messages ADD actions jsonb;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    ALTER TABLE beauty_messages ADD callback_data character varying(64);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    ALTER TABLE beauty_messages ADD callback_message_ref character varying(32);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    ALTER TABLE beauty_appointments ADD client_confirmed_at timestamp with time zone;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    CREATE TABLE beauty_chat_keyboards (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        conversation_id uuid NOT NULL,
+        message_id uuid NOT NULL,
+        kind character varying(24) NOT NULL,
+        token character varying(22) NOT NULL,
+        options jsonb NOT NULL,
+        proposal_id uuid,
+        appointment_id uuid,
+        status character varying(16) NOT NULL DEFAULT 'active',
+        expires_at timestamp with time zone NOT NULL,
+        used_at timestamp with time zone,
+        used_option smallint,
+        used_by_message_id uuid,
+        markup_cleared_at timestamp with time zone,
+        clear_attempts smallint NOT NULL DEFAULT 0,
+        tenant_id uuid NOT NULL,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        updated_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_chat_keyboards PRIMARY KEY (id),
+        CONSTRAINT ak_beauty_chat_keyboards_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT ck_beauty_chat_keyboards_appointment CHECK (kind NOT IN ('appointment_actions', 'cancel_confirm', 'reminder_choice') OR appointment_id IS NOT NULL),
+        CONSTRAINT ck_beauty_chat_keyboards_clear_attempts CHECK (clear_attempts >= 0),
+        CONSTRAINT ck_beauty_chat_keyboards_kind CHECK (kind IN ('booking_confirm', 'slot_pick', 'reminder_choice', 'appointment_list', 'appointment_actions', 'cancel_confirm')),
+        CONSTRAINT ck_beauty_chat_keyboards_options CHECK (jsonb_typeof(options) = 'array' AND jsonb_array_length(options) <= 10),
+        CONSTRAINT ck_beauty_chat_keyboards_proposal CHECK (kind <> 'booking_confirm' OR proposal_id IS NOT NULL),
+        CONSTRAINT ck_beauty_chat_keyboards_status CHECK (status IN ('active', 'used', 'expired', 'revoked')),
+        CONSTRAINT ck_beauty_chat_keyboards_token CHECK (token ~ '^[A-Za-z0-9_-]{22}$'),
+        CONSTRAINT ck_beauty_chat_keyboards_used CHECK ((status = 'used' AND used_at IS NOT NULL AND used_by_message_id IS NOT NULL) OR (status <> 'used' AND used_at IS NULL AND used_by_message_id IS NULL)),
+        CONSTRAINT ck_beauty_chat_keyboards_used_option CHECK (used_option IS NULL OR (status = 'used' AND used_option BETWEEN 0 AND 9)),
+        CONSTRAINT fk_beauty_chat_keyboards_beauty_appointments_tenant_id_appoint FOREIGN KEY (tenant_id, appointment_id) REFERENCES beauty_appointments (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_chat_keyboards_beauty_chat_booking_proposals_tenant_ FOREIGN KEY (tenant_id, proposal_id) REFERENCES beauty_chat_booking_proposals (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_chat_keyboards_beauty_conversations_tenant_id_conver FOREIGN KEY (tenant_id, conversation_id) REFERENCES beauty_conversations (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_chat_keyboards_beauty_messages_tenant_id_message_id FOREIGN KEY (tenant_id, message_id) REFERENCES beauty_messages (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_chat_keyboards_beauty_messages_tenant_id_used_by_mes FOREIGN KEY (tenant_id, used_by_message_id) REFERENCES beauty_messages (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    ALTER TABLE beauty_messages ADD CONSTRAINT ck_beauty_messages_actions CHECK (actions IS NULL OR (direction = 'outbound' AND jsonb_typeof(actions) = 'object' AND octet_length(actions::text) <= 4096));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    ALTER TABLE beauty_messages ADD CONSTRAINT ck_beauty_messages_callback_fields CHECK (kind = 'callback' OR (callback_data IS NULL AND callback_message_ref IS NULL));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    ALTER TABLE beauty_messages ADD CONSTRAINT ck_beauty_messages_kind CHECK (kind IN ('text', 'command', 'unsupported', 'callback'));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    CREATE INDEX ix_beauty_chat_keyboards_active ON beauty_chat_keyboards (tenant_id, conversation_id) WHERE status = 'active';
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    CREATE INDEX ix_beauty_chat_keyboards_sweeper ON beauty_chat_keyboards (tenant_id, updated_at) WHERE status <> 'active' AND markup_cleared_at IS NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    CREATE INDEX ix_beauty_chat_keyboards_tenant_id_appointment_id ON beauty_chat_keyboards (tenant_id, appointment_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    CREATE INDEX ix_beauty_chat_keyboards_tenant_id_conversation_id ON beauty_chat_keyboards (tenant_id, conversation_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    CREATE UNIQUE INDEX ix_beauty_chat_keyboards_tenant_id_message_id ON beauty_chat_keyboards (tenant_id, message_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    CREATE INDEX ix_beauty_chat_keyboards_tenant_id_proposal_id ON beauty_chat_keyboards (tenant_id, proposal_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    CREATE UNIQUE INDEX ix_beauty_chat_keyboards_tenant_id_token ON beauty_chat_keyboards (tenant_id, token);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    CREATE INDEX ix_beauty_chat_keyboards_tenant_id_used_by_message_id ON beauty_chat_keyboards (tenant_id, used_by_message_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    ALTER TABLE beauty_chat_keyboards ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    ALTER TABLE beauty_chat_keyboards FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_chat_keyboards
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+
+    DO $$
+    DECLARE
+        t text;
+    BEGIN
+        FOREACH t IN ARRAY ARRAY['beauty_chat_keyboards', 'beauty_messages', 'beauty_appointments']
+        LOOP
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_class c
+                WHERE c.oid = to_regclass('public.' || t) AND c.relrowsecurity AND c.relforcerowsecurity) THEN
+                RAISE EXCEPTION 'FORCE ROW LEVEL SECURITY is not enabled on %', t;
+            END IF;
+        END LOOP;
+    END
+    $$;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261025080340_beauty_chat_buttons') THEN
+    INSERT INTO "__EFMigrationsHistory" (migration_id, product_version)
+    VALUES ('20261025080340_beauty_chat_buttons', '8.0.11');
+    END IF;
+END $EF$;
+COMMIT;
+

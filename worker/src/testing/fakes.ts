@@ -14,6 +14,7 @@ export function makeDeps(init: {
   const reminders: { appointmentId: string; offset: string; delayMs: number }[] = [];
   const campaigns: { id: string; delayMs: number }[] = [];
   let failures = init.sendFailures ?? 0;
+  const sending = new Set<string>();
   const state = { now: init.now ?? new Date("2026-01-10T10:00:00Z") };
 
   const deps: BeautyDeps = {
@@ -33,9 +34,14 @@ export function makeDeps(init: {
         return { message, created: true };
       },
       getMessage: async (id) => messages.get(id) ?? null,
-      setMessageStatus: async (id, s) => { messages.get(id)!.status = s; },
+      setMessageStatus: async (id, s) => { sending.delete(id); messages.get(id)!.status = s; },
+      claimForSend: async (id) => {
+        if (messages.get(id)?.status !== "queued" || sending.has(id)) return false;
+        sending.add(id);
+        return true;
+      },
       countMarketingSentSince: async () => sent.filter((m) => m.kind === "campaign" || m.kind === "winback").length,
-      recordSendFailure: async (id, _attempt, _error, final) => { if (final) messages.get(id)!.status = "failed"; },
+      recordSendFailure: async (id, _attempt, _error, final) => { sending.delete(id); if (final) messages.get(id)!.status = "failed"; },
     },
     sender: { send: async (m) => { if (failures > 0) { failures--; throw new Error("channel down"); } sent.push(m); } },
     idempotency: {

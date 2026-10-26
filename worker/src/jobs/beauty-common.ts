@@ -13,6 +13,12 @@ export const OUTBOX_BACKOFF_MS = 5_000;
 /** Marketing messages per tenant per rolling 24 h (override: WORKER_MARKETING_DAILY_LIMIT). */
 export const DEFAULT_MARKETING_DAILY_LIMIT = 200;
 export const MARKETING_KINDS: ReadonlySet<OutboundMessage["kind"]> = new Set(["campaign", "winback"]);
+/** Permanent channel failure codes (§22.5); stored as `last_error` / `skip_reason` instead of free text. */
+export const CHANNEL_ERROR_CODES = ["bot_blocked", "chat_not_found", "channel_inactive", "token_missing"] as const;
+export type ChannelErrorCode = (typeof CHANNEL_ERROR_CODES)[number];
+export const isChannelErrorCode = (v: unknown): v is ChannelErrorCode => CHANNEL_ERROR_CODES.includes(v as ChannelErrorCode);
+/** Codes after which a "delivery_failed" call task is created (the client cannot be reached in Telegram). */
+export const CALL_TASK_CODES: ReadonlySet<string> = new Set(["bot_blocked", "chat_not_found"]);
 export const UNSUBSCRIBE_NOTE = "Щоб не отримувати повідомлення, надішліть STOP";
 
 /** Marketing texts must carry the opt-out instruction. */

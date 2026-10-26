@@ -4,7 +4,7 @@ import { withTenant } from "../db/tenant-db";
 import type { TenantDirectory } from "../db/tenants";
 import { processOutbox } from "../jobs/beauty-outbox";
 import { processReviewRequest } from "../jobs/beauty-review";
-import { processReminder } from "../jobs/beauty-reminder";
+import { processDueReminder } from "../jobs/beauty-reminder";
 import { processWinback } from "../jobs/beauty-winback";
 import type { BeautyDeps } from "../ports";
 
@@ -15,6 +15,17 @@ export interface PollContext {
   logger: Logger;
   batchSize?: number;
   backoffMs?: number;
+  /**
+   * WORKER_REMINDERS_ENABLED (§22.2). `false` => pollReminders does nothing. main.ts always sets it from the env
+   * (default false); an unset value means "enabled" only for in-process callers/tests that build the context by hand.
+   */
+  remindersEnabled?: boolean;
+  /** WORKER_REMINDER_MIN_LEAD_MINUTES (default 15). */
+  reminderMinLeadMinutes?: number;
+  /** WORKER_REMINDER_BUTTONS_ENABLED (§23.2, default false): inline buttons under the reminder (also needs the channel flag). */
+  reminderButtonsEnabled?: boolean;
+  /** WORKER_REVIEWS_ENABLED (TASK-760, default false in main.ts). `false` => pollReviews does nothing; unset = enabled (hand-built contexts/tests). */
+  reviewsEnabled?: boolean;
 }
 
 export interface PollResult { processed: number; errors: number }
@@ -29,35 +40,37 @@ async function forEachTenant(ctx: PollContext, fn: () => Promise<PollResult>, wh
       total.errors += r.errors;
     } catch (err) {
       total.errors++;
-      ctx.logger.error(`${what} failed for tenant`, { tenantId, error: String(err) });
+      ctx.logger.error(`${what} failed for tenant`, { tenantId, errorCode: errorCode(err) });
     }
   }
   return total;
 }
 
-/** Due beauty_reminders -> outbox messages (idempotent per reminder row). Runs every few minutes. */
+/**
+ * Due beauty_reminders -> outbox messages (idempotent per reminder row, key `reminder:{id}`), checks of §22.5.
+ * Runs every minute, only with WORKER_REMINDERS_ENABLED=true. Logs carry ids and codes only.
+ */
 export function pollReminders(ctx: PollContext): Promise<PollResult> {
+  if (ctx.remindersEnabled === false) return Promise.resolve({ processed: 0, errors: 0 });
   return forEachTenant(ctx, async () => {
-    const now = ctx.deps.now();
     const res: PollResult = { processed: 0, errors: 0 };
-    for (const r of await ctx.store.listDueReminders(now, ctx.batchSize ?? 100)) {
+    for (const r of await ctx.store.listDueReminders(ctx.deps.now(), ctx.batchSize ?? 100)) {
       try {
-        const outcome = r.offset
-          ? await processReminder(ctx.deps, { appointmentId: r.appointmentId, offset: r.offset, reminderId: r.id })
-          : "skipped";
-        if (outcome === "skipped") {
-          const missed = r.startsAt.getTime() <= now.getTime();
-          await ctx.store.closeReminder(r.id, missed ? "failed" : "cancelled",
-            missed ? "visit already started" : "appointment inactive, reminder option changed or client unreachable", now);
-        }
+        await processDueReminder(ctx.deps, ctx.store, r, { minLeadMinutes: ctx.reminderMinLeadMinutes, buttonsEnabled: ctx.reminderButtonsEnabled === true });
         res.processed++;
       } catch (err) {
         res.errors++;
-        ctx.logger.error("reminder failed", { reminderId: r.id, error: String(err) });
+        ctx.logger.error("reminder failed", { reminderId: r.id, errorCode: errorCode(err) });
       }
     }
     return res;
   }, "pollReminders");
+}
+
+/** Error class/code only: DB and library messages can echo values (personal data). */
+function errorCode(err: unknown): string {
+  const e = err as { code?: unknown; name?: unknown } | null;
+  return typeof e?.code === "string" ? e.code : typeof e?.name === "string" ? e.name : "error";
 }
 
 /**
@@ -74,7 +87,7 @@ export function pollOutbox(ctx: PollContext): Promise<PollResult> {
       } catch (err) {
         // already persisted by processOutbox (attempt/last_error/log); counted here so the scheduler sees it
         res.errors++;
-        ctx.logger.error("outbox send failed", { messageId: m.id, attempt: m.attempts + 1, error: String(err) });
+        ctx.logger.error("outbox send failed", { messageId: m.id, attempt: m.attempts + 1, errorCode: errorCode(err) });
       }
     }
     return res;
@@ -94,6 +107,7 @@ export function pollWinback(ctx: PollContext, inactiveDays?: number): Promise<Po
  * have the message are excluded by the query, and a concurrent duplicate is rejected by the unique key.
  */
 export function pollReviews(ctx: PollContext): Promise<PollResult> {
+  if (ctx.reviewsEnabled === false) return Promise.resolve({ processed: 0, errors: 0 });
   return forEachTenant(ctx, async () => {
     const res: PollResult = { processed: 0, errors: 0 };
     for (const id of await ctx.store.listCompletedWithoutReview(ctx.deps.now(), ctx.batchSize ?? 50)) {
@@ -101,7 +115,7 @@ export function pollReviews(ctx: PollContext): Promise<PollResult> {
         if (await processReviewRequest(ctx.deps, { appointmentId: id }) === "queued") res.processed++;
       } catch (err) {
         res.errors++;
-        ctx.logger.error("review request failed", { appointmentId: id, error: String(err) });
+        ctx.logger.error("review request failed", { appointmentId: id, errorCode: errorCode(err) });
       }
     }
     return res;

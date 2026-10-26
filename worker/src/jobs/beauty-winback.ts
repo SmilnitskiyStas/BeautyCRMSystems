@@ -8,7 +8,7 @@ export async function processWinback(deps: BeautyDeps, inactiveDays = WINBACK_IN
   let sent = 0;
   let skipped = 0;
   for (const c of await deps.data.listLapsedClients(deps.now(), inactiveDays)) {
-    if (!c.marketingConsent) { skipped++; continue; }
+    if (!c.marketingConsent || c.optedOut) { skipped++; continue; }
     // Keyed by last visit: one nudge per lapse, repeat runs do not duplicate.
     const ok = await enqueueMessage(deps, {
       tenantId: c.tenantId, clientId: c.id, channel: c.channel, address: c.address,
