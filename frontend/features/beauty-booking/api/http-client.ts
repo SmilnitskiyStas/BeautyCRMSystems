@@ -10,7 +10,7 @@ import {
   type Service,
   type Slot,
   type Specialist,
-  reminderOptionSchema,
+  appointmentReminderOptionSchema,
 } from "../types";
 import type { BookingApi } from "./client";
 
@@ -146,7 +146,7 @@ export function toSlots(rows: FreeSlotDto[]): Slot[] {
 }
 
 export function toAppointment(a: PublicAppointmentDto): Appointment {
-  const reminder = reminderOptionSchema.safeParse(a.reminderOption);
+  const reminder = appointmentReminderOptionSchema.safeParse(a.reminderOption);
   return {
     locationName: a.locationName,
     specialistName: a.specialistName,

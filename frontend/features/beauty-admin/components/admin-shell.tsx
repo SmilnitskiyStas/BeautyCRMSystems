@@ -5,14 +5,28 @@ import { usePathname } from "next/navigation";
 import { useEffect, Suspense, useId, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthGate, useAuth } from "@/features/beauty-auth/components/auth-provider";
-import { navFor } from "@/features/beauty-auth/permissions";
+import { canUseInbox, navFor } from "@/features/beauty-auth/permissions";
 import { ROLE_LABEL } from "@/features/beauty-auth/types";
 import { useAiPanel } from "../hooks/use-ai-panel";
+import { useNeedsReplyCount } from "../hooks/use-inbox";
 import { aiContextFor } from "./ai-contexts";
 
 function isActive(pathname: string, href: string) {
   if (href === "/beauty") return pathname === "/beauty";
   return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+/** Бейдж «потрібна відповідь» біля пункту «Розмови» (§22.11): число для зору, повний підпис для скрінрідера. */
+function InboxBadge() {
+  const { user } = useAuth();
+  const count = useNeedsReplyCount(canUseInbox(user.role)).data ?? 0;
+  if (count <= 0) return null;
+  return (
+    <span data-testid="inbox-badge" className="ml-2 inline-flex min-w-6 items-center justify-center rounded-full bg-white px-1.5 text-[13px] font-bold text-(--ink)">
+      <span aria-hidden="true">{count > 99 ? "99+" : count}</span>
+      <span className="sr-only">, потрібна відповідь: {count}</span>
+    </span>
+  );
 }
 
 export function SideNav() {
@@ -36,6 +50,7 @@ export function SideNav() {
             className={`block min-h-11 rounded-xl px-3.5 py-3 text-[15px] text-white no-underline ${active ? "bg-(--accent) font-semibold" : "font-normal hover:bg-white/10"}`}
           >
             {n.label}
+            {n.href === "/beauty/inbox" ? <InboxBadge /> : null}
           </Link>
         );
       })}

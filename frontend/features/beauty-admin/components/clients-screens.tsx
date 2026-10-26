@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { useAddClientNote, useClient, useClients } from "../hooks/use-beauty-admin";
-import { cancelledByLabel } from "../cancellation";
+import { CLIENT_TG_CANCEL_EVENT, cancelledByLabel, isClientTelegramCancel } from "../cancellation";
 import { initials } from "../format";
+import { ContactPreferencesCard } from "./contact-preferences-card";
 import type { ClientProfile } from "../types";
 import {
   Avatar,
@@ -175,9 +176,9 @@ export function ClientProfileScreen({ id }: { id: string }) {
                           <Badge tone={VISIT_TONE[v.status].tone}>{VISIT_TONE[v.status].label}</Badge>
                           {v.status === "cancelled" ? (
                             <div className="mt-1.5 flex flex-col gap-0.5 text-[13px] text-(--muted)" data-testid="visit-cancel-info">
-                              <span>{cancelledByLabel(v.cancelledBy)}</span>
+                              <span>{isClientTelegramCancel(v) ? CLIENT_TG_CANCEL_EVENT : cancelledByLabel(v.cancelledBy)}</span>
                               {v.cancelledAtLabel ? <span>{v.cancelledAtLabel}</span> : null}
-                              {v.cancelReason ? <span>Причина: {v.cancelReason}</span> : null}
+                              {v.cancelReason && !isClientTelegramCancel(v) ? <span>Причина: {v.cancelReason}</span> : null}
                             </div>
                           ) : null}
                         </td>
@@ -218,6 +219,7 @@ export function ClientProfileScreen({ id }: { id: string }) {
                     <KeyValue key={p.label} label={p.label} value={p.value} />
                   ))}
                 </Card>
+                <ContactPreferencesCard clientId={c.id} />
                 {c.warning ? (
                   <div role="note" className="rounded-2xl bg-[#FFF1CC] p-4 text-sm leading-snug text-[#5C3900]">
                     <strong>Увага:</strong> {c.warning}

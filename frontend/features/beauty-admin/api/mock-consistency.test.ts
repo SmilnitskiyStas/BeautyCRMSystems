@@ -7,7 +7,6 @@ vi.hoisted(() => {
 });
 
 import { bookableAt, toMinutes } from "@/features/beauty-shared/availability";
-import { ANALYTICS_LOCS } from "./mock-data";
 import { mockBookingApi, mockSlots } from "@/features/beauty-booking/api/mock-client";
 import { isClosedDate } from "@/features/beauty-booking/dates";
 import { mockBeautyApi } from "./mock-client";
@@ -43,7 +42,13 @@ describe("F3: календар від поточної дати, одні дан
 
   it("аналітика посилається лише на майстрів, які є в штаті", async () => {
     const ids = new Set((await mockBeautyApi.getStaff()).map((m) => m.id));
-    for (const loc of Object.values(ANALYTICS_LOCS)) for (const [id] of loc.specs) expect(ids.has(id)).toBe(true);
+    const b = await mockBeautyApi.getLocationBreakdown("c", { from: "2026-09-01", to: "2026-10-14" });
+    expect(b.specialists.length).toBeGreaterThan(0);
+    for (const s of b.specialists) expect(ids.has(s.specialistId)).toBe(true);
+    for (const loc of await mockBeautyApi.getLocationsAnalytics({ from: "2026-09-01", to: "2026-10-14", compare: false })) {
+      const d = await mockBeautyApi.getLocationBreakdown(loc.locationId, { from: "2026-09-01", to: "2026-10-14" });
+      for (const s of d.specialists) expect(ids.has(s.specialistId)).toBe(true);
+    }
   });
 });
 

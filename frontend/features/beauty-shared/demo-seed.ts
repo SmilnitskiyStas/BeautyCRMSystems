@@ -1,4 +1,4 @@
-import type { Absence, Appointment, BeautyLocation, CalendarKind, LocationClosure, StaffMember, WorkingHours } from "@/features/beauty-admin/types";
+import type { Absence, Appointment, BeautyLocation, CalendarKind, ContactSource, LocationClosure, MessageSenderType, MessageStatus, ReminderMethod, StaffMember, WorkingHours } from "@/features/beauty-admin/types";
 import { weekdayOf } from "@/features/beauty-admin/closed-days";
 import { bookableAt, dayAvailability, hhmm } from "./availability";
 import { addDaysYmd, localToInstant, mondayOfYmd, todayInZone } from "./zone-time";
@@ -213,18 +213,15 @@ const TEMPLATES: Record<string, Tpl[]> = {
   ],
 };
 
-/**
- * Записи поточного й наступного тижня. Шаблон потрапляє в набір, лише якщо його час доступний за правилами
- * (графік ∩ години закладу ∩ не вихідний ∩ без відсутності); інакше пропускається, id решти стабільні.
- */
-export function appointmentsSeed(today: string = demoToday(), now: Date = new Date()): Appointment[] {
+/** Тижні відносно поточного: 0 - поточний, 1 - наступний, від'ємні - історія для аналітики. */
+function buildAppointments(today: string, now: Date, weeks: number[]): Appointment[] {
   const absences = absencesSeed(today);
   const closures = closuresSeed(today);
   const monday = mondayOfYmd(today);
   const out: Appointment[] = [];
   for (const master of STAFF) {
     (TEMPLATES[master.id] ?? []).forEach(([dayNo, start, serviceId, clientId, kind], i) => {
-      for (const week of [0, 1]) {
+      for (const week of weeks) {
         const date = addDaysYmd(monday, dayNo + week * 7);
         const link = master.locations.find((l) => l.isActive !== false && (l.workingHours[weekdayOf(date)]?.length ?? 0) > 0);
         const loc = DEMO_LOCATIONS.find((l) => l.id === link?.locationId);
@@ -245,8 +242,11 @@ export function appointmentsSeed(today: string = demoToday(), now: Date = new Da
         const past = localToInstant(startsAt, loc.timezone).getTime() < now.getTime();
         const client = CLIENT_SEED.find((c) => c.id === clientId)!;
         const promo = kind === "promo" && !!s.promo;
+        // Історія (week < 0): детермінована різноманітність статусів для аналітики (скасування, no-show).
+        const mix = week < 0 ? (i * 7 + -week * 3 + master.id.length) % 13 : -1;
+        const status = mix === 0 ? "cancelled" : mix === 7 ? "no_show" : past ? "completed" : kind === "online" ? "pending" : "confirmed";
         out.push({
-          id: week === 0 ? `${master.id}${i}` : `${master.id}${i}w1`,
+          id: week === 0 ? `${master.id}${i}` : week === 1 ? `${master.id}${i}w1` : `${master.id}${i}h${-week}`,
           locationId: loc.id,
           specialistId: master.id,
           serviceId,
@@ -255,7 +255,7 @@ export function appointmentsSeed(today: string = demoToday(), now: Date = new Da
           serviceName: s.name,
           startsAt,
           durationMinutes: s.durationMinutes,
-          status: past ? "completed" : kind === "online" ? "pending" : "confirmed",
+          status,
           source: kind === "online" ? "online" : "admin",
           kind: kind === "promo" && !promo ? "visit" : kind,
           priceFinal: promo ? promoPrice(s.price) : s.price,
@@ -267,3 +267,173 @@ export function appointmentsSeed(today: string = demoToday(), now: Date = new Da
   }
   return out;
 }
+
+/**
+ * Записи поточного й наступного тижня. Шаблон потрапляє в набір, лише якщо його час доступний за правилами
+ * (графік ∩ години закладу ∩ не вихідний ∩ без відсутності); інакше пропускається, id решти стабільні.
+ */
+export const appointmentsSeed = (today: string = demoToday(), now: Date = new Date()): Appointment[] => buildAppointments(today, now, [0, 1]);
+
+/** Кількість тижнів історії для аналітики (§19): достатньо для пресету «Рік» і порівняння з попереднім періодом. */
+export const HISTORY_WEEKS = 80;
+
+/**
+ * Історія записів для аналітики: ті самі шаблони за попередні тижні (з різноманітними статусами: завершено,
+ * скасовано, не прийшов). Той самий графік/години/вихідні, що й у календарі, тож аналітика узгоджена з рештою mock.
+ */
+export const historySeed = (today: string = demoToday(), now: Date = new Date(), weeks: number = HISTORY_WEEKS): Appointment[] =>
+  buildAppointments(today, now, Array.from({ length: weeks }, (_, i) => -(i + 1)));
+
+
+// ---------- вподобання нагадувань і розмови (§22) ----------
+
+export interface ContactPrefSeed {
+  clientId: string;
+  /** Відсутній запис = «Не обрано» (state: unset). */
+  pref?: { method: ReminderMethod; offsets: number[]; source: ContactSource; updatedBy?: { id: string; name: string } };
+  /** Чи є розмова в підключеному Telegram-каналі (потрібна для способу «Telegram»). */
+  telegram: boolean;
+}
+
+/**
+ * Демо-сценарії: oc - Telegram 2 год + 24 год (вибір у чаті); sm - не обрано (питає про нагадування в розмові);
+ * kl - дзвінок за 24 год (адміністратор); tg - Telegram 1 год, але бот заблоковано (задача «не доставлено»);
+ * mp - дзвінок за 2 год; немає Telegram-розмови.
+ */
+export const CONTACT_PREFS_SEED: ContactPrefSeed[] = [
+  { clientId: "oc", telegram: true, pref: { method: "telegram", offsets: [120, 1440], source: "chat" } },
+  { clientId: "sm", telegram: true },
+  { clientId: "kl", telegram: true, pref: { method: "call", offsets: [1440], source: "admin", updatedBy: { id: "mock-user", name: "Світлана Коваленко" } } },
+  { clientId: "tg", telegram: true, pref: { method: "telegram", offsets: [60], source: "admin", updatedBy: { id: "mock-user", name: "Світлана Коваленко" } } },
+  { clientId: "mp", telegram: false, pref: { method: "call", offsets: [120], source: "admin", updatedBy: { id: "mock-user", name: "Світлана Коваленко" } } },
+];
+
+export interface ConversationSeedMessage {
+  from: MessageSenderType;
+  text: string;
+  /** Скільки хвилин тому. */
+  minutesAgo: number;
+  status: MessageStatus;
+  staffName?: string;
+  failureCode?: string;
+  /** Підписи кнопок клавіатури вихідного повідомлення (§23.10). */
+  buttons?: string[];
+  /** Клієнт натиснув кнопку з таким підписом (`kind=callback`, `body="[кнопка] …"`). */
+  pressed?: string;
+}
+
+export interface ConversationSeed {
+  id: string;
+  channelId: "tg" | "ig";
+  /** Заклад каналу; відсутній = канал без закладу. */
+  locationId?: string;
+  clientId?: string;
+  title: string;
+  aiState: "active" | "handoff";
+  handoffReason?: string;
+  /** Хвилин до кінця паузи ШІ від «зараз»; відсутнє при handoff = безстроково. */
+  pausedForMinutes?: number;
+  /** Скільки хвилин очікує відповіді людини (`awaiting_staff_since`). */
+  awaitingMinutes?: number;
+  /** Коли менеджер востаннє читав розмову (хвилин тому). */
+  readMinutesAgo: number;
+  messages: ConversationSeedMessage[];
+}
+
+/** Стани розмов (кнопки: підсумок запису, нагадування з підтвердженням і скасуванням клієнтом — §23): ШІ відповідає, передано людині (просив нагадування), пауза з `held`, Instagram без відповіді з вебу, не доставлено. */
+export const CONVERSATIONS_SEED: ConversationSeed[] = [
+  {
+    id: "cv1",
+    channelId: "tg",
+    locationId: "c",
+    clientId: "oc",
+    title: "Олена Кравченко",
+    aiState: "active",
+    readMinutesAgo: 60,
+    messages: [
+      { from: "client", text: "Добрий день! Чи є вільне вікно на манікюр у п'ятницю?", minutesAgo: 95, status: "processed" },
+      { from: "ai", text: "Добрий день, Олено! У п'ятницю є 11:00 та 15:00 у закладі Центр. Який час підійде?", minutesAgo: 94, status: "sent" },
+      { from: "client", text: "11:00, будь ласка", minutesAgo: 90, status: "processed" },
+      { from: "ai", text: "Підготувала запис: манікюр + гель-лак, п'ятниця 11:00, Центр, Марина Бойко, 900 ₴. Підтверджуєте?", minutesAgo: 89, status: "sent", buttons: ["✅ Так, записати", "❌ Ні", "🕐 Інший час"] },
+      { from: "client", text: "", pressed: "✅ Так, записати", minutesAgo: 88, status: "processed" },
+      { from: "ai", text: "Готово, вас записано. Нагадаємо в Telegram за 2 год і за 24 год.", minutesAgo: 88, status: "sent" },
+    ],
+  },
+  {
+    id: "cv2",
+    channelId: "tg",
+    locationId: "c",
+    clientId: "sm",
+    title: "Софія Мартин",
+    aiState: "handoff",
+    handoffReason: "policy_unknown",
+    pausedForMinutes: 11 * 60 + 30,
+    awaitingMinutes: 25,
+    readMinutesAgo: 120,
+    messages: [
+      { from: "client", text: "Добрий вечір! Підкажіть, чи нагадаєте ви мені про запис? І чи зателефонує адміністратор?", minutesAgo: 26, status: "processed" },
+      { from: "system", text: "Щодо цього я уточню в адміністратора — він відповість вам тут.", minutesAgo: 25, status: "sent" },
+    ],
+  },
+  {
+    id: "cv3",
+    channelId: "tg",
+    locationId: "p",
+    clientId: "kl",
+    title: "Катерина Ляшко",
+    aiState: "handoff",
+    handoffReason: "human_requested",
+    pausedForMinutes: 9 * 60,
+    awaitingMinutes: 140,
+    readMinutesAgo: 145,
+    messages: [
+      { from: "client", text: "Хочу перенести запис на наступний тиждень, можна?", minutesAgo: 150, status: "processed" },
+      { from: "system", text: "Передаю розмову адміністратору, він відповість найближчим часом.", minutesAgo: 149, status: "sent" },
+      { from: "client", text: "Алло? Є хтось на зв'язку?", minutesAgo: 140, status: "held" },
+      { from: "client", text: "Можна на вівторок після 14:00", minutesAgo: 70, status: "held" },
+      { from: "client", text: "Будь ласка, дайте відповідь, це важливо", minutesAgo: 20, status: "held" },
+    ],
+  },
+  {
+    id: "cv4",
+    channelId: "ig",
+    title: "Ірина Л.",
+    aiState: "active",
+    readMinutesAgo: 600,
+    messages: [
+      { from: "client", text: "Чи є вільний час на манікюр з гель-лаком сьогодні ввечері?", minutesAgo: 45, status: "processed" },
+      { from: "ai", text: "Чернетка: Добрий день, Ірино! Сьогодні є вільні вікна о 17:00 та 18:30 у закладі Центр. Записати вас на 17:00?", minutesAgo: 44, status: "draft" },
+    ],
+  },
+  {
+    id: "cv5",
+    channelId: "tg",
+    locationId: "p",
+    clientId: "tg",
+    title: "Тетяна Гончар",
+    aiState: "active",
+    readMinutesAgo: 400,
+    messages: [
+      { from: "client", text: "Дякую, до зустрічі!", minutesAgo: 1500, status: "processed" },
+      { from: "system", text: "Нагадуємо про ваш візит. Скасувати чи перенести — напишіть сюди. Щоб не отримувати нагадування, напишіть «Стоп».", minutesAgo: 300, status: "failed", failureCode: "bot_blocked" },
+    ],
+  },
+  {
+    id: "cv6",
+    channelId: "tg",
+    locationId: "c",
+    clientId: "mp",
+    title: "Марія Пономаренко",
+    aiState: "active",
+    readMinutesAgo: 100,
+    messages: [
+      { from: "system", text: "Нагадуємо про ваш візит. Підтвердьте, будь ласка, що прийдете.", minutesAgo: 600, status: "sent", buttons: ["✅ Підтверджую візит", "❌ Скасувати візит", "🔕 Більше не нагадувати"] },
+      { from: "client", text: "", pressed: "✅ Підтверджую візит", minutesAgo: 590, status: "processed" },
+      { from: "system", text: "Дякуємо, візит підтверджено. Чекаємо на вас!", minutesAgo: 590, status: "sent" },
+      { from: "client", text: "", pressed: "❌ Скасувати візит", minutesAgo: 190, status: "processed" },
+      { from: "ai", text: "Скасувати наступний запис? Оплата в закладі, тож нічого повертати не потрібно.", minutesAgo: 189, status: "sent", buttons: ["Так, скасувати", "Ні, залишити"] },
+      { from: "client", text: "", pressed: "Так, скасувати", minutesAgo: 185, status: "processed" },
+      { from: "system", text: "Запис скасовано. Щоб записатися знову, напишіть нам.", minutesAgo: 185, status: "sent" },
+    ],
+  },
+];

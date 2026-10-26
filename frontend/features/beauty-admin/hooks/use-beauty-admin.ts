@@ -1,8 +1,14 @@
 "use client";
 
+import { useCallback, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { beautyApi } from "../api";
 import type {
+  AiKeyDeleteInput,
+  AiKeySaveInput,
+  AiKeySource,
+  AiSettingsInput,
+  AnalyticsQuery,
   CancellationSettings,
   ChannelConfig,
   ChannelId,
@@ -35,11 +41,17 @@ export const beautyKeys = {
   absences: (from: string, to: string, specialistId?: string) => ["beauty", "absences", from, to, specialistId ?? null] as const,
   priceList: ["beauty", "price-list"] as const,
   promoPreview: (d: PromoDraft) => ["beauty", "promo-preview", d] as const,
-  network: ["beauty", "analytics", "network"] as const,
-  locationAnalytics: (id: LocationId) => ["beauty", "analytics", "location", id] as const,
-  promoAnalytics: ["beauty", "analytics", "promotions"] as const,
+  // §19: ключі містять from/to (і compare там, де він змінює відповідь).
+  network: (q: AnalyticsQuery) => ["beauty", "analytics", "network", q.from, q.to, q.compare] as const,
+  networkSeries: (q: Pick<AnalyticsQuery, "from" | "to">) => ["beauty", "analytics", "series", q.from, q.to] as const,
+  locationsAnalytics: (q: AnalyticsQuery) => ["beauty", "analytics", "locations", q.from, q.to, q.compare] as const,
+  locationBreakdown: (id: LocationId, q: Pick<AnalyticsQuery, "from" | "to">) => ["beauty", "analytics", "breakdown", id, q.from, q.to] as const,
+  promoAnalytics: (q: AnalyticsQuery) => ["beauty", "analytics", "promotions", q.from, q.to, q.compare] as const,
   channels: ["beauty", "channels"] as const,
   cancellation: ["beauty", "settings", "cancellation"] as const,
+  aiSettings: ["beauty", "ai", "settings"] as const,
+  aiModels: ["beauty", "ai", "models"] as const,
+  aiUsage: (months: number) => ["beauty", "ai", "usage", months] as const,
   aiRequests: ["beauty", "ai", "requests"] as const,
   aiChat: ["beauty", "ai", "chat"] as const,
   aiPlan: (goal: PromoGoalId) => ["beauty", "ai", "plan", goal] as const,
@@ -293,19 +305,24 @@ export const usePromoPreview = (draft: PromoDraft) =>
 export const useCreatePromotion = () =>
   useMutation({ mutationFn: (draft: PromoDraft) => beautyApi.createPromotion(draft) });
 
-export const useNetworkAnalytics = () =>
-  useQuery({ queryKey: beautyKeys.network, queryFn: () => beautyApi.getNetworkAnalytics() });
+export const useNetworkAnalytics = (q: AnalyticsQuery) =>
+  useQuery({ queryKey: beautyKeys.network(q), queryFn: () => beautyApi.getNetworkAnalytics(q) });
 
-export const useLocationAnalytics = (id: LocationId, enabled = true) =>
+export const useNetworkSeries = (q: Pick<AnalyticsQuery, "from" | "to">) =>
+  useQuery({ queryKey: beautyKeys.networkSeries(q), queryFn: () => beautyApi.getNetworkSeries(q) });
+
+export const useLocationsAnalytics = (q: AnalyticsQuery) =>
+  useQuery({ queryKey: beautyKeys.locationsAnalytics(q), queryFn: () => beautyApi.getLocationsAnalytics(q) });
+
+export const useLocationBreakdown = (id: LocationId, q: Pick<AnalyticsQuery, "from" | "to">, enabled = true) =>
   useQuery({
-    queryKey: beautyKeys.locationAnalytics(id),
-    queryFn: () => beautyApi.getLocationAnalytics(id),
+    queryKey: beautyKeys.locationBreakdown(id, q),
+    queryFn: () => beautyApi.getLocationBreakdown(id, q),
     enabled: enabled && id !== "",
-    placeholderData: keepPreviousData,
   });
 
-export const usePromotionAnalytics = () =>
-  useQuery({ queryKey: beautyKeys.promoAnalytics, queryFn: () => beautyApi.getPromotionAnalytics() });
+export const usePromotionAnalytics = (q: AnalyticsQuery) =>
+  useQuery({ queryKey: beautyKeys.promoAnalytics(q), queryFn: () => beautyApi.getPromotionAnalytics(q) });
 
 export const useChannels = () =>
   useQuery({ queryKey: beautyKeys.channels, queryFn: () => beautyApi.getChannels() });
@@ -345,6 +362,11 @@ export function useConnectChannel() {
     mutationFn: (input: { id: ChannelId; secret: string }) => beautyApi.connectChannel(input),
     onSuccess: (next) => qc.setQueryData<ChannelConfig[]>(beautyKeys.channels, (l) => replaceChannel(l, next)),
   });
+}
+
+/** POST /channels/{id}/telegram/sync-commands: оновити меню команд Telegram-бота (§23.4). */
+export function useSyncTelegramCommands() {
+  return useMutation({ mutationFn: (id: ChannelId) => beautyApi.syncTelegramCommands(id) });
 }
 
 export function useDisconnectChannel() {
@@ -389,3 +411,68 @@ export const useLaunchAiCampaign = () =>
     mutationFn: (input: { goalId: PromoGoalId; segmentIds: string[]; text: string }) =>
       beautyApi.launchAiCampaign(input),
   });
+
+// ---------- Налаштування ШІ (§20) ----------
+
+export const useAiSettings = (enabled = true) =>
+  useQuery({ queryKey: beautyKeys.aiSettings, queryFn: () => beautyApi.getAiSettings(), enabled, retry: false });
+
+/** Каталог моделей з цінами - лише з API; змінюється рідко. */
+export const useAiModels = (enabled = true) =>
+  useQuery({ queryKey: beautyKeys.aiModels, queryFn: () => beautyApi.getAiModels(), enabled, staleTime: 5 * 60_000 });
+
+export const useAiUsage = (months = 6, enabled = true) =>
+  useQuery({ queryKey: beautyKeys.aiUsage(months), queryFn: () => beautyApi.getAiUsage(months), enabled, retry: false });
+
+export function useSaveAiSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: AiSettingsInput) => beautyApi.saveAiSettings(input),
+    onSuccess: ({ settings }) => {
+      qc.setQueryData(beautyKeys.aiSettings, settings);
+      void qc.invalidateQueries({ queryKey: ["beauty", "ai", "usage"] });
+    },
+  });
+}
+
+export function useSetAiKeySource() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (keySource: AiKeySource) => beautyApi.setAiKeySource(keySource),
+    onSuccess: (settings) => {
+      qc.setQueryData(beautyKeys.aiSettings, settings);
+      void qc.invalidateQueries({ queryKey: ["beauty", "ai", "usage"] });
+    },
+  });
+}
+
+/**
+ * Дії з ключами провайдера. СВІДОМО без useMutation: змінні мутацій лишаються в MutationCache (gcTime), а повний ключ
+ * не повинен потрапляти в жоден кеш React Query. Ключ живе лише в аргументі виклику; кеш інвалідовується без нього.
+ */
+export function useAiKeyActions() {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const refresh = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: beautyKeys.aiSettings });
+  }, [qc]);
+  const run = useCallback(
+    async <T,>(fn: () => Promise<T>, after = true): Promise<T> => {
+      setBusy(true);
+      try {
+        const r = await fn();
+        if (after) refresh();
+        return r;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refresh],
+  );
+  return {
+    busy,
+    save: (input: AiKeySaveInput) => run(() => beautyApi.saveAiKey(input)),
+    remove: (input: AiKeyDeleteInput) => run(() => beautyApi.deleteAiKey(input)),
+    test: (provider: string, apiKey?: string) => run(() => beautyApi.testAiKey(provider, apiKey), false),
+  };
+}

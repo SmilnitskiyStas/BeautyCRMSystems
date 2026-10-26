@@ -2,6 +2,9 @@ import { z } from "zod";
 
 export const reminderOptionSchema = z.enum(["none", "1h", "2h"]);
 export type ReminderOption = z.infer<typeof reminderOptionSchema>;
+/** Відповідь API (§22.6.1): запис може мати `custom` (кілька точок, задані адміністратором). Запит приймає лише `reminderOptionSchema`. */
+export const appointmentReminderOptionSchema = z.enum(["none", "1h", "2h", "custom"]);
+export type AppointmentReminderOption = z.infer<typeof appointmentReminderOptionSchema>;
 
 export const paymentMethodSchema = z.enum(["card", "cash"]);
 export type PaymentMethod = z.infer<typeof paymentMethodSchema>;
@@ -100,7 +103,7 @@ export interface Appointment {
   priceOriginal: number;
   priceFinal: number;
   promotionId?: string;
-  reminderOption: ReminderOption;
+  reminderOption: AppointmentReminderOption;
   paymentMethod?: PaymentMethod;
   paymentStatus?: string;
   cancellation?: CancellationTerms;

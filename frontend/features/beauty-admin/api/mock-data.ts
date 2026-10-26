@@ -154,6 +154,7 @@ export const INITIAL_CHANNELS: ChannelConfig[] = [
   {
     id: "tg", name: "Telegram", icon: "TG", description: "Бот для записів і повідомлень клієнтів.",
     connected: true, inbox: true, booking: true, ai: true, mode: "confirm", greeting: "", handoff: { negative: true, payment: true, human: true },
+    assistantEnabled: true, buttons: true,
     maskedSecret: "••••••••••••",
     connectHelp: { field: "Токен бота", placeholder: "Вставте токен із BotFather", how: "Створіть бота в @BotFather, скопіюйте токен і вставте його нижче. Клієнти зможуть писати боту й записуватися." },
   },
@@ -229,24 +230,3 @@ export const AI_GOALS = {
     text: (p: number) => `Вперше у Beauty Lab? −${p}% на першу послугу. Оберіть заклад і майстра онлайн за кілька хвилин.`,
   },
 };
-
-export const ANALYTICS_LOCS = {
-  c: { label: "Центр", rev: 412000, n: 596, avg: 691, load: 78,
-    specs: [["m", "Марина Бойко", 142, 118000, 84], ["a", "Анна Шевчук", 96, 164000, 72], ["o", "Оксана Лис", 88, 98000, 69]] as [string, string, number, number, number][],
-    svcs: [["Манікюр + гель-лак", 214000], ["Фарбування", 164000], ["Чистка обличчя", 98000], ["Стрижка", 54000]] as [string, number][] },
-  p: { label: "Поділ", rev: 268000, n: 402, avg: 667, load: 66,
-    specs: [["im", "Ірина Мельник", 402, 268000, 66]] as [string, string, number, number, number][],
-    svcs: [["Стрижка", 120000], ["Манікюр", 96000], ["Барбер-догляд", 52000]] as [string, number][] },
-  k: { label: "Печерськ", rev: 231000, n: 338, avg: 683, load: 61,
-    specs: [["m", "Марина Бойко", 238, 128000, 64], ["ng", "Наталя Гук", 100, 103000, 58]] as [string, string, number, number, number][],
-    svcs: [["Чистка обличчя", 118000], ["Манікюр", 78000], ["Депіляція", 35000]] as [string, number][] },
-};
-
-export const ANALYTICS_WEEKS = [188, 201, 195, 214, 223, 208, 236, 241];
-
-export const ANALYTICS_PROMOS = [
-  { id: "a1", name: "Осінній манікюр", period: "7–14 жовт.", where: "Центр, Поділ", n: 64, fresh: 21, rev: 44800, cost: 11200 },
-  { id: "a2", name: "Нові клієнти −20%", period: "постійна", where: "Усі заклади", n: 58, fresh: 58, rev: 52200, cost: 13050 },
-  { id: "a3", name: "Чистка обличчя −20%", period: "1–31 жовт.", where: "Центр, Печерськ", n: 37, fresh: 9, rev: 40700, cost: 10175 },
-  { id: "a4", name: "Happy hours 12–15", period: "пн–пт", where: "Поділ", n: 46, fresh: 12, rev: 29900, cost: 4485 },
-];

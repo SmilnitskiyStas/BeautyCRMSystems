@@ -1,10 +1,32 @@
 import type {
+  AiCatalog,
   AiChat,
+  AiKeyDeleteInput,
+  AiKeySaved,
+  AiKeySaveInput,
+  AiKeySource,
+  AiKeyTestResult,
+  AiSettings,
+  AiSettingsInput,
+  AiSettingsSaved,
+  AiUsage,
   AiPromoPlan,
   AiRequest,
   BeautyLocation,
   CancellationSettings,
+  CallTask,
+  CallTaskList,
+  CallTaskPatch,
+  CallTaskQuery,
   CalendarWeek,
+  ContactPreferences,
+  ContactPreferencesInput,
+  ContactPreferencesSaved,
+  ConversationDetail,
+  ConversationList,
+  ConversationListQuery,
+  ReminderSettings,
+  ReplyResult,
   ClosureInput,
   LocationClosure,
   Weekday,
@@ -14,7 +36,10 @@ import type {
   ClientProfile,
   ClientSummary,
   ConnectChannelInput,
-  LocationAnalytics,
+  AnalyticsQuery,
+  LocationBreakdown,
+  LocationStat,
+  NetworkSeries,
   LocationInput,
   LocationId,
   NetworkAnalytics,
@@ -129,12 +154,38 @@ export interface BeautyAdminApi {
   previewPromotion(draft: PromoDraft): Promise<PromoPreview>;
   /** POST /promotions */
   createPromotion(draft: PromoDraft): Promise<{ id: string }>;
-  /** GET /analytics/network */
-  getNetworkAnalytics(): Promise<NetworkAnalytics>;
-  /** GET /analytics/locations?locationId */
-  getLocationAnalytics(locationId: LocationId): Promise<LocationAnalytics>;
-  /** GET /analytics/promotions */
-  getPromotionAnalytics(): Promise<PromotionAnalytics>;
+  /**
+   * GET /analytics/network?from&to[&compare=true] (§19.1, §19.3): датний режим `yyyy-MM-dd`; 422 invalid_range.
+   * Доступ лише owner/admin.
+   */
+  getNetworkAnalytics(q: AnalyticsQuery): Promise<NetworkAnalytics>;
+  /** GET /analytics/network/series?from&to (§19.2): динаміка одним запитом, гранулярність обирає сервер. */
+  getNetworkSeries(q: Pick<AnalyticsQuery, "from" | "to">): Promise<NetworkSeries>;
+  /** GET /analytics/locations?from&to[&compare=true] (§19.4): усі активні + неактивні із записами; `load` зі §19.4. */
+  getLocationsAnalytics(q: AnalyticsQuery): Promise<LocationStat[]>;
+  /** GET /analytics/locations/{id}/breakdown?from&to (§19.4): спеціалісти й топ послуг; 404 location_not_found. */
+  getLocationBreakdown(locationId: LocationId, q: Pick<AnalyticsQuery, "from" | "to">): Promise<LocationBreakdown>;
+  /** GET /analytics/promotions?from&to[&compare=true] (+ /promotions для періоду й закладів) */
+  getPromotionAnalytics(q: AnalyticsQuery): Promise<PromotionAnalytics>;
+  /** GET /ai/settings (§20.5, owner/admin; `no-store`); для admin `keys` відсутній. Повного ключа в відповіді немає. */
+  getAiSettings(): Promise<AiSettings>;
+  /** PUT /ai/settings (owner/admin): повна заміна; 422 prompt_addendum_*|unknown_model|auto_mode_ack_required…; повертає warnings[]. */
+  saveAiSettings(input: AiSettingsInput): Promise<AiSettingsSaved>;
+  /** PUT /ai/settings/key-source (owner) */
+  setAiKeySource(keySource: AiKeySource): Promise<AiSettings>;
+  /** GET /ai/models (owner/admin): ролі, провайдери, моделі з рівнями й цінами (цін у коді frontend немає). */
+  getAiModels(): Promise<AiCatalog>;
+  /**
+   * PUT /ai/settings/keys/{provider} (owner). Ключ іде лише в тілі запиту. 409 key_affects_other_roles
+   * (`BeautyApiError.affectedRoles`), 422 invalid_key_format|key_rejected|provider_not_available, 429, 502, 503.
+   */
+  saveAiKey(input: AiKeySaveInput): Promise<AiKeySaved>;
+  /** DELETE /ai/settings/keys/{provider}?forRole&acknowledgeAffectedRoles (owner) - 204, 409 key_affects_other_roles */
+  deleteAiKey(input: AiKeyDeleteInput): Promise<void>;
+  /** POST /ai/settings/keys/{provider}/test (owner): без `apiKey` перевіряється збережений ключ. */
+  testAiKey(provider: string, apiKey?: string): Promise<AiKeyTestResult>;
+  /** GET /ai/usage?months=1..12 (owner/admin) */
+  getAiUsage(months?: number): Promise<AiUsage>;
   /** GET /channels (секрети маскуються) */
   getChannels(): Promise<ChannelConfig[]>;
   /** PUT /channels/{id} */
@@ -143,6 +194,8 @@ export interface BeautyAdminApi {
   connectChannel(input: ConnectChannelInput): Promise<ChannelConfig>;
   /** PUT /channels/{id} (disconnect) */
   disconnectChannel(id: ChannelId): Promise<ChannelConfig>;
+  /** POST /channels/{id}/telegram/sync-commands (§23.4, owner/admin): 204; 404 channel_not_found, 409 channel_unsupported|channel_inactive|token_missing, 502 telegram_unavailable. */
+  syncTelegramCommands(id: ChannelId): Promise<void>;
   /** GET /ai/actions (вхідні заявки та чернетки) */
   getAiRequests(): Promise<AiRequest[]>;
   /** POST /ai/actions/{id}/approve */
@@ -155,4 +208,34 @@ export interface BeautyAdminApi {
   getAiPromoPlan(goalId: PromoGoalId): Promise<AiPromoPlan>;
   /** POST /ai/actions (build_audience + campaign) */
   launchAiCampaign(input: { goalId: PromoGoalId; segmentIds: string[]; text: string }): Promise<{ reach: number }>;
+
+  // ---------- §22: нагадування, зв'язок, дзвінки, inbox (owner/admin; specialist -> 403 forbidden_role) ----------
+  /** GET /clients/{id}/contact-preferences (§22.6.2): 404 client_not_found. */
+  getContactPreferences(clientId: string): Promise<ContactPreferences>;
+  /**
+   * PUT /clients/{id}/contact-preferences (§22.6.2): 422 invalid_method|invalid_offsets, 409 telegram_unavailable|phone_required|
+   * call_reminders_disabled|telegram_reminders_disabled. `applyToUpcoming` за замовчуванням true.
+   */
+  setContactPreferences(clientId: string, input: ContactPreferencesInput): Promise<ContactPreferencesSaved>;
+  /** GET /call-tasks (§22.6.3): день за локальною датою `due_at` у зоні закладу; 422 invalid_day|invalid_status. */
+  getCallTasks(q: CallTaskQuery): Promise<CallTaskList>;
+  /** PATCH /call-tasks/{id} (§22.6.3): 404 call_task_not_found, 422 invalid_status|invalid_note, 409 task_already_closed (+`task`)|task_cancelled. */
+  updateCallTask(id: string, patch: CallTaskPatch): Promise<CallTask>;
+  /** GET /settings/reminders (§22.6.4, owner/admin). */
+  getReminderSettings(): Promise<ReminderSettings>;
+  /** PUT /settings/reminders (§22.6.4, лише owner): 422 settings_incomplete|invalid_quiet_hours. */
+  saveReminderSettings(s: ReminderSettings): Promise<ReminderSettings>;
+  /** GET /conversations (§22.6.5): `needs_reply` - найдовше очікувані першими; `meta.needsReplyCount` для бейджа меню. */
+  getConversations(q: ConversationListQuery): Promise<ConversationList>;
+  /** GET /conversations/{id} (§22.6.5): повідомлення від старих до нових; 404 conversation_not_found. */
+  getConversation(id: string, q?: { before?: string; take?: number }): Promise<ConversationDetail>;
+  /**
+   * POST /conversations/{id}/reply (§22.6.5) з `Idempotency-Key` (8..128): 400 idempotency_key_required, 404, 409 channel_inactive|
+   * channel_unsupported|idempotency_conflict, 422 invalid_text, 429 rate_limited. Повтор того самого ключа й тексту = те саме повідомлення.
+   */
+  replyToConversation(id: string, text: string, idempotencyKey: string): Promise<ReplyResult>;
+  /** POST /conversations/{id}/resume-ai (§22.6.5): 204, ідемпотентно. */
+  resumeConversationAi(id: string): Promise<void>;
+  /** POST /conversations/{id}/read (§22.6.5): 204. */
+  markConversationRead(id: string, upToMessageId?: string): Promise<void>;
 }

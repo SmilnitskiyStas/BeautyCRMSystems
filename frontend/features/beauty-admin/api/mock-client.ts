@@ -1,4 +1,5 @@
 import { BeautyApiError } from "@/features/beauty-auth/errors";
+import { CLIENT_TG_REASON } from "../cancellation";
 import { money, dayIndex, weekDayLabels, weekRangeLabel } from "../format";
 import { mastersForCalendar } from "../calendar-masters";
 import { closedDayInfo, localDateIn, validateClosure, weekdayOf } from "../closed-days";
@@ -6,17 +7,17 @@ import { isValidTimeZone } from "../locations-logic";
 import { outsideHours } from "../location-hours";
 import { activeLinks } from "../staff-links";
 import { normalizeHours, validateHours } from "../working-hours";
-import { DEMO_TZ, blocksOn, demoToday } from "../../beauty-shared/demo-seed";
+import { DEMO_TZ, blocksOn, demoToday, historySeed } from "../../beauty-shared/demo-seed";
 import { buildWeekAvailability, countFreeSlots, dayAvailability, slotStarts, toMinutes, type PlaceRules } from "../../beauty-shared/availability";
 import { instantToLocal, mondayOfYmd } from "../../beauty-shared/zone-time";
 import type { BeautyAdminApi } from "./client";
+import { createMockAi } from "./mock-ai";
+import { createMockAnalytics } from "./mock-analytics";
+import { createMockInbox } from "./mock-inbox";
 import {
   AI_GOALS,
   AI_REQUESTS,
   AI_SEGMENTS,
-  ANALYTICS_LOCS,
-  ANALYTICS_PROMOS,
-  ANALYTICS_WEEKS,
   CLOSURES_SEED,
   DEFAULT_GREETING,
   INITIAL_CHANNELS,
@@ -56,7 +57,20 @@ const LATENCY_MS = 150;
 const wait = <T>(value: T): Promise<T> =>
   new Promise((resolve) => setTimeout(() => resolve(structuredClone(value)), LATENCY_MS));
 
-const pct = (v: number, max: number) => Math.round((v / max) * 100);
+/** Історія записів для аналітики (§19): будується один раз на «сьогодні». */
+let history: { today: string; list: Appointment[] } | null = null;
+function analytics() {
+  const today = demoToday();
+  if (!history || history.today !== today) history = { today, list: historySeed(today) };
+  return createMockAnalytics({
+    appointments: [...history.list, ...allMockAppointments()],
+    locations,
+    staff,
+    absences,
+    closures,
+    today,
+  });
+}
 
 /** Змінний стан «сервера» в межах сесії браузера. */
 const channels: ChannelConfig[] = INITIAL_CHANNELS.map((c) => ({ ...c, greeting: DEFAULT_GREETING }));
@@ -69,6 +83,8 @@ const chatMessages: AiChatMessage[] = [
 /** Скасовані записи: хто, коли й чому (§16) - дані не видаляються. */
 const cancelled = new Map<string, { at: string; by: CancelledBy; reason?: string }>();
 const moved = new Map<string, string>();
+/** Візити, підтверджені клієнтом кнопкою в чаті (§23.10): id запису -> UTC-момент. */
+const clientConfirmed = new Map<string, string>();
 const locations: BeautyLocation[] = structuredClone(LOCATIONS);
 /** Закриття закладів на дати (§17). */
 const closures: LocationClosure[] = structuredClone(CLOSURES_SEED());
@@ -85,9 +101,11 @@ const MOCK_SPECIALIST_ID = "m";
 function viewOf(a: Appointment): Appointment {
   const base = { ...a, startsAt: moved.get(a.id) ?? a.startsAt };
   const c = cancelled.get(a.id);
-  return c
-    ? { ...base, status: "cancelled" as const, cancelledAt: c.at, cancelledBy: c.by, ...(c.reason && isManager() ? { cancelReason: c.reason } : {}) }
-    : base;
+  if (c) return { ...base, status: "cancelled" as const, cancelledAt: c.at, cancelledBy: c.by, ...(c.reason && isManager() ? { cancelReason: c.reason } : {}) };
+  // §22.6.1: нагадування запису (точки плану) - лише керівникам.
+  const reminders = mockInbox.remindersFor(base);
+  const confirmedAt = clientConfirmed.get(a.id);
+  return { ...base, ...(reminders ? { reminders } : {}), ...(confirmedAt ? { clientConfirmedAt: confirmedAt } : {}) };
 }
 const allMockAppointments = (): Appointment[] => demoAppointments().map(viewOf);
 /** Майбутні активні (pending/confirmed) записи: правила has_future_appointments / timezone_locked / конфлікти. */
@@ -224,7 +242,51 @@ function freeSlotsToday(locationId: LocationId | null): number {
   return total;
 }
 
+const mockAi = createMockAi({ role: mockRole });
+/** §22: inbox, задачі дзвінків, вподобання й налаштування нагадувань. Клієнт-симуляція відповідей лише в браузері (не в тестах). */
+const mockInbox = createMockInbox({
+  role: mockRole,
+  locations: () => locations,
+  appointments: allMockAppointments,
+  channels: () => channels,
+  staffName: (id) => staff.find((m) => m.id === id)?.name ?? "",
+  simulateClient: typeof window !== "undefined" && process.env.NODE_ENV !== "test",
+});
+
+/**
+ * Демо §23 (узгоджено з розмовою cv6): Марія Пономаренко (mp) підтвердила найближчий візит кнопкою в Telegram
+ * і скасувала наступний («Скасовано клієнтом у Telegram»). Записи беруться з поточного демо-набору.
+ */
+(function seedClientButtonActions() {
+  const mine = allMockAppointments()
+    .filter((a) => a.clientId === "mp" && isUpcoming(a))
+    .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+  if (mine[0]) clientConfirmed.set(mine[0].id, new Date(Date.now() - 590 * 60_000).toISOString());
+  if (mine[1]) cancelled.set(mine[1].id, { at: new Date(Date.now() - 185 * 60_000).toISOString(), by: { type: "client" }, reason: CLIENT_TG_REASON });
+})();
+
 export const mockBeautyApi: BeautyAdminApi = {
+  getAiSettings: mockAi.getAiSettings,
+  saveAiSettings: mockAi.saveAiSettings,
+  setAiKeySource: mockAi.setAiKeySource,
+  getAiModels: mockAi.getAiModels,
+  saveAiKey: mockAi.saveAiKey,
+  deleteAiKey: mockAi.deleteAiKey,
+  testAiKey: mockAi.testAiKey,
+  getAiUsage: mockAi.getAiUsage,
+
+  getContactPreferences: mockInbox.getContactPreferences,
+  setContactPreferences: mockInbox.setContactPreferences,
+  getCallTasks: mockInbox.getCallTasks,
+  updateCallTask: mockInbox.updateCallTask,
+  getReminderSettings: mockInbox.getReminderSettings,
+  saveReminderSettings: mockInbox.saveReminderSettings,
+  getConversations: mockInbox.getConversations,
+  getConversation: mockInbox.getConversation,
+  replyToConversation: mockInbox.replyToConversation,
+  resumeConversationAi: mockInbox.resumeConversationAi,
+  markConversationRead: mockInbox.markConversationRead,
+
   getLocations: () => wait(activeLocations()),
 
   getManagedLocations: async () => {
@@ -627,62 +689,11 @@ export const mockBeautyApi: BeautyAdminApi = {
 
   createPromotion: async () => wait({ id: `promo-${Date.now()}` }),
 
-  getNetworkAnalytics: () => {
-    const l = Object.entries(ANALYTICS_LOCS);
-    const totalRev = l.reduce((a, [, v]) => a + v.rev, 0);
-    const totalN = l.reduce((a, [, v]) => a + v.n, 0);
-    return wait({
-      kpis: [
-        { label: "Виручка мережі", value: money(totalRev), note: "за місяць, 3 заклади" },
-        { label: "Записів", value: String(totalN), note: "з них онлайн 71%" },
-        { label: "Середній чек", value: money(Math.round(totalRev / totalN)), note: "по мережі" },
-        { label: "Повторні клієнти", value: "61%", note: "прийшли вдруге за 60 днів" },
-      ],
-      weeks: ANALYTICS_WEEKS.map((value, i) => ({ label: `Т${i + 1}`, value })),
-      locations: l.map(([id, v]) => ({
-        id,
-        label: v.label,
-        value: money(v.rev),
-        pct: pct(v.rev, ANALYTICS_LOCS.c.rev),
-        note: `${v.n} записів · середній чек ${money(v.avg)}`,
-      })),
-    });
-  },
-
-  getLocationAnalytics: (locationId: LocationId) => {
-    const L = ANALYTICS_LOCS[locationId as keyof typeof ANALYTICS_LOCS] ?? ANALYTICS_LOCS.c;
-    const totalRev = Object.values(ANALYTICS_LOCS).reduce((a, v) => a + v.rev, 0);
-    const smax = Math.max(...L.svcs.map((r) => r[1]));
-    return wait({
-      locationId,
-      kpis: [
-        { label: "Виручка закладу", value: money(L.rev), note: `${Math.round((L.rev / totalRev) * 100)}% від мережі` },
-        { label: "Записів", value: String(L.n), note: "за місяць" },
-        { label: "Середній чек", value: money(L.avg), note: "по закладу" },
-        { label: "Завантаження", value: `${L.load}%`, note: "зайнятих годин у графіку" },
-      ],
-      specialists: L.specs.map(([id, name, count, rev, load]) => ({ id, name, count, revenue: money(rev), load })),
-      topServices: L.svcs.map(([label, v]) => ({ label, value: money(v), pct: pct(v, smax) })),
-    });
-  },
-
-  getPromotionAnalytics: () => {
-    const sum = (k: "n" | "fresh" | "rev" | "cost") => ANALYTICS_PROMOS.reduce((a, p) => a + p[k], 0);
-    const totalN = Object.values(ANALYTICS_LOCS).reduce((a, v) => a + v.n, 0);
-    const pmax = Math.max(...ANALYTICS_PROMOS.map((p) => p.n));
-    return wait({
-      kpis: [
-        { label: "Записів по акціях", value: String(sum("n")), note: `${Math.round((sum("n") / totalN) * 100)}% від усіх записів` },
-        { label: "Нових клієнтів", value: String(sum("fresh")), note: "прийшли через акції" },
-        { label: "Виручка з акцій", value: money(sum("rev")), note: "за місяць" },
-        { label: "Віддано знижками", value: money(sum("cost")), note: "вартість знижок" },
-      ],
-      rows: ANALYTICS_PROMOS.map((p) => ({
-        id: p.id, name: p.name, period: p.period, where: p.where, count: p.n, fresh: p.fresh, revenue: money(p.rev), cost: money(p.cost),
-      })),
-      bars: ANALYTICS_PROMOS.map((p) => ({ label: p.name, value: String(p.n), pct: pct(p.n, pmax) })),
-    });
-  },
+  getNetworkAnalytics: async (q) => wait(analytics().network(q)),
+  getNetworkSeries: async (q) => wait(analytics().series(q)),
+  getLocationsAnalytics: async (q) => wait(analytics().locations(q)),
+  getLocationBreakdown: async (locationId, q) => wait(analytics().breakdown(locationId, q)),
+  getPromotionAnalytics: async (q) => wait({ rows: analytics().promotions(q) }),
 
   getChannels: () => wait(channels),
 
@@ -707,6 +718,15 @@ export const mockBeautyApi: BeautyAdminApi = {
     c.connected = false;
     c.maskedSecret = null;
     return wait(c);
+  },
+
+  /** §23.4: оновлення меню команд бота (лише Telegram; owner/admin). Токена в UI й у відповіді немає. */
+  syncTelegramCommands: async (id) => {
+    if (!isManager()) throw forbid();
+    const c = findChannel(id);
+    if (c.id !== "tg") throw new BeautyApiError(409, "channel_unsupported", "unsupported");
+    if (!c.connected) throw new BeautyApiError(409, "channel_inactive", "inactive");
+    await wait(null);
   },
 
   getAiRequests: () => wait(requests),

@@ -4,12 +4,14 @@ import { useSearchParams } from "next/navigation";
 import { useId, useState } from "react";
 import { useAuth } from "@/features/beauty-auth/components/auth-provider";
 import { humanizeError } from "@/features/beauty-auth/errors";
-import { useAbsences, useCalendarWeek, useCancelAppointment, useMoveAppointment } from "../hooks/use-beauty-admin";
+import { useAbsences, useCalendarWeek, useCancelAppointment, useLocations, useMoveAppointment } from "../hooks/use-beauty-admin";
 import { canSeeClosureReason, closedDayLabel } from "../closed-days";
-import { MAX_CANCEL_REASON, cancelledByLabel, cancelledByShort } from "../cancellation";
+import { CLIENT_TG_CANCEL_EVENT, MAX_CANCEL_REASON, cancelledByLabel, cancelledByShort, isClientTelegramCancel } from "../cancellation";
+import { ConfirmedBadge } from "./client-confirmed-badge";
 import { addDaysIso, clock, dateTimeLabel, dayIndex, durationLabel, minutesOfDay, money } from "../format";
 import { bookableAt } from "../../beauty-shared/availability";
 import type { Absence, Appointment, CalendarKind, DayAvailability, MinuteInterval } from "../types";
+import { ReminderPoints } from "./reminder-points";
 import { ABSENCE_TYPE_LABEL, CheckRow } from "./staff-parts";
 import { Badge, Card, Chip, FIELD_INPUT, FIELD_LABEL, PageHeader, PrimaryButton, QueryState, SecondaryButton, TextLink } from "./ui";
 
@@ -138,7 +140,9 @@ function AppointmentPanel({
   const move = useMoveAppointment(specialistId);
   const moveInputId = useId();
   const reasonId = useId();
+  const zone = useLocations().data?.find((l) => l.id === appt.locationId)?.timezone;
   const [reason, setReason] = useState("");
+  const cancelledByTelegram = isClientTelegramCancel(appt);
   const closed = appt.status === "completed" || appt.status === "cancelled" || appt.status === "no_show";
   const terms = appt.cancellation;
   const problem = moving && newStart && newStart !== appt.startsAt ? (moveProblem?.(newStart, appt.durationMinutes) ?? null) : null;
@@ -153,16 +157,18 @@ function AppointmentPanel({
       <div className="text-sm font-semibold">{money(appt.priceFinal)}</div>
       {appt.status === "cancelled" ? (
         <div className="flex flex-col gap-0.5 rounded-xl bg-(--page) p-3 text-sm" data-testid="cancel-info">
-          <span className="font-semibold">{cancelledByLabel(appt.cancelledBy)}</span>
+          <span className="font-semibold">{cancelledByTelegram ? CLIENT_TG_CANCEL_EVENT : cancelledByLabel(appt.cancelledBy)}</span>
           {appt.cancelledAt ? <span className="text-(--muted)">{dateTimeLabel(appt.cancelledAt)}</span> : null}
-          {appt.cancelReason ? <span>Причина: {appt.cancelReason}</span> : null}
+          {appt.cancelReason && !cancelledByTelegram ? <span>Причина: {appt.cancelReason}</span> : null}
         </div>
       ) : null}
+      {appt.clientConfirmedAt && appt.status !== "cancelled" ? <ConfirmedBadge at={appt.clientConfirmedAt} timezone={zone} /> : null}
       {outOfHours ? (
         <p role="status" data-testid="out-of-hours-note" className="rounded-xl bg-[#FFF1CC] px-3 py-2 text-[13px] text-[#5C3900]">
           Запис припадає на час, коли майстер або заклад недоступні (поза графіком, годинами закладу, вихідним чи відсутністю). Його можна перенести.
         </p>
       ) : null}
+      {appt.reminders && appt.status !== "cancelled" ? <ReminderPoints reminders={appt.reminders} timezone={zone} /> : null}
       {appt.clientId ? <TextLink href={`/beauty/clients/${appt.clientId}`}>Профіль клієнта</TextLink> : null}
       {appt.kind === "promo" ? <Badge tone="promo" className="self-start">Акція: {appt.promotionName}</Badge> : null}
       {appt.kind === "online" ? <Badge tone="now" className="self-start">Створено клієнтом онлайн</Badge> : null}
@@ -549,7 +555,7 @@ export function CalendarScreen() {
                               key={a.id}
                               type="button"
                               aria-pressed={on}
-                              aria-label={`${a.clientName}, ${a.serviceName}, ${timeRange(a)}${gone ? `, скасовано. ${cancelledByLabel(a.cancelledBy)}` : ""}${warn ? ", поза доступним часом" : ""}`}
+                              aria-label={`${a.clientName}, ${a.serviceName}, ${timeRange(a)}${gone ? `, скасовано. ${cancelledByLabel(a.cancelledBy)}` : ""}${a.clientConfirmedAt && !gone ? ", клієнт підтвердив візит" : ""}${warn ? ", поза доступним часом" : ""}`}
                               onClick={() => {
                                 setSelectedId(a.id);
                                 setNotice(null);
@@ -569,6 +575,12 @@ export function CalendarScreen() {
                                 {timeRange(a)} · {durationLabel(a.durationMinutes)}
                               </span>
                               <span className="block truncate">{gone ? cancelledByShort(a.cancelledBy) : a.serviceName}</span>
+                              {a.clientConfirmedAt && !gone ? (
+                                <span data-testid="block-confirmed" title="Клієнт підтвердив візит" className="absolute right-1 bottom-0.5 text-xs font-bold">
+                                  <span aria-hidden="true">✓</span>
+                                  <span className="sr-only">клієнт підтвердив візит</span>
+                                </span>
+                              ) : null}
                             </button>
                           );
                         })}

@@ -8,6 +8,8 @@ export interface NavItem {
 const ALL_NAV: NavItem[] = [
   { label: "Огляд", href: "/beauty" },
   { label: "Записи", href: "/beauty/calendar" },
+  { label: "Розмови", href: "/beauty/inbox" },
+  { label: "Дзвінки", href: "/beauty/calls" },
   { label: "Клієнти", href: "/beauty/clients" },
   { label: "Спеціалісти", href: "/beauty/staff" },
   { label: "Заклади", href: "/beauty/locations" },
@@ -43,6 +45,22 @@ export const homeFor = (role: Role) => (role === "specialist" ? "/beauty/calenda
 
 /** Лише власник змінює налаштування; admin їх бачить (§11). */
 export const canEditSettings = (role: Role) => role === "owner";
+
+/** §20.9: ключ API провайдера ШІ бачить і змінює лише власник. */
+export const canManageAiKey = (role: Role) => role === "owner";
+
+/** §20.9: налаштування ШІ (моделі, режим, промпт, ліміти) - owner і admin; specialist розділу не бачить. */
+export const canEditAiSettings = (role: Role) => role === "owner" || role === "admin";
+
+/**
+ * §22.10: inbox розмов, задачі дзвінків і вподобання нагадувань - лише owner/admin; specialist отримує 403 від API
+ * ще до читання, тому ці розділи для нього не показуються й не відкриваються.
+ */
+export const canUseInbox = (role: Role) => role === "owner" || role === "admin";
+export const canUseCalls = canUseInbox;
+export const canManageReminderPrefs = canUseInbox;
+/** Налаштування нагадувань (§22.6.4): читають owner/admin, змінює лише owner. */
+export const canEditReminderSettings = (role: Role) => role === "owner";
 
 const CONTROL_CHARS = /[\x00-\x1f\x7f]/;
 /** Умовний origin для розбору відносного шляху: перевіряємо лише, що розбір не виводить за межі сайту. */

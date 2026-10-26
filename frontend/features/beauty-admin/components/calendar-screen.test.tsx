@@ -176,3 +176,37 @@ describe("календар: вихідні дні закладу (§17)", () => 
     expect(screen.queryAllByTestId("closed-day")).toHaveLength(0);
   });
 });
+
+describe("кнопки в чаті (§23.10)", () => {
+  it("бейдж «Клієнт підтвердив візит» у блоці й деталях; без підтвердження його немає", async () => {
+    const user = userEvent.setup();
+    const confirmed: Appointment = { ...live, clientConfirmedAt: "2026-10-05T07:30:00Z" };
+    getCalendarWeek.mockImplementation(async () => week({ appointments: [confirmed, { ...live, id: "a9", clientName: "Ірина Л.", startsAt: "2026-10-06T14:00" }] }));
+    renderScreen();
+    const block = await screen.findByRole("button", { name: /Олена К\./ });
+    expect(block).toHaveAccessibleName(/клієнт підтвердив візит/);
+    expect(within(block).getByTestId("block-confirmed")).toBeInTheDocument();
+    expect(within(await screen.findByRole("button", { name: /Ірина Л\./ })).queryByTestId("block-confirmed")).toBeNull();
+    await user.click(block);
+    expect(screen.getByTestId("client-confirmed")).toHaveTextContent(/Клієнт підтвердив візит/);
+    await user.click(screen.getByRole("button", { name: /Ірина Л\./ }));
+    expect(screen.queryByTestId("client-confirmed")).not.toBeInTheDocument();
+  });
+
+  it("скасований клієнтом у Telegram: подія в історії замість сирої причини; скасований запис без бейджа підтвердження", async () => {
+    const user = userEvent.setup();
+    const tg: Appointment = {
+      ...gone, id: "a3", clientName: "Марія П.", clientConfirmedAt: "2026-10-05T07:30:00Z", cancelledBy: { type: "client" }, cancelReason: "Скасовано клієнтом у Telegram",
+    };
+    getCalendarWeek.mockImplementation(async (_id, inc) => week({ appointments: inc ? [live, tg] : [live] }));
+    renderScreen();
+    await screen.findByRole("button", { name: /Олена К\./ });
+    await user.click(screen.getByRole("checkbox", { name: "Показати скасовані" }));
+    await user.click(await screen.findByRole("button", { name: /Марія П\./ }));
+    const info = screen.getByTestId("cancel-info");
+    expect(info).toHaveTextContent("Скасовано клієнтом у Telegram");
+    expect(info).not.toHaveTextContent("Причина:");
+    expect(screen.queryByTestId("client-confirmed")).not.toBeInTheDocument();
+  });
+});
+

@@ -2,6 +2,7 @@
 
 import { useId, useState } from "react";
 import {
+  useAiSettings,
   useAiChat,
   useAiPromoPlan,
   useAiRequests,
@@ -10,6 +11,7 @@ import {
   useSendAiChatMessage,
 } from "../hooks/use-beauty-admin";
 import { money } from "../format";
+import { overallStatusText } from "../ai-settings/messages";
 import type { AiPromoPlan, PromoGoalId } from "../types";
 import { Badge, Card, PageHeader, PrimaryButton, QueryState, SecondaryButton, Table, TD, Tabs, TextLink } from "./ui";
 
@@ -235,6 +237,19 @@ function PromoTab() {
   );
 }
 
+/** Банер, коли ШІ вимкнено (`status.chat.state=unavailable`, §20.9): тихий, якщо налаштувань не вдалося отримати. */
+function AiUnavailableBanner() {
+  const q = useAiSettings();
+  const status = q.data?.status.chat;
+  if (!status || status.state !== "unavailable") return null;
+  return (
+    <div role="status" className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl bg-[#FFF1CC] px-4 py-2.5 text-sm text-[#5C3900]">
+      <span>{overallStatusText(status)}</span>
+      <TextLink href="/beauty/settings#ai">Налаштування ШІ</TextLink>
+    </div>
+  );
+}
+
 export function AiScreen() {
   const [tab, setTab] = useState<Tab>("req");
   return (
@@ -254,6 +269,7 @@ export function AiScreen() {
           />
         }
       />
+      <AiUnavailableBanner />
       {tab === "req" ? <RequestsTab /> : null}
       {tab === "chat" ? <ChatTab /> : null}
       {tab === "promo" ? <PromoTab /> : null}

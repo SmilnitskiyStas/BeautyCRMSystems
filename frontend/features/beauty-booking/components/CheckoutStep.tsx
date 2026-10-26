@@ -7,6 +7,7 @@ import {
   formatPrice,
   paymentOptions,
   paymentPolicy,
+  reminderHint,
   reminderOptions,
 } from "../content";
 import { useBookingFlow } from "../hooks/useBookingFlow";
@@ -111,6 +112,7 @@ export function CheckoutStep({ errors, submitError }: { errors: ClientErrors; su
         id="remind"
         value={reminder}
         onChange={(e) => setReminder(e.target.value as ReminderOption)}
+        aria-describedby="remind-hint"
         className={`${inputCls} font-semibold`}
       >
         {reminderOptions.map((r) => (
@@ -119,6 +121,9 @@ export function CheckoutStep({ errors, submitError }: { errors: ClientErrors; su
           </option>
         ))}
       </select>
+      <p id="remind-hint" className="text-[13px] text-[#5E5873]">
+        {reminderHint}
+      </p>
 
       <div role="group" aria-labelledby="pay-heading" className="mt-1 flex flex-col gap-2">
         <div id="pay-heading" className="text-sm font-semibold">
