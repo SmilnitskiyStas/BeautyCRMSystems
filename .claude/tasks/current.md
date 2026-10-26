@@ -1,27 +1,64 @@
 # Поточні задачі
 
-| ID | Опис | Статус | Агент |
-|---|---|---|---|
-| TASK-674 | БД: EF Core модель + міграція beauty_*, RLS, exclusion constraint, app.tenant_id interceptor, AddBeautyData | review (RLS-тест написано, не запускався — немає Docker/PG creds) | database-engineer |
-| TASK-677 | AI-шар: клієнт Anthropic, 8 tools, режими, журнал, guardrails | done | ai-agent-developer |
-| TASK-680 | Публічний запис: заклад → майстер → послуга й час → оформлення → підтвердження (mock API) | done | frontend-developer |
-| TASK-679 | Адмінка: огляд, календар (блок = тривалість послуги), клієнти, спеціалісти, ціни й акції, аналітика, AI, канали; спільне меню, AI-FAB, mock API | done (lint/tsc OK) | frontend-developer |
-| TASK-675 | Backend API beauty (слоти, запис/перенос/скасування A2, послуги/ціни, акції, клієнти, аналітика, канали, webhook, AI-журнал) + інтеграція портів Хвилі A, tenant middleware, RequireModule | review (build + 104 тести зелені; DB-інтеграція не запускалась: немає PG) | backend-developer |
-| TASK-686 | Worker <-> БД: pg-адаптери портів, transactional outbox, поллери нагадувань/outbox/winback, HTTP-відправник Telegram/Instagram (AES-GCM), RLS-роль + app.tenant_id | review (build + 30 тестів зелені, integration на Testcontainers PG; питання: міграція для списку tenant, таблиця кампаній) | backend-developer |
-| TASK-684 | Автентифікація, tenants, ролі: tenants/users/invites/refresh_tokens + RLS, JWT+refresh, політики ролей, specialist бачить лише свої записи, оператор створює tenant+owner (ключ із .env), lockout, rate limit | review (build + 151 тест зелені з BEAUTY_TEST_REQUIRE_DB=1, інтеграція на Docker PostgreSQL) | backend-developer |
-| TASK-685 | Налаштовувана політика повернення коштів: beauty_cancellation_settings + RLS, GET/PUT /settings/cancellation (owner пише), умови скасування в слотах/записі, CancellationService за налаштуваннями | review (build + 194 тести зелені з BEAUTY_TEST_REQUIRE_DB=1) | backend-developer |
-| TASK-687 | Адмінка: реальний HTTP-клієнт (§9–§11), логін/запрошення (BFF, httpOnly refresh, access у пам'яті), захист /beauty/*, ролі, «Перенести запис», Налаштування -> Повернення коштів | review (lint/tsc/build OK; потрібні CORS і ForwardedHeaders на backend) | frontend-developer |
-| TASK-688 | Публічний API онлайн-запису `/api/public/{slug}`: каталог, слоти, POST запису (Idempotency-Key, rate limit, CAPTCHA-хук), перегляд/скасування за токеном, tenant за slug без розширення RLS | review (build ok; `BEAUTY_TEST_REQUIRE_DB=1 dotnet test` 261/261 x3) | backend-developer |
-| TASK-692 | Адмінка: керування працівниками (§13) — список/створення/профіль (профіль, послуги, графік, відсутність), запрошення з одноразовим посиланням, запити specialist, смуга відсутності в календарі, mock + http-клієнт | review (lint/tsc/build OK; http-частина без перевірки з реальним backend) | frontend-developer |
-| TASK-693 | Frontend: звірка адмін http-клієнта з DTO backend, публічний запис на реальному API (/api/public/{slug}, Idempotency-Key, honeypot, токен у шляху, скасування, вибір дати), CSP/security headers, safeNext, refresh 429, vitest-тести | review (lint/tsc/build/test OK; без реального backend) | frontend-developer |
-| TASK-691 | Керування працівниками (backend, §13): профіль/послуги/графік/запрошення, відсутності (запити, approve/reject/cancel, conflicts[], видимість note), інтеграція в слоти/запис (409 specialist_unavailable) і публічний API, міграція beauty_staff_management + RLS + backfill | review (build + `BEAUTY_TEST_REQUIRE_DB=1 dotnet test` 340/340) | backend-developer |
-| TASK-694 | Worker: schema.sql перегенеровано з усіх міграцій (schema-drift зелений), відписка (STOP-рядок у winback/campaign + повторна перевірка unsubscribed перед відправкою), денний ліміт маркетингу на tenant (200, `WORKER_MARKETING_DAILY_LIMIT`), poller review-запиту після візиту | review (worker: `npm run build` OK, `npm test` 46/46 з Docker PostgreSQL) | backend-developer |
-| TASK-689+690 | Backend: виправлення аудиту безпеки (H1 роль БД, H2 mock-адаптери, H3 довірені проксі/rate limit, M1 атомарне скасування, M2 AI CAS, M3 lockout, M4 tenant-контекст (документовано), M5 Instagram appSecret/verifyToken, L3/L4/L7/L8) + прогалини адмінки (CORS, GET /locations, timezone, POST/DELETE specialists/{id}/locations, GET /overview), security headers; контракт §14 | review (build ok; `BEAUTY_TEST_REQUIRE_DB=1 dotnet test` 412/412, Docker PostgreSQL; міграцій немає) | backend-developer |
-| TASK-696 | Backend: виправлення за аудитом TASK-695 «керування працівниками» (деактивація каскадом в одній транзакції, одне активне запрошення, публічний API без розкриття причини, advisory-lock відсутність↔запис, ліміти, cancelled_by, міграція beauty_staff_hardening + перевірка FORCE RLS, Cache-Control no-store) | review (434 тести зелені, worker schema.sql оновлено) | backend-developer |
-| TASK-698 | Адмінка (frontend до §16): екран «Заклади» (CRUD, IANA-зона, деактивація з підтвердженням), календар без скасованих + «Показати скасовані» + неактивні майстри з записами, історія скасувань у картці клієнта, кількість майбутніх записів перед деактивацією працівника, причина скасування | review (lint/tsc/build/test 63 OK; без реального backend) | frontend-developer |
-| TASK-697 | Backend (§16): API закладів (CRUD, 409 has_future_appointments/timezone_locked/location_name_taken, 422 invalid_timezone), історія скасувань (cancelled_by_type/user_id/cancel_reason, includeCancelled, видимість за роллю, лічильники клієнта), міграція beauty_locations_and_cancellation_history + backfill system + RLS | review (build ok; `BEAUTY_TEST_REQUIRE_DB=1 dotnet test` 473/473 = 434 + 39 нових; worker `npm test` 46/46, schema.sql оновлено) | backend-developer |
-| TASK-701 | Backend (§17): вихідні дні закладу — `closed_weekdays` + `beauty_location_closures` (EXCLUDE, RLS FORCE), 4 ендпоінти (PUT closed-weekdays, GET/POST/DELETE closures), підтвердження `confirm` із conflicts[] без клієнтських даних, слоти staff/public, 409 `location_closed` (public: узагальнений `slot_unavailable`), публічний каталог із closedWeekdays/closures без причини, гонка через FOR UPDATE/FOR SHARE на рядок закладу, міграція beauty_location_closures | review (build ok; `BEAUTY_TEST_REQUIRE_DB=1 dotnet test` 499/499 = 473 + 26 нових; worker `npm test` 46/46, schema.sql оновлено) | backend-developer |
-| TASK-702 | Frontend (§17): вихідні дні закладу — блок «Вихідні дні» на екрані «Заклади» (перемикачі Пн..Нд, закриття на дати з причиною ≤200, діалог підтвердження 409 `has_appointments_on_closed_days` з `confirm=true`), затінені закриті дні в календарі («Вихідний», причина лише керівникам, без створення запису), дефолтний графік 7 днів, публічний запис відключає закриті дні («Заклад не працює в цей день»), помилки `closure_overlap`/`location_closed`, API-клієнт і mock за §17 | review (lint/tsc/build ok; `npm test` 121/121; без реального backend, DTO звірено з TASK-701) | frontend-developer |
-| TASK-703 | Backend (§18.1-§18.2): години роботи закладу — `beauty_locations.working_hours jsonb NULL`, PUT `/locations/{id}/working-hours` (confirm-флоу 409 `has_appointments_outside_hours` + conflicts[] без даних клієнта, 422 `invalid_working_hours`), перетин із графіком майстра у слотах staff/public, 409 `outside_location_hours` (public: `slot_unavailable`), FOR UPDATE/FOR SHARE на рядок закладу, `workingHours` у LocationDto/PublicLocationDto; §18.2: наявного `GET /specialists` достатньо, окремий endpoint не додано; міграція beauty_location_working_hours | review (build ok; `BEAUTY_TEST_REQUIRE_DB=1 dotnet test` 523/523 = 499 + 24 нових; worker `npm test` 46/46, schema.sql оновлено) | backend-developer |
-| TASK-704 | Frontend (§18.3): список закладів лише для перегляду (кількість спеціалістів, години або «Години не задано», вихідні, «Відкрити», мінімальна форма «Додати заклад»), нова сторінка `/beauty/locations/{id}` (Основне + «Відкрити на карті», Години роботи з діалогом 409 `has_appointments_outside_hours`, Вихідні й закриття з виправленою версткою, Спеціалісти закладу), «← Заклад» на профілі спеціаліста, права owner/admin vs specialist (перегляд), `workingHours` у типах/клієнтах/mock і публічних типах | review (tsc/lint/build/test — див. task log; без реального backend TASK-703) | frontend-developer |
-| TASK-705 | Frontend: виправлення аудиту узгодженості F1-F9 — час записів у зоні закладу (UTC-fix для календаря/огляду/переносу/історії), календар показує доступність (графік ∩ години закладу ∩ вихідні, відсутності, вибір закладу, сітка за графіком, заборона переносу в недоступний час), `isActive` зв'язку майстра із закладом, аналітика без вигаданого locationId, єдиний відносний до сьогодні mock-набір (адмінка + публічний запис, спільний хелпер слотів), `workingHours` у публічному записі, ліміт 8 інтервалів, попередження про збій закриттів, огляд через `GET /overview` | review (tsc/lint/build/vitest 255/255 ok; build у копії теки; без реального backend і без перегляду в браузері) | frontend-developer |
+Деталі, тести й причини — у task-логах (колонка «Лог»). Повний попередній текст: `.claude/tasks/current.full.md.bak` (локальний, не в git).
+
+| ID | Агент | Статус | Коротко | Лог |
+|---|---|---|---|---|
+| TASK-674 | database-engineer | review | БД: EF-модель, міграція beauty_*, RLS, exclusion (RLS-тест не запускався) | .claude/logs/tasks/TASK-674.md |
+| TASK-677 | ai-agent-developer | done | AI-шар: клієнт Anthropic, 8 tools, режими, журнал, guardrails | .claude/logs/tasks/TASK-677.md |
+| TASK-680 | frontend-developer | done | Публічний запис: заклад → майстер → послуга → час → підтвердження (mock) | .claude/logs/tasks/TASK-680.md |
+| TASK-679 | frontend-developer | done | Адмінка: огляд, календар, клієнти, спеціалісти, ціни, аналітика, AI (mock) | .claude/logs/tasks/TASK-679.md |
+| TASK-675 | backend-developer | review | Backend API beauty: слоти, запис/скасування A2, послуги, акції, канали, AI-журнал | .claude/logs/tasks/TASK-675.md |
+| TASK-686 | backend-developer | review | Worker↔БД: outbox, поллери нагадувань/winback, відправник TG/IG, RLS-роль | .claude/logs/tasks/TASK-686.md |
+| TASK-684 | backend-developer | review | Auth, tenants, ролі: JWT+refresh, RLS, lockout, rate limit | .claude/logs/tasks/TASK-684.md |
+| TASK-685 | backend-developer | review | Політика повернення коштів: налаштування, CancellationService | .claude/logs/tasks/TASK-685.md |
+| TASK-687 | frontend-developer | review | Адмінка: HTTP-клієнт, логін/запрошення (BFF), захист /beauty/*, перенос | .claude/logs/tasks/TASK-687.md |
+| TASK-688 | backend-developer | review | Публічний API /api/public/{slug}: каталог, слоти, запис, скасування за токеном | .claude/logs/tasks/TASK-688.md |
+| TASK-692 | frontend-developer | review | Адмінка: працівники (профіль, графік, відсутності, запрошення), mock + http | .claude/logs/tasks/TASK-692.md |
+| TASK-693 | frontend-developer | review | Звірка http-клієнта з DTO, публічний запис на API, CSP, vitest | .claude/logs/tasks/TASK-693.md |
+| TASK-691 | backend-developer | review | Backend: працівники (профіль, графік, відсутності), 409 specialist_unavailable | .claude/logs/tasks/TASK-691.md |
+| TASK-694 | backend-developer | review | Worker: schema.sql з міграцій, відписка STOP, денний ліміт маркетингу | .claude/logs/tasks/TASK-694.md |
+| TASK-689+690 | backend-developer | review | Аудит безпеки H/M/L + прогалини адмінки (CORS, locations, overview), §14 | .claude/logs/tasks/TASK-689.md |
+| TASK-696 | backend-developer | review | Аудит TASK-695: каскадна деактивація, одне запрошення, advisory-lock | .claude/logs/tasks/TASK-696.md |
+| TASK-698 | frontend-developer | review | Адмінка: екран «Заклади», календар без скасованих, історія скасувань | .claude/logs/tasks/TASK-698.md |
+| TASK-697 | backend-developer | review | Backend §16: API закладів (409/422), історія скасувань, міграція | .claude/logs/tasks/TASK-697.md |
+| TASK-701 | backend-developer | review | Backend §17: вихідні дні закладу, closures (EXCLUDE), 409 location_closed | .claude/logs/tasks/TASK-701.md |
+| TASK-702 | frontend-developer | review | Frontend §17: вихідні дні, затінені дні в календарі, публічний запис | .claude/logs/tasks/TASK-702.md |
+| TASK-703 | backend-developer | review | Backend §18: години роботи закладу, перетин із графіком майстра | .claude/logs/tasks/TASK-703.md |
+| TASK-704 | frontend-developer | review | Frontend §18.3: список і сторінка закладу, години роботи (перегляд) | .claude/logs/tasks/TASK-704.md |
+| TASK-705 | frontend-developer | review | Аудит узгодженості F1–F9: час у зоні закладу, доступність, GET /overview | .claude/logs/tasks/TASK-705.md |
+| TASK-710 | frontend-developer | review | Frontend §19: діапазон аналітики, series, breakdown, порівняння, CSV | .claude/logs/tasks/TASK-710.md |
+| TASK-706 | backend-developer | review | Backend §19: аналітика from/to, network/series, compare, завантаження | .claude/logs/tasks/TASK-706.md |
+| TASK-713 | database-engineer | review | Схема ШІ §20.4 (ADR-010): налаштування, ключі (шифротекст), облік, RLS | .claude/logs/tasks/TASK-713.md |
+| TASK-714 | backend-developer | review | Протектор ключів ШІ v2 (AES-256-GCM), ротація, ai-secrets reencrypt | .claude/logs/tasks/TASK-714.md |
+| TASK-717 | frontend-developer | review | Frontend §20.9: «ШІ-асистент» у Налаштуваннях (провайдер, ключі, промпт) | .claude/logs/tasks/TASK-717.md |
+| TASK-715 | ai-agent-developer | review | ШІ-шар ADR-010: реєстр провайдерів, runtime tenant, ліміти, PromptComposer | .claude/logs/tasks/TASK-715.md |
+| TASK-716 | backend-developer | review | HTTP API налаштувань ШІ §20.5–§20.6, аудит без значень ключів | .claude/logs/tasks/TASK-716.md |
+| TASK-722 | frontend-developer | done | Двоколонкова розкладка /beauty/settings | .claude/logs/tasks/TASK-722.md |
+| TASK-723 | ai-agent-developer | review | Виправлення рев'ю безпеки M1, M3, L3, L5, L9 (TASK-719) | .claude/logs/tasks/TASK-723.md |
+| TASK-724 | database-engineer | review | Міграція beauty_chat_assistant (ADR-011): poll_state, proposals, RLS | .claude/logs/tasks/TASK-724.md |
+| TASK-726 | backend-developer | review | Backend §21.6: OnlineBookingCore, ChatBookingService (prepare/confirm) | .claude/logs/tasks/TASK-726.md |
+| TASK-725 | integrations-developer | review | Канали §21.3: InboundIngestCore, парсер Telegram, TelegramPoller | .claude/logs/tasks/TASK-725.md |
+| TASK-727 | ai-agent-developer | review | ШІ-шар чату клієнта §21.7: scope ClientChat, 7 tools | .claude/logs/tasks/TASK-727.md |
+| TASK-728 | ai-agent-developer | review | Конвеєр розмов §21.5–§21.6: ConversationWorker, TurnProcessor | .claude/logs/tasks/TASK-728.md |
+| TASK-733 | ai-agent-developer | review | Виправлення рев'ю чату (TASK-732): M1–M3, L1–L3, L6, L7 | .claude/logs/tasks/TASK-733.md |
+| TASK-734 | devops-engineer | review | Локальне dev-середовище для smoke Telegram (scripts/dev, runbook §11) | .claude/logs/tasks/TASK-734.md |
+| TASK-735 | ai-agent-developer | review | Виправлення за живим smoke Telegram: контекст ходу, чистий текст | .claude/logs/tasks/TASK-735.md |
+| TASK-736 | database-engineer | review | Міграція beauty_reminders_contacts_inbox (ADR-012), RLS FORCE | .claude/logs/tasks/TASK-736.md |
+| TASK-739 | backend-developer | review | Inbox API §22.6.5: список розмов, відповідь менеджера, resume-ai, read | .claude/logs/tasks/TASK-739.md |
+| TASK-742 | backend-developer | review | Воркер нагадувань §22.5: час закладу (DST), тиша 22–08, delivery_failed | .claude/logs/tasks/TASK-742.md |
+| TASK-743 | frontend-developer | review | Frontend inbox §22.6.5: /beauty/inbox, відповідь, «Повернути ШІ» | .claude/logs/tasks/TASK-743.md |
+| TASK-744 | frontend-developer | review | Frontend дзвінки й нагадування §22.6: /beauty/calls, картка клієнта | .claude/logs/tasks/TASK-744.md |
+| TASK-737 | backend-developer | review | ReminderPlanner §22.4: тиша, злиття, переплан у create/patch/cancel | .claude/logs/tasks/TASK-737.md |
+| TASK-740 | ai-agent-developer | review | Нагадування й handoff §22.7–§22.8: held, вибір, «Стоп» | .claude/logs/tasks/TASK-740.md |
+| TASK-749 | database-engineer | review | Міграція beauty_chat_buttons (ADR-013): клавіатури, actions, RLS | .claude/logs/tasks/TASK-749.md |
+| TASK-738 | backend-developer | review | API вподобань, call-tasks, settings/reminders §22.6.2–§22.6.4 | .claude/logs/tasks/TASK-738.md |
+| TASK-741 | ai-agent-developer | review | Блок «ФАКТИ ЗАКЛАДУ» §22.9, PolicyClaimGuard → handoff policy_unknown | .claude/logs/tasks/TASK-741.md |
+| TASK-751 | backend-developer | review | Воркер кнопок §23.4: reply_markup, клавіатура нагадування | .claude/logs/tasks/TASK-751.md |
+| TASK-750 | integrations-developer | review | Транспорт Telegram для кнопок §23.4: callback_query, setMyCommands | .claude/logs/tasks/TASK-750.md |
+| TASK-752 | backend-developer | review | Клавіатури й дії клієнта §23.3–§23.10: токени, скасування з лімітом | .claude/logs/tasks/TASK-752.md |
+| TASK-753 | ai-agent-developer | review | Конвеєр кнопок і команд §23.5–§23.8: callback без LLM, slot_pick | .claude/logs/tasks/TASK-753.md |
+| TASK-754 | frontend-developer | review | Frontend кнопок Telegram §23.10–§23.12 (mock): чипи, перемикач кнопок | .claude/logs/tasks/TASK-754.md |
+| TASK-745 | devops-engineer | review | Dev-середовище нагадувань/inbox/кнопок: міграції 12→14, start-worker.ps1 | .claude/logs/tasks/TASK-745.md |
+| TASK-760 | backend-developer | review | Воркер: відгук і winback не йдуть відписаним/none (M2), прапорець | .claude/logs/tasks/TASK-760.md |
+| TASK-759 | ai-agent-developer | review | Виправлення рев'ю M3, L2, L8, L10: ліміти шаблонних відповідей, throttle | .claude/logs/tasks/TASK-759.md |
