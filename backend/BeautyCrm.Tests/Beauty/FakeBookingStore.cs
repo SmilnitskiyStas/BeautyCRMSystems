@@ -1,4 +1,5 @@
 using BeautyCrm.Application.Features.BeautyBooking;
+using BeautyCrm.Application.Features.BeautyReminders;
 
 namespace BeautyCrm.Tests.Beauty;
 
@@ -30,6 +31,8 @@ internal sealed class FakeBookingStore : IBookingStore
     public List<(Guid AppointmentId, DateTimeOffset At)> Reminders = [];
     public Dictionary<Guid, PaymentRecord> Payments = new();
     public bool ClientExists = true;
+    /// <summary>TASK-737: останній план нагадувань, переданий у store (запис / перенос), за id запису.</summary>
+    public Dictionary<Guid, PlannedReminders> Plans = new();
 
     public Task<ServiceInfo?> GetServiceAsync(Guid id, CancellationToken ct) =>
         Task.FromResult<ServiceInfo?>(id == Service90 ? new ServiceInfo(id, "Манікюр", ServiceDuration, true) : null);
@@ -63,6 +66,11 @@ internal sealed class FakeBookingStore : IBookingStore
         var dto = new AppointmentDto(Guid.NewGuid(), a.LocationId, "Центр", a.SpecialistId, "Марина", a.ServiceId, "Манікюр",
             a.ClientId, "Клієнт", a.StartsAt, end, a.DurationMinutes, "pending", a.Source, a.PriceOriginal, a.PriceFinal,
             a.PromotionId, a.ReminderOption, a.PaymentMethod);
+        if (a.Plan is { } plan)
+        {
+            Plans[dto.Id] = plan;
+            dto = dto with { Reminders = new AppointmentRemindersDto(plan.Method, plan.Offsets.Select(o => (int)o).ToList()) };
+        }
         Appointments.Add(dto);
         if (a.ReminderAt is { } r) Reminders.Add((dto.Id, r));
         if (a.Payment is { } p) Payments[dto.Id] = new PaymentRecord(Guid.NewGuid(), dto.Id, p.Amount, p.Method, "pending", null);
@@ -86,6 +94,12 @@ internal sealed class FakeBookingStore : IBookingStore
         Reminders.RemoveAll(r => r.AppointmentId == id);
         if (reminderAt is { } r) Reminders.Add((id, r));
         return Task.FromResult(StoreResult<AppointmentDto>.Ok(moved));
+    }
+
+    public Task<StoreResult<AppointmentDto>> RescheduleAsync(Guid id, DateTimeOffset newStart, PlannedReminders plan, CancellationToken ct)
+    {
+        Plans[id] = plan;
+        return RescheduleAsync(id, newStart, plan.LegacyReminderAt, ct);
     }
 
     public Task<AppointmentDto?> SetStatusAsync(Guid id, string status, CancellationToken ct) => Replace(id, a => a with { Status = status });

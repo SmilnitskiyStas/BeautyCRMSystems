@@ -1,3 +1,5 @@
+using BeautyCrm.Application.Features.BeautyReminders;
+
 namespace BeautyCrm.Application.Features.BeautyBooking;
 
 /// <summary>Порт даних для запису/слотів. Реалізація — Infrastructure (EF Core, RLS за tenant).</summary>
@@ -22,6 +24,13 @@ public interface IBookingStore
         DateTimeOffset from, DateTimeOffset to, Guid? locationId, Guid? specialistId, bool includeCancelled, CancellationToken ct);
     /// <summary>Переносить запис і переплановує нагадування (reminderAt null = без нагадування).</summary>
     Task<StoreResult<AppointmentDto>> RescheduleAsync(Guid id, DateTimeOffset newStart, DateTimeOffset? reminderAt, CancellationToken ct);
+    /// <summary>
+    /// Перенос з планом нагадувань (§22.4): у ТІЙ САМІЙ транзакції старі scheduled-рядки -> cancelled:replanned, відкриті задачі
+    /// дзвінка -> cancelled:replanned, нові точки з плану. Реалізація за замовчуванням - спадкова (одна точка), для портів без плану.
+    /// </summary>
+    Task<StoreResult<AppointmentDto>> RescheduleAsync(Guid id, DateTimeOffset newStart, PlannedReminders plan, CancellationToken ct) =>
+        RescheduleAsync(id, newStart, plan.LegacyReminderAt, ct);
+    /// <remarks>completed / no_show закривають scheduled-нагадування й відкриті задачі дзвінка (appointment_inactive), §22.4.</remarks>
     Task<AppointmentDto?> SetStatusAsync(Guid id, string status, CancellationToken ct);
     /// <summary>
     /// Атомарний claim скасування (умовний UPDATE ... WHERE status IN ('pending','confirmed')): true лише для ОДНОГО з паралельних
@@ -31,7 +40,7 @@ public interface IBookingStore
     Task<bool> TryClaimCancelAsync(Guid id, DateTimeOffset at, CancelOrigin origin, string? reason, CancellationToken ct);
     /// <summary>Компенсація невдалого повернення коштів: status = previousStatus, cancelled_at і cancelled_by_*/reason = null (лише якщо ще cancelled).</summary>
     Task ReleaseCancelAsync(Guid id, string previousStatus, CancellationToken ct);
-    /// <summary>status = cancelled, cancelled_at, нагадування -> cancelled. Якщо автор ще не зафіксований — system.</summary>
+    /// <summary>status = cancelled, cancelled_at, нагадування й відкриті задачі дзвінка -> cancelled:appointment_inactive. Якщо автор ще не зафіксований — system.</summary>
     Task<AppointmentDto?> MarkCancelledAsync(Guid id, DateTimeOffset at, CancellationToken ct);
     Task<PaymentRecord?> GetPaymentAsync(Guid appointmentId, CancellationToken ct);
     Task UpdatePaymentAsync(Guid paymentId, string status, string? providerPaymentId, DateTimeOffset? paidAt, CancellationToken ct);

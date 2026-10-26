@@ -3,8 +3,7 @@ using BeautyCrm.Api.Infrastructure;
 using BeautyCrm.Api.PublicBooking;
 using BeautyCrm.Api.Tenancy;
 using BeautyCrm.Application.Features;
-using BeautyCrm.Infrastructure.AI.Beauty;
-using BeautyCrm.Infrastructure.Data;
+using BeautyCrm.Infrastructure.AI.Beauty;using BeautyCrm.Infrastructure.Data;
 using BeautyCrm.Infrastructure.Data.Auth;
 using BeautyCrm.Infrastructure.Integrations.Channels;
 using Microsoft.AspNetCore.Mvc;
@@ -25,13 +24,26 @@ var useMocks = builder.Configuration.GetValue("Channels:UseMocks", false);
 if (useMocks && !builder.Environment.IsDevelopment())
     throw new InvalidOperationException("Channels:UseMocks=true is allowed only in the Development environment.");
 
+// Mock-провайдер ШІ (TASK-715, ADR-010 §4): так само лише Development.
+if (builder.Configuration.GetValue("Ai:UseMockProvider", false) && !builder.Environment.IsDevelopment())
+    throw new InvalidOperationException("Ai:UseMockProvider=true is allowed only in the Development environment.");
+
+// Асистент у чаті клієнта (TASK-733, M3): поза Development вмикається лише після явного підтвердження юридичного gate
+// (§21.11 п. 3: тексти розмов ідуть провайдеру ШІ). Без ChatAssistant:LegalGateApproved=true старт падає.
+if (builder.Configuration.GetValue("ChatAssistant:Enabled", false) && !builder.Environment.IsDevelopment()
+    && !builder.Configuration.GetValue("ChatAssistant:LegalGateApproved", false))
+    throw new InvalidOperationException(
+        "ChatAssistant:Enabled=true outside Development requires ChatAssistant:LegalGateApproved=true (legal gate, contract section 21.11).");
+
 builder.Services
     .AddBeautyData()
     .AddBeautyChannels(useMocks)
     .AddBeautyAi()
+    .AddBeautyAiSecretsStartupCheck() // keyring ключів ШІ (Ai:Secrets:*): валідація лише логується, старт не ламає
     .AddBeautyApplication()
     .AddBeautyAuthData()
     .AddBeautyAuthApi(builder.Configuration) // JWT, ролі, rate limit; без Auth:JwtSigningKey додаток не стартує
+    .AddBeautyAiApi(builder.Configuration) // налаштування ШІ (TASK-716): ліміт ключів, мапінг винятків ШІ, swagger-фільтр секрету
     .AddBeautyPublicBookingApi(builder.Configuration); // публічний запис /api/public/{slug} (TASK-688)
 builder.Services.AddScoped<ITenantModuleProvider, DbTenantModuleProvider>(); // tenants.modules
 builder.Services.AddBeautyDbRoleGuard(); // старт падає, якщо runtime-роль БД superuser/BYPASSRLS (H1)
@@ -58,8 +70,16 @@ builder.Services.AddSwaggerGen(o =>
 
 var app = builder.Build();
 
+// CLI-режим: `ai-secrets reencrypt ...` (ротація keyring, ADR-010 §2.5). Веб-сервер не стартує.
+if (args.Length > 0 && args[0] == AiSecretsCli.Command)
+{
+    Environment.ExitCode = await AiSecretsCli.RunAsync(app.Services, args[1..], Console.Out);
+    return;
+}
+
 app.UseBeautyForwardedHeaders(); // лише довірені проксі (Beauty:TrustedProxies); першим, щоб IP/схема були справжніми далі
 app.UseBeautySecurityHeaders(app.Environment);
+app.UseBeautyAiNoStore(); // Cache-Control: no-store на /ai/settings*, /ai/models, /ai/usage
 
 if (app.Environment.IsDevelopment())
 {

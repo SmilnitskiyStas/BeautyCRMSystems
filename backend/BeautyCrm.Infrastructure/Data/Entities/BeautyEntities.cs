@@ -205,6 +205,12 @@ public class Appointment : TenantEntity
     public decimal PriceFinal { get; set; }
     public Guid? PromotionId { get; set; }
     public ReminderOption ReminderOption { get; set; } = ReminderOption.None;
+    /// <summary>TASK-736 (§22.3): none | auto | telegram | call. План нагадувань на записі (знімок).</summary>
+    public string ReminderMethod { get; set; } = "none";
+    /// <summary>Точки нагадування у хвилинах до візиту, підмножина {60,120,1440}; нормалізує застосунок (унікальні, за зростанням).</summary>
+    public short[] ReminderOffsets { get; set; } = [];
+    /// <summary>TASK-749 (§23.3): клієнт натиснув «Підтверджую візит» у чаті; null = ні.</summary>
+    public DateTimeOffset? ClientConfirmedAt { get; set; }
     public PaymentMethod? PaymentMethod { get; set; }
     public DateTimeOffset? CancelledAt { get; set; }
     /// <summary>Хто скасував (TASK-697): client | staff | system; null лише для нескасованих.</summary>
@@ -253,9 +259,28 @@ public class Conversation : TenantEntity
     public string ExternalChatId { get; set; } = null!;
     public ConversationStatus Status { get; set; } = ConversationStatus.Open;
     public DateTimeOffset? LastMessageAt { get; set; }
+    // TASK-736 (§22.3): inbox і стан розмови
+    public DateTimeOffset? AwaitingStaffSince { get; set; }
+    public DateTimeOffset? StaffLastReadAt { get; set; }
+    public DateTimeOffset? StaffRepliedAt { get; set; }
+    public DateTimeOffset? HandoffAt { get; set; }
+    /// <summary>«Стоп» від клієнта, якого ще немає в beauty_clients.</summary>
+    public DateTimeOffset? RemindersStopAt { get; set; }
+    /// <summary>reminder_choice; усі три pending_prompt* заповнені разом або жодне.</summary>
+    public string? PendingPrompt { get; set; }
+    public Guid? PendingPromptAppointmentId { get; set; }
+    public DateTimeOffset? PendingPromptExpiresAt { get; set; }
+    /// <summary>TASK-724 (§21.4): active | handoff.</summary>
+    public string AiState { get; set; } = "active";
+    public string? HandoffReason { get; set; }
+    public DateTimeOffset? AiPausedUntil { get; set; }
+    /// <summary>Lease ходу ШІ: умовний UPDATE (ai_lease_until &lt; now()) дає одного виконавця на розмову.</summary>
+    public DateTimeOffset? AiLeaseUntil { get; set; }
+    public Guid? AiLeaseOwner { get; set; }
 
     public Channel? Channel { get; set; }
     public Client? Client { get; set; }
+    public Appointment? PendingPromptAppointment { get; set; }
 }
 
 public class Message : TenantEntity
@@ -266,8 +291,18 @@ public class Message : TenantEntity
     public string Body { get; set; } = null!;
     public string? ExternalMessageId { get; set; }
     public DateTimeOffset SentAt { get; set; }
-    /// <summary>received (inbound) | draft | pending (outbox) | sent | failed.</summary>
+    /// <summary>received (inbound) | held (TASK-736: під час handoff) | draft | pending (outbox) | sent | failed. CHECK на status немає.</summary>
     public string Status { get; set; } = "received";
+    /// <summary>TASK-724 (§21.4): text | command | unsupported; TASK-749 (§23.3): callback (натискання інлайн-кнопки).</summary>
+    public string Kind { get; set; } = "text";
+    /// <summary>TASK-749 (§23.3): нейтральна розкладка клавіатури вихідного (jsonb-об'єкт ≤ 4096 байт); null = без кнопок. Не віддається API.</summary>
+    public string? Actions { get; set; }
+    /// <summary>TASK-749: callback_data натискання (≤ 64); лише для kind=callback; null, якщо формат невалідний.</summary>
+    public string? CallbackData { get; set; }
+    /// <summary>TASK-749: Telegram message_id повідомлення, під яким натиснули (≤ 32); лише для kind=callback.</summary>
+    public string? CallbackMessageRef { get; set; }
+    /// <summary>TASK-736: автор відповіді менеджера; лише для sender_type = staff.</summary>
+    public Guid? SenderUserId { get; set; }
     public int Attempts { get; set; }
     public string? LastError { get; set; }
     /// <summary>Dedup of webhook redeliveries, e.g. "telegram:12345"; unique per tenant when set.</summary>
@@ -304,6 +339,15 @@ public class Reminder : TenantEntity
     public ReminderStatus Status { get; set; } = ReminderStatus.Scheduled;
     public DateTimeOffset? SentAt { get; set; }
     public string? Error { get; set; }
+    // TASK-736 (§22.3). NULL offset_minutes = спадковий рядок (offset беруть з reminder_option).
+    public short? OffsetMinutes { get; set; }
+    /// <summary>telegram | auto.</summary>
+    public string? Method { get; set; }
+    /// <summary>starts_at запису на момент планування; воркер порівнює з поточним (інакше skipped:replanned).</summary>
+    public DateTimeOffset? PlannedStartsAt { get; set; }
+    /// <summary>Лише код (§22.4), без тексту й ПД.</summary>
+    public string? SkipReason { get; set; }
+    public Guid? MessageId { get; set; }
 
     public Appointment? Appointment { get; set; }
 }

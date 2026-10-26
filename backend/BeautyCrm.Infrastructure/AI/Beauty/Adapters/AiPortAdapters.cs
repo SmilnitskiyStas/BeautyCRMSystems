@@ -128,7 +128,7 @@ public sealed class DraftReplyAdapter(BeautyDbContext db, TenantContext tenant, 
         // Атомарний claim draft -> sending (а не pending): воркер бере лише 'pending', тож те саме повідомлення не піде двічі
         // (inline тут і з воркера). Повторний SendAsync того ж чернеткового id програє claim -> draft_not_found.
         var claimed = await db.Messages.Where(m => m.Id == draftId && m.Status == "draft")
-            .ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, "sending"), ct);
+            .ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, "sending").SetProperty(m => m.UpdatedAt, clock.GetUtcNow()), ct);
         if (claimed != 1) throw new InvalidOperationException("draft_not_found");
         OutboxResult outcome;
         try

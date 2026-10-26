@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using BeautyCrm.Application.Features.BeautyAuth;
+using BeautyCrm.Application.Features.BeautyReminders;
 using BeautyCrm.Application.Features.BeautyStaff;
 
 namespace BeautyCrm.Application.Features.BeautyBooking;
@@ -42,7 +43,9 @@ public sealed record ClientInput(Guid? Id, string? Name, string? Phone, string? 
 
 public sealed record CreateAppointmentRequest(
     Guid LocationId, Guid SpecialistId, Guid ServiceId, DateTimeOffset StartsAt,
-    ClientInput Client, string Reminder, string PaymentMethod, string? Source);
+    ClientInput Client, string? Reminder, string PaymentMethod, string? Source,
+    decimal? ExpectedPriceFinal = null, // §21.6: розбіжність із quote -> 409 price_changed (запис не створюється)
+    ReminderPlanRequest? Reminders = null); // §22.6.1: явний план (staff); разом із Reminder -> 422 reminder_conflict; обидва null -> вподобання клієнта
 
 /// <summary>PATCH: перенос (StartsAt) і/або зміна статусу. Скасування — лише POST /cancel.</summary>
 public sealed record PatchAppointmentRequest(DateTimeOffset? StartsAt, string? Status);
@@ -55,7 +58,9 @@ public sealed record AppointmentDto(
     CancellationTerms? Cancellation = null, string? Timezone = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? CancelledAt = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] CancelledByDto? CancelledBy = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CancelReason = null)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CancelReason = null,
+    AppointmentRemindersDto? Reminders = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? ClientConfirmedAt = null)
 {
     /// <summary>
     /// Видимість деталей скасування (§16): ім'я автора й причину бачать лише керівники; specialist бачить лише тип і час.
@@ -64,6 +69,17 @@ public sealed record AppointmentDto(
         ? this
         : this with { CancelledBy = CancelledBy is null ? null : new CancelledByDto(CancelledBy.Type), CancelReason = null };
 }
+
+/// <summary>§22.6.1: план нагадувань запису. Points - лише для staff-DTO (публічний бачить method + offsetsMinutes).</summary>
+public sealed record AppointmentRemindersDto(
+    string Method, IReadOnlyList<int> OffsetsMinutes,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<ReminderPointDto>? Points = null);
+
+/// <param name="Kind">message | call.</param>
+/// <param name="Status">message: scheduled | sent | failed | skipped; call: open | done | skipped.</param>
+public sealed record ReminderPointDto(
+    string Kind, int OffsetMinutes, DateTimeOffset DueAt, string Status,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SkipReason = null);
 
 public sealed record CancelResult(AppointmentDto Appointment, decimal RefundAmount, int RefundPercent, int FeePercent = 0)
 {
@@ -103,10 +119,11 @@ public sealed record NewPayment(string Method, decimal Amount);
 public sealed record NewAppointment(
     Guid LocationId, Guid SpecialistId, Guid ServiceId, Guid ClientId, DateTimeOffset StartsAt, int DurationMinutes,
     string Source, decimal PriceOriginal, decimal PriceFinal, Guid? PromotionId, string ReminderOption,
-    string PaymentMethod, DateTimeOffset? ReminderAt, NewPayment? Payment, PublicCreateOptions? Public = null);
+    string PaymentMethod, DateTimeOffset? ReminderAt, NewPayment? Payment, PublicCreateOptions? Public = null,
+    PlannedReminders? Plan = null); // §22.4: план нагадувань (null = спадковий шлях: лише ReminderAt)
 
-/// <summary>Публічний запис (TASK-688): id наперед (токен виводиться з нього), хеші токена й Idempotency-Key.</summary>
-public sealed record PublicCreateOptions(Guid AppointmentId, string TokenHash, string IdempotencyKeyHash, string RequestHash);
+/// <summary>Публічний запис (TASK-688): id наперед (токен виводиться з нього), хеші токена й Idempotency-Key. TokenHash = null для запису з чату (§21.6).</summary>
+public sealed record PublicCreateOptions(Guid AppointmentId, string? TokenHash, string IdempotencyKeyHash, string RequestHash);
 
 public sealed record StoreResult<T>(T? Value, bool Conflict, bool Duplicate = false, bool SpecialistBlocked = false, bool LocationClosed = false,
     bool OutsideLocationHours = false)

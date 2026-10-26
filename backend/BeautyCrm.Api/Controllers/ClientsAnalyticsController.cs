@@ -37,15 +37,24 @@ public sealed class ClientsController(ClientService clients) : ControllerBase
 [Authorize(Policy = AuthPolicies.Management)]
 public sealed class AnalyticsController(AnalyticsService analytics) : ControllerBase
 {
+    // from/to - рядки: yyyy-MM-dd = датний режим (§19.1), значення з часом = legacy (v0.19). Невалідне значення -> 422 invalid_range.
     [HttpGet("network")]
-    public async Task<IActionResult> Network([FromQuery] DateTimeOffset? from, [FromQuery] DateTimeOffset? to, CancellationToken ct) =>
-        this.ToResult(await analytics.NetworkAsync(from, to, ct));
+    public async Task<IActionResult> Network([FromQuery] string? from, [FromQuery] string? to, [FromQuery] bool compare = false, CancellationToken ct = default) =>
+        this.ToResult(await analytics.NetworkAsync(from, to, compare, ct));
+
+    [HttpGet("network/series")]
+    public async Task<IActionResult> Series([FromQuery] string? from, [FromQuery] string? to, CancellationToken ct = default) =>
+        this.ToResult(await analytics.SeriesAsync(from, to, ct));
 
     [HttpGet("locations")]
-    public async Task<IActionResult> Locations([FromQuery] DateTimeOffset? from, [FromQuery] DateTimeOffset? to, CancellationToken ct) =>
-        this.ToResult(await analytics.LocationsAsync(from, to, ct));
+    public async Task<IActionResult> Locations([FromQuery] string? from, [FromQuery] string? to, [FromQuery] bool compare = false, CancellationToken ct = default) =>
+        this.ToResult(await analytics.LocationsAsync(from, to, compare, ct));
+
+    [HttpGet("locations/{locationId:guid}/breakdown")]
+    public async Task<IActionResult> Breakdown(Guid locationId, [FromQuery] string? from, [FromQuery] string? to, CancellationToken ct = default) =>
+        this.ToResult(await analytics.BreakdownAsync(locationId, from, to, ct));
 
     [HttpGet("promotions")]
-    public async Task<IActionResult> Promotions([FromQuery] DateTimeOffset? from, [FromQuery] DateTimeOffset? to, CancellationToken ct) =>
-        this.ToResult(await analytics.PromotionsAsync(from, to, ct));
+    public async Task<IActionResult> Promotions([FromQuery] string? from, [FromQuery] string? to, [FromQuery] bool compare = false, CancellationToken ct = default) =>
+        this.ToResult(await analytics.PromotionsAsync(from, to, compare, ct));
 }

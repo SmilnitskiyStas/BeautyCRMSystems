@@ -3,6 +3,7 @@ using System.Text;
 using System.Threading.RateLimiting;
 using BeautyCrm.Api.Auth;
 using BeautyCrm.Api.Infrastructure;
+using BeautyCrm.Application.Features.BeautyChatBooking;
 using BeautyCrm.Application.Features.BeautyPublicBooking;
 using BeautyCrm.Infrastructure.Data.Beauty;
 using Microsoft.AspNetCore.Mvc;
@@ -56,6 +57,9 @@ public static class PublicBookingSetup
             TokenKey = ResolveTokenKey(config),
         };
         services.AddBeautyPublicBookingApplication(options).AddBeautyPublicBookingData();
+        // Запис з чату (§21.6): спільне ядро OnlineBookingCore; споживач - конвеєр розмов (TASK-728).
+        services.AddBeautyChatBookingApplication(new ChatBookingOptions { ProposalTtlMinutes = config.GetValue("ChatAssistant:ProposalTtlMinutes", 15) })
+            .AddBeautyChatBookingData();
 
         var window = TimeSpan.FromSeconds(config.GetValue("PublicBooking:RateLimit:WindowSeconds", 60));
         services.AddRateLimiter(o =>

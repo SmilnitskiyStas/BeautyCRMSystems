@@ -11,6 +11,7 @@ using BeautyCrm.Infrastructure.Data.Tenancy;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace BeautyCrm.Infrastructure.Data;
 
@@ -55,6 +56,10 @@ public static class DataServiceExtensions
         services.AddScoped<IStaffStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<IOverviewStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<ILocationStore>(sp => sp.GetRequiredService<EfBeautyStore>());
+        services.AddScoped<BeautyCrm.Application.Features.BeautyReminders.IReminderContextStore>(sp => sp.GetRequiredService<EfBeautyStore>());
+        services.AddScoped<BeautyCrm.Application.Features.BeautyReminders.IReminderReplanStore>(sp => sp.GetRequiredService<EfBeautyStore>());
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddScoped<ReminderContactsService>(); // TASK-738: вподобання, call-tasks, settings/reminders
 
         return services;
     }

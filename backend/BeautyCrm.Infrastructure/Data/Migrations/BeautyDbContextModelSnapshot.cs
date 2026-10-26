@@ -116,6 +116,392 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.AiProviderKey", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by_user_id");
+
+                    b.Property<string>("KeyEncrypted")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("key_encrypted");
+
+                    b.Property<string>("KeyKid")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("key_kid");
+
+                    b.Property<string>("KeyLast4")
+                        .IsRequired()
+                        .HasMaxLength(4)
+                        .HasColumnType("character varying(4)")
+                        .HasColumnName("key_last4");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("provider");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid>("UpdatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by_user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_ai_provider_keys");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_ai_provider_keys_tenant_id_id");
+
+                    b.HasIndex("KeyKid")
+                        .HasDatabaseName("ix_beauty_ai_provider_keys_key_kid");
+
+                    b.HasIndex("TenantId", "CreatedByUserId")
+                        .HasDatabaseName("ix_beauty_ai_provider_keys_tenant_id_created_by_user_id");
+
+                    b.HasIndex("TenantId", "Provider")
+                        .IsUnique()
+                        .HasDatabaseName("ix_beauty_ai_provider_keys_tenant_id_provider");
+
+                    b.HasIndex("TenantId", "UpdatedByUserId")
+                        .HasDatabaseName("ix_beauty_ai_provider_keys_tenant_id_updated_by_user_id");
+
+                    b.ToTable("beauty_ai_provider_keys", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_ai_provider_keys_key_encrypted", "key_encrypted LIKE 'v2:%'");
+
+                            t.HasCheckConstraint("ck_beauty_ai_provider_keys_key_kid", "key_kid ~ '^[a-z0-9-]{1,32}$'");
+
+                            t.HasCheckConstraint("ck_beauty_ai_provider_keys_provider", "provider ~ '^[a-z][a-z0-9_]{1,31}$'");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.AiSettingsAuditRow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("action");
+
+                    b.Property<string[]>("ChangedFields")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text[]")
+                        .HasColumnName("changed_fields")
+                        .HasDefaultValueSql("'{}'");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("Provider")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("provider");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid?>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_ai_settings_audit");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_ai_settings_audit_tenant_id_id");
+
+                    b.HasIndex("TenantId", "CreatedAt")
+                        .IsDescending(false, true)
+                        .HasDatabaseName("ix_beauty_ai_settings_audit_tenant_id_created_at");
+
+                    b.HasIndex("TenantId", "UserId")
+                        .HasDatabaseName("ix_beauty_ai_settings_audit_tenant_id_user_id");
+
+                    b.ToTable("beauty_ai_settings_audit", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_ai_settings_audit_action", "action IN ('settings_updated', 'key_source_changed', 'key_set', 'key_replaced', 'key_deleted', 'key_tested', 'prompt_reset', 'platform_quota_changed')");
+
+                            t.HasCheckConstraint("ck_beauty_ai_settings_audit_provider", "provider IS NULL OR provider ~ '^[a-z][a-z0-9_]{1,31}$'");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.AiSettingsRow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<string>("AnalyticsModel")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("analytics_model");
+
+                    b.Property<string>("AnalyticsProvider")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasDefaultValue("anthropic")
+                        .HasColumnName("analytics_provider");
+
+                    b.Property<string>("ChatModel")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("chat_model");
+
+                    b.Property<string>("ChatProvider")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasDefaultValue("anthropic")
+                        .HasColumnName("chat_provider");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("KeySource")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("platform")
+                        .HasColumnName("key_source");
+
+                    b.Property<int>("MaxOutputTokens")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1024)
+                        .HasColumnName("max_output_tokens");
+
+                    b.Property<string>("Mode")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("confirm")
+                        .HasColumnName("mode");
+
+                    b.Property<int?>("MonthlyRequestLimit")
+                        .HasColumnType("integer")
+                        .HasColumnName("monthly_request_limit");
+
+                    b.Property<long?>("MonthlyTokenLimit")
+                        .HasColumnType("bigint")
+                        .HasColumnName("monthly_token_limit");
+
+                    b.Property<bool?>("PlatformEnabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("platform_enabled");
+
+                    b.Property<int?>("PlatformMonthlyRequestQuota")
+                        .HasColumnType("integer")
+                        .HasColumnName("platform_monthly_request_quota");
+
+                    b.Property<long?>("PlatformMonthlyTokenQuota")
+                        .HasColumnType("bigint")
+                        .HasColumnName("platform_monthly_token_quota");
+
+                    b.Property<string>("PromptAddendum")
+                        .HasColumnType("text")
+                        .HasColumnName("prompt_addendum");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid?>("UpdatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by_user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_ai_settings");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_ai_settings_tenant_id_id");
+
+                    b.HasIndex("TenantId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_beauty_ai_settings_tenant_id");
+
+                    b.HasIndex("TenantId", "UpdatedByUserId")
+                        .HasDatabaseName("ix_beauty_ai_settings_tenant_id_updated_by_user_id");
+
+                    b.ToTable("beauty_ai_settings", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_ai_settings_analytics_model", "char_length(analytics_model) BETWEEN 1 AND 100");
+
+                            t.HasCheckConstraint("ck_beauty_ai_settings_analytics_provider", "analytics_provider ~ '^[a-z][a-z0-9_]{1,31}$'");
+
+                            t.HasCheckConstraint("ck_beauty_ai_settings_chat_model", "char_length(chat_model) BETWEEN 1 AND 100");
+
+                            t.HasCheckConstraint("ck_beauty_ai_settings_chat_provider", "chat_provider ~ '^[a-z][a-z0-9_]{1,31}$'");
+
+                            t.HasCheckConstraint("ck_beauty_ai_settings_key_source", "key_source IN ('own', 'platform')");
+
+                            t.HasCheckConstraint("ck_beauty_ai_settings_max_output_tokens", "max_output_tokens BETWEEN 64 AND 8192");
+
+                            t.HasCheckConstraint("ck_beauty_ai_settings_mode", "mode IN ('suggest', 'confirm', 'auto')");
+
+                            t.HasCheckConstraint("ck_beauty_ai_settings_monthly_request_limit", "monthly_request_limit IS NULL OR monthly_request_limit BETWEEN 1 AND 10000000");
+
+                            t.HasCheckConstraint("ck_beauty_ai_settings_monthly_token_limit", "monthly_token_limit IS NULL OR monthly_token_limit BETWEEN 1 AND 100000000000");
+
+                            t.HasCheckConstraint("ck_beauty_ai_settings_platform_quotas", "(platform_monthly_token_quota IS NULL OR platform_monthly_token_quota >= 0) AND (platform_monthly_request_quota IS NULL OR platform_monthly_request_quota >= 0)");
+
+                            t.HasCheckConstraint("ck_beauty_ai_settings_prompt_addendum", "prompt_addendum IS NULL OR char_length(prompt_addendum) <= 4000");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.AiUsageRow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<int>("ErrorCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0)
+                        .HasColumnName("error_count");
+
+                    b.Property<long>("InputTokens")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(0L)
+                        .HasColumnName("input_tokens");
+
+                    b.Property<string>("KeySource")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("key_source");
+
+                    b.Property<string>("Model")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("model");
+
+                    b.Property<long>("OutputTokens")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(0L)
+                        .HasColumnName("output_tokens");
+
+                    b.Property<DateOnly>("PeriodStart")
+                        .HasColumnType("date")
+                        .HasColumnName("period_start");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("provider");
+
+                    b.Property<int>("RequestCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0)
+                        .HasColumnName("request_count");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("role");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_ai_usage");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_ai_usage_tenant_id_id");
+
+                    b.HasIndex("TenantId", "PeriodStart", "Role", "Provider", "Model", "KeySource")
+                        .IsUnique()
+                        .HasDatabaseName("ix_beauty_ai_usage_tenant_id_period_start_role_provider_model_");
+
+                    b.ToTable("beauty_ai_usage", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_ai_usage_counters", "request_count >= 0 AND error_count >= 0 AND input_tokens >= 0 AND output_tokens >= 0");
+
+                            t.HasCheckConstraint("ck_beauty_ai_usage_key_source", "key_source IN ('own', 'platform')");
+
+                            t.HasCheckConstraint("ck_beauty_ai_usage_period_start", "extract(day from period_start) = 1");
+
+                            t.HasCheckConstraint("ck_beauty_ai_usage_provider", "provider ~ '^[a-z][a-z0-9_]{1,31}$'");
+
+                            t.HasCheckConstraint("ck_beauty_ai_usage_role", "role IN ('chat', 'analytics')");
+                        });
+                });
+
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.Appointment", b =>
                 {
                     b.Property<Guid>("Id")
@@ -141,6 +527,10 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.Property<Guid?>("CancelledByUserId")
                         .HasColumnType("uuid")
                         .HasColumnName("cancelled_by_user_id");
+
+                    b.Property<DateTimeOffset?>("ClientConfirmedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("client_confirmed_at");
 
                     b.Property<Guid>("ClientId")
                         .HasColumnType("uuid")
@@ -198,6 +588,21 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)")
                         .HasColumnName("public_token_hash");
+
+                    b.Property<string>("ReminderMethod")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("none")
+                        .HasColumnName("reminder_method");
+
+                    b.Property<short[]>("ReminderOffsets")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("smallint[]")
+                        .HasColumnName("reminder_offsets")
+                        .HasDefaultValueSql("'{}'");
 
                     b.Property<string>("ReminderOption")
                         .IsRequired()
@@ -293,11 +698,137 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
 
                             t.HasCheckConstraint("ck_beauty_appointments_prices_non_negative", "price_original >= 0 AND price_final >= 0");
 
-                            t.HasCheckConstraint("ck_beauty_appointments_reminder_option", "reminder_option IN ('none', '1h', '2h')");
+                            t.HasCheckConstraint("ck_beauty_appointments_reminder_call_single", "reminder_method <> 'call' OR cardinality(reminder_offsets) = 1");
+
+                            t.HasCheckConstraint("ck_beauty_appointments_reminder_method", "reminder_method IN ('none', 'auto', 'telegram', 'call')");
+
+                            t.HasCheckConstraint("ck_beauty_appointments_reminder_none_empty", "(reminder_method = 'none') = (cardinality(reminder_offsets) = 0)");
+
+                            t.HasCheckConstraint("ck_beauty_appointments_reminder_offsets", "reminder_offsets <@ ARRAY[60, 120, 1440]::smallint[] AND cardinality(reminder_offsets) <= 3");
+
+                            t.HasCheckConstraint("ck_beauty_appointments_reminder_option", "reminder_option IN ('none', '1h', '2h', 'custom')");
 
                             t.HasCheckConstraint("ck_beauty_appointments_source", "source IN ('admin', 'online', 'telegram', 'instagram')");
 
                             t.HasCheckConstraint("ck_beauty_appointments_status", "status IN ('pending', 'confirmed', 'completed', 'cancelled', 'no_show')");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.CallTask", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<Guid>("AppointmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("appointment_id");
+
+                    b.Property<Guid>("ClientId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("client_id");
+
+                    b.Property<string>("ClosedReason")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("closed_reason");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<Guid?>("CompletedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("completed_by_user_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<DateTimeOffset>("DueAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("due_at");
+
+                    b.Property<Guid>("LocationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("location_id");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("note");
+
+                    b.Property<short?>("OffsetMinutes")
+                        .HasColumnType("smallint")
+                        .HasColumnName("offset_minutes");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("reason");
+
+                    b.Property<Guid?>("ReminderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("reminder_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("open")
+                        .HasColumnName("status");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_call_tasks");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_call_tasks_tenant_id_id");
+
+                    b.HasIndex("TenantId", "AppointmentId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_call_tasks_open_reminder")
+                        .HasFilter("status = 'open' AND reason = 'reminder'");
+
+                    b.HasIndex("TenantId", "ClientId")
+                        .HasDatabaseName("ix_beauty_call_tasks_tenant_id_client_id");
+
+                    b.HasIndex("TenantId", "CompletedByUserId")
+                        .HasDatabaseName("ix_beauty_call_tasks_tenant_id_completed_by_user_id");
+
+                    b.HasIndex("TenantId", "ReminderId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_call_tasks_reminder")
+                        .HasFilter("reminder_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "LocationId", "DueAt")
+                        .HasDatabaseName("ix_beauty_call_tasks_tenant_id_location_id_due_at");
+
+                    b.HasIndex("TenantId", "Status", "DueAt")
+                        .HasDatabaseName("ix_beauty_call_tasks_tenant_id_status_due_at");
+
+                    b.ToTable("beauty_call_tasks", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_call_tasks_completed", "(status IN ('done', 'skipped') AND completed_by_user_id IS NOT NULL AND completed_at IS NOT NULL) OR (status NOT IN ('done', 'skipped') AND completed_by_user_id IS NULL AND completed_at IS NULL)");
+
+                            t.HasCheckConstraint("ck_beauty_call_tasks_reason", "reason IN ('reminder', 'delivery_failed')");
+
+                            t.HasCheckConstraint("ck_beauty_call_tasks_status", "status IN ('open', 'done', 'skipped', 'cancelled')");
                         });
                 });
 
@@ -445,6 +976,345 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ChannelPollState", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("ChannelId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("channel_id");
+
+                    b.Property<long>("LastUpdateId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(0L)
+                        .HasColumnName("last_update_id");
+
+                    b.Property<Guid?>("LeaseOwner")
+                        .HasColumnType("uuid")
+                        .HasColumnName("lease_owner");
+
+                    b.Property<DateTimeOffset?>("LeaseUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("lease_until");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.HasKey("TenantId", "ChannelId")
+                        .HasName("pk_beauty_channel_poll_state");
+
+                    b.ToTable("beauty_channel_poll_state", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_channel_poll_state_last_update_id", "last_update_id >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ChatBookingProposal", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<Guid?>("AppointmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("appointment_id");
+
+                    b.Property<Guid?>("ClientId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("client_id");
+
+                    b.Property<string>("ConfirmationTokenHash")
+                        .IsRequired()
+                        .HasColumnType("character(64)")
+                        .HasColumnName("confirmation_token_hash");
+
+                    b.Property<Guid>("ConversationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("conversation_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<DateTimeOffset?>("DecidedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("decided_at");
+
+                    b.Property<int>("DurationMinutes")
+                        .HasColumnType("integer")
+                        .HasColumnName("duration_minutes");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<string>("FailureCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("failure_code");
+
+                    b.Property<Guid>("LocationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("location_id");
+
+                    b.Property<decimal>("PriceFinal")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)")
+                        .HasColumnName("price_final");
+
+                    b.Property<decimal>("PriceOriginal")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)")
+                        .HasColumnName("price_original");
+
+                    b.Property<Guid?>("PromotionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("promotion_id");
+
+                    b.Property<Guid>("ServiceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("service_id");
+
+                    b.Property<Guid>("SpecialistId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("specialist_id");
+
+                    b.Property<DateTimeOffset>("StartsAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("starts_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("prepared")
+                        .HasColumnName("status");
+
+                    b.Property<Guid?>("SummaryMessageId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("summary_message_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_chat_booking_proposals");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_chat_booking_proposals_tenant_id_id");
+
+                    b.HasIndex("TenantId", "AppointmentId")
+                        .HasDatabaseName("ix_beauty_chat_booking_proposals_tenant_id_appointment_id");
+
+                    b.HasIndex("TenantId", "ClientId")
+                        .HasDatabaseName("ix_beauty_chat_booking_proposals_tenant_id_client_id");
+
+                    b.HasIndex("TenantId", "ConfirmationTokenHash")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_chat_booking_proposals_token");
+
+                    b.HasIndex("TenantId", "ConversationId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_chat_booking_proposals_active")
+                        .HasFilter("status IN ('prepared', 'shown')");
+
+                    b.HasIndex("TenantId", "LocationId")
+                        .HasDatabaseName("ix_beauty_chat_booking_proposals_tenant_id_location_id");
+
+                    b.HasIndex("TenantId", "PromotionId")
+                        .HasDatabaseName("ix_beauty_chat_booking_proposals_tenant_id_promotion_id");
+
+                    b.HasIndex("TenantId", "ServiceId")
+                        .HasDatabaseName("ix_beauty_chat_booking_proposals_tenant_id_service_id");
+
+                    b.HasIndex("TenantId", "SpecialistId")
+                        .HasDatabaseName("ix_beauty_chat_booking_proposals_tenant_id_specialist_id");
+
+                    b.HasIndex("TenantId", "SummaryMessageId")
+                        .HasDatabaseName("ix_beauty_chat_booking_proposals_tenant_id_summary_message_id");
+
+                    b.HasIndex("TenantId", "ConversationId", "CreatedAt")
+                        .HasDatabaseName("ix_beauty_chat_booking_proposals_tenant_id_conversation_id_cre");
+
+                    b.ToTable("beauty_chat_booking_proposals", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_chat_booking_proposals_duration", "duration_minutes > 0");
+
+                            t.HasCheckConstraint("ck_beauty_chat_booking_proposals_failure_code", "failure_code IS NULL OR char_length(failure_code) BETWEEN 1 AND 64");
+
+                            t.HasCheckConstraint("ck_beauty_chat_booking_proposals_prices", "price_original >= 0 AND price_final >= 0");
+
+                            t.HasCheckConstraint("ck_beauty_chat_booking_proposals_status", "status IN ('prepared', 'shown', 'confirmed', 'rejected', 'expired', 'superseded', 'failed')");
+
+                            t.HasCheckConstraint("ck_beauty_chat_booking_proposals_token_hash", "confirmation_token_hash ~ '^[0-9a-f]{64}$'");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ChatKeyboard", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<Guid?>("AppointmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("appointment_id");
+
+                    b.Property<short>("ClearAttempts")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("smallint")
+                        .HasDefaultValue((short)0)
+                        .HasColumnName("clear_attempts");
+
+                    b.Property<Guid>("ConversationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("conversation_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("kind");
+
+                    b.Property<DateTimeOffset?>("MarkupClearedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("markup_cleared_at");
+
+                    b.Property<Guid>("MessageId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("message_id");
+
+                    b.Property<string>("Options")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("options");
+
+                    b.Property<Guid?>("ProposalId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("proposal_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("active")
+                        .HasColumnName("status");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("Token")
+                        .IsRequired()
+                        .HasMaxLength(22)
+                        .HasColumnType("character varying(22)")
+                        .HasColumnName("token");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<DateTimeOffset?>("UsedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("used_at");
+
+                    b.Property<Guid?>("UsedByMessageId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("used_by_message_id");
+
+                    b.Property<short?>("UsedOption")
+                        .HasColumnType("smallint")
+                        .HasColumnName("used_option");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_chat_keyboards");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_chat_keyboards_tenant_id_id");
+
+                    b.HasIndex("TenantId", "AppointmentId")
+                        .HasDatabaseName("ix_beauty_chat_keyboards_tenant_id_appointment_id");
+
+                    b.HasIndex("TenantId", "ConversationId")
+                        .HasDatabaseName("ix_beauty_chat_keyboards_tenant_id_conversation_id");
+
+                    b.HasIndex("TenantId", "MessageId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_beauty_chat_keyboards_tenant_id_message_id");
+
+                    b.HasIndex("TenantId", "ProposalId")
+                        .HasDatabaseName("ix_beauty_chat_keyboards_tenant_id_proposal_id");
+
+                    b.HasIndex("TenantId", "Token")
+                        .IsUnique()
+                        .HasDatabaseName("ix_beauty_chat_keyboards_tenant_id_token");
+
+                    b.HasIndex("TenantId", "UpdatedAt")
+                        .HasDatabaseName("ix_beauty_chat_keyboards_sweeper")
+                        .HasFilter("status <> 'active' AND markup_cleared_at IS NULL");
+
+                    b.HasIndex("TenantId", "UsedByMessageId")
+                        .HasDatabaseName("ix_beauty_chat_keyboards_tenant_id_used_by_message_id");
+
+                    b.HasIndex(new[] { "TenantId", "ConversationId" }, "ix_beauty_chat_keyboards_active")
+                        .HasDatabaseName("ix_beauty_chat_keyboards_active")
+                        .HasFilter("status = 'active'");
+
+                    b.ToTable("beauty_chat_keyboards", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_chat_keyboards_appointment", "kind NOT IN ('appointment_actions', 'cancel_confirm', 'reminder_choice') OR appointment_id IS NOT NULL");
+
+                            t.HasCheckConstraint("ck_beauty_chat_keyboards_clear_attempts", "clear_attempts >= 0");
+
+                            t.HasCheckConstraint("ck_beauty_chat_keyboards_kind", "kind IN ('booking_confirm', 'slot_pick', 'reminder_choice', 'appointment_list', 'appointment_actions', 'cancel_confirm')");
+
+                            t.HasCheckConstraint("ck_beauty_chat_keyboards_options", "jsonb_typeof(options) = 'array' AND jsonb_array_length(options) <= 10");
+
+                            t.HasCheckConstraint("ck_beauty_chat_keyboards_proposal", "kind <> 'booking_confirm' OR proposal_id IS NOT NULL");
+
+                            t.HasCheckConstraint("ck_beauty_chat_keyboards_status", "status IN ('active', 'used', 'expired', 'revoked')");
+
+                            t.HasCheckConstraint("ck_beauty_chat_keyboards_token", "token ~ '^[A-Za-z0-9_-]{22}$'");
+
+                            t.HasCheckConstraint("ck_beauty_chat_keyboards_used", "(status = 'used' AND used_at IS NOT NULL AND used_by_message_id IS NOT NULL) OR (status <> 'used' AND used_at IS NULL AND used_by_message_id IS NULL)");
+
+                            t.HasCheckConstraint("ck_beauty_chat_keyboards_used_option", "used_option IS NULL OR (status = 'used' AND used_option BETWEEN 0 AND 9)");
+                        });
+                });
+
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.Client", b =>
                 {
                     b.Property<Guid>("Id")
@@ -518,6 +1388,80 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.ToTable("beauty_clients", (string)null);
                 });
 
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ClientContactPreference", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("ClientId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("client_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("Method")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("method");
+
+                    b.Property<short[]>("OffsetsMinutes")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("smallint[]")
+                        .HasColumnName("offsets_minutes")
+                        .HasDefaultValueSql("'{}'");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("source");
+
+                    b.Property<Guid?>("TelegramConversationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("telegram_conversation_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid?>("UpdatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by_user_id");
+
+                    b.HasKey("TenantId", "ClientId")
+                        .HasName("pk_beauty_client_contact_preferences");
+
+                    b.HasIndex("TenantId", "TelegramConversationId")
+                        .HasDatabaseName("ix_beauty_client_contact_preferences_tenant_id_telegram_conver");
+
+                    b.HasIndex("TenantId", "UpdatedByUserId")
+                        .HasDatabaseName("ix_beauty_client_contact_preferences_tenant_id_updated_by_user");
+
+                    b.ToTable("beauty_client_contact_preferences", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_client_contact_preferences_call_single", "method <> 'call' OR cardinality(offsets_minutes) = 1");
+
+                            t.HasCheckConstraint("ck_beauty_client_contact_preferences_method", "method IN ('none', 'telegram', 'call')");
+
+                            t.HasCheckConstraint("ck_beauty_client_contact_preferences_none_empty", "(method = 'none') = (cardinality(offsets_minutes) = 0)");
+
+                            t.HasCheckConstraint("ck_beauty_client_contact_preferences_offsets", "offsets_minutes <@ ARRAY[60, 120, 1440]::smallint[] AND cardinality(offsets_minutes) <= 3");
+
+                            t.HasCheckConstraint("ck_beauty_client_contact_preferences_source", "source IN ('chat', 'admin', 'stop', 'web')");
+
+                            t.HasCheckConstraint("ck_beauty_client_contact_preferences_updated_by", "updated_by_user_id IS NULL OR source = 'admin'");
+                        });
+                });
+
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ClientNote", b =>
                 {
                     b.Property<Guid>("Id")
@@ -575,6 +1519,30 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnName("id")
                         .HasDefaultValueSql("gen_random_uuid()");
 
+                    b.Property<Guid?>("AiLeaseOwner")
+                        .HasColumnType("uuid")
+                        .HasColumnName("ai_lease_owner");
+
+                    b.Property<DateTimeOffset?>("AiLeaseUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("ai_lease_until");
+
+                    b.Property<DateTimeOffset?>("AiPausedUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("ai_paused_until");
+
+                    b.Property<string>("AiState")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("active")
+                        .HasColumnName("ai_state");
+
+                    b.Property<DateTimeOffset?>("AwaitingStaffSince")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("awaiting_staff_since");
+
                     b.Property<Guid>("ChannelId")
                         .HasColumnType("uuid")
                         .HasColumnName("channel_id");
@@ -595,9 +1563,43 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(256)")
                         .HasColumnName("external_chat_id");
 
+                    b.Property<DateTimeOffset?>("HandoffAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("handoff_at");
+
+                    b.Property<string>("HandoffReason")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("handoff_reason");
+
                     b.Property<DateTimeOffset?>("LastMessageAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("last_message_at");
+
+                    b.Property<string>("PendingPrompt")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("pending_prompt");
+
+                    b.Property<Guid?>("PendingPromptAppointmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("pending_prompt_appointment_id");
+
+                    b.Property<DateTimeOffset?>("PendingPromptExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("pending_prompt_expires_at");
+
+                    b.Property<DateTimeOffset?>("RemindersStopAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reminders_stop_at");
+
+                    b.Property<DateTimeOffset?>("StaffLastReadAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("staff_last_read_at");
+
+                    b.Property<DateTimeOffset?>("StaffRepliedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("staff_replied_at");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -623,6 +1625,9 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.HasAlternateKey("TenantId", "Id")
                         .HasName("ak_beauty_conversations_tenant_id_id");
 
+                    b.HasIndex("TenantId", "AiState")
+                        .HasDatabaseName("ix_beauty_conversations_tenant_id_ai_state");
+
                     b.HasIndex("TenantId", "ClientId")
                         .HasDatabaseName("ix_beauty_conversations_tenant_id_client_id");
 
@@ -630,12 +1635,29 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasDatabaseName("ix_beauty_conversations_tenant_id_last_message_at")
                         .HasFilter("status = 'open'");
 
+                    b.HasIndex("TenantId", "PendingPromptAppointmentId")
+                        .HasDatabaseName("ix_beauty_conversations_tenant_id_pending_prompt_appointment_id");
+
                     b.HasIndex("TenantId", "ChannelId", "ExternalChatId")
                         .IsUnique()
                         .HasDatabaseName("ix_beauty_conversations_tenant_id_channel_id_external_chat_id");
 
+                    b.HasIndex(new[] { "TenantId", "AwaitingStaffSince" }, "ix_beauty_conversations_awaiting_staff")
+                        .HasDatabaseName("ix_beauty_conversations_awaiting_staff")
+                        .HasFilter("awaiting_staff_since IS NOT NULL");
+
+                    b.HasIndex(new[] { "TenantId", "LastMessageAt" }, "ix_beauty_conversations_last_message_desc")
+                        .IsDescending(false, true)
+                        .HasDatabaseName("ix_beauty_conversations_last_message_desc");
+
                     b.ToTable("beauty_conversations", null, t =>
                         {
+                            t.HasCheckConstraint("ck_beauty_conversations_ai_state", "ai_state IN ('active', 'handoff')");
+
+                            t.HasCheckConstraint("ck_beauty_conversations_pending_prompt", "pending_prompt IS NULL OR pending_prompt IN ('reminder_choice')");
+
+                            t.HasCheckConstraint("ck_beauty_conversations_pending_prompt_all_or_none", "(pending_prompt IS NULL) = (pending_prompt_appointment_id IS NULL) AND (pending_prompt IS NULL) = (pending_prompt_expires_at IS NULL)");
+
                             t.HasCheckConstraint("ck_beauty_conversations_status", "status IN ('open', 'closed')");
                         });
                 });
@@ -867,6 +1889,10 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnName("id")
                         .HasDefaultValueSql("gen_random_uuid()");
 
+                    b.Property<string>("Actions")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("actions");
+
                     b.Property<int>("Attempts")
                         .HasColumnType("integer")
                         .HasColumnName("attempts");
@@ -875,6 +1901,16 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("body");
+
+                    b.Property<string>("CallbackData")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("callback_data");
+
+                    b.Property<string>("CallbackMessageRef")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("callback_message_ref");
 
                     b.Property<Guid>("ConversationId")
                         .HasColumnType("uuid")
@@ -902,6 +1938,14 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(300)")
                         .HasColumnName("idempotency_key");
 
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("text")
+                        .HasColumnName("kind");
+
                     b.Property<string>("LastError")
                         .HasColumnType("text")
                         .HasColumnName("last_error");
@@ -911,6 +1955,10 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)")
                         .HasColumnName("sender_type");
+
+                    b.Property<Guid?>("SenderUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("sender_user_id");
 
                     b.Property<DateTimeOffset>("SentAt")
                         .ValueGeneratedOnAdd()
@@ -947,14 +1995,29 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasDatabaseName("ix_beauty_messages_tenant_id_idempotency_key")
                         .HasFilter("idempotency_key IS NOT NULL");
 
+                    b.HasIndex("TenantId", "SenderUserId")
+                        .HasDatabaseName("ix_beauty_messages_tenant_id_sender_user_id");
+
                     b.HasIndex("TenantId", "ConversationId", "SentAt")
                         .HasDatabaseName("ix_beauty_messages_tenant_id_conversation_id_sent_at");
 
+                    b.HasIndex(new[] { "TenantId", "ConversationId", "SentAt" }, "ix_beauty_messages_inbound_received")
+                        .HasDatabaseName("ix_beauty_messages_inbound_received")
+                        .HasFilter("direction = 'inbound' AND status = 'received'");
+
                     b.ToTable("beauty_messages", null, t =>
                         {
+                            t.HasCheckConstraint("ck_beauty_messages_actions", "actions IS NULL OR (direction = 'outbound' AND jsonb_typeof(actions) = 'object' AND octet_length(actions::text) <= 4096)");
+
+                            t.HasCheckConstraint("ck_beauty_messages_callback_fields", "kind = 'callback' OR (callback_data IS NULL AND callback_message_ref IS NULL)");
+
                             t.HasCheckConstraint("ck_beauty_messages_direction", "direction IN ('inbound', 'outbound')");
 
+                            t.HasCheckConstraint("ck_beauty_messages_kind", "kind IN ('text', 'command', 'unsupported', 'callback')");
+
                             t.HasCheckConstraint("ck_beauty_messages_sender_type", "sender_type IN ('client', 'staff', 'ai', 'system')");
+
+                            t.HasCheckConstraint("ck_beauty_messages_sender_user", "sender_user_id IS NULL OR sender_type = 'staff'");
                         });
                 });
 
@@ -1259,6 +2322,23 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("error");
 
+                    b.Property<Guid?>("MessageId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("message_id");
+
+                    b.Property<string>("Method")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("method");
+
+                    b.Property<short?>("OffsetMinutes")
+                        .HasColumnType("smallint")
+                        .HasColumnName("offset_minutes");
+
+                    b.Property<DateTimeOffset?>("PlannedStartsAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("planned_starts_at");
+
                     b.Property<DateTimeOffset>("ScheduledAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("scheduled_at");
@@ -1266,6 +2346,11 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.Property<DateTimeOffset?>("SentAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("sent_at");
+
+                    b.Property<string>("SkipReason")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("skip_reason");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -1294,13 +2379,75 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.HasIndex("TenantId", "AppointmentId")
                         .HasDatabaseName("ix_beauty_reminders_tenant_id_appointment_id");
 
+                    b.HasIndex("TenantId", "MessageId")
+                        .HasDatabaseName("ix_beauty_reminders_tenant_id_message_id");
+
                     b.HasIndex("TenantId", "ScheduledAt")
                         .HasDatabaseName("ix_beauty_reminders_tenant_id_scheduled_at")
                         .HasFilter("status = 'scheduled'");
 
+                    b.HasIndex("TenantId", "AppointmentId", "OffsetMinutes")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_reminders_point")
+                        .HasFilter("status = 'scheduled' AND offset_minutes IS NOT NULL");
+
                     b.ToTable("beauty_reminders", null, t =>
                         {
-                            t.HasCheckConstraint("ck_beauty_reminders_status", "status IN ('scheduled', 'sent', 'failed', 'cancelled')");
+                            t.HasCheckConstraint("ck_beauty_reminders_method", "method IS NULL OR method IN ('telegram', 'auto')");
+
+                            t.HasCheckConstraint("ck_beauty_reminders_status", "status IN ('scheduled', 'sent', 'failed', 'cancelled', 'skipped')");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ReminderSettingsRow", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<bool>("CallEnabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true)
+                        .HasColumnName("call_enabled");
+
+                    b.Property<TimeOnly>("QuietEnd")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("time without time zone")
+                        .HasColumnName("quiet_end")
+                        .HasDefaultValueSql("'08:00'");
+
+                    b.Property<TimeOnly>("QuietStart")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("time without time zone")
+                        .HasColumnName("quiet_start")
+                        .HasDefaultValueSql("'22:00'");
+
+                    b.Property<bool>("TelegramEnabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true)
+                        .HasColumnName("telegram_enabled");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid?>("UpdatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by_user_id");
+
+                    b.HasKey("TenantId")
+                        .HasName("pk_beauty_reminder_settings");
+
+                    b.HasIndex("TenantId", "UpdatedByUserId")
+                        .HasDatabaseName("ix_beauty_reminder_settings_tenant_id_updated_by_user_id");
+
+                    b.ToTable("beauty_reminder_settings", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_reminder_settings_quiet", "quiet_start <> quiet_end");
                         });
                 });
 
@@ -1840,6 +2987,45 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.Navigation("Conversation");
                 });
 
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.AiProviderKey", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CreatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_ai_provider_keys_users_tenant_id_created_by_user_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "UpdatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_ai_provider_keys_users_tenant_id_updated_by_user_id");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.AiSettingsAuditRow", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "UserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_ai_settings_audit_users_tenant_id_user_id");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.AiSettingsRow", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "UpdatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_ai_settings_users_tenant_id_updated_by_user_id");
+                });
+
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.Appointment", b =>
                 {
                     b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
@@ -1899,6 +3085,55 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.Navigation("Specialist");
                 });
 
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.CallTask", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Appointment", "Appointment")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "AppointmentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_call_tasks_beauty_appointments_tenant_id_appointment");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Client", "Client")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ClientId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_call_tasks_beauty_clients_tenant_id_client_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CompletedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_call_tasks_users_tenant_id_completed_by_user_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Location", "Location")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LocationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_call_tasks_beauty_locations_tenant_id_location_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Reminder", "Reminder")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ReminderId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_call_tasks_beauty_reminders_tenant_id_reminder_id");
+
+                    b.Navigation("Appointment");
+
+                    b.Navigation("Client");
+
+                    b.Navigation("Location");
+
+                    b.Navigation("Reminder");
+                });
+
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.Channel", b =>
                 {
                     b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Location", "Location")
@@ -1909,6 +3144,175 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasConstraintName("fk_beauty_channels_beauty_locations_tenant_id_location_id");
 
                     b.Navigation("Location");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ChannelPollState", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Channel", "Channel")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ChannelId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_channel_poll_state_beauty_channels_tenant_id_channel");
+
+                    b.Navigation("Channel");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ChatBookingProposal", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Appointment", "Appointment")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "AppointmentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_chat_booking_proposals_beauty_appointments_tenant_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Client", "Client")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ClientId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_chat_booking_proposals_beauty_clients_tenant_id_clie");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Conversation", "Conversation")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ConversationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_chat_booking_proposals_beauty_conversations_tenant_i");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Location", "Location")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LocationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_chat_booking_proposals_beauty_locations_tenant_id_lo");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Promotion", "Promotion")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PromotionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_chat_booking_proposals_beauty_promotions_tenant_id_p");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Service", "Service")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ServiceId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_chat_booking_proposals_beauty_services_tenant_id_ser");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Specialist", "Specialist")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SpecialistId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_chat_booking_proposals_beauty_specialists_tenant_id_");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Message", "SummaryMessage")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SummaryMessageId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_chat_booking_proposals_beauty_messages_tenant_id_sum");
+
+                    b.Navigation("Appointment");
+
+                    b.Navigation("Client");
+
+                    b.Navigation("Conversation");
+
+                    b.Navigation("Location");
+
+                    b.Navigation("Promotion");
+
+                    b.Navigation("Service");
+
+                    b.Navigation("Specialist");
+
+                    b.Navigation("SummaryMessage");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ChatKeyboard", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Appointment", "Appointment")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "AppointmentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_chat_keyboards_beauty_appointments_tenant_id_appoint");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Conversation", "Conversation")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ConversationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_chat_keyboards_beauty_conversations_tenant_id_conver");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Message", "Message")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "MessageId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_chat_keyboards_beauty_messages_tenant_id_message_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.ChatBookingProposal", "Proposal")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ProposalId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_chat_keyboards_beauty_chat_booking_proposals_tenant_");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Message", "UsedByMessage")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "UsedByMessageId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_chat_keyboards_beauty_messages_tenant_id_used_by_mes");
+
+                    b.Navigation("Appointment");
+
+                    b.Navigation("Conversation");
+
+                    b.Navigation("Message");
+
+                    b.Navigation("Proposal");
+
+                    b.Navigation("UsedByMessage");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ClientContactPreference", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Client", "Client")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ClientId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_client_contact_preferences_beauty_clients_tenant_id_");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Conversation", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "TelegramConversationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_client_contact_preferences_beauty_conversations_tena");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "UpdatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_client_contact_preferences_users_tenant_id_updated_b");
+
+                    b.Navigation("Client");
                 });
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ClientNote", b =>
@@ -1941,9 +3345,18 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_beauty_conversations_beauty_clients_tenant_id_client_id");
 
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Appointment", "PendingPromptAppointment")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PendingPromptAppointmentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_conversations_beauty_appointments_tenant_id_pending_");
+
                     b.Navigation("Channel");
 
                     b.Navigation("Client");
+
+                    b.Navigation("PendingPromptAppointment");
                 });
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.Invite", b =>
@@ -2001,6 +3414,13 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_beauty_messages_beauty_conversations_tenant_id_conversation");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SenderUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_messages_users_tenant_id_sender_user_id");
 
                     b.Navigation("Conversation");
                 });
@@ -2094,7 +3514,24 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .IsRequired()
                         .HasConstraintName("fk_beauty_reminders_beauty_appointments_tenant_id_appointment_");
 
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Message", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "MessageId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_reminders_beauty_messages_tenant_id_message_id");
+
                     b.Navigation("Appointment");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ReminderSettingsRow", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "UpdatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_reminder_settings_users_tenant_id_updated_by_user_id");
                 });
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ServicePrice", b =>

@@ -1,3 +1,5 @@
+using BeautyCrm.Infrastructure.Integrations.Channels.Inbox;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -31,12 +33,30 @@ public static class ChannelsServiceExtensions
         services.TryAddSingleton<ChannelRequestContext>();
         services.TryAddSingleton<IChannelCredentialsProvider, AmbientChannelCredentialsProvider>();
         services.TryAddScoped<IChannelMessageRepository, EfChannelMessageRepository>();
-        services.TryAddScoped<IChannelQueue, DeferredChannelQueue>();
+        services.TryAddSingleton<ConversationSignals>(); // сигнал для ConversationWorker (TASK-728); замінює лише-логуючу DeferredChannelQueue
+        services.TryAddScoped<IChannelQueue, ChannelSignalQueue>();
         services.TryAddScoped<ChannelDirectory>();
         services.TryAddScoped<WebhookIngestService>();
         services.TryAddScoped<OutboundDispatcher>();
         services.AddScoped<InboundWebhookService>();
+        services.TryAddScoped<InboundIngestCore>();
+        // Telegram long polling (ADR-011): вимкнений за замовчуванням; старт падає, якщо ввімкнений поза Development або з UseMocks.
+        services.TryAddSingleton(sp => TelegramPollingOptions.Read(sp.GetRequiredService<IConfiguration>()));
+        services.TryAddSingleton(sp => new TelegramPollingHttp(new HttpClient(new SocketsHttpHandler())
+        {
+            Timeout = TimeSpan.FromSeconds(sp.GetRequiredService<TelegramPollingOptions>().TimeoutSeconds + 10), // без IHttpClientFactory: URL з токеном не логується
+        }));
+        services.TryAddSingleton<TelegramPoller>();
+        services.AddHostedService<TelegramPollingService>();
         services.AddScoped<OutboxProcessor>();
+        // Транспорт інлайн-кнопок Telegram (TASK-750, §23.4): порт для TASK-752/753 і сервіс меню команд для API.
+        services.TryAddScoped<IChannelActionsPort, ChannelActionsPort>();
+        services.TryAddScoped<TelegramCommandsService>();
+        // Inbox розмов (TASK-739, §22.6.5): ліміти Inbox:* ; сервіс використовує IAiActionJournal з AddBeautyAi.
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton(sp => InboxOptions.Read(sp.GetRequiredService<IConfiguration>()));
+        services.TryAddSingleton<InboxThrottle>();
+        services.TryAddScoped<InboxService>();
         return services;
     }
 }

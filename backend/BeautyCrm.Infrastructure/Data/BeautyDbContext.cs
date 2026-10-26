@@ -35,10 +35,24 @@ public class BeautyDbContext : DbContext
     public DbSet<Channel> Channels => Set<Channel>();
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<Message> Messages => Set<Message>();
+    public DbSet<ChatBookingProposal> ChatBookingProposals => Set<ChatBookingProposal>();
+    public DbSet<ChatKeyboard> ChatKeyboards => Set<ChatKeyboard>(); // TASK-749 (§23.3)
+    public DbSet<ChannelPollState> ChannelPollStates => Set<ChannelPollState>();
     public DbSet<AiAction> AiActions => Set<AiAction>();
     public DbSet<Reminder> Reminders => Set<Reminder>();
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<CancellationSettingsRow> CancellationSettings => Set<CancellationSettingsRow>();
+
+    // Нагадування, вподобання, задачі дзвінків (TASK-736, §22.3)
+    public DbSet<ClientContactPreference> ClientContactPreferences => Set<ClientContactPreference>();
+    public DbSet<CallTask> CallTasks => Set<CallTask>();
+    public DbSet<ReminderSettingsRow> ReminderSettings => Set<ReminderSettingsRow>();
+
+    // AI settings (TASK-713, §20.4)
+    public DbSet<AiSettingsRow> AiSettings => Set<AiSettingsRow>();
+    public DbSet<AiProviderKey> AiProviderKeys => Set<AiProviderKey>();
+    public DbSet<AiUsageRow> AiUsage => Set<AiUsageRow>();
+    public DbSet<AiSettingsAuditRow> AiSettingsAudit => Set<AiSettingsAuditRow>();
 
     // auth (TASK-684)
     public DbSet<Tenant> Tenants => Set<Tenant>();
@@ -262,10 +276,20 @@ public class BeautyDbContext : DbContext
                 t.HasCheckConstraint("ck_beauty_appointments_cancel_reason_len",
                     "cancel_reason IS NULL OR char_length(cancel_reason) <= 300");
                 t.HasCheckConstraint("ck_beauty_appointments_prices_non_negative", "price_original >= 0 AND price_final >= 0");
+                // TASK-736 (§22.3): план нагадувань на записі
+                t.HasCheckConstraint("ck_beauty_appointments_reminder_method", "reminder_method IN ('none', 'auto', 'telegram', 'call')");
+                t.HasCheckConstraint("ck_beauty_appointments_reminder_offsets",
+                    $"reminder_offsets <@ {ReminderOffsetsSql} AND cardinality(reminder_offsets) <= 3");
+                t.HasCheckConstraint("ck_beauty_appointments_reminder_none_empty",
+                    "(reminder_method = 'none') = (cardinality(reminder_offsets) = 0)");
+                t.HasCheckConstraint("ck_beauty_appointments_reminder_call_single",
+                    "reminder_method <> 'call' OR cardinality(reminder_offsets) = 1");
             });
             Enum(b.Property(x => x.Status)).HasDefaultValue(AppointmentStatus.Pending);
             Enum(b.Property(x => x.Source));
             Enum(b.Property(x => x.ReminderOption)).HasDefaultValue(ReminderOption.None);
+            b.Property(x => x.ReminderMethod).HasMaxLength(16).HasDefaultValue("none");
+            b.Property(x => x.ReminderOffsets).HasColumnType("smallint[]").HasDefaultValueSql("'{}'");
             b.Property(x => x.PaymentMethod).HasConversion(new EnumMemberConverter<PaymentMethod>()).HasMaxLength(32);
             b.Property(x => x.PriceOriginal).HasPrecision(12, 2);
             b.Property(x => x.PriceFinal).HasPrecision(12, 2);
@@ -309,7 +333,27 @@ public class BeautyDbContext : DbContext
 
         mb.Entity<Conversation>(b =>
         {
-            Base(b, "beauty_conversations", t => Check<ConversationStatus>(t, "beauty_conversations", "status"));
+            Base(b, "beauty_conversations", t =>
+            {
+                Check<ConversationStatus>(t, "beauty_conversations", "status");
+                t.HasCheckConstraint("ck_beauty_conversations_ai_state", "ai_state IN ('active', 'handoff')");
+                // TASK-736 (§22.3): питання про нагадування - усі три поля разом або жодне
+                t.HasCheckConstraint("ck_beauty_conversations_pending_prompt", "pending_prompt IS NULL OR pending_prompt IN ('reminder_choice')");
+                t.HasCheckConstraint("ck_beauty_conversations_pending_prompt_all_or_none",
+                    "(pending_prompt IS NULL) = (pending_prompt_appointment_id IS NULL) AND (pending_prompt IS NULL) = (pending_prompt_expires_at IS NULL)");
+            });
+            b.Property(x => x.PendingPrompt).HasMaxLength(32);
+            TenantFk(b, x => x.PendingPromptAppointment, x => new { x.TenantId, x.PendingPromptAppointmentId }, DeleteBehavior.Restrict);
+            b.HasIndex(new[] { nameof(Conversation.TenantId), nameof(Conversation.AwaitingStaffSince) }, "ix_beauty_conversations_awaiting_staff")
+                .HasDatabaseName("ix_beauty_conversations_awaiting_staff")
+                .HasFilter("awaiting_staff_since IS NOT NULL");
+            b.HasIndex(new[] { nameof(Conversation.TenantId), nameof(Conversation.LastMessageAt) }, "ix_beauty_conversations_last_message_desc")
+                .HasDatabaseName("ix_beauty_conversations_last_message_desc")
+                .IsDescending(false, true);
+            b.HasIndex(x => new { x.TenantId, x.PendingPromptAppointmentId });
+            b.Property(x => x.AiState).HasMaxLength(16).HasDefaultValue("active");
+            b.Property(x => x.HandoffReason).HasMaxLength(32);
+            b.HasIndex(x => new { x.TenantId, x.AiState });
             Enum(b.Property(x => x.Status)).HasDefaultValue(ConversationStatus.Open);
             b.Property(x => x.ExternalChatId).HasMaxLength(256);
             TenantFk(b, x => x.Channel, x => new { x.TenantId, x.ChannelId }, DeleteBehavior.Restrict);
@@ -324,7 +368,25 @@ public class BeautyDbContext : DbContext
             {
                 Check<MessageDirection>(t, "beauty_messages", "direction");
                 Check<MessageSenderType>(t, "beauty_messages", "sender_type");
+                // TASK-749 (§23.3): callback - надмножина без backfill
+                t.HasCheckConstraint("ck_beauty_messages_kind", "kind IN ('text', 'command', 'unsupported', 'callback')");
+                t.HasCheckConstraint("ck_beauty_messages_actions",
+                    "actions IS NULL OR (direction = 'outbound' AND jsonb_typeof(actions) = 'object' AND octet_length(actions::text) <= 4096)");
+                t.HasCheckConstraint("ck_beauty_messages_callback_fields",
+                    "kind = 'callback' OR (callback_data IS NULL AND callback_message_ref IS NULL)");
+                t.HasCheckConstraint("ck_beauty_messages_sender_user", "sender_user_id IS NULL OR sender_type = 'staff'");
             });
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.SenderUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.SenderUserId });
+            b.Property(x => x.Kind).HasMaxLength(16).HasDefaultValue("text");
+            b.Property(x => x.Actions).HasColumnType("jsonb");
+            b.Property(x => x.CallbackData).HasMaxLength(64);
+            b.Property(x => x.CallbackMessageRef).HasMaxLength(32);
+            // очередь необроблених вхідних (sweeper/пакет ходу); окремий іменований індекс поряд зі звичайним
+            b.HasIndex(new[] { nameof(Message.TenantId), nameof(Message.ConversationId), nameof(Message.SentAt) }, "ix_beauty_messages_inbound_received")
+                .HasDatabaseName("ix_beauty_messages_inbound_received")
+                .HasFilter("direction = 'inbound' AND status = 'received'");
             Enum(b.Property(x => x.Direction));
             Enum(b.Property(x => x.SenderType));
             b.Property(x => x.ExternalMessageId).HasMaxLength(256);
@@ -351,9 +413,23 @@ public class BeautyDbContext : DbContext
 
         mb.Entity<Reminder>(b =>
         {
-            Base(b, "beauty_reminders", t => Check<ReminderStatus>(t, "beauty_reminders", "status"));
+            Base(b, "beauty_reminders", t =>
+            {
+                Check<ReminderStatus>(t, "beauty_reminders", "status");
+                t.HasCheckConstraint("ck_beauty_reminders_method", "method IS NULL OR method IN ('telegram', 'auto')");
+            });
             Enum(b.Property(x => x.Status)).HasDefaultValue(ReminderStatus.Scheduled);
+            b.Property(x => x.Method).HasMaxLength(16);
+            b.Property(x => x.SkipReason).HasMaxLength(32);
             TenantFk(b, x => x.Appointment, x => new { x.TenantId, x.AppointmentId }, DeleteBehavior.Cascade);
+            b.HasOne<Message>().WithMany().HasForeignKey(x => new { x.TenantId, x.MessageId })
+                .HasPrincipalKey(m => new { m.TenantId, m.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.AppointmentId }); // FK; унікальний індекс нижче частковий і не покриває всі рядки
+            b.HasIndex(x => new { x.TenantId, x.MessageId });
+            // одна точка (offset) на запис, поки scheduled; спадкові рядки (offset NULL) не обмежуються
+            b.HasIndex(x => new { x.TenantId, x.AppointmentId, x.OffsetMinutes }).IsUnique()
+                .HasFilter("status = 'scheduled' AND offset_minutes IS NOT NULL")
+                .HasDatabaseName("ux_beauty_reminders_point");
             // due reminders per tenant
             b.HasIndex(x => new { x.TenantId, x.ScheduledAt }).HasFilter("status = 'scheduled'");
         });
@@ -391,7 +467,304 @@ public class BeautyDbContext : DbContext
             b.HasIndex(x => x.TenantId).IsUnique(); // один рядок на tenant
         });
 
+        ConfigureChatAssistant(mb);
+        ConfigureReminders(mb);
+        ConfigureChatButtons(mb);
+        ConfigureAiSettings(mb);
         ConfigureAuth(mb);
+    }
+
+    // ---------- Нагадування клієнтам, вподобання, задачі дзвінків (TASK-736, §22.3; RLS in migration beauty_reminders_contacts_inbox) ----------
+
+    private const string ReminderOffsetsSql = "ARRAY[60, 120, 1440]::smallint[]";
+
+    private static void ConfigureReminders(ModelBuilder mb)
+    {
+        mb.Entity<ClientContactPreference>(b =>
+        {
+            b.ToTable("beauty_client_contact_preferences", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_client_contact_preferences_method", "method IN ('none', 'telegram', 'call')");
+                t.HasCheckConstraint("ck_beauty_client_contact_preferences_offsets",
+                    $"offsets_minutes <@ {ReminderOffsetsSql} AND cardinality(offsets_minutes) <= 3");
+                t.HasCheckConstraint("ck_beauty_client_contact_preferences_none_empty",
+                    "(method = 'none') = (cardinality(offsets_minutes) = 0)");
+                t.HasCheckConstraint("ck_beauty_client_contact_preferences_call_single",
+                    "method <> 'call' OR cardinality(offsets_minutes) = 1");
+                t.HasCheckConstraint("ck_beauty_client_contact_preferences_source", "source IN ('chat', 'admin', 'stop', 'web')");
+                t.HasCheckConstraint("ck_beauty_client_contact_preferences_updated_by", "updated_by_user_id IS NULL OR source = 'admin'");
+            });
+            b.HasKey(x => new { x.TenantId, x.ClientId });
+            b.Property(x => x.Method).HasMaxLength(16);
+            b.Property(x => x.Source).HasMaxLength(16);
+            b.Property(x => x.OffsetsMinutes).HasColumnType("smallint[]").HasDefaultValueSql("'{}'");
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            b.Property(x => x.UpdatedAt).HasDefaultValueSql("now()");
+            TenantFk(b, x => x.Client, x => new { x.TenantId, x.ClientId }, DeleteBehavior.Cascade);
+            b.HasOne<Conversation>().WithMany().HasForeignKey(x => new { x.TenantId, x.TelegramConversationId })
+                .HasPrincipalKey(c => new { c.TenantId, c.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.UpdatedByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.TelegramConversationId });
+            b.HasIndex(x => new { x.TenantId, x.UpdatedByUserId });
+        });
+
+        mb.Entity<CallTask>(b =>
+        {
+            Base(b, "beauty_call_tasks", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_call_tasks_reason", "reason IN ('reminder', 'delivery_failed')");
+                t.HasCheckConstraint("ck_beauty_call_tasks_status", "status IN ('open', 'done', 'skipped', 'cancelled')");
+                t.HasCheckConstraint("ck_beauty_call_tasks_completed",
+                    "(status IN ('done', 'skipped') AND completed_by_user_id IS NOT NULL AND completed_at IS NOT NULL) " +
+                    "OR (status NOT IN ('done', 'skipped') AND completed_by_user_id IS NULL AND completed_at IS NULL)");
+            });
+            b.Property(x => x.Reason).HasMaxLength(16);
+            b.Property(x => x.Status).HasMaxLength(16).HasDefaultValue("open");
+            b.Property(x => x.ClosedReason).HasMaxLength(32);
+            b.Property(x => x.Note).HasMaxLength(300);
+            TenantFk(b, x => x.Appointment, x => new { x.TenantId, x.AppointmentId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Client, x => new { x.TenantId, x.ClientId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Location, x => new { x.TenantId, x.LocationId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Reminder, x => new { x.TenantId, x.ReminderId }, DeleteBehavior.Restrict);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.CompletedByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            // одна задача на нагадування-точку (також індекс для FK reminder_id)
+            b.HasIndex(x => new { x.TenantId, x.ReminderId }).IsUnique().HasFilter("reminder_id IS NOT NULL")
+                .HasDatabaseName("ux_beauty_call_tasks_reminder");
+            // одна відкрита задача-нагадування на запис
+            b.HasIndex(x => new { x.TenantId, x.AppointmentId }).IsUnique().HasFilter("status = 'open' AND reason = 'reminder'")
+                .HasDatabaseName("ux_beauty_call_tasks_open_reminder");
+            b.HasIndex(x => new { x.TenantId, x.Status, x.DueAt });
+            b.HasIndex(x => new { x.TenantId, x.LocationId, x.DueAt });
+            b.HasIndex(x => new { x.TenantId, x.AppointmentId });
+            b.HasIndex(x => new { x.TenantId, x.ClientId });
+            b.HasIndex(x => new { x.TenantId, x.CompletedByUserId });
+        });
+
+        mb.Entity<ReminderSettingsRow>(b =>
+        {
+            b.ToTable("beauty_reminder_settings", t =>
+                t.HasCheckConstraint("ck_beauty_reminder_settings_quiet", "quiet_start <> quiet_end"));
+            b.HasKey(x => x.TenantId);
+            b.Property(x => x.TelegramEnabled).HasDefaultValue(true);
+            b.Property(x => x.CallEnabled).HasDefaultValue(true);
+            b.Property(x => x.QuietStart).HasColumnType("time without time zone").HasDefaultValueSql("'22:00'").HasSentinel(new TimeOnly(22, 0));
+            b.Property(x => x.QuietEnd).HasColumnType("time without time zone").HasDefaultValueSql("'08:00'").HasSentinel(new TimeOnly(8, 0));
+            b.Property(x => x.UpdatedAt).HasDefaultValueSql("now()");
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.UpdatedByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.UpdatedByUserId });
+        });
+    }
+
+    // ---------- Інлайн-кнопки Telegram (TASK-749, §23.3, ADR-013; RLS in migration beauty_chat_buttons) ----------
+
+    private static void ConfigureChatButtons(ModelBuilder mb)
+    {
+        mb.Entity<ChatKeyboard>(b =>
+        {
+            Base(b, "beauty_chat_keyboards", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_chat_keyboards_kind",
+                    "kind IN ('booking_confirm', 'slot_pick', 'reminder_choice', 'appointment_list', 'appointment_actions', 'cancel_confirm')");
+                t.HasCheckConstraint("ck_beauty_chat_keyboards_token", "token ~ '^[A-Za-z0-9_-]{22}$'");
+                t.HasCheckConstraint("ck_beauty_chat_keyboards_options", "jsonb_typeof(options) = 'array' AND jsonb_array_length(options) <= 10");
+                t.HasCheckConstraint("ck_beauty_chat_keyboards_status", "status IN ('active', 'used', 'expired', 'revoked')");
+                t.HasCheckConstraint("ck_beauty_chat_keyboards_used",
+                    "(status = 'used' AND used_at IS NOT NULL AND used_by_message_id IS NOT NULL) OR (status <> 'used' AND used_at IS NULL AND used_by_message_id IS NULL)");
+                t.HasCheckConstraint("ck_beauty_chat_keyboards_used_option",
+                    "used_option IS NULL OR (status = 'used' AND used_option BETWEEN 0 AND 9)");
+                t.HasCheckConstraint("ck_beauty_chat_keyboards_proposal", "kind <> 'booking_confirm' OR proposal_id IS NOT NULL");
+                t.HasCheckConstraint("ck_beauty_chat_keyboards_appointment",
+                    "kind NOT IN ('appointment_actions', 'cancel_confirm', 'reminder_choice') OR appointment_id IS NOT NULL");
+                t.HasCheckConstraint("ck_beauty_chat_keyboards_clear_attempts", "clear_attempts >= 0");
+            });
+            b.Property(x => x.Kind).HasMaxLength(24);
+            b.Property(x => x.Token).HasMaxLength(22);
+            b.Property(x => x.Options).HasColumnType("jsonb");
+            b.Property(x => x.Status).HasMaxLength(16).HasDefaultValue("active");
+            b.Property(x => x.ClearAttempts).HasDefaultValue((short)0);
+            TenantFk(b, x => x.Conversation, x => new { x.TenantId, x.ConversationId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Message, x => new { x.TenantId, x.MessageId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Proposal, x => new { x.TenantId, x.ProposalId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Appointment, x => new { x.TenantId, x.AppointmentId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.UsedByMessage, x => new { x.TenantId, x.UsedByMessageId }, DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.MessageId }).IsUnique(); // одна клавіатура на повідомлення (і індекс FK)
+            b.HasIndex(x => new { x.TenantId, x.Token }).IsUnique();
+            b.HasIndex(x => new { x.TenantId, x.ConversationId }); // FK; частковий нижче не покриває всі рядки
+            b.HasIndex(new[] { nameof(ChatKeyboard.TenantId), nameof(ChatKeyboard.ConversationId) }, "ix_beauty_chat_keyboards_active")
+                .HasDatabaseName("ix_beauty_chat_keyboards_active").HasFilter("status = 'active'");
+            b.HasIndex(x => new { x.TenantId, x.UpdatedAt }).HasFilter("status <> 'active' AND markup_cleared_at IS NULL")
+                .HasDatabaseName("ix_beauty_chat_keyboards_sweeper");
+            b.HasIndex(x => new { x.TenantId, x.ProposalId });
+            b.HasIndex(x => new { x.TenantId, x.AppointmentId });
+            b.HasIndex(x => new { x.TenantId, x.UsedByMessageId });
+        });
+    }
+
+    // ---------- Асистент у чаті клієнта (TASK-724, §21.4; RLS in migration beauty_chat_assistant) ----------
+
+    private static void ConfigureChatAssistant(ModelBuilder mb)
+    {
+        mb.Entity<ChatBookingProposal>(b =>
+        {
+            Base(b, "beauty_chat_booking_proposals", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_chat_booking_proposals_status",
+                    "status IN ('prepared', 'shown', 'confirmed', 'rejected', 'expired', 'superseded', 'failed')");
+                t.HasCheckConstraint("ck_beauty_chat_booking_proposals_duration", "duration_minutes > 0");
+                t.HasCheckConstraint("ck_beauty_chat_booking_proposals_prices", "price_original >= 0 AND price_final >= 0");
+                t.HasCheckConstraint("ck_beauty_chat_booking_proposals_token_hash", "confirmation_token_hash ~ '^[0-9a-f]{64}$'");
+                t.HasCheckConstraint("ck_beauty_chat_booking_proposals_failure_code",
+                    "failure_code IS NULL OR char_length(failure_code) BETWEEN 1 AND 64");
+            });
+            b.Property(x => x.Status).HasMaxLength(16).HasDefaultValue("prepared");
+            b.Property(x => x.PriceOriginal).HasPrecision(10, 2);
+            b.Property(x => x.PriceFinal).HasPrecision(10, 2);
+            b.Property(x => x.ConfirmationTokenHash).HasColumnType("character(64)");
+            b.Property(x => x.FailureCode).HasMaxLength(64);
+            TenantFk(b, x => x.Conversation, x => new { x.TenantId, x.ConversationId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Client, x => new { x.TenantId, x.ClientId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Location, x => new { x.TenantId, x.LocationId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Specialist, x => new { x.TenantId, x.SpecialistId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Service, x => new { x.TenantId, x.ServiceId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Promotion, x => new { x.TenantId, x.PromotionId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.SummaryMessage, x => new { x.TenantId, x.SummaryMessageId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Appointment, x => new { x.TenantId, x.AppointmentId }, DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.ConfirmationTokenHash }).IsUnique()
+                .HasDatabaseName("ux_beauty_chat_booking_proposals_token");
+            // одна активна пропозиція на розмову
+            b.HasIndex(x => new { x.TenantId, x.ConversationId }).IsUnique()
+                .HasFilter("status IN ('prepared', 'shown')")
+                .HasDatabaseName("ux_beauty_chat_booking_proposals_active");
+            b.HasIndex(x => new { x.TenantId, x.ConversationId, x.CreatedAt });
+            b.HasIndex(x => new { x.TenantId, x.ClientId });
+            b.HasIndex(x => new { x.TenantId, x.LocationId });
+            b.HasIndex(x => new { x.TenantId, x.SpecialistId });
+            b.HasIndex(x => new { x.TenantId, x.ServiceId });
+            b.HasIndex(x => new { x.TenantId, x.PromotionId });
+            b.HasIndex(x => new { x.TenantId, x.SummaryMessageId });
+            b.HasIndex(x => new { x.TenantId, x.AppointmentId });
+        });
+
+        mb.Entity<ChannelPollState>(b =>
+        {
+            b.ToTable("beauty_channel_poll_state", t =>
+                t.HasCheckConstraint("ck_beauty_channel_poll_state_last_update_id", "last_update_id >= 0"));
+            b.HasKey(x => new { x.TenantId, x.ChannelId });
+            b.Property(x => x.LastUpdateId).HasDefaultValue(0L);
+            b.Property(x => x.UpdatedAt).HasDefaultValueSql("now()");
+            b.HasOne(x => x.Channel).WithMany().HasForeignKey(x => new { x.TenantId, x.ChannelId })
+                .HasPrincipalKey(c => new { c.TenantId, c.Id }).OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+
+    // ---------- AI settings per tenant (TASK-713, §20.4; RLS in migration beauty_ai_settings_and_usage) ----------
+
+    private const string ProviderRegex = "^[a-z][a-z0-9_]{1,31}$";
+
+    private static void ConfigureAiSettings(ModelBuilder mb)
+    {
+        mb.Entity<AiSettingsRow>(b =>
+        {
+            Base(b, "beauty_ai_settings", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_ai_settings_key_source", "key_source IN ('own', 'platform')");
+                t.HasCheckConstraint("ck_beauty_ai_settings_chat_provider", $"chat_provider ~ '{ProviderRegex}'");
+                t.HasCheckConstraint("ck_beauty_ai_settings_analytics_provider", $"analytics_provider ~ '{ProviderRegex}'");
+                t.HasCheckConstraint("ck_beauty_ai_settings_chat_model", "char_length(chat_model) BETWEEN 1 AND 100");
+                t.HasCheckConstraint("ck_beauty_ai_settings_analytics_model", "char_length(analytics_model) BETWEEN 1 AND 100");
+                t.HasCheckConstraint("ck_beauty_ai_settings_mode", "mode IN ('suggest', 'confirm', 'auto')");
+                t.HasCheckConstraint("ck_beauty_ai_settings_prompt_addendum", "prompt_addendum IS NULL OR char_length(prompt_addendum) <= 4000");
+                t.HasCheckConstraint("ck_beauty_ai_settings_monthly_token_limit",
+                    "monthly_token_limit IS NULL OR monthly_token_limit BETWEEN 1 AND 100000000000");
+                t.HasCheckConstraint("ck_beauty_ai_settings_monthly_request_limit",
+                    "monthly_request_limit IS NULL OR monthly_request_limit BETWEEN 1 AND 10000000");
+                t.HasCheckConstraint("ck_beauty_ai_settings_max_output_tokens", "max_output_tokens BETWEEN 64 AND 8192");
+                t.HasCheckConstraint("ck_beauty_ai_settings_platform_quotas",
+                    "(platform_monthly_token_quota IS NULL OR platform_monthly_token_quota >= 0) AND (platform_monthly_request_quota IS NULL OR platform_monthly_request_quota >= 0)");
+            });
+            b.Property(x => x.KeySource).HasMaxLength(16).HasDefaultValue("platform");
+            b.Property(x => x.ChatProvider).HasMaxLength(32).HasDefaultValue("anthropic");
+            b.Property(x => x.ChatModel).HasMaxLength(100);
+            b.Property(x => x.AnalyticsProvider).HasMaxLength(32).HasDefaultValue("anthropic");
+            b.Property(x => x.AnalyticsModel).HasMaxLength(100);
+            b.Property(x => x.Mode).HasMaxLength(16).HasDefaultValue("confirm");
+            b.Property(x => x.PromptAddendum).HasColumnType("text");
+            b.Property(x => x.MaxOutputTokens).HasDefaultValue(1024);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.UpdatedByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => x.TenantId).IsUnique(); // один рядок на tenant
+            b.HasIndex(x => new { x.TenantId, x.UpdatedByUserId });
+        });
+
+        mb.Entity<AiProviderKey>(b =>
+        {
+            Base(b, "beauty_ai_provider_keys", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_ai_provider_keys_provider", $"provider ~ '{ProviderRegex}'");
+                t.HasCheckConstraint("ck_beauty_ai_provider_keys_key_encrypted", "key_encrypted LIKE 'v2:%'");
+                t.HasCheckConstraint("ck_beauty_ai_provider_keys_key_kid", "key_kid ~ '^[a-z0-9-]{1,32}$'");
+            });
+            b.Property(x => x.Provider).HasMaxLength(32);
+            b.Property(x => x.KeyEncrypted).HasColumnType("text");
+            b.Property(x => x.KeyKid).HasMaxLength(32);
+            b.Property(x => x.KeyLast4).HasMaxLength(4);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.CreatedByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.UpdatedByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.Provider }).IsUnique();
+            b.HasIndex(x => x.KeyKid); // ротація keyring
+            b.HasIndex(x => new { x.TenantId, x.CreatedByUserId });
+            b.HasIndex(x => new { x.TenantId, x.UpdatedByUserId });
+        });
+
+        mb.Entity<AiUsageRow>(b =>
+        {
+            Base(b, "beauty_ai_usage", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_ai_usage_period_start", "extract(day from period_start) = 1");
+                t.HasCheckConstraint("ck_beauty_ai_usage_role", "role IN ('chat', 'analytics')");
+                t.HasCheckConstraint("ck_beauty_ai_usage_provider", $"provider ~ '{ProviderRegex}'");
+                t.HasCheckConstraint("ck_beauty_ai_usage_key_source", "key_source IN ('own', 'platform')");
+                t.HasCheckConstraint("ck_beauty_ai_usage_counters",
+                    "request_count >= 0 AND error_count >= 0 AND input_tokens >= 0 AND output_tokens >= 0");
+            });
+            b.Property(x => x.PeriodStart).HasColumnType("date");
+            b.Property(x => x.Role).HasMaxLength(16);
+            b.Property(x => x.Provider).HasMaxLength(32);
+            b.Property(x => x.Model).HasMaxLength(100);
+            b.Property(x => x.KeySource).HasMaxLength(16);
+            b.Property(x => x.RequestCount).HasDefaultValue(0);
+            b.Property(x => x.ErrorCount).HasDefaultValue(0);
+            b.Property(x => x.InputTokens).HasDefaultValue(0L);
+            b.Property(x => x.OutputTokens).HasDefaultValue(0L);
+            // префікс (tenant_id, period_start) обслуговується цим унікальним індексом
+            b.HasIndex(x => new { x.TenantId, x.PeriodStart, x.Role, x.Provider, x.Model, x.KeySource }).IsUnique();
+        });
+
+        mb.Entity<AiSettingsAuditRow>(b =>
+        {
+            b.ToTable("beauty_ai_settings_audit", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_ai_settings_audit_action",
+                    "action IN ('settings_updated', 'key_source_changed', 'key_set', 'key_replaced', 'key_deleted', 'key_tested', 'prompt_reset', 'platform_quota_changed')");
+                t.HasCheckConstraint("ck_beauty_ai_settings_audit_provider", $"provider IS NULL OR provider ~ '{ProviderRegex}'");
+            });
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            b.HasAlternateKey(x => new { x.TenantId, x.Id });
+            b.Property(x => x.Action).HasMaxLength(32);
+            b.Property(x => x.Provider).HasMaxLength(32);
+            b.Property(x => x.ChangedFields).HasColumnType("text[]").HasDefaultValueSql("'{}'");
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.UserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.CreatedAt }).IsDescending(false, true);
+            b.HasIndex(x => new { x.TenantId, x.UserId });
+        });
     }
 
     // ---------- auth: tenants, users, invites, refresh tokens (RLS in migration auth_tenants_users_invites) ----------

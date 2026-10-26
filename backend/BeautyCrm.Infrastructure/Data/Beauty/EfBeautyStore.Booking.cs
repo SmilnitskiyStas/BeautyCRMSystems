@@ -4,6 +4,7 @@ using BeautyCrm.Application.Features.BeautyCatalog;
 using BeautyCrm.Application.Features.BeautyChannels;
 using BeautyCrm.Application.Features.BeautyClients;
 using BeautyCrm.Application.Features.BeautyLocations;
+using BeautyCrm.Application.Features.BeautyReminders;
 using BeautyCrm.Application.Features.BeautyStaff;
 using BeautyCrm.Infrastructure.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -117,8 +118,11 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
     public async Task<StoreResult<AppointmentDto>> AddAppointmentAsync(NewAppointment a, CancellationToken ct)
     {
         var id = a.Public?.AppointmentId ?? Guid.NewGuid();
+        // §22.3: план на записі (method + offsets) і дзеркало reminder_option; без плану (спадкові виклики) - з reminder_option.
+        var (legacyMethod, legacyOffsets) = ReminderOffsets.FromLegacy(a.ReminderOption);
         db.Appointments.Add(new Appointment
         {
+            ReminderMethod = a.Plan?.Method ?? legacyMethod, ReminderOffsets = a.Plan?.Offsets.ToArray() ?? legacyOffsets,
             Id = id, LocationId = a.LocationId, SpecialistId = a.SpecialistId, ServiceId = a.ServiceId, ClientId = a.ClientId,
             StartsAt = a.StartsAt.ToUniversalTime(), DurationMinutes = a.DurationMinutes, Status = AppointmentStatus.Pending,
             Source = EnumText<AppointmentSource>.FromDb(a.Source), PriceOriginal = a.PriceOriginal, PriceFinal = a.PriceFinal,
@@ -126,7 +130,8 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
             PaymentMethod = EnumText<Ent.PaymentMethod>.FromDb(a.PaymentMethod),
             PublicTokenHash = a.Public?.TokenHash, IdempotencyKeyHash = a.Public?.IdempotencyKeyHash, IdempotencyRequestHash = a.Public?.RequestHash,
         });
-        if (a.ReminderAt is { } at)
+        if (a.Plan is { } plan) AddPlanRows(id, a.ClientId, a.LocationId, plan);
+        else if (a.ReminderAt is { } at)
             db.Reminders.Add(new Reminder { Id = Guid.NewGuid(), AppointmentId = id, ScheduledAt = at.ToUniversalTime() });
         if (a.Payment is { } p)
             db.Payments.Add(new Payment
@@ -175,7 +180,14 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
             && (locationId == null || a.LocationId == locationId) && (specialistId == null || a.SpecialistId == specialistId))
             .OrderBy(a => a.StartsAt), ct);
 
-    public async Task<StoreResult<AppointmentDto>> RescheduleAsync(Guid id, DateTimeOffset newStart, DateTimeOffset? reminderAt, CancellationToken ct)
+    public Task<StoreResult<AppointmentDto>> RescheduleAsync(Guid id, DateTimeOffset newStart, DateTimeOffset? reminderAt, CancellationToken ct) =>
+        RescheduleCoreAsync(id, newStart, null, reminderAt, ct);
+
+    public Task<StoreResult<AppointmentDto>> RescheduleAsync(Guid id, DateTimeOffset newStart, PlannedReminders plan, CancellationToken ct) =>
+        RescheduleCoreAsync(id, newStart, plan, null, ct);
+
+    private async Task<StoreResult<AppointmentDto>> RescheduleCoreAsync(
+        Guid id, DateTimeOffset newStart, PlannedReminders? plan, DateTimeOffset? legacyReminderAt, CancellationToken ct)
     {
         var appt = await db.Appointments.FirstAsync(a => a.Id == id, ct);
         // TASK-696: lock майстра + повторна перевірка відсутності під локом (див. AddAppointmentAsync).
@@ -193,9 +205,16 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
             case BlockReason.SpecialistUnavailable: db.ChangeTracker.Clear(); return StoreResult<AppointmentDto>.Blocked();
         }
         appt.StartsAt = newStart.ToUniversalTime();
-        foreach (var r in await db.Reminders.Where(r => r.AppointmentId == id && r.Status == ReminderStatus.Scheduled).ToListAsync(ct))
-            r.Status = ReminderStatus.Cancelled;
-        if (reminderAt is { } at)
+        // §22.4: старі точки закриваються (replanned) умовними UPDATE ДО вставки нових - частковий UNIQUE точок не бачить дублів.
+        await ClosePlanAsync(id, ReminderSkipReasons.Replanned, includePlannerSkipped: true, ct);
+        if (plan is not null)
+        {
+            appt.ReminderMethod = plan.Method;
+            appt.ReminderOffsets = plan.Offsets.ToArray();
+            appt.ReminderOption = EnumText<ReminderOption>.FromDb(plan.Mirror);
+            AddPlanRows(id, appt.ClientId, appt.LocationId, plan);
+        }
+        else if (legacyReminderAt is { } at)
             db.Reminders.Add(new Reminder { Id = Guid.NewGuid(), AppointmentId = id, ScheduledAt = at.ToUniversalTime() });
 
         if (await TrySaveAsync(ct) != SaveOutcome.Ok) return StoreResult<AppointmentDto>.Overlap();
@@ -238,7 +257,12 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
         var appt = await db.Appointments.FirstOrDefaultAsync(a => a.Id == id, ct);
         if (appt is null) return null;
         appt.Status = EnumText<AppointmentStatus>.FromDb(status);
+        // §22.4: completed / no_show закривають scheduled-нагадування й відкриті задачі дзвінка в тій самій транзакції.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
         await db.SaveChangesAsync(ct);
+        if (appt.Status is AppointmentStatus.Completed or AppointmentStatus.NoShow)
+            await ClosePlanAsync(id, ReminderSkipReasons.AppointmentInactive, includePlannerSkipped: false, ct);
+        await tx.CommitAsync(ct);
         return await GetAppointmentAsync(id, ct);
     }
 
@@ -278,9 +302,10 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
         appt.Status = AppointmentStatus.Cancelled;
         appt.CancelledAt = at;
         appt.CancelledByType ??= CancelledByTypes.System; // збій оплати при створенні тощо; автор staff/client вже зафіксований claim-ом
-        foreach (var r in await db.Reminders.Where(r => r.AppointmentId == id && r.Status == ReminderStatus.Scheduled).ToListAsync(ct))
-            r.Status = ReminderStatus.Cancelled;
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
         await db.SaveChangesAsync(ct);
+        await ClosePlanAsync(id, ReminderSkipReasons.AppointmentInactive, includePlannerSkipped: false, ct);
+        await tx.CommitAsync(ct);
         return await GetAppointmentAsync(id, ct);
     }
 
@@ -343,11 +368,12 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
             a.Id, a.LocationId, LocationName = a.Location!.Name, a.SpecialistId, SpecialistName = a.Specialist!.FullName,
             a.ServiceId, ServiceName = a.Service!.Name, a.ClientId, ClientName = a.Client!.FullName,
             a.StartsAt, a.EndsAt, a.DurationMinutes, a.Status, a.Source, a.PriceOriginal, a.PriceFinal, a.PromotionId,
-            a.ReminderOption, a.PaymentMethod, LocationTimezone = a.Location!.Timezone,
-            a.CancelledAt, a.CancelledByType, a.CancelReason,
+            a.ReminderOption, a.ReminderMethod, a.ReminderOffsets, a.PaymentMethod, LocationTimezone = a.Location!.Timezone,
+            a.CancelledAt, a.CancelledByType, a.CancelReason, a.ClientConfirmedAt,
             CancelledByName = a.CancelledByUserId == null ? null
                 : db.Users.Where(u => u.Id == a.CancelledByUserId).Select(u => u.FullName).FirstOrDefault(),
         }).ToListAsync(ct);
+        var reminderViews = await LoadReminderViewsAsync(rows.Select(r => (r.Id, r.StartsAt, r.ReminderOption, r.ReminderMethod, r.ReminderOffsets)).ToList(), ct);
         return rows.Select(r => new AppointmentDto(
             r.Id, r.LocationId, r.LocationName, r.SpecialistId, r.SpecialistName, r.ServiceId, r.ServiceName, r.ClientId, r.ClientName,
             r.StartsAt, r.EndsAt, r.DurationMinutes, EnumText<AppointmentStatus>.ToDb(r.Status), EnumText<AppointmentSource>.ToDb(r.Source),
@@ -355,6 +381,6 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
             r.PaymentMethod is { } m ? EnumText<Ent.PaymentMethod>.ToDb(m) : null, null, r.LocationTimezone,
             r.Status == AppointmentStatus.Cancelled ? r.CancelledAt : null,
             r.Status == AppointmentStatus.Cancelled ? new CancelledByDto(r.CancelledByType ?? CancelledByTypes.System, r.CancelledByName) : null,
-            r.Status == AppointmentStatus.Cancelled ? r.CancelReason : null)).ToList();
+            r.Status == AppointmentStatus.Cancelled ? r.CancelReason : null, reminderViews[r.Id], r.ClientConfirmedAt)).ToList();
     }
 }

@@ -1,10 +1,17 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 
 namespace BeautyCrm.Infrastructure.AI.Beauty;
 
-public enum AiScope { Client, Manager }
+/// <summary><c>ClientChat</c> - чат клієнта в каналі (§21.7): окремий набір tools; <c>Client</c>/<c>Manager</c> не змінено.</summary>
+public enum AiScope { Client, Manager, ClientChat }
 
-public sealed record AiToolContext(Guid TenantId, Guid? ClientId, AiMode Mode, AiScope Scope);
+/// <param name="ConversationId">Лише з контексту ходу (канал/розмова), ніколи з аргументів моделі.</param>
+/// <param name="DefaultLocationId">Заклад каналу за замовчуванням для tools ClientChat.</param>
+/// <param name="Turn">Стан ходу ClientChat (підсумок запису, handoff моделі, помилки tools); null поза ClientChat.</param>
+public sealed record AiToolContext(
+    Guid TenantId, Guid? ClientId, AiMode Mode, AiScope Scope,
+    Guid? ConversationId = null, Guid? DefaultLocationId = null, ChatTurnState? Turn = null);
 public sealed record AiToolResult(string Content, bool IsError, string? ActionStatus = null);
 
 public static class AiToolNames
@@ -44,8 +51,46 @@ public static class AiToolCatalog
         T(AiToolNames.BuildAudience, "Підібрати аудиторію (лише клієнти зі згодою) під сегмент.", $"\"segment\":{{{Str}}}", "\"segment\""),
     };
 
-    public static IReadOnlyList<AiToolDefinition> For(AiScope scope) =>
-        scope == AiScope.Manager ? All : All.Where(t => !AiToolNames.ManagerOnly.Contains(t.Name)).ToList();
+    private const string Uuid = "\"type\":\"string\",\"description\":\"UUID з результатів tools\"";
+
+    /// <summary>
+    /// Tools ClientChat (§21.7). Схеми без tenantId/clientId/conversationId. create_appointment, get_client_context, draft_reply,
+    /// confirm_booking тут немає: модель їх не бачить, а виконавець відхиляє навіть явний виклик.
+    /// </summary>
+    public static readonly IReadOnlyList<AiToolDefinition> ClientChat = new[]
+    {
+        T(ClientChatToolNames.ListLocations, "Активні заклади: назва, адреса, зона, години роботи, вихідні.", "", ""),
+        T(ClientChatToolNames.ListServices, "Послуги закладу з актуальною ціною й акцією (ціни лише звідси).",
+            $"\"locationId\":{{{Uuid}}}", ""),
+        T(ClientChatToolNames.ListSpecialists, "Майстри закладу (за потреби - що виконують послугу).",
+            $"\"locationId\":{{{Uuid}}},\"serviceId\":{{{Uuid}}}", ""),
+        T(ClientChatToolNames.FindSlots,
+            "Вільні слоти на дату. Якщо клієнт назвав бажаний час, ЗАВЖДИ передай preferredTime: отримаєш 4-6 найближчих до нього слотів " +
+            "(requestedTimeAvailable каже, чи є саме цей час). Клієнту показуй 4-6 варіантів, а не всю сітку. " +
+            "startsAt зі слота передавай у prepare_booking без змін.",
+            $"\"locationId\":{{{Uuid}}},\"serviceId\":{{{Uuid}}},\"specialistId\":{{{Uuid}}},\"date\":{{{Str},\"description\":\"YYYY-MM-DD, локальна дата закладу\"}}," +
+            $"\"preferredTime\":{{{Str},\"description\":\"HH:mm, локальний бажаний час закладу (необов'язково)\"}}",
+            "\"serviceId\",\"date\""),
+        All.First(t => t.Name == AiToolNames.GetActivePromotions),
+        T(ClientChatToolNames.PrepareBooking,
+            "Підготувати запис на слот з find_slots. Запису НЕ створює: підсумок покаже система, запис - лише після відповіді клієнта «Так». " +
+            "Час задай АБО startsAt зі слота find_slots без змін, АБО локальними date (YYYY-MM-DD) і time (HH:mm) закладу - offset додасть система. " +
+            "Слот мусить бути серед вільних слотів find_slots.",
+            $"\"locationId\":{{{Uuid}}},\"serviceId\":{{{Uuid}}},\"specialistId\":{{{Uuid}}},\"startsAt\":{{{Str},\"description\":\"ISO-8601 з offset, рівно як у find_slots\"}}," +
+            $"\"date\":{{{Str},\"description\":\"YYYY-MM-DD, локальна дата закладу (разом з time, замість startsAt)\"}}," +
+            $"\"time\":{{{Str},\"description\":\"HH:mm, локальний час закладу (разом з date, замість startsAt)\"}}",
+            "\"serviceId\",\"specialistId\""),
+        T(ClientChatToolNames.RequestHandoff, "Передати розмову адміністратору (скарга, оплата, людина, скасування/перенесення, незрозуміле). " +
+            "reason=policy_unknown - питання про політику закладу (дзвінки, канали, нагадування, оплата, скасування, повернення), відповіді на яке немає в блоку ФАКТИ ЗАКЛАДУ.",
+            "\"reason\":{\"type\":\"string\",\"enum\":[\"complaint\",\"unclear\",\"human_requested\",\"medical\",\"policy_unknown\",\"other\"]}", "\"reason\""),
+    };
+
+    public static IReadOnlyList<AiToolDefinition> For(AiScope scope) => scope switch
+    {
+        AiScope.ClientChat => ClientChat,
+        AiScope.Manager => All,
+        _ => All.Where(t => !AiToolNames.ManagerOnly.Contains(t.Name)).ToList(),
+    };
 }
 
 /// <summary>
@@ -65,16 +110,19 @@ public sealed class AiToolExecutor
     private readonly IAiActionJournal _journal;
     private readonly AiSettings _settings;
     private readonly TimeProvider _time;
+    private readonly ILogger<AiToolExecutor>? _logger;
+    private readonly ClientChatToolbox? _chat;
 
+    /// <param name="chat">Tools scope ClientChat (TASK-727). Null лише в тестах без чату: тоді ClientChat-виклики відхиляються.</param>
     public AiToolExecutor(
         IFindFreeSlotsPort slots, ICreateAppointmentPort appointments, IGetPricesPort prices,
         IGetActivePromotionsPort promos, IGetClientContextPort clients, IDraftReplyPort drafts,
         ISuggestPromotionPort promoSuggest, IBuildAudiencePort audience, IAiActionJournal journal,
-        AiSettings settings, TimeProvider time)
+        AiSettings settings, TimeProvider time, ILogger<AiToolExecutor>? logger = null, ClientChatToolbox? chat = null)
     {
         _slots = slots; _appointments = appointments; _prices = prices; _promos = promos; _clients = clients;
         _drafts = drafts; _promoSuggest = promoSuggest; _audience = audience; _journal = journal;
-        _settings = settings; _time = time;
+        _settings = settings; _time = time; _logger = logger; _chat = chat;
     }
 
     public bool IsBroadcastHourAllowed(DateTimeOffset sendAt) =>
@@ -84,6 +132,14 @@ public sealed class AiToolExecutor
     {
         try
         {
+            // ClientChat: окремий закритий набір. Усе поза ним (create_appointment, get_client_context, draft_reply, confirm_booking...)
+            // відхиляється тут, до будь-якого порту, незалежно від того, що «викликала» модель.
+            if (ctx.Scope == AiScope.ClientChat)
+            {
+                if (_chat is null) return await RejectAsync(ctx, tool, "-", "client_chat_unavailable", ct);
+                return await _chat.ExecuteAsync(ctx, tool, input, ct);
+            }
+
             if (AiToolNames.ManagerOnly.Contains(tool) && ctx.Scope != AiScope.Manager)
                 return await RejectAsync(ctx, tool, "-", "tool_not_allowed_in_client_scope", ct);
 
@@ -100,9 +156,31 @@ public sealed class AiToolExecutor
                 _ => await RejectAsync(ctx, tool, "-", "unknown_tool", ct),
             };
         }
+        catch (TenantMismatchException ex)
+        {
+            // Безпекова подія: НЕ invalid_arguments. Запуск переривається (виняток летить до викликача).
+            await ReportTenantMismatchAsync(ctx, tool, ex);
+            throw;
+        }
         catch (Exception ex) when (ex is KeyNotFoundException or FormatException or InvalidOperationException or JsonException)
         {
             return await RejectAsync(ctx, tool, "-", "invalid_arguments", ct);
+        }
+    }
+
+    private async Task ReportTenantMismatchAsync(AiToolContext ctx, string tool, TenantMismatchException ex)
+    {
+        _logger?.LogError("ai_security_event {Event} tool={Tool} scopeTenant={ScopeTenant} requestedTenant={RequestedTenant}",
+            "tenant_mismatch", tool, ex.ScopeTenantId, ex.RequestedTenantId);
+        try
+        {
+            // Запис у журнал — під tenant автентифікованого scope (журнал сам звіряє tenant зі scope).
+            await _journal.AppendAsync(new AiActionRecord(Guid.NewGuid(), ex.ScopeTenantId, "security_tenant_mismatch", tool,
+                _time.GetUtcNow(), AiActionStatus.Flagged, false, ctx.Mode, "{\"event\":\"tenant_mismatch\"}"), CancellationToken.None);
+        }
+        catch (Exception jex)
+        {
+            _logger?.LogError("ai_security_event journal_write_failed type={Type}", jex.GetType().Name);
         }
     }
 
@@ -302,6 +380,7 @@ public sealed class AiToolExecutor
 
     private async Task<AiToolResult> RejectAsync(AiToolContext ctx, string tool, string target, string reason, CancellationToken ct)
     {
+        if (ctx.Turn is not null) ctx.Turn.ToolErrors++;
         await LogAsync(ctx, tool, target, AiActionStatus.Rejected, false, JsonSerializer.Serialize(new { reason }), ct);
         return new AiToolResult(reason, true, AiActionStatus.Rejected);
     }
@@ -309,7 +388,7 @@ public sealed class AiToolExecutor
     private async Task<Guid> LogAsync(AiToolContext ctx, string action, string target, string status, bool revertible, string payload, CancellationToken ct)
     {
         var id = Guid.NewGuid();
-        await _journal.AppendAsync(new AiActionRecord(id, ctx.TenantId, action, target, _time.GetUtcNow(), status, revertible, ctx.Mode, payload), ct);
+        await _journal.AppendAsync(new AiActionRecord(id, ctx.TenantId, action, target, _time.GetUtcNow(), status, revertible, ctx.Mode, payload, ctx.ConversationId), ct);
         return id;
     }
 }

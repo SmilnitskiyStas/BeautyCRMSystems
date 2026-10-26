@@ -49,7 +49,11 @@ public sealed record PublicAppointmentDto(
     Guid LocationId, string LocationName, Guid SpecialistId, string SpecialistName, Guid ServiceId, string ServiceName,
     DateTimeOffset StartsAt, DateTimeOffset EndsAt, int DurationMinutes, string Status,
     decimal PriceOriginal, decimal PriceFinal, Guid? PromotionId, string ReminderOption,
-    string? PaymentMethod, string? PaymentStatus, CancellationTerms? Cancellation);
+    string? PaymentMethod, string? PaymentStatus, CancellationTerms? Cancellation,
+    PublicRemindersDto? Reminders = null);
+
+/// <summary>§22.6.1: публічний DTO бачить лише спосіб і точки (без стану окремих нагадувань).</summary>
+public sealed record PublicRemindersDto(string Method, IReadOnlyList<int> OffsetsMinutes);
 
 public sealed record PublicBookingCreatedDto(string PublicToken, PublicAppointmentDto Appointment);
 

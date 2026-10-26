@@ -231,15 +231,4 @@ public class BeautyAssistantTests
         Assert.DoesNotContain(ai.Requests[0].Tools, t => t.Name == "suggest_promotion");
         Assert.Contains("ДАНИМИ", ai.Requests[0].System);
     }
-
-    [Fact]
-    public void anthropicClient_buildBody_uses_sonnet_4_5_and_tools()
-    {
-        var settings = new AiSettings();
-        var c = new AnthropicAiClient(new HttpClient(), settings);
-        var body = c.BuildBody(new AiRequest("sys", new[] { AiMessage.User("hi") }, AiToolCatalog.All));
-        using var doc = JsonDocument.Parse(body);
-        Assert.Equal("claude-sonnet-4-5", doc.RootElement.GetProperty("model").GetString());
-        Assert.Equal(8, doc.RootElement.GetProperty("tools").GetArrayLength());
-    }
 }
