@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using BeautyCrm.Api.Auth;
 using BeautyCrm.Api.Infrastructure;
 using BeautyCrm.Api.PublicBooking;
@@ -35,6 +36,12 @@ if (builder.Configuration.GetValue("ChatAssistant:Enabled", false) && !builder.E
     throw new InvalidOperationException(
         "ChatAssistant:Enabled=true outside Development requires ChatAssistant:LegalGateApproved=true (legal gate, contract section 21.11).");
 
+// Розсилки (TASK-779, §26.2, ADR-015 gate §26.16): поза Development Marketing:Enabled=true лише з Marketing:LegalGateApproved=true.
+if (builder.Configuration.GetValue("Marketing:Enabled", false) && !builder.Environment.IsDevelopment()
+    && !builder.Configuration.GetValue("Marketing:LegalGateApproved", false))
+    throw new InvalidOperationException(
+        "Marketing:Enabled=true outside Development requires Marketing:LegalGateApproved=true (legal gate, contract section 26.16).");
+
 builder.Services
     .AddBeautyData()
     .AddBeautyChannels(useMocks)
@@ -44,7 +51,16 @@ builder.Services
     .AddBeautyAuthData()
     .AddBeautyAuthApi(builder.Configuration) // JWT, ролі, rate limit; без Auth:JwtSigningKey додаток не стартує
     .AddBeautyAiApi(builder.Configuration) // налаштування ШІ (TASK-716): ліміт ключів, мапінг винятків ШІ, swagger-фільтр секрету
-    .AddBeautyPublicBookingApi(builder.Configuration); // публічний запис /api/public/{slug} (TASK-688)
+    .AddBeautyPublicBookingApi(builder.Configuration) // публічний запис /api/public/{slug} (TASK-688)
+    .AddBeautyAnalyticsApi(builder.Configuration); // ліміт деталей аналітики на користувача (TASK-764, §24.2)
+// Купони (TASK-778, §26.2): ліміти спроб і строк утримання пропозиції з конфігу (Coupons:*); значення обмежуються в CouponOptions
+builder.Services.Replace(ServiceDescriptor.Singleton(new BeautyCrm.Application.Features.BeautyCoupons.CouponOptions
+{
+    ChatInvalidPerConversationPerHour = builder.Configuration.GetValue("Coupons:ChatInvalidPerConversationPerHour", 5),
+    PublicCheckPerIpPer10Min = builder.Configuration.GetValue("Coupons:PublicCheckPerIpPer10Min", 10),
+    StaffCheckPerUserPerMinute = builder.Configuration.GetValue("Coupons:StaffCheckPerUserPerMinute", 30),
+    ConversationHoldHours = builder.Configuration.GetValue("Coupons:ConversationHoldHours", 72),
+}));
 builder.Services.AddScoped<ITenantModuleProvider, DbTenantModuleProvider>(); // tenants.modules
 builder.Services.AddBeautyDbRoleGuard(); // старт падає, якщо runtime-роль БД superuser/BYPASSRLS (H1)
 builder.Services.AddBeautyCors(builder.Configuration); // Beauty:AllowedOrigins (адмінка), без credentials
@@ -80,6 +96,7 @@ if (args.Length > 0 && args[0] == AiSecretsCli.Command)
 app.UseBeautyForwardedHeaders(); // лише довірені проксі (Beauty:TrustedProxies); першим, щоб IP/схема були справжніми далі
 app.UseBeautySecurityHeaders(app.Environment);
 app.UseBeautyAiNoStore(); // Cache-Control: no-store на /ai/settings*, /ai/models, /ai/usage
+app.UseBeautyAnalyticsNoStore(); // Cache-Control: no-store на /analytics/* (TASK-764, §24)
 
 if (app.Environment.IsDevelopment())
 {

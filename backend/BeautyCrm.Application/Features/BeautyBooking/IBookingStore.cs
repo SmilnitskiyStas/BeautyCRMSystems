@@ -30,8 +30,11 @@ public interface IBookingStore
     /// </summary>
     Task<StoreResult<AppointmentDto>> RescheduleAsync(Guid id, DateTimeOffset newStart, PlannedReminders plan, CancellationToken ct) =>
         RescheduleAsync(id, newStart, plan.LegacyReminderAt, ct);
-    /// <remarks>completed / no_show закривають scheduled-нагадування й відкриті задачі дзвінка (appointment_inactive), §22.4.</remarks>
-    Task<AppointmentDto?> SetStatusAsync(Guid id, string status, CancellationToken ct);
+    /// <remarks>
+    /// completed / no_show закривають scheduled-нагадування й відкриті задачі дзвінка (appointment_inactive), §22.4.
+    /// completed (§24.4) - один умовний UPDATE зі знімком собівартості; null = запис не знайдено, AlreadyClosed() = гонка (409 appointment_closed).
+    /// </remarks>
+    Task<StoreResult<AppointmentDto>?> SetStatusAsync(Guid id, string status, CancellationToken ct);
     /// <summary>
     /// Атомарний claim скасування (умовний UPDATE ... WHERE status IN ('pending','confirmed')): true лише для ОДНОГО з паралельних
     /// викликів. Виконується ПЕРЕД поверненням коштів, щоб гонка двох cancel не повернула кошти двічі.

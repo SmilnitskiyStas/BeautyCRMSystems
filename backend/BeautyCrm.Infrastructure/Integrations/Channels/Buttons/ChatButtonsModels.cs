@@ -23,6 +23,12 @@ public sealed class ChatButtonsOptions
     public bool CancelEnabled { get; init; } = true;
     public int CancelMinLeadMinutes { get; init; }
     public int CancelMaxPerClientPerDay { get; init; } = 3;
+    /// <summary>TASK-781 (§26.2): <c>Marketing:Enabled</c> (за замовч. false). Вимкнено: <c>mc</c>, <c>co</c>, <c>i:mkt</c> -> Disabled (T-action-stale); <c>i:mkoff</c> працює завжди.</summary>
+    public bool MarketingEnabled { get; init; }
+    /// <summary>TASK-781 (§26.2): TTL клавіатури marketing_consent, <c>Marketing:ConsentKeyboardTtlHours</c> (168; 1..720).</summary>
+    public int MarketingConsentTtlHours { get; init; } = 168;
+    /// <summary>TASK-781 (§26.8): типовий строк campaign_offer, якщо викликач не задав <c>ExpiresAt</c> (queued_at + 30 днів).</summary>
+    public const int CampaignOfferDefaultTtlDays = 30;
 
     public static ChatButtonsOptions Read(IConfiguration c)
     {
@@ -41,6 +47,8 @@ public sealed class ChatButtonsOptions
             CancelEnabled = B(c, "ChatCancel:Enabled", true),
             CancelMinLeadMinutes = I(c, "ChatCancel:MinLeadMinutes", 0, 0, 1440),
             CancelMaxPerClientPerDay = I(c, "ChatCancel:MaxPerClientPerDay", 3, 1, 20),
+            MarketingEnabled = B(c, "Marketing:Enabled", false),
+            MarketingConsentTtlHours = I(c, "Marketing:ConsentKeyboardTtlHours", 168, 1, 720),
         };
     }
 }
@@ -53,12 +61,16 @@ public static class KeyboardKinds
     public const string AppointmentList = "appointment_list";
     public const string AppointmentActions = "appointment_actions";
     public const string CancelConfirm = "cancel_confirm";
+    /// <summary>TASK-781 (§26.9.1): вибір рівня згоди (3 кнопки <c>mc</c>).</summary>
+    public const string MarketingConsent = "marketing_consent";
+    /// <summary>TASK-781 (§26.9.1): кнопка розсилки <c>co</c> (+ <c>i:mkoff</c>); прив'язана до campaign_recipient_id.</summary>
+    public const string CampaignOffer = "campaign_offer";
 
     public static readonly IReadOnlyList<string> All =
-        [BookingConfirm, SlotPick, ReminderChoice, AppointmentList, AppointmentActions, CancelConfirm];
+        [BookingConfirm, SlotPick, ReminderChoice, AppointmentList, AppointmentActions, CancelConfirm, MarketingConsent, CampaignOffer];
 
     /// <summary>Нова клавіатура цього виду відкликає попередню активну в розмові (§23.6 «Відкликання»); одна активна appointment_list на розмову (TASK-759, M3); actions не відкликаються (прив'язані до запису).</summary>
-    public static bool ReplacesPrevious(string kind) => kind is BookingConfirm or SlotPick or ReminderChoice or CancelConfirm or AppointmentList;
+    public static bool ReplacesPrevious(string kind) => kind is BookingConfirm or SlotPick or ReminderChoice or CancelConfirm or AppointmentList or MarketingConsent;
 }
 
 public static class KeyboardStatuses
@@ -87,8 +99,18 @@ public static class ButtonVerbs
     public const string Help = "i:help";
     public const string Human = "i:human";
     public const string Stop = "i:stop";
+    /// <summary>TASK-768 (§25.4/§25.5.1): «Змінити номер / спосіб» - безстанова дія; обробка (T-phone-request) - конвеєр TASK-770.</summary>
+    public const string Phone = "i:phone";
+    /// <summary>TASK-781 (§26.9.1): вибір рівня згоди; станова, споживає клавіатуру marketing_consent, index 0..2.</summary>
+    public const string MarketingConsent = "mc";
+    /// <summary>TASK-781: «Записатися зі знижкою» під розсилкою; станова, не споживає, kind=campaign_offer.</summary>
+    public const string CampaignOffer = "co";
+    /// <summary>TASK-781: меню згоди (<c>/marketing</c>, T-marketing-menu); вимкнено <c>Marketing:Enabled</c> -> T-action-stale.</summary>
+    public const string MarketingMenu = "i:mkt";
+    /// <summary>TASK-781: «Не надсилати акції»; діє завжди (маркетинг/кнопки вимкнені, handoff).</summary>
+    public const string MarketingOff = "i:mkoff";
 
-    public static readonly IReadOnlySet<string> Stateless = new HashSet<string>(StringComparer.Ordinal) { Book, My, Help, Human, Stop };
+    public static readonly IReadOnlySet<string> Stateless = new HashSet<string>(StringComparer.Ordinal) { Book, My, Help, Human, Stop, Phone, MarketingMenu, MarketingOff };
 
     private static readonly IReadOnlyDictionary<string, string[]> ByKind = new Dictionary<string, string[]>
     {
@@ -98,6 +120,8 @@ public static class ButtonVerbs
         [KeyboardKinds.AppointmentList] = [CancelAsk, Reschedule],
         [KeyboardKinds.AppointmentActions] = [Attend, CancelAsk, Reschedule],
         [KeyboardKinds.CancelConfirm] = [CancelYes, CancelNo],
+        [KeyboardKinds.MarketingConsent] = [MarketingConsent],
+        [KeyboardKinds.CampaignOffer] = [CampaignOffer],
     };
 
     /// <summary>Verb дозволений для виду клавіатури (стан), безстанові кнопки (рядок «Записатися» тощо) дозволені в options будь-якого виду.</summary>
@@ -106,21 +130,22 @@ public static class ButtonVerbs
 
     /// <summary>Чи потрібен index: sp, rc, а також ac/ar у переліку записів (§23.5).</summary>
     public static bool NeedsIndex(string kind, string verb) =>
-        verb is SlotPick or ReminderChoice || (kind == KeyboardKinds.AppointmentList && verb is CancelAsk or Reschedule);
+        verb is SlotPick or ReminderChoice or MarketingConsent || (kind == KeyboardKinds.AppointmentList && verb is CancelAsk or Reschedule);
 
     /// <summary>Дії, що споживають клавіатуру (CAS active -> used).</summary>
-    public static bool Consuming(string verb) => verb is ConfirmBooking or DeclineBooking or OtherTime or SlotPick or ReminderChoice or CancelYes or CancelNo;
+    public static bool Consuming(string verb) => verb is ConfirmBooking or DeclineBooking or OtherTime or SlotPick or ReminderChoice or CancelYes or CancelNo or MarketingConsent;
 
-    /// <summary>Дозволені під час handoff (§23.6): i:stop, i:my, rc, aa, ac, cy, cn.</summary>
-    public static bool AllowedInHandoff(string verb) => verb is Stop or My or ReminderChoice or Attend or CancelAsk or CancelYes or CancelNo;
+    /// <summary>Дозволені під час handoff (§23.6, §25.5.6, §26.9.1): i:stop, i:my, i:phone, rc, aa, ac, cy, cn, mc, i:mkt, i:mkoff. <c>co</c> заблоковано.</summary>
+    public static bool AllowedInHandoff(string verb) =>
+        verb is Stop or My or Phone or ReminderChoice or Attend or CancelAsk or CancelYes or CancelNo or MarketingConsent or MarketingMenu or MarketingOff;
 }
 
-/// <summary>Розібраний <c>callback_data</c>. Станові: <c>verb:token[:index]</c>; безстанові: <c>i:book|my|help|human|stop</c>.</summary>
+/// <summary>Розібраний <c>callback_data</c>. Станові: <c>verb:token[:index]</c>; безстанові: <c>i:book|my|help|human|stop|phone|mkt|mkoff</c>.</summary>
 public readonly record struct CallbackAddress(string Verb, string? Token, int? Index)
 {
-    private static readonly Regex Stateful = new(@"^(by|bn|bo|sp|rc|ac|aa|ar|cy|cn):([A-Za-z0-9_-]{22})(?::([0-9]))?\z",
+    private static readonly Regex Stateful = new(@"^(by|bn|bo|sp|rc|ac|aa|ar|cy|cn|mc|co):([A-Za-z0-9_-]{22})(?::([0-9]))?\z",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
-    private static readonly Regex StatelessRx = new(@"^i:(book|my|help|human|stop)\z", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex StatelessRx = new(@"^i:(book|my|help|human|stop|phone|mkt|mkoff)\z", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     public bool IsStateless => Token is null;
 
@@ -141,11 +166,12 @@ public readonly record struct CallbackAddress(string Verb, string? Token, int? I
 
 /// <summary>
 /// Дозволена кнопка з серверними посиланнями (§23.3 «options»): код пише, код читає; модель і клієнт їх не бачать.
-/// sp: заклад/послуга/майстер/початок; rc: method/offsets; ac|ar|aa: appointmentId.
+/// sp: заклад/послуга/майстер/початок; rc: method/offsets; ac|ar|aa: appointmentId; mc: level (full|selective|none) + textVersion (TASK-781).
 /// </summary>
 public sealed record KeyboardOption(
     string Verb, string Label, Guid? LocationId = null, Guid? ServiceId = null, Guid? SpecialistId = null,
-    DateTimeOffset? StartsAt = null, string? Method = null, IReadOnlyList<short>? Offsets = null, Guid? AppointmentId = null);
+    DateTimeOffset? StartsAt = null, string? Method = null, IReadOnlyList<short>? Offsets = null, Guid? AppointmentId = null,
+    string? Level = null, string? TextVersion = null);
 
 public static class KeyboardJson
 {
@@ -217,8 +243,13 @@ public static class ChatKeyboardLayout
         try
         {
             using var doc = JsonDocument.Parse(actionsJson);
-            var rows = doc.RootElement.ValueKind == JsonValueKind.Object
-                ? doc.RootElement.EnumerateObject().FirstOrDefault(p => p.NameEquals("rows") || p.Name.Equals("Rows", StringComparison.OrdinalIgnoreCase)).Value
+            var container = doc.RootElement;
+            // §25.4: підписи reply-клавіатури ({"reply":{"rows":...}}) показуються в inbox так само, як inline
+            if (container.ValueKind == JsonValueKind.Object
+                && container.EnumerateObject().FirstOrDefault(p => p.Name.Equals("reply", StringComparison.OrdinalIgnoreCase)) is { Value.ValueKind: JsonValueKind.Object } rp)
+                container = rp.Value;
+            var rows = container.ValueKind == JsonValueKind.Object
+                ? container.EnumerateObject().FirstOrDefault(p => p.NameEquals("rows") || p.Name.Equals("Rows", StringComparison.OrdinalIgnoreCase)).Value
                 : default;
             if (rows.ValueKind != JsonValueKind.Array) return [];
             var labels = new List<string>();
@@ -270,7 +301,7 @@ public enum CallbackClass { Valid, Stale, Used, Expired, Mismatch, Handoff }
 /// <param name="Id">Клавіатура, знайдена за токеном і ПЕРЕВІРЕНА як належна цій розмові (інакше null).</param>
 public sealed record KeyboardInfo(
     Guid Id, string Kind, string Status, Guid MessageId, Guid? ProposalId, Guid? AppointmentId, DateTimeOffset ExpiresAt,
-    DateTimeOffset? UsedAt, Guid? UsedByMessageId);
+    DateTimeOffset? UsedAt, Guid? UsedByMessageId, Guid? CampaignRecipientId = null);
 
 /// <param name="Verb">Verb із callback_data (порожньо при invalid_format).</param>
 /// <param name="Option">Обрана опція з БД (для безстанових - null).</param>
@@ -281,6 +312,15 @@ public sealed record CallbackResolution(
     int OptionPosition = 0, bool Replay = false, DateTimeOffset? Now = null)
 {
     public bool IsValid => Outcome is CallbackOutcome.Valid or CallbackOutcome.Stateless;
+
+    /// <summary>TASK-781: для валідного <c>mc</c> - обраний рівень згоди з options у БД (не з callback_data); інакше null.</summary>
+    public string? ConsentLevel => IsValid && Verb == ButtonVerbs.MarketingConsent ? Option?.Level : null;
+
+    /// <summary>TASK-781: для валідного <c>mc</c> - версія показаного тексту з options у БД.</summary>
+    public string? ConsentTextVersion => IsValid && Verb == ButtonVerbs.MarketingConsent ? Option?.TextVersion : null;
+
+    /// <summary>TASK-781: для валідних <c>co</c> / <c>i:mkoff</c> під повідомленням кампанії - одержувач (перевірений як цієї розмови й клієнта); інакше null.</summary>
+    public Guid? CampaignRecipientId => IsValid && Verb is ButtonVerbs.CampaignOffer or ButtonVerbs.MarketingOff ? Keyboard?.CampaignRecipientId : null;
 
     /// <summary>Код результату §23.5 (<c>ok</c>, <c>invalid_format</c>, <c>used</c> ...).</summary>
     public string Code => Outcome switch
@@ -324,7 +364,7 @@ public sealed record CallbackResolution(
 /// appointment_actions - початок візиту, reminder_choice - 24 год.</param>
 public sealed record NewKeyboard(
     Guid ConversationId, Guid MessageId, string Kind, IReadOnlyList<KeyboardOption> Options, DateTimeOffset? ExpiresAt = null,
-    Guid? ProposalId = null, Guid? AppointmentId = null);
+    Guid? ProposalId = null, Guid? AppointmentId = null, Guid? CampaignRecipientId = null);
 
 /// <param name="Token">22 символи base64url (128 біт CSPRNG). Лише для побудови callback_data; не логувати, не віддавати API.</param>
 /// <param name="Revoked">Попередні активні клавіатури, відкликані цією (їхню розмітку треба прибрати).</param>

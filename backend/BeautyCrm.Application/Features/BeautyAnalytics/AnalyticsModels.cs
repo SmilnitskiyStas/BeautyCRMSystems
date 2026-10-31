@@ -11,20 +11,24 @@ public sealed record NetworkReport(
     string FromDate, string ToDate, string Timezone, DateTimeOffset From, DateTimeOffset To,
     int Appointments, int Completed, int Cancelled, int NoShow, decimal Revenue, decimal AverageCheck, decimal CancellationRate,
     int NewClients,
+    decimal Cost, decimal MasterPayout, decimal NetIncome, decimal? MarginPercent, int WithoutCost, decimal RevenueWithoutCost,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] NetworkPrevious? Previous = null);
 
 public sealed record NetworkPrevious(
     string FromDate, string ToDate, int Appointments, int Completed, int Cancelled, int NoShow, decimal Revenue,
-    decimal AverageCheck, decimal CancellationRate, int NewClients);
+    decimal AverageCheck, decimal CancellationRate, int NewClients,
+    decimal Cost, decimal MasterPayout, decimal NetIncome, decimal? MarginPercent, int WithoutCost, decimal RevenueWithoutCost);
 
 /// <summary>Load = busy / available (0..1, 4 знаки) або null, якщо доступних хвилин немає (§19.4).</summary>
 public sealed record LocationReport(
     Guid LocationId, string Name, int Appointments, int Completed, int Cancelled, decimal Revenue,
     int NoShow, string Timezone, bool IsActive, int BusyMinutes, int AvailableMinutes, decimal? Load,
+    decimal Cost, decimal MasterPayout, decimal NetIncome, decimal? MarginPercent, int WithoutCost,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] LocationPrevious? Previous = null);
 
 public sealed record LocationPrevious(
-    int Appointments, int Completed, int Cancelled, int NoShow, decimal Revenue, int BusyMinutes, int AvailableMinutes, decimal? Load);
+    int Appointments, int Completed, int Cancelled, int NoShow, decimal Revenue, int BusyMinutes, int AvailableMinutes, decimal? Load,
+    decimal Cost, decimal MasterPayout, decimal NetIncome, decimal? MarginPercent, int WithoutCost);
 
 public sealed record PromotionReport(
     Guid PromotionId, string Name, int Uses, decimal DiscountTotal, decimal Revenue,
@@ -32,7 +36,9 @@ public sealed record PromotionReport(
 
 public sealed record PromotionPrevious(int Uses, decimal DiscountTotal, decimal Revenue);
 
-public sealed record SeriesPoint(string From, string To, int Appointments, int Completed, int Cancelled, int NoShow, decimal Revenue);
+/// <summary>Фінансові поля (§24.6.2): cost/masterPayout - Σ знімків, netIncome = revenue - cost - masterPayout, withoutCost - completed без собівартості.</summary>
+public sealed record SeriesPoint(string From, string To, int Appointments, int Completed, int Cancelled, int NoShow, decimal Revenue,
+    decimal Cost, decimal MasterPayout, decimal NetIncome, int WithoutCost);
 
 /// <summary>Granularity: day | week | month (§19.2).</summary>
 public sealed record SeriesReport(string FromDate, string ToDate, string Timezone, string Granularity, IReadOnlyList<SeriesPoint> Points);
@@ -59,8 +65,9 @@ public sealed record AnalyticsLink(
 /// <summary>Діапазон повних локальних дат: закриття закладу (OwnerId = заклад) або затверджена відсутність (OwnerId = майстер).</summary>
 public sealed record AnalyticsSpan(Guid OwnerId, DateOnly From, DateOnly To);
 
-/// <summary>Агрегат записів: заклад × локальна дата (зона закладу) × статус. Revenue — Σ price_final лише для completed.</summary>
-public sealed record DailyRow(Guid LocationId, DateOnly Date, string Status, int Count, decimal Revenue);
+/// <summary>Агрегат записів: заклад × локальна дата (зона закладу) × статус. Revenue/Cost/MasterPayout/WithoutCost - лише для completed (§24.5).</summary>
+public sealed record DailyRow(Guid LocationId, DateOnly Date, string Status, int Count, decimal Revenue,
+    decimal Cost = 0m, decimal MasterPayout = 0m, int WithoutCost = 0, decimal RevenueWithoutCost = 0m);
 
 /// <summary>Σ тривалості записів pending/confirmed/completed майстра в закладі.</summary>
 public sealed record BusyRow(Guid LocationId, Guid SpecialistId, int Minutes);

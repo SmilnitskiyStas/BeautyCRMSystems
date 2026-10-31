@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Application.Features.BeautyCommon;
+using BeautyCrm.Application.Features.BeautyCoupons;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeautyCrm.Application.Features.BeautyPublicBooking;
@@ -12,7 +13,8 @@ namespace BeautyCrm.Application.Features.BeautyPublicBooking;
 public sealed partial class PublicBookingService(
     IPublicBookingStore pub, IBookingStore store, CancellationService cancellation,
     CancellationSettingsService settings, PublicTenantResolver tenant, PublicTokenService tokens,
-    ICaptchaVerifier captcha, PublicBookingOptions options, TimeProvider clock, OnlineBookingCore core)
+    ICaptchaVerifier captcha, PublicBookingOptions options, TimeProvider clock, OnlineBookingCore core,
+    CouponService? coupons = null)
 {
     /// <summary>Єдина відповідь на неіснуючий/чужий/зіпсований токен (розрізнити причини ззовні неможливо).</summary>
     public static readonly Error TokenNotFound = Error.NotFound("not_found", "Not found.");
@@ -43,6 +45,23 @@ public sealed partial class PublicBookingService(
             return new PublicServiceDto(s.Id, s.Name, s.Description, s.Category, s.DurationMinutes, q.Original, q.Final, q.PromotionId, q.PromotionName);
         }).ToList();
         return Result<IReadOnlyList<PublicServiceDto>>.Ok(list);
+    }
+
+    /// <summary>
+    /// Публічна перевірка загального коду (§26.11.4): будь-яка причина (невідомий, прострочений, вичерпаний, персональний) - однакове
+    /// 404 coupon_invalid. Ліміт PublicCheckPerIpPer10Min -> 429. Клієнта немає, тож already_used тут не перевіряється.
+    /// </summary>
+    public async Task<Result<PublicCouponCheckDto>> CheckCouponAsync(string? code, Guid locationId, Guid serviceId, string? remoteIp, CancellationToken ct)
+    {
+        if (coupons is null || string.IsNullOrWhiteSpace(code)) return Error.NotFound(CouponService.Invalid, "The code is not valid.");
+        var r = await coupons.CheckAsync(new CouponUse(CouponScope.Public, code, RateKey: remoteIp ?? "unknown"), locationId, serviceId, null, ct);
+        if (r.IsOk) return new PublicCouponCheckDto(r.Value!.Outcome, r.Value.PriceOriginal, r.Value.PriceFinal);
+        return r.Error!.Kind switch
+        {
+            ErrorKind.TooManyRequests => r.Error,
+            ErrorKind.Conflict => Error.NotFound(CouponService.Invalid, "The code is not valid."),
+            _ => r.Error, // location_not_found / service_not_found - публічні довідники
+        };
     }
 
     public Task<Result<IReadOnlyList<FreeSlot>>> GetSlotsAsync(
@@ -83,7 +102,8 @@ public sealed partial class PublicBookingService(
 
         var keyHash = PublicTokenService.Hash("idem:" + ctx.IdempotencyKey);
         var requestHash = PublicTokenService.Hash(string.Join('|', req.LocationId, req.SpecialistId, req.ServiceId,
-            startsAt.UtcTicks, phone, name, reminder, payment));
+            startsAt.UtcTicks, phone, name, reminder, payment)
+            + (string.IsNullOrWhiteSpace(req.CouponCode) ? "" : "|c:" + CouponCodes.Hash(req.CouponCode))); // купон входить у відбиток запиту (хеш, не код)
 
         // Ідемпотентність: той самий ключ і те саме тіло -> той самий результат без повторного списання.
         if (await pub.FindByIdempotencyKeyAsync(keyHash, ct) is { } hit)
@@ -101,10 +121,11 @@ public sealed partial class PublicBookingService(
         var id = Guid.NewGuid();
         var token = tokens.Create(tenantId, id);
         var createRequest = new CreateAppointmentRequest(req.LocationId.Value, req.SpecialistId.Value, req.ServiceId.Value, startsAt,
-            new ClientInput(null, name, phone, null, req.Client?.MarketingConsent == true), reminder, payment, "online");
+            new ClientInput(null, name, phone, null, false /* §26 (TASK-777): client.marketingConsent приймається й ігнорується */), reminder, payment, "online");
         var publicOptions = new PublicCreateOptions(id, PublicTokenService.Hash(token), keyHash, requestHash);
 
-        var outcome = await core.CreateAsync(createRequest, publicOptions, ct);
+        var couponUse = string.IsNullOrWhiteSpace(req.CouponCode) ? null : new CouponUse(CouponScope.Public, req.CouponCode, RateKey: ctx.RemoteIp ?? "unknown");
+        var outcome = await core.CreateAsync(createRequest, publicOptions, ct, couponUse);
         if (outcome.Replay is { } raced) return await ReplayAsync(tenantId, raced, requestHash, ct);
         if (outcome.Error is not null) return outcome.Error;
 
@@ -154,7 +175,7 @@ public sealed partial class PublicBookingService(
         a.StartsAt, a.EndsAt, a.DurationMinutes, a.Status, a.PriceOriginal, a.PriceFinal, a.PromotionId,
         a.ReminderOption, a.PaymentMethod, (await store.GetPaymentAsync(a.Id, ct))?.Status,
         a.Cancellation ?? await settings.GetTermsAsync(ct),
-        a.Reminders is { } r ? new PublicRemindersDto(r.Method, r.OffsetsMinutes) : null);
+        a.Reminders is { } r ? new PublicRemindersDto(r.Method, r.OffsetsMinutes) : null, a.Coupon is { Outcome: CouponOutcomes.Applied });
 }
 
 public static class PublicBookingServiceExtensions

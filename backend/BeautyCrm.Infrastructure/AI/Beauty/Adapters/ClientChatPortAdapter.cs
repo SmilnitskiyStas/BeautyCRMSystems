@@ -68,7 +68,9 @@ public sealed class ClientChatPortAdapter(IServiceProvider services, TenantConte
         Guid tenantId, Guid conversationId, Guid locationId, Guid serviceId, Guid specialistId, DateTimeOffset startsAt, CancellationToken ct)
     {
         TenantGuard.Ensure(tenant, tenantId);
-        var r = await Chat.PrepareAsync(new ChatPrepareRequest(conversationId, locationId, serviceId, specialistId, startsAt), ct);
+        // TASK-782 (§26.9.3): купон із пропозиції розмови додає КОД (не модель); недійсний купон знімається, ціна - звичайна
+        var prepare = new ChatPrepareRequest(conversationId, locationId, serviceId, specialistId, startsAt);
+        var r = services.GetService<Conversations.ChatCouponOffers>() is { } offers ? await offers.PrepareAsync(Chat, prepare, ct) : await Chat.PrepareAsync(prepare, ct);
         if (!r.IsOk) return ChatPortResult<ChatPreparedDto>.Fail(Map(r.Error!.Code, PrepareCodes, "prepare_failed"));
 
         var p = r.Value!;
@@ -76,7 +78,7 @@ public sealed class ClientChatPortAdapter(IServiceProvider services, TenantConte
         // p.ConfirmationToken свідомо не читається.
         return ChatPortResult<ChatPreparedDto>.Ok(new ChatPreparedDto(p.ProposalId,
             new ChatBookingSummaryDto(s.ServiceName, s.SpecialistName, s.LocationName, s.Address, s.LocalDate, s.LocalTime, s.Timezone,
-                s.DurationMinutes, s.PriceOriginal, s.PriceFinal, s.PromotionName), p.ExpiresAt));
+                s.DurationMinutes, s.PriceOriginal, s.PriceFinal, s.PromotionName, s.CouponOutcome), p.ExpiresAt));
     }
 
     private static string Map(string code, HashSet<string> allowed, string fallback) => allowed.Contains(code) ? code : fallback;

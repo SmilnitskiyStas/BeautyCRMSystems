@@ -44,12 +44,13 @@ public sealed class OnlineBookingCore(IPublicBookingStore pub, BookingService bo
     /// чекаємо коміт переможця й повертаємо його запис (<see cref="CoreCreateOutcome.Replay"/>); якщо переможця немає — пробуємо знову.
     /// Причини недоступності майстра/закладу маскуються в <c>slot_unavailable</c> (публічний контракт, §12/§17/§18).
     /// </summary>
-    public async Task<CoreCreateOutcome> CreateAsync(CreateAppointmentRequest request, PublicCreateOptions opts, CancellationToken ct)
+    public async Task<CoreCreateOutcome> CreateAsync(
+        CreateAppointmentRequest request, PublicCreateOptions opts, CancellationToken ct, BeautyCrm.Application.Features.BeautyCoupons.CouponUse? coupon = null)
     {
         Result<AppointmentDto> created = default!;
         for (var attempt = 0; attempt < 3; attempt++)
         {
-            created = await booking.CreateAsync(request, ct, opts);
+            created = await booking.CreateAsync(request, ct, opts, coupon);
             if (created.Error is not { Kind: ErrorKind.Conflict } conflict) break;
             var polls = conflict.Code == "idempotency_conflict" ? 5 : 1;
             for (var i = 0; i < polls; i++)

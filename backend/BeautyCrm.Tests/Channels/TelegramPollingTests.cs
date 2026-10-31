@@ -100,7 +100,6 @@ public class TelegramParserTests
     [InlineData("\"voice\":{}", "[voice]")]
     [InlineData("\"photo\":[{}]", "[photo]")]
     [InlineData("\"document\":{}", "[document]")]
-    [InlineData("\"contact\":{\"phone_number\":\"+380501112233\"}", "[contact]")]
     [InlineData("\"location\":{}", "[location]")]
     [InlineData("\"poll\":{}", "[unsupported]")]
     public async Task parse_media_is_unsupported_with_placeholder_and_never_keeps_contact_phone(string extra, string placeholder)

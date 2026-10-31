@@ -30,7 +30,9 @@ public sealed class ChatKeyboardService(BeautyDbContext db, ChatButtonsOptions o
         if (!KeyboardKinds.All.Contains(req.Kind) || req.Options.Count is 0 or > ChatKeyboardLayout.MaxButtons
             || req.Options.Any(o => string.IsNullOrWhiteSpace(o.Label) || !ButtonVerbs.AllowedFor(req.Kind, o.Verb))
             || (req.Kind == KeyboardKinds.BookingConfirm && req.ProposalId is null)
-            || (req.Kind is KeyboardKinds.AppointmentActions or KeyboardKinds.CancelConfirm or KeyboardKinds.ReminderChoice && req.AppointmentId is null))
+            || (req.Kind is KeyboardKinds.AppointmentActions or KeyboardKinds.CancelConfirm or KeyboardKinds.ReminderChoice && req.AppointmentId is null)
+            || (req.Kind == KeyboardKinds.CampaignOffer) != (req.CampaignRecipientId is not null)
+            || !MarketingOptionsValid(req))
         {
             log.LogWarning("keyboard_invalid conversation={Conversation} kind={Kind}", req.ConversationId, req.Kind);
             return Error.Validation("keyboard_invalid", "Keyboard is invalid.");
@@ -62,8 +64,15 @@ public sealed class ChatKeyboardService(BeautyDbContext db, ChatButtonsOptions o
         if (req.Options.Any(o => o.AppointmentId != null) && !await OptionAppointmentsBelongAsync(conv.ClientId, req.Options, ct))
             return Error.NotFound("appointment_not_found", "Appointment not found.");
 
+        if (req.CampaignRecipientId is { } rid
+            && !await db.CampaignRecipients.AsNoTracking().AnyAsync(r => r.Id == rid && r.ConversationId == req.ConversationId
+                && conv.ClientId != null && r.ClientId == conv.ClientId, ct))
+            return Error.NotFound("recipient_not_found", "Campaign recipient not found.");
+
         var expires = req.ExpiresAt ?? req.Kind switch
         {
+            KeyboardKinds.MarketingConsent => now.AddHours(opts.MarketingConsentTtlHours),
+            KeyboardKinds.CampaignOffer => now.AddDays(ChatButtonsOptions.CampaignOfferDefaultTtlDays),
             KeyboardKinds.SlotPick => now.AddMinutes(opts.SlotPickTtlMinutes),
             KeyboardKinds.AppointmentList => now.AddMinutes(opts.ListTtlMinutes),
             KeyboardKinds.CancelConfirm => now.AddMinutes(opts.CancelConfirmTtlMinutes),
@@ -89,7 +98,8 @@ public sealed class ChatKeyboardService(BeautyDbContext db, ChatButtonsOptions o
         {
             Id = Guid.NewGuid(), ConversationId = req.ConversationId, MessageId = req.MessageId, Kind = req.Kind, Token = NewToken(),
             Options = KeyboardJson.Serialize(req.Options.Select(o => o with { Label = ChatKeyboardLayout.SanitizeLabel(o.Label) }).ToList()),
-            ProposalId = req.ProposalId, AppointmentId = req.AppointmentId, Status = KeyboardStatuses.Active, ExpiresAt = expires,
+            ProposalId = req.ProposalId, AppointmentId = req.AppointmentId, CampaignRecipientId = req.CampaignRecipientId,
+            Status = KeyboardStatuses.Active, ExpiresAt = expires,
         };
         db.ChatKeyboards.Add(entity);
         await db.SaveChangesAsync(ct);
@@ -97,6 +107,22 @@ public sealed class ChatKeyboardService(BeautyDbContext db, ChatButtonsOptions o
         db.Entry(entity).State = EntityState.Detached;
         log.LogInformation("chat_keyboard_created conversation={Conversation} keyboard={Keyboard} kind={Kind}", req.ConversationId, entity.Id, req.Kind);
         return new CreatedKeyboard(entity.Id, entity.Token, expires, revoked);
+    }
+
+    internal static readonly string[] ConsentLevels = ["full", "selective", "none"];
+
+    /// <summary>§26.9.1: marketing_consent - рівно 3 <c>mc</c> (full, selective, none) з однаковою непорожньою textVersion; campaign_offer - рівно один <c>co</c>; level/textVersion лише в <c>mc</c>.</summary>
+    private static bool MarketingOptionsValid(NewKeyboard req)
+    {
+        if (req.Options.Any(o => o.Verb != ButtonVerbs.MarketingConsent && (o.Level is not null || o.TextVersion is not null))) return false;
+        if (req.Kind == KeyboardKinds.MarketingConsent)
+        {
+            var v = req.Options.FirstOrDefault()?.TextVersion;
+            return req.Options.Count == 3 && req.Options.All(o => o.Verb == ButtonVerbs.MarketingConsent && o.TextVersion == v)
+                && !string.IsNullOrWhiteSpace(v) && v.Length <= 32 && req.Options.Select(o => o.Level).Order().SequenceEqual(ConsentLevels.Order());
+        }
+        if (req.Kind == KeyboardKinds.CampaignOffer) return req.Options.Count(o => o.Verb == ButtonVerbs.CampaignOffer) == 1;
+        return true;
     }
 
     private async Task<bool> OptionAppointmentsBelongAsync(Guid? clientId, IReadOnlyList<KeyboardOption> options, CancellationToken ct)
@@ -134,7 +160,7 @@ public sealed class ChatKeyboardService(BeautyDbContext db, ChatButtonsOptions o
         if (!CallbackAddress.TryParse(callbackData, out var addr)) return Done(CallbackOutcome.InvalidFormat);
 
         var conv = await db.Conversations.AsNoTracking().Where(c => c.Id == conversationId)
-            .Select(c => new { c.AiState, c.AiPausedUntil, c.HandoffAt, c.StaffRepliedAt, ChannelSettings = c.Channel!.Settings }).FirstOrDefaultAsync(ct);
+            .Select(c => new { c.ClientId, c.AiState, c.AiPausedUntil, c.HandoffAt, c.StaffRepliedAt, ChannelSettings = c.Channel!.Settings }).FirstOrDefaultAsync(ct);
         if (conv is null) return Done(CallbackOutcome.UnknownToken, addr);
         var handoff = conv.AiState == "handoff"
             && (conv.AiPausedUntil is null || conv.AiPausedUntil > now
@@ -146,8 +172,20 @@ public sealed class ChatKeyboardService(BeautyDbContext db, ChatButtonsOptions o
         // 2. безстанова дія: далі лише політика handoff (частотний ліміт - у конвеєрі)
         if (addr.IsStateless)
         {
+            // §26.9.2: «Не надсилати акції» діє завжди (маркетинг/кнопки вимкнені, handoff). Клавіатура повідомлення (campaign_offer) віддається
+            // доменові лише для кампанії одержувача; без збігу з цією розмовою й клієнтом - null.
+            if (addr.Verb == ButtonVerbs.MarketingOff)
+            {
+                var offer = await KeyboardOfMessageAsync(conversationId, callbackMessageRef, ct);
+                if (offer is { Kind: KeyboardKinds.CampaignOffer, CampaignRecipientId: { } orid }
+                    && !await RecipientBelongsAsync(orid, conversationId, conv.ClientId, ct))
+                    offer = null;
+                return Done(CallbackOutcome.Stateless, addr, offer is { Kind: KeyboardKinds.CampaignOffer } ? offer : null);
+            }
             // «Стоп» - відписка від власних нагадувань, діє завжди; решта безстанових кнопок старої клавіатури -> Disabled + прибрати розмітку.
             if (!buttonsOn && addr.Verb != ButtonVerbs.Stop)
+                return Done(CallbackOutcome.Disabled, addr, await KeyboardOfMessageAsync(conversationId, callbackMessageRef, ct));
+            if (addr.Verb == ButtonVerbs.MarketingMenu && !opts.MarketingEnabled)
                 return Done(CallbackOutcome.Disabled, addr, await KeyboardOfMessageAsync(conversationId, callbackMessageRef, ct));
             return handoff && !ButtonVerbs.AllowedInHandoff(addr.Verb) ? Done(CallbackOutcome.HandoffBlocked, addr) : Done(CallbackOutcome.Stateless, addr);
         }
@@ -158,13 +196,18 @@ public sealed class ChatKeyboardService(BeautyDbContext db, ChatButtonsOptions o
 
         // 4. збіг розмови (клавіатуру чужої розмови не розкриваємо й не чіпаємо)
         if (k.ConversationId != conversationId) return Done(CallbackOutcome.ForeignConversation, addr);
-        var info = new KeyboardInfo(k.Id, k.Kind, k.Status, k.MessageId, k.ProposalId, k.AppointmentId, k.ExpiresAt, k.UsedAt, k.UsedByMessageId);
+        var info = new KeyboardInfo(k.Id, k.Kind, k.Status, k.MessageId, k.ProposalId, k.AppointmentId, k.ExpiresAt, k.UsedAt, k.UsedByMessageId, k.CampaignRecipientId);
 
         // 5. повідомлення клавіатури відправлене; якщо відомий external_message_id - збіг із message_ref
         var msg = await db.Messages.AsNoTracking().Where(m => m.Id == k.MessageId && m.ConversationId == conversationId)
             .Select(m => new { m.Status, m.ExternalMessageId }).FirstOrDefaultAsync(ct);
         if (msg is null || msg.Status != "sent" || (msg.ExternalMessageId is { } ext && ext != callbackMessageRef))
             return Done(CallbackOutcome.RefMismatch, addr, info);
+
+        // §26.9.3: кнопка розсилки діє лише в розмові й для клієнта її одержувача (recipient.conversation_id = розмова, client_id = клієнт розмови)
+        if (k.Kind == KeyboardKinds.CampaignOffer
+            && (k.CampaignRecipientId is not { } recipient || !await RecipientBelongsAsync(recipient, conversationId, conv.ClientId, ct)))
+            return Done(CallbackOutcome.ForeignConversation, addr, info);
 
         // 6. verb дозволений для виду; index є в options (і відсутній, де не потрібен)
         var options = KeyboardJson.TryParse(k.Options);
@@ -182,6 +225,9 @@ public sealed class ChatKeyboardService(BeautyDbContext db, ChatButtonsOptions o
             if (pos < 0) return Done(CallbackOutcome.InvalidOption, addr, info);
         }
         var option = options[pos];
+        // mc: рівень і версія тексту мають бути в options (ставить код); зіпсований рядок = invalid_option
+        if (addr.Verb == ButtonVerbs.MarketingConsent && (!ConsentLevels.Contains(option.Level) || string.IsNullOrWhiteSpace(option.TextVersion)))
+            return Done(CallbackOutcome.InvalidOption, addr, info, option, pos);
 
         // 7. статус і TTL (протермінована активна -> expired)
         var replay = k.Status == KeyboardStatuses.Used && inboundMessageId is { } inbound && k.UsedByMessageId == inbound;
@@ -197,6 +243,9 @@ public sealed class ChatKeyboardService(BeautyDbContext db, ChatButtonsOptions o
 
         // вимкнені кнопки: стара клавіатура -> Stale + прибирання
         if (!buttonsOn) return Done(CallbackOutcome.Disabled, addr, info, option, pos);
+        // §26.2: Marketing:Enabled=false -> mc / co як застарілі (T-action-stale); відписка (i:mkoff) діє вище
+        if (addr.Verb is ButtonVerbs.MarketingConsent or ButtonVerbs.CampaignOffer && !opts.MarketingEnabled)
+            return Done(CallbackOutcome.Disabled, addr, info, option, pos);
 
         // 8. політика handoff
         if (handoff && !ButtonVerbs.AllowedInHandoff(addr.Verb)) return Done(CallbackOutcome.HandoffBlocked, addr, info, option, pos);
@@ -229,8 +278,12 @@ public sealed class ChatKeyboardService(BeautyDbContext db, ChatButtonsOptions o
                        join m in db.Messages.AsNoTracking() on kb.MessageId equals m.Id
                        where kb.ConversationId == conversationId && m.ConversationId == conversationId && m.ExternalMessageId == messageRef
                        select kb).FirstOrDefaultAsync(ct);
-        return k is null ? null : new KeyboardInfo(k.Id, k.Kind, k.Status, k.MessageId, k.ProposalId, k.AppointmentId, k.ExpiresAt, k.UsedAt, k.UsedByMessageId);
+        return k is null ? null : new KeyboardInfo(k.Id, k.Kind, k.Status, k.MessageId, k.ProposalId, k.AppointmentId, k.ExpiresAt, k.UsedAt, k.UsedByMessageId, k.CampaignRecipientId);
     }
+
+    private Task<bool> RecipientBelongsAsync(Guid recipientId, Guid conversationId, Guid? clientId, CancellationToken ct) =>
+        clientId is not { } cid ? Task.FromResult(false)
+            : db.CampaignRecipients.AsNoTracking().AnyAsync(r => r.Id == recipientId && r.ConversationId == conversationId && r.ClientId == cid, ct);
 
     // ------------------------------------------------------------------ CAS і зміна стану
 

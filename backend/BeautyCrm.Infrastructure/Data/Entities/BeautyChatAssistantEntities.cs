@@ -16,6 +16,9 @@ public class ChatBookingProposal : TenantEntity
     public decimal PriceOriginal { get; set; }
     public decimal PriceFinal { get; set; }
     public Guid? PromotionId { get; set; }
+    /// <summary>TASK-776 (§26.3): купон і кампанія пропозиції (FK RESTRICT).</summary>
+    public Guid? CouponId { get; set; }
+    public Guid? CampaignId { get; set; }
     public string Status { get; set; } = "prepared";
     public string ConfirmationTokenHash { get; set; } = null!;
     public Guid? SummaryMessageId { get; set; }
@@ -30,6 +33,8 @@ public class ChatBookingProposal : TenantEntity
     public Specialist? Specialist { get; set; }
     public Service? Service { get; set; }
     public Promotion? Promotion { get; set; }
+    public Coupon? Coupon { get; set; }
+    public Campaign? Campaign { get; set; }
     public Message? SummaryMessage { get; set; }
     public Appointment? Appointment { get; set; }
 }

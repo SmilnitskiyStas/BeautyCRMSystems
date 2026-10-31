@@ -97,7 +97,7 @@ public sealed class BeautyAssistant
         // Службовий блок ходу (дата/час закладу, каталог): формує код з довіреного порту, поза <client_message>.
         string? turnContext = null;
         if (chat && _chatContext is not null)
-            turnContext = await _chatContext.BuildAsync(req.TenantId, req.DefaultLocationId, ct, req.ClientId);
+            turnContext = await _chatContext.BuildAsync(req.TenantId, req.DefaultLocationId, ct, req.ClientId, req.ConversationId);
         if (chat && req.RetryEmptyReply)
             turnContext = turnContext is null ? RetryHint : $"{turnContext}\n{RetryHint}";
         var system = PromptComposer.Compose(mode, tenantSettings?.PromptAddendum, req.Scope, turnContext);

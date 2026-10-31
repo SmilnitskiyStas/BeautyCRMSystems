@@ -68,7 +68,7 @@ public sealed class TelegramAdapter(HttpClient http, IChannelCredentialsProvider
     public static readonly IReadOnlyList<(string Command, string Description)> BotCommands =
     [
         ("start", "Почати"), ("book", "Записатися"), ("my", "Мої записи"),
-        ("cancel", "Скасувати запис"), ("stop", "Вимкнути нагадування"), ("help", "Допомога"),
+        ("cancel", "Скасувати запис"), ("stop", "Вимкнути нагадування"), ("marketing", "Новини й акції"), ("help", "Допомога"),
     ];
 
     public const string SecretHeader = "X-Telegram-Bot-Api-Secret-Token";
@@ -82,9 +82,9 @@ public sealed class TelegramAdapter(HttpClient http, IChannelCredentialsProvider
         return !string.IsNullOrEmpty(secret) && !string.IsNullOrEmpty(got) && Crypto.FixedTimeEquals(secret, got);
     }
 
-    // Типи вкладень без тексту -> плейсхолдер (медіа не завантажується, телефон із contact не зберігається).
+    // Типи вкладень без тексту -> плейсхолдер (медіа не завантажується). contact обробляється окремо (kind=contact, §25.4).
     private static readonly string[] MediaKeys =
-        ["sticker", "voice", "video", "video_note", "audio", "photo", "document", "contact", "location", "animation"];
+        ["sticker", "voice", "video", "video_note", "audio", "photo", "document", "location", "animation"];
 
     /// <summary>
     /// Один update (webhook-тіло або елемент result у getUpdates). Лише приватні чати, не боти; edited_message та інші типи
@@ -109,8 +109,10 @@ public sealed class TelegramAdapter(HttpClient http, IChannelCredentialsProvider
             var chatId = chat.GetProperty("id").GetRawText();
             var ts = m.TryGetProperty("date", out var d)
                 ? DateTimeOffset.FromUnixTimeSeconds(d.GetInt64()) : DateTimeOffset.UtcNow;
-            result.Add(new InboundMessage(Channel, $"{chatId}:{m.GetProperty("message_id").GetRawText()}", chatId,
-                from.GetProperty("id").GetRawText(), SenderName(from), text, ts, kind));
+            var inbound = new InboundMessage(Channel, $"{chatId}:{m.GetProperty("message_id").GetRawText()}", chatId,
+                from.GetProperty("id").GetRawText(), SenderName(from), text, ts, kind);
+            if (kind == InboundKinds.Contact) inbound = inbound with { ContactVerdict = ContactVerdict(m, chat, from, out var phone), ContactPhone = phone };
+            result.Add(inbound);
         }
         return Task.FromResult<IReadOnlyList<InboundMessage>>(result);
     }
@@ -124,8 +126,8 @@ public sealed class TelegramAdapter(HttpClient http, IChannelCredentialsProvider
     }
 
     private static readonly Regex StateCallbackData = new(
-        @"^(by|bn|bo|sp|rc|ac|aa|ar|cy|cn):[A-Za-z0-9_-]{22}(:[0-9])?\z", RegexOptions.CultureInvariant);
-    private static readonly Regex StatelessCallbackData = new(@"^i:(book|my|help|human|stop)\z", RegexOptions.CultureInvariant);
+        @"^(by|bn|bo|sp|rc|ac|aa|ar|cy|cn|mc|co):[A-Za-z0-9_-]{22}(:[0-9])?\z", RegexOptions.CultureInvariant);
+    private static readonly Regex StatelessCallbackData = new(@"^i:(book|my|help|human|stop|phone|mkt|mkoff)\z", RegexOptions.CultureInvariant);
     private static readonly Regex QueryIdPattern = new(@"^[A-Za-z0-9_-]{1,64}\z", RegexOptions.CultureInvariant);
 
     /// <summary>Формат callback_data за §23.5: станова дія <c>{verb}:{token22}[:{index}]</c> або безстанова <c>i:{cmd}</c>; &lt;= 64 байти UTF-8.</summary>
@@ -185,6 +187,27 @@ public sealed class TelegramAdapter(HttpClient http, IChannelCredentialsProvider
         return chat.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.Number && id.GetInt64() > 0;
     }
 
+    /// <summary>Поля пересилання: картка контакту, переслана від когось, ніколи не вважається власною (§25.9).</summary>
+    private static readonly string[] ForwardKeys = ["forward_origin", "forward_from", "forward_from_chat", "forward_sender_name", "forward_date", "via_bot"];
+
+    /// <summary>
+    /// §25.4: <c>own</c> лише якщо contact.user_id (число) == from.id, чат приватний з chat.id == from.id, повідомлення не переслане, а
+    /// номер нормалізується до E.164; <c>invalid</c> - власний, але номер не розпізнано; решта (user_id немає/інший/переслане) - <c>foreign</c>.
+    /// Номер повертається лише для <c>own</c>; vcard, імена й user_id далі не передаються.
+    /// </summary>
+    internal static string ContactVerdict(JsonElement m, JsonElement chat, JsonElement from, out string? phone)
+    {
+        phone = null;
+        var contact = m.GetProperty("contact");
+        if (!TryLong(contact, "user_id", out var contactUser) || !TryLong(from, "id", out var fromId) || contactUser != fromId
+            || !TryLong(chat, "id", out var chatNum) || chatNum != fromId
+            || ForwardKeys.Any(k => m.TryGetProperty(k, out _)))
+            return ContactVerdicts.Foreign;
+        var raw = contact.TryGetProperty("phone_number", out var pn) && pn.ValueKind == JsonValueKind.String ? pn.GetString() : null;
+        phone = ContactPhoneNormalizer.Normalize(raw);
+        return phone is null ? ContactVerdicts.Invalid : ContactVerdicts.Own;
+    }
+
     private static (string Text, string Kind) Classify(JsonElement m)
     {
         if (m.TryGetProperty("text", out var t) && t.ValueKind == JsonValueKind.String)
@@ -192,6 +215,9 @@ public sealed class TelegramAdapter(HttpClient http, IChannelCredentialsProvider
             var text = t.GetString() ?? "";
             return (text, text.StartsWith('/') ? InboundKinds.Command : InboundKinds.Text);
         }
+        // §25.4: контакт - окремий вид з тілом-маркером; сам номер у тіло не потрапляє.
+        if (m.TryGetProperty("contact", out var contact) && contact.ValueKind == JsonValueKind.Object)
+            return (InboundKinds.ContactBody, InboundKinds.Contact);
         foreach (var key in MediaKeys)
         {
             if (!m.TryGetProperty(key, out _)) continue;
@@ -225,18 +251,30 @@ public sealed class TelegramAdapter(HttpClient http, IChannelCredentialsProvider
         var text = TruncateUtf16(msg.Text, MaxTextUnits);
         // Невалідна розкладка (довге callback_data, порожній підпис) не надсилається: текст іде без кнопок (§23.8).
         object payload = msg.Actions is { } a && a.IsValid()
-            ? new
-            {
-                chat_id = msg.ExternalConversationId, text,
-                reply_markup = new
-                {
-                    inline_keyboard = a.Rows.Select(r => r.Select(b => new { text = b.Label, callback_data = b.Data }).ToArray()).ToArray(),
-                },
-            }
+            ? new { chat_id = msg.ExternalConversationId, text, reply_markup = ReplyMarkup(a) }
             : new { chat_id = msg.ExternalConversationId, text };
         using var req = Call(token, "sendMessage", payload);
         var body = await HttpSend.PostForBodyAsync(http, req, "Telegram sendMessage", ct, telegramCodes: true);
         return new ChannelSendReceipt(ReadMessageId(body));
+    }
+
+    /// <summary>Рівно один з: inline_keyboard / reply keyboard (§25.4) / remove_keyboard. Без parse_mode.</summary>
+    private static object ReplyMarkup(ChatActionLayout a)
+    {
+        if (a.RemoveReply) return new { remove_keyboard = true };
+        if (a.Reply is { } r)
+        {
+            var keyboard = r.Rows.Select(row => row.Select(b => b.RequestContact
+                ? (object)new { text = b.Label, request_contact = true }
+                : new { text = b.Label }).ToArray()).ToArray();
+            var markup = new Dictionary<string, object> { ["keyboard"] = keyboard, ["one_time_keyboard"] = r.OneTime, ["resize_keyboard"] = r.Resize };
+            if (!string.IsNullOrEmpty(r.Placeholder)) markup["input_field_placeholder"] = r.Placeholder;
+            return markup;
+        }
+        return new
+        {
+            inline_keyboard = a.Rows.Select(row => row.Select(b => new { text = b.Label, callback_data = b.Data }).ToArray()).ToArray(),
+        };
     }
 
     private static string? ReadMessageId(string? body)

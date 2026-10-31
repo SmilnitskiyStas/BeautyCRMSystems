@@ -54,6 +54,18 @@ public class BeautyDbContext : DbContext
     public DbSet<AiUsageRow> AiUsage => Set<AiUsageRow>();
     public DbSet<AiSettingsAuditRow> AiSettingsAudit => Set<AiSettingsAuditRow>();
 
+    // Собівартість послуг (TASK-762, §24.3)
+    public DbSet<ServiceCost> ServiceCosts => Set<ServiceCost>();
+    public DbSet<ServiceCostAuditRow> ServiceCostAudit => Set<ServiceCostAuditRow>();
+
+    // Маркетингова згода, кампанії, купони (TASK-776, §26.3)
+    public DbSet<MarketingConsent> MarketingConsents => Set<MarketingConsent>();
+    public DbSet<MarketingConsentEvent> MarketingConsentEvents => Set<MarketingConsentEvent>();
+    public DbSet<Campaign> Campaigns => Set<Campaign>();
+    public DbSet<CampaignRecipient> CampaignRecipients => Set<CampaignRecipient>();
+    public DbSet<Coupon> Coupons => Set<Coupon>();
+    public DbSet<CouponRedemption> CouponRedemptions => Set<CouponRedemption>();
+
     // auth (TASK-684)
     public DbSet<Tenant> Tenants => Set<Tenant>();
     public DbSet<User> Users => Set<User>();
@@ -209,9 +221,25 @@ public class BeautyDbContext : DbContext
 
         mb.Entity<Client>(b =>
         {
-            Base(b, "beauty_clients");
+            Base(b, "beauty_clients", t =>
+            {
+                // TASK-767 (§25.3): телефон, зібраний у чаті. Формат спадкового phone не перевіряється.
+                t.HasCheckConstraint("ck_beauty_clients_phone_source",
+                    "phone_source IS NULL OR phone_source IN ('telegram_contact', 'manual_chat', 'web_form', 'staff')");
+                t.HasCheckConstraint("ck_beauty_clients_phone_source_requires_phone", "phone_source IS NULL OR phone IS NOT NULL");
+                t.HasCheckConstraint("ck_beauty_clients_phone_pending_format", "phone_pending IS NULL OR phone_pending ~ '^\\+[1-9][0-9]{7,14}$'");
+                t.HasCheckConstraint("ck_beauty_clients_phone_pending_source",
+                    "phone_pending_source IS NULL OR phone_pending_source IN ('telegram_contact', 'manual_chat')");
+                t.HasCheckConstraint("ck_beauty_clients_phone_pending_all_or_none",
+                    "(phone_pending IS NULL) = (phone_pending_source IS NULL) AND (phone_pending IS NULL) = (phone_pending_at IS NULL)");
+                t.HasCheckConstraint("ck_beauty_clients_duplicate_not_self", "duplicate_of_client_id IS NULL OR duplicate_of_client_id <> id");
+            });
             b.Property(x => x.FullName).HasMaxLength(200);
             b.Property(x => x.Phone).HasMaxLength(32);
+            b.Property(x => x.PhoneSource).HasMaxLength(16);
+            b.Property(x => x.PhonePending).HasMaxLength(16);
+            b.Property(x => x.PhonePendingSource).HasMaxLength(16);
+            TenantFk(b, x => x.DuplicateOfClient, x => new { x.TenantId, x.DuplicateOfClientId }, DeleteBehavior.Restrict);
             b.Property(x => x.Email).HasMaxLength(320);
             b.Property(x => x.MarketingConsent).HasDefaultValue(false);
             b.Property(x => x.Unsubscribed).HasDefaultValue(false);
@@ -232,7 +260,10 @@ public class BeautyDbContext : DbContext
                 t.HasCheckConstraint("ck_beauty_promotions_discount_value",
                     "discount_value > 0 AND (discount_type <> 'percent' OR discount_value <= 100)");
                 t.HasCheckConstraint("ck_beauty_promotions_period", "ends_at IS NULL OR starts_at IS NULL OR ends_at > starts_at");
+                // TASK-776 (§26.3): code_only діє лише через купон
+                t.HasCheckConstraint("ck_beauty_promotions_access", "access IN ('public', 'code_only')");
             });
+            b.Property(x => x.Access).HasMaxLength(16).HasDefaultValue("public");
             b.Property(x => x.Name).HasMaxLength(200);
             Enum(b.Property(x => x.DiscountType));
             b.Property(x => x.DiscountValue).HasPrecision(12, 2);
@@ -284,7 +315,19 @@ public class BeautyDbContext : DbContext
                     "(reminder_method = 'none') = (cardinality(reminder_offsets) = 0)");
                 t.HasCheckConstraint("ck_beauty_appointments_reminder_call_single",
                     "reminder_method <> 'call' OR cardinality(reminder_offsets) = 1");
+                // TASK-762 (§24.3): знімок собівартості лише для completed
+                t.HasCheckConstraint("ck_beauty_appointments_cost_values",
+                    "(cost_snapshot IS NULL OR cost_snapshot >= 0) AND (master_payout_snapshot IS NULL OR master_payout_snapshot >= 0) " +
+                    "AND (master_percent_snapshot IS NULL OR master_percent_snapshot BETWEEN 0 AND 100)");
+                t.HasCheckConstraint("ck_beauty_appointments_cost_status",
+                    "(cost_snapshot IS NULL AND master_percent_snapshot IS NULL AND master_payout_snapshot IS NULL AND cost_captured_at IS NULL) OR status = 'completed'");
+                t.HasCheckConstraint("ck_beauty_appointments_cost_consistency",
+                    "(cost_snapshot IS NULL OR cost_captured_at IS NOT NULL) AND (master_payout_snapshot IS NULL OR cost_snapshot IS NOT NULL) " +
+                    "AND (master_percent_snapshot IS NULL OR master_payout_snapshot IS NOT NULL)");
             });
+            b.Property(x => x.CostSnapshot).HasPrecision(12, 2);
+            b.Property(x => x.MasterPercentSnapshot).HasPrecision(5, 2);
+            b.Property(x => x.MasterPayoutSnapshot).HasPrecision(12, 2);
             Enum(b.Property(x => x.Status)).HasDefaultValue(AppointmentStatus.Pending);
             Enum(b.Property(x => x.Source));
             Enum(b.Property(x => x.ReminderOption)).HasDefaultValue(ReminderOption.None);
@@ -305,6 +348,11 @@ public class BeautyDbContext : DbContext
             TenantFk(b, x => x.Service, x => new { x.TenantId, x.ServiceId }, DeleteBehavior.Restrict);
             TenantFk(b, x => x.Client, x => new { x.TenantId, x.ClientId }, DeleteBehavior.Restrict);
             TenantFk(b, x => x.Promotion, x => new { x.TenantId, x.PromotionId }, DeleteBehavior.Restrict);
+            // TASK-776 (§26.3): купон і кампанія-джерело
+            TenantFk(b, x => x.Coupon, x => new { x.TenantId, x.CouponId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Campaign, x => new { x.TenantId, x.CampaignId }, DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.CouponId }).HasFilter("coupon_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.CampaignId }).HasFilter("campaign_id IS NOT NULL");
 
             // calendar views: location / specialist day ranges
             b.HasIndex(x => new { x.TenantId, x.LocationId, x.StartsAt });
@@ -338,10 +386,22 @@ public class BeautyDbContext : DbContext
                 Check<ConversationStatus>(t, "beauty_conversations", "status");
                 t.HasCheckConstraint("ck_beauty_conversations_ai_state", "ai_state IN ('active', 'handoff')");
                 // TASK-736 (§22.3): питання про нагадування - усі три поля разом або жодне
-                t.HasCheckConstraint("ck_beauty_conversations_pending_prompt", "pending_prompt IS NULL OR pending_prompt IN ('reminder_choice')");
+                // TASK-767 (§25.3): phone_request - надмножина; для phone_request запис може бути NULL
+                t.HasCheckConstraint("ck_beauty_conversations_pending_prompt", "pending_prompt IS NULL OR pending_prompt IN ('reminder_choice', 'phone_request')");
                 t.HasCheckConstraint("ck_beauty_conversations_pending_prompt_all_or_none",
-                    "(pending_prompt IS NULL) = (pending_prompt_appointment_id IS NULL) AND (pending_prompt IS NULL) = (pending_prompt_expires_at IS NULL)");
+                    "(pending_prompt IS NULL AND pending_prompt_appointment_id IS NULL AND pending_prompt_expires_at IS NULL) " +
+                    "OR (pending_prompt IS NOT NULL AND pending_prompt = 'reminder_choice' AND pending_prompt_appointment_id IS NOT NULL AND pending_prompt_expires_at IS NOT NULL) " +
+                    "OR (pending_prompt IS NOT NULL AND pending_prompt = 'phone_request' AND pending_prompt_expires_at IS NOT NULL)");
+                // TASK-776 (§26.3): пропозиція розмови (кампанія / купон) живе рівно до offer_until
+                t.HasCheckConstraint("ck_beauty_conversations_offer_until_null",
+                    "offer_until IS NOT NULL OR (offer_campaign_id IS NULL AND offer_coupon_id IS NULL)");
+                t.HasCheckConstraint("ck_beauty_conversations_offer_until_set",
+                    "offer_until IS NULL OR offer_campaign_id IS NOT NULL OR offer_coupon_id IS NOT NULL");
             });
+            TenantFk(b, x => x.OfferCampaign, x => new { x.TenantId, x.OfferCampaignId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.OfferCoupon, x => new { x.TenantId, x.OfferCouponId }, DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.OfferCampaignId }).HasFilter("offer_campaign_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.OfferCouponId }).HasFilter("offer_coupon_id IS NOT NULL");
             b.Property(x => x.PendingPrompt).HasMaxLength(32);
             TenantFk(b, x => x.PendingPromptAppointment, x => new { x.TenantId, x.PendingPromptAppointmentId }, DeleteBehavior.Restrict);
             b.HasIndex(new[] { nameof(Conversation.TenantId), nameof(Conversation.AwaitingStaffSince) }, "ix_beauty_conversations_awaiting_staff")
@@ -369,7 +429,12 @@ public class BeautyDbContext : DbContext
                 Check<MessageDirection>(t, "beauty_messages", "direction");
                 Check<MessageSenderType>(t, "beauty_messages", "sender_type");
                 // TASK-749 (§23.3): callback - надмножина без backfill
-                t.HasCheckConstraint("ck_beauty_messages_kind", "kind IN ('text', 'command', 'unsupported', 'callback')");
+                // TASK-767 (§25.3): contact - надмножина без backfill
+                t.HasCheckConstraint("ck_beauty_messages_kind", "kind IN ('text', 'command', 'unsupported', 'callback', 'contact')");
+                t.HasCheckConstraint("ck_beauty_messages_contact_verdict", "contact_verdict IS NULL OR contact_verdict IN ('own', 'foreign', 'invalid')");
+                t.HasCheckConstraint("ck_beauty_messages_contact_fields", "kind = 'contact' OR (contact_phone IS NULL AND contact_verdict IS NULL)");
+                t.HasCheckConstraint("ck_beauty_messages_contact_phone",
+                    "contact_phone IS NULL OR (contact_verdict IS NOT NULL AND contact_verdict = 'own' AND contact_phone ~ '^\\+[1-9][0-9]{7,14}$')");
                 t.HasCheckConstraint("ck_beauty_messages_actions",
                     "actions IS NULL OR (direction = 'outbound' AND jsonb_typeof(actions) = 'object' AND octet_length(actions::text) <= 4096)");
                 t.HasCheckConstraint("ck_beauty_messages_callback_fields",
@@ -383,6 +448,12 @@ public class BeautyDbContext : DbContext
             b.Property(x => x.Actions).HasColumnType("jsonb");
             b.Property(x => x.CallbackData).HasMaxLength(64);
             b.Property(x => x.CallbackMessageRef).HasMaxLength(32);
+            b.Property(x => x.ContactPhone).HasMaxLength(16);
+            b.Property(x => x.ContactVerdict).HasMaxLength(8);
+            // sweeper (§25.5.7): обнулення contact_phone старше ContactRetentionHours
+            b.HasIndex(new[] { nameof(Message.TenantId), nameof(Message.CreatedAt) }, "ix_beauty_messages_contact_phone")
+                .HasDatabaseName("ix_beauty_messages_contact_phone")
+                .HasFilter("contact_phone IS NOT NULL");
             // очередь необроблених вхідних (sweeper/пакет ходу); окремий іменований індекс поряд зі звичайним
             b.HasIndex(new[] { nameof(Message.TenantId), nameof(Message.ConversationId), nameof(Message.SentAt) }, "ix_beauty_messages_inbound_received")
                 .HasDatabaseName("ix_beauty_messages_inbound_received")
@@ -471,7 +542,275 @@ public class BeautyDbContext : DbContext
         ConfigureReminders(mb);
         ConfigureChatButtons(mb);
         ConfigureAiSettings(mb);
+        ConfigureServiceCosts(mb);
+        ConfigureMarketing(mb);
         ConfigureAuth(mb);
+    }
+
+    // ---------- Собівартість послуг (TASK-762, §24.3, ADR-014; RLS in migration beauty_service_costs) ----------
+
+    private static void ConfigureServiceCosts(ModelBuilder mb)
+    {
+        mb.Entity<ServiceCost>(b =>
+        {
+            Base(b, "beauty_service_costs", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_service_costs_cost", "cost_amount >= 0 AND cost_amount <= 1000000");
+                t.HasCheckConstraint("ck_beauty_service_costs_master_percent", "master_percent IS NULL OR master_percent BETWEEN 0 AND 100");
+            });
+            b.Property(x => x.CostAmount).HasPrecision(12, 2);
+            b.Property(x => x.MasterPercent).HasPrecision(5, 2);
+            TenantFk(b, x => x.Service, x => new { x.TenantId, x.ServiceId }, DeleteBehavior.Cascade);
+            TenantFk(b, x => x.Location, x => new { x.TenantId, x.LocationId }, DeleteBehavior.Cascade);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.UpdatedByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            // одна мережева (location_id NULL) + не більше одного override на заклад; також індекс FK service_id
+            b.HasIndex(x => new { x.TenantId, x.ServiceId, x.LocationId }).IsUnique().AreNullsDistinct(false)
+                .HasDatabaseName("ux_beauty_service_costs_scope");
+            b.HasIndex(x => new { x.TenantId, x.LocationId });
+            b.HasIndex(x => new { x.TenantId, x.UpdatedByUserId });
+        });
+
+        mb.Entity<ServiceCostAuditRow>(b =>
+        {
+            b.ToTable("beauty_service_cost_audit", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_service_cost_audit_action", "action IN ('set', 'delete')");
+                t.HasCheckConstraint("ck_beauty_service_cost_audit_changed_fields", "changed_fields <@ ARRAY['cost_amount', 'master_percent']::text[]");
+            });
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            b.HasAlternateKey(x => new { x.TenantId, x.Id });
+            b.Property(x => x.Action).HasMaxLength(8);
+            b.Property(x => x.ChangedFields).HasColumnType("text[]");
+            b.HasOne<Service>().WithMany().HasForeignKey(x => new { x.TenantId, x.ServiceId })
+                .HasPrincipalKey(s => new { s.TenantId, s.Id }).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne<Location>().WithMany().HasForeignKey(x => new { x.TenantId, x.LocationId })
+                .HasPrincipalKey(l => new { l.TenantId, l.Id }).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.UserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.ServiceId, x.CreatedAt });
+            b.HasIndex(x => new { x.TenantId, x.LocationId });
+            b.HasIndex(x => new { x.TenantId, x.UserId });
+        });
+    }
+
+    // ---------- Маркетингова згода, кампанії, купони (TASK-776, §26.3, ADR-015; RLS in migration beauty_marketing) ----------
+
+    private const string Hex64 = "^[0-9a-f]{64}$";
+
+    private static void ConfigureMarketing(ModelBuilder mb)
+    {
+        mb.Entity<MarketingConsent>(b =>
+        {
+            b.ToTable("beauty_marketing_consents", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_marketing_consents_channel", "channel IN ('telegram', 'push')");
+                t.HasCheckConstraint("ck_beauty_marketing_consents_level", "level IN ('full', 'selective', 'none')");
+                t.HasCheckConstraint("ck_beauty_marketing_consents_source", "source IN ('chat', 'admin', 'stop')");
+                t.HasCheckConstraint("ck_beauty_marketing_consents_admin", "(source = 'admin') = (updated_by_user_id IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_marketing_consents_version", "source <> 'chat' OR level = 'none' OR text_version IS NOT NULL");
+            });
+            b.HasKey(x => new { x.TenantId, x.ClientId, x.Channel });
+            b.Property(x => x.Channel).HasMaxLength(16);
+            b.Property(x => x.Level).HasMaxLength(16);
+            b.Property(x => x.Source).HasMaxLength(16);
+            b.Property(x => x.TextVersion).HasMaxLength(32);
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            b.Property(x => x.UpdatedAt).HasDefaultValueSql("now()");
+            TenantFk(b, x => x.Client, x => new { x.TenantId, x.ClientId }, DeleteBehavior.Restrict);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.UpdatedByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<Conversation>().WithMany().HasForeignKey(x => new { x.TenantId, x.ConversationId })
+                .HasPrincipalKey(c => new { c.TenantId, c.Id }).OnDelete(DeleteBehavior.Restrict);
+            // PK (tenant_id, client_id, channel) покриває FK клієнта
+            b.HasIndex(x => new { x.TenantId, x.UpdatedByUserId }).HasFilter("updated_by_user_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.ConversationId }).HasFilter("conversation_id IS NOT NULL");
+        });
+
+        mb.Entity<MarketingConsentEvent>(b =>
+        {
+            b.ToTable("beauty_marketing_consent_events", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_marketing_consent_events_channel", "channel IN ('telegram', 'push')");
+                t.HasCheckConstraint("ck_beauty_marketing_consent_events_level_from", "level_from IS NULL OR level_from IN ('full', 'selective', 'none')");
+                t.HasCheckConstraint("ck_beauty_marketing_consent_events_level_to", "level_to IN ('full', 'selective', 'none')");
+                t.HasCheckConstraint("ck_beauty_marketing_consent_events_source", "source IN ('chat', 'admin', 'stop')");
+                t.HasCheckConstraint("ck_beauty_marketing_consent_events_via", "via IS NULL OR via IN ('button', 'command', 'text', 'api')");
+                t.HasCheckConstraint("ck_beauty_marketing_consent_events_basis", "basis IS NULL OR basis IN ('written', 'in_person', 'other')");
+                t.HasCheckConstraint("ck_beauty_marketing_consent_events_basis_admin", "basis IS NULL OR source = 'admin'");
+                t.HasCheckConstraint("ck_beauty_marketing_consent_events_basis_note", "basis IS NULL OR basis_note IS NOT NULL");
+                t.HasCheckConstraint("ck_beauty_marketing_consent_events_changed", "level_from IS DISTINCT FROM level_to");
+            });
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            b.HasAlternateKey(x => new { x.TenantId, x.Id });
+            b.Property(x => x.Channel).HasMaxLength(16);
+            b.Property(x => x.LevelFrom).HasMaxLength(16);
+            b.Property(x => x.LevelTo).HasMaxLength(16);
+            b.Property(x => x.Source).HasMaxLength(16);
+            b.Property(x => x.Via).HasMaxLength(16);
+            b.Property(x => x.TextVersion).HasMaxLength(32);
+            b.Property(x => x.Basis).HasMaxLength(16);
+            b.Property(x => x.BasisNote).HasMaxLength(200);
+            TenantFk(b, x => x.Client, x => new { x.TenantId, x.ClientId }, DeleteBehavior.Restrict);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.ActorUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<Campaign>().WithMany().HasForeignKey(x => new { x.TenantId, x.CampaignId })
+                .HasPrincipalKey(c => new { c.TenantId, c.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<Conversation>().WithMany().HasForeignKey(x => new { x.TenantId, x.ConversationId })
+                .HasPrincipalKey(c => new { c.TenantId, c.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.ClientId, x.CreatedAt });
+            b.HasIndex(x => new { x.TenantId, x.CampaignId, x.CreatedAt }).HasFilter("campaign_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.ActorUserId }).HasFilter("actor_user_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.ConversationId }).HasFilter("conversation_id IS NOT NULL");
+        });
+
+        mb.Entity<Campaign>(b =>
+        {
+            Base(b, "beauty_campaigns", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_campaigns_type", "type IN ('promo', 'news')");
+                t.HasCheckConstraint("ck_beauty_campaigns_segment_kind", "segment_kind IN ('lapsed', 'frequent', 'new', 'all_consented')");
+                t.HasCheckConstraint("ck_beauty_campaigns_segment_ranges",
+                    "(segment_days IS NULL OR segment_days BETWEEN 1 AND 730) AND (segment_min_visits IS NULL OR segment_min_visits BETWEEN 1 AND 100) " +
+                    "AND (segment_period_days IS NULL OR segment_period_days BETWEEN 1 AND 730)");
+                t.HasCheckConstraint("ck_beauty_campaigns_coupon_mode", "coupon_mode IN ('none', 'personal', 'shared')");
+                t.HasCheckConstraint("ck_beauty_campaigns_status", "status IN ('draft', 'scheduled', 'sending', 'done', 'cancelled')");
+                t.HasCheckConstraint("ck_beauty_campaigns_type_promotion",
+                    "(type <> 'news' OR (promotion_id IS NULL AND coupon_mode = 'none')) AND (type <> 'promo' OR promotion_id IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_campaigns_segment_params",
+                    "(segment_kind <> 'lapsed' OR (segment_days IS NOT NULL AND segment_min_visits IS NULL AND segment_period_days IS NULL)) " +
+                    "AND (segment_kind <> 'frequent' OR (segment_min_visits IS NOT NULL AND segment_period_days IS NOT NULL AND segment_days IS NULL AND segment_service_id IS NULL)) " +
+                    "AND (segment_kind NOT IN ('new', 'all_consented') OR (segment_days IS NULL AND segment_service_id IS NULL AND segment_min_visits IS NULL AND segment_period_days IS NULL))");
+                t.HasCheckConstraint("ck_beauty_campaigns_shared_coupon", "(coupon_mode = 'shared') = (shared_coupon_id IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_campaigns_personal_valid_to", "coupon_mode <> 'personal' OR coupon_valid_to IS NOT NULL");
+                t.HasCheckConstraint("ck_beauty_campaigns_coupon_period",
+                    "coupon_valid_from IS NULL OR coupon_valid_to IS NULL OR coupon_valid_to > coupon_valid_from");
+                t.HasCheckConstraint("ck_beauty_campaigns_confirmed",
+                    "status NOT IN ('scheduled', 'sending', 'done') OR (confirmed_by_user_id IS NOT NULL AND confirmed_at IS NOT NULL AND scheduled_at IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_campaigns_cancelled", "(status = 'cancelled') = (cancelled_at IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_campaigns_revision", "revision >= 1");
+                t.HasCheckConstraint("ck_beauty_campaigns_recipients_total", "recipients_total IS NULL OR recipients_total >= 0");
+            });
+            b.Property(x => x.Name).HasMaxLength(200);
+            b.Property(x => x.Type).HasMaxLength(8);
+            b.Property(x => x.SegmentKind).HasMaxLength(16);
+            b.Property(x => x.Template).HasMaxLength(1000);
+            b.Property(x => x.CouponMode).HasMaxLength(8).HasDefaultValue("none");
+            b.Property(x => x.Status).HasMaxLength(12).HasDefaultValue("draft");
+            b.Property(x => x.Revision).HasDefaultValue(1);
+            b.Property(x => x.ConfirmKeyHash).HasColumnType("character(64)");
+            TenantFk(b, x => x.Promotion, x => new { x.TenantId, x.PromotionId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.SegmentService, x => new { x.TenantId, x.SegmentServiceId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Location, x => new { x.TenantId, x.LocationId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.SharedCoupon, x => new { x.TenantId, x.SharedCouponId }, DeleteBehavior.Restrict);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.CreatedByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.ConfirmedByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.CancelledByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.Status, x.ScheduledAt });
+            b.HasIndex(x => new { x.TenantId, x.PromotionId });
+            b.HasIndex(x => new { x.TenantId, x.SegmentServiceId }).HasFilter("segment_service_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.LocationId }).HasFilter("location_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.SharedCouponId }).HasFilter("shared_coupon_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.CreatedByUserId });
+            b.HasIndex(x => new { x.TenantId, x.ConfirmedByUserId }).HasFilter("confirmed_by_user_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.CancelledByUserId }).HasFilter("cancelled_by_user_id IS NOT NULL");
+        });
+
+        mb.Entity<CampaignRecipient>(b =>
+        {
+            Base(b, "beauty_campaign_recipients", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_campaign_recipients_status", "status IN ('pending', 'queued', 'sent', 'failed', 'skipped')");
+                t.HasCheckConstraint("ck_beauty_campaign_recipients_message", "status NOT IN ('queued', 'sent', 'failed') OR message_id IS NOT NULL");
+                t.HasCheckConstraint("ck_beauty_campaign_recipients_skip_reason", "status <> 'skipped' OR skip_reason IS NOT NULL");
+            });
+            b.Property(x => x.Status).HasMaxLength(8).HasDefaultValue("pending");
+            b.Property(x => x.SkipReason).HasMaxLength(32);
+            TenantFk(b, x => x.Campaign, x => new { x.TenantId, x.CampaignId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Client, x => new { x.TenantId, x.ClientId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Message, x => new { x.TenantId, x.MessageId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Coupon, x => new { x.TenantId, x.CouponId }, DeleteBehavior.Restrict);
+            b.HasOne<Conversation>().WithMany().HasForeignKey(x => new { x.TenantId, x.ConversationId })
+                .HasPrincipalKey(c => new { c.TenantId, c.Id }).OnDelete(DeleteBehavior.Restrict);
+            // ключ ідемпотентності одержувача (і індекс FK campaign_id)
+            b.HasIndex(x => new { x.TenantId, x.CampaignId, x.ClientId }).IsUnique().HasDatabaseName("ux_beauty_campaign_recipients_campaign_client");
+            b.HasIndex(x => new { x.TenantId, x.CampaignId, x.Status });
+            b.HasIndex(x => new { x.TenantId, x.ClientId, x.QueuedAt });
+            b.HasIndex(x => new { x.TenantId, x.MessageId }).HasFilter("message_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.CouponId }).HasFilter("coupon_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.ConversationId }).HasFilter("conversation_id IS NOT NULL");
+        });
+
+        mb.Entity<Coupon>(b =>
+        {
+            Base(b, "beauty_coupons", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_coupons_kind", "kind IN ('personal', 'shared')");
+                t.HasCheckConstraint("ck_beauty_coupons_status", "status IN ('active', 'revoked')");
+                t.HasCheckConstraint("ck_beauty_coupons_code_hash", $"code_hash ~ '{Hex64}'");
+                t.HasCheckConstraint("ck_beauty_coupons_period", "valid_to > valid_from");
+                t.HasCheckConstraint("ck_beauty_coupons_kind_fields",
+                    "(kind <> 'personal' OR (client_id IS NOT NULL AND campaign_id IS NOT NULL AND code IS NULL AND max_uses IS NOT NULL AND max_uses = 1)) " +
+                    "AND (kind <> 'shared' OR (client_id IS NULL AND code IS NOT NULL))");
+                t.HasCheckConstraint("ck_beauty_coupons_uses", "uses_count >= 0 AND (max_uses IS NULL OR uses_count <= max_uses)");
+                t.HasCheckConstraint("ck_beauty_coupons_max_uses", "max_uses IS NULL OR max_uses BETWEEN 1 AND 100000");
+            });
+            b.Property(x => x.Kind).HasMaxLength(8);
+            b.Property(x => x.CodeHash).HasColumnType("character(64)");
+            b.Property(x => x.Code).HasMaxLength(20);
+            b.Property(x => x.CodeHint).HasMaxLength(4);
+            b.Property(x => x.Status).HasMaxLength(8).HasDefaultValue("active");
+            b.Property(x => x.UsesCount).HasDefaultValue(0);
+            TenantFk(b, x => x.Promotion, x => new { x.TenantId, x.PromotionId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Campaign, x => new { x.TenantId, x.CampaignId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Client, x => new { x.TenantId, x.ClientId }, DeleteBehavior.Restrict);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.CreatedByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.CodeHash }).IsUnique().HasDatabaseName("ux_beauty_coupons_code_hash");
+            b.HasIndex(x => new { x.TenantId, x.ClientId }).HasFilter("client_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.CampaignId });
+            b.HasIndex(x => new { x.TenantId, x.PromotionId });
+            b.HasIndex(x => new { x.TenantId, x.CreatedByUserId }).HasFilter("created_by_user_id IS NOT NULL");
+        });
+
+        mb.Entity<CouponRedemption>(b =>
+        {
+            b.ToTable("beauty_coupon_redemptions", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_coupon_redemptions_amount", "discount_amount >= 0");
+                t.HasCheckConstraint("ck_beauty_coupon_redemptions_status", "status IN ('active', 'released')");
+                t.HasCheckConstraint("ck_beauty_coupon_redemptions_reason", "release_reason IS NULL OR release_reason IN ('cancelled', 'payment_failed')");
+                t.HasCheckConstraint("ck_beauty_coupon_redemptions_released",
+                    "(status = 'released') = (released_at IS NOT NULL AND release_reason IS NOT NULL)");
+                // §26.3 дослівно пропускає released_at без release_reason (і навпаки) у active через AND з NULL: забороняємо половинний стан
+                t.HasCheckConstraint("ck_beauty_coupon_redemptions_released_pair", "(released_at IS NULL) = (release_reason IS NULL)");
+            });
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            b.HasAlternateKey(x => new { x.TenantId, x.Id });
+            b.Property(x => x.DiscountAmount).HasPrecision(12, 2);
+            b.Property(x => x.Status).HasMaxLength(8).HasDefaultValue("active");
+            b.Property(x => x.ReleaseReason).HasMaxLength(16);
+            b.HasOne(x => x.Coupon).WithMany().HasForeignKey(x => new { x.TenantId, x.CouponId })
+                .HasPrincipalKey(c => new { c.TenantId, c.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne(x => x.Appointment).WithMany().HasForeignKey(x => new { x.TenantId, x.AppointmentId })
+                .HasPrincipalKey(a => new { a.TenantId, a.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne(x => x.Client).WithMany().HasForeignKey(x => new { x.TenantId, x.ClientId })
+                .HasPrincipalKey(c => new { c.TenantId, c.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.AppointmentId }).IsUnique().HasDatabaseName("ux_beauty_coupon_redemptions_appointment");
+            b.HasIndex(x => new { x.TenantId, x.CouponId, x.ClientId }).IsUnique().HasFilter("status = 'active'")
+                .HasDatabaseName("ux_beauty_coupon_redemptions_active");
+            b.HasIndex(x => new { x.TenantId, x.CouponId });
+            b.HasIndex(x => new { x.TenantId, x.ClientId });
+        });
     }
 
     // ---------- Нагадування клієнтам, вподобання, задачі дзвінків (TASK-736, §22.3; RLS in migration beauty_reminders_contacts_inbox) ----------
@@ -567,7 +906,9 @@ public class BeautyDbContext : DbContext
             Base(b, "beauty_chat_keyboards", t =>
             {
                 t.HasCheckConstraint("ck_beauty_chat_keyboards_kind",
-                    "kind IN ('booking_confirm', 'slot_pick', 'reminder_choice', 'appointment_list', 'appointment_actions', 'cancel_confirm')");
+                    "kind IN ('booking_confirm', 'slot_pick', 'reminder_choice', 'appointment_list', 'appointment_actions', 'cancel_confirm', 'marketing_consent', 'campaign_offer')");
+                // TASK-776 (§26.3): кнопка кампанії завжди прив'язана до одержувача
+                t.HasCheckConstraint("ck_beauty_chat_keyboards_campaign_recipient", "kind <> 'campaign_offer' OR campaign_recipient_id IS NOT NULL");
                 t.HasCheckConstraint("ck_beauty_chat_keyboards_token", "token ~ '^[A-Za-z0-9_-]{22}$'");
                 t.HasCheckConstraint("ck_beauty_chat_keyboards_options", "jsonb_typeof(options) = 'array' AND jsonb_array_length(options) <= 10");
                 t.HasCheckConstraint("ck_beauty_chat_keyboards_status", "status IN ('active', 'used', 'expired', 'revoked')");
@@ -590,6 +931,8 @@ public class BeautyDbContext : DbContext
             TenantFk(b, x => x.Proposal, x => new { x.TenantId, x.ProposalId }, DeleteBehavior.Restrict);
             TenantFk(b, x => x.Appointment, x => new { x.TenantId, x.AppointmentId }, DeleteBehavior.Restrict);
             TenantFk(b, x => x.UsedByMessage, x => new { x.TenantId, x.UsedByMessageId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.CampaignRecipient, x => new { x.TenantId, x.CampaignRecipientId }, DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.CampaignRecipientId });
             b.HasIndex(x => new { x.TenantId, x.MessageId }).IsUnique(); // одна клавіатура на повідомлення (і індекс FK)
             b.HasIndex(x => new { x.TenantId, x.Token }).IsUnique();
             b.HasIndex(x => new { x.TenantId, x.ConversationId }); // FK; частковий нижче не покриває всі рядки
@@ -630,6 +973,10 @@ public class BeautyDbContext : DbContext
             TenantFk(b, x => x.Specialist, x => new { x.TenantId, x.SpecialistId }, DeleteBehavior.Restrict);
             TenantFk(b, x => x.Service, x => new { x.TenantId, x.ServiceId }, DeleteBehavior.Restrict);
             TenantFk(b, x => x.Promotion, x => new { x.TenantId, x.PromotionId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Coupon, x => new { x.TenantId, x.CouponId }, DeleteBehavior.Restrict); // TASK-776 (§26.3)
+            TenantFk(b, x => x.Campaign, x => new { x.TenantId, x.CampaignId }, DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.CouponId }).HasFilter("coupon_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.CampaignId }).HasFilter("campaign_id IS NOT NULL");
             TenantFk(b, x => x.SummaryMessage, x => new { x.TenantId, x.SummaryMessageId }, DeleteBehavior.Restrict);
             TenantFk(b, x => x.Appointment, x => new { x.TenantId, x.AppointmentId }, DeleteBehavior.Restrict);
             b.HasIndex(x => new { x.TenantId, x.ConfirmationTokenHash }).IsUnique()

@@ -7,7 +7,12 @@ namespace BeautyCrm.Infrastructure.Integrations.Channels.Inbox;
 
 public sealed record InboxChannelDto(Guid Id, string Type, string Name);
 public sealed record InboxLocationDto(Guid Id, string Name);
-public sealed record InboxClientDto(Guid Id, string Name);
+/// <param name="PhoneMasked">TASK-769 (§25.7): «+», потім • замість цифр, крім останніх двох; повний номер inbox не віддає ніколи.</param>
+/// <param name="PhonePending">Клієнт надав інший номер у чаті, очікує рішення адміністратора (сам номер - лише в картці клієнта й call-tasks).</param>
+public sealed record InboxClientDto(
+    Guid Id, string Name,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PhoneMasked = null,
+    bool PhonePending = false);
 
 /// <param name="Title">Ім'я клієнта, інакше «Клієнт {канал}». <c>external_chat_id</c> не віддається ніколи.</param>
 /// <param name="AiPausedUntil">Null при <c>aiState=handoff</c> = пауза безстроково (до «Повернути ШІ»).</param>
@@ -33,7 +38,9 @@ public sealed record InboxMessageDto(
     Guid Id, string Direction, string SenderType, InboxUserDto? SenderUser, string Kind, string Body, string Status,
     string? FailureCode, DateTimeOffset SentAt, DateTimeOffset CreatedAt,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? Buttons = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PressedLabel = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PressedLabel = null,
+    // TASK-768 (§25.4): own | foreign | invalid лише для kind=contact; номера немає.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ContactVerdict = null);
 
 public sealed record InboxProposalDto(string Status, DateTimeOffset ExpiresAt, string? SummaryText);
 public sealed record InboxReminderPlanDto(string Method, IReadOnlyList<short> OffsetsMinutes);

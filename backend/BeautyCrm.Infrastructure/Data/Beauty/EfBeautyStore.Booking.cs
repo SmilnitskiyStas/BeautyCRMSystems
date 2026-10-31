@@ -3,6 +3,7 @@ using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Application.Features.BeautyCatalog;
 using BeautyCrm.Application.Features.BeautyChannels;
 using BeautyCrm.Application.Features.BeautyClients;
+using BeautyCrm.Application.Features.BeautyCoupons;
 using BeautyCrm.Application.Features.BeautyLocations;
 using BeautyCrm.Application.Features.BeautyReminders;
 using BeautyCrm.Application.Features.BeautyStaff;
@@ -87,7 +88,7 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
     }
 
     public async Task<IReadOnlyList<PromotionRule>> GetPromotionRulesAsync(CancellationToken ct) =>
-        (await LoadPromotionsAsync(null, activeOnly: true, ct))
+        (await LoadPromotionsAsync(null, activeOnly: true, ct, publicOnly: true))
             .Select(p => new PromotionRule(p.Id, p.Name, p.DiscountType, p.DiscountValue, p.StartsAt, p.EndsAt,
                 p.IsActive, p.LocationIds, p.ServiceIds)).ToList();
 
@@ -99,14 +100,15 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
             return await db.Clients.AnyAsync(c => c.Id == id && c.DeletedAt == null, ct) ? id : null;
 
         var phone = client.Phone!.Trim();
-        var existing = await db.Clients.Where(c => c.Phone == phone && c.DeletedAt == null)
-            .Select(c => (Guid?)c.Id).FirstOrDefaultAsync(ct);
+        // §25.7: порівняння за цифрами (спадкові номери), детермінований пріоритет оригіналу (без duplicate_of, найстарший)
+        var existing = (await FindClientIdsByPhoneAsync(phone, null, 1, ct)).Select(x => (Guid?)x).FirstOrDefault();
         if (existing is not null) return existing;
 
         // Зберігається разом із записом одним SaveChanges (див. AddAppointmentAsync).
         var created = new Client
         {
-            Id = Guid.NewGuid(), FullName = client.Name!.Trim(), Phone = phone, MarketingConsent = client.MarketingConsent,
+            Id = Guid.NewGuid(), FullName = client.Name!.Trim(), Phone = phone, MarketingConsent = false, // §26.4 (TASK-779): персонал згоду не створює; лише MarketingConsentService (кнопка клієнта)
+            PhoneSource = client.PhoneSource is PhoneSources.WebForm ? PhoneSources.WebForm : PhoneSources.Staff,
             Email = string.IsNullOrWhiteSpace(client.Email) ? null : client.Email.Trim(),
         };
         db.Clients.Add(created);
@@ -126,7 +128,7 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
             Id = id, LocationId = a.LocationId, SpecialistId = a.SpecialistId, ServiceId = a.ServiceId, ClientId = a.ClientId,
             StartsAt = a.StartsAt.ToUniversalTime(), DurationMinutes = a.DurationMinutes, Status = AppointmentStatus.Pending,
             Source = EnumText<AppointmentSource>.FromDb(a.Source), PriceOriginal = a.PriceOriginal, PriceFinal = a.PriceFinal,
-            PromotionId = a.PromotionId, ReminderOption = EnumText<ReminderOption>.FromDb(a.ReminderOption),
+            PromotionId = a.PromotionId, CouponId = a.Coupon?.CouponId, CampaignId = a.Coupon?.CampaignId, ReminderOption = EnumText<ReminderOption>.FromDb(a.ReminderOption),
             PaymentMethod = EnumText<Ent.PaymentMethod>.FromDb(a.PaymentMethod),
             PublicTokenHash = a.Public?.TokenHash, IdempotencyKeyHash = a.Public?.IdempotencyKeyHash, IdempotencyRequestHash = a.Public?.RequestHash,
         });
@@ -161,8 +163,29 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
             case BlockReason.OutsideLocationHours: db.ChangeTracker.Clear(); return StoreResult<AppointmentDto>.OutsideHours();
             case BlockReason.SpecialistUnavailable: db.ChangeTracker.Clear(); return StoreResult<AppointmentDto>.Blocked();
         }
+        if (a.Coupon is { } rd)
+        {
+            // §26.6: CAS погашення в тій самій транзакції; 0 рядків (вичерпано / строк / відкликано / чужий клієнт) -> відкат, запис не створюється.
+            // Персональний купон: client_id = власник; max_uses = 1 робить друге використання неможливим навіть у гонці.
+            var at = rd.At.ToUniversalTime();
+            var cas = await db.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE beauty_coupons SET uses_count = uses_count + 1, updated_at = {at}
+                WHERE id = {rd.CouponId} AND status = 'active' AND (max_uses IS NULL OR uses_count < max_uses)
+                  AND valid_from <= {at} AND {at} < valid_to AND (client_id IS NULL OR client_id = {a.ClientId})
+                """, ct);
+            if (cas == 0)
+            {
+                db.ChangeTracker.Clear();
+                return StoreResult<AppointmentDto>.CouponGone();
+            }
+            db.CouponRedemptions.Add(new CouponRedemption
+            {
+                Id = Guid.NewGuid(), CouponId = rd.CouponId, AppointmentId = id, ClientId = a.ClientId, DiscountAmount = rd.DiscountAmount,
+            });
+        }
         switch (await TrySaveAsync(ct, concurrentRetryable: a.Public is not null))
         {
+            case SaveOutcome.CouponTaken: return StoreResult<AppointmentDto>.CouponGone();
             case SaveOutcome.Overlap: return StoreResult<AppointmentDto>.Overlap();
             case SaveOutcome.Duplicate: return StoreResult<AppointmentDto>.Duplicated();
         }
@@ -252,18 +275,56 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
         return BlockReason.None;
     }
 
-    public async Task<AppointmentDto?> SetStatusAsync(Guid id, string status, CancellationToken ct)
+    public async Task<StoreResult<AppointmentDto>?> SetStatusAsync(Guid id, string status, CancellationToken ct)
     {
+        var target = EnumText<AppointmentStatus>.FromDb(status);
+        if (target == AppointmentStatus.Completed) return await CompleteWithCostSnapshotAsync(id, ct);
+
         var appt = await db.Appointments.FirstOrDefaultAsync(a => a.Id == id, ct);
         if (appt is null) return null;
-        appt.Status = EnumText<AppointmentStatus>.FromDb(status);
-        // §22.4: completed / no_show закривають scheduled-нагадування й відкриті задачі дзвінка в тій самій транзакції.
+        appt.Status = target;
+        // §22.4: no_show закриває scheduled-нагадування й відкриті задачі дзвінка в тій самій транзакції (знімок собівартості не пишеться).
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await db.SaveChangesAsync(ct);
-        if (appt.Status is AppointmentStatus.Completed or AppointmentStatus.NoShow)
+        if (appt.Status is AppointmentStatus.NoShow)
             await ClosePlanAsync(id, ReminderSkipReasons.AppointmentInactive, includePlannerSkipped: false, ct);
         await tx.CommitAsync(ct);
-        return await GetAppointmentAsync(id, ct);
+        return StoreResult<AppointmentDto>.Ok((await GetAppointmentAsync(id, ct))!);
+    }
+
+    /// <summary>
+    /// §24.4, ADR-014 §2.2: перехід у completed і знімок собівартості - ОДИН умовний UPDATE (WHERE status IN pending|confirmed),
+    /// тому з двох паралельних завершень знімок пише рівно одне (друге - 0 рядків -> AlreadyClosed), а повторне completed нічого не чіпає.
+    /// Ефективний рядок: заклад запису, інакше мережа; без рядка пишеться лише cost_captured_at (CHECK cost_consistency).
+    /// Виплата = round(price_final * coalesce(percent, 0) / 100, 2) від ціни продажу; сума собівартості в лог не потрапляє.
+    /// </summary>
+    private async Task<StoreResult<AppointmentDto>?> CompleteWithCostSnapshotAsync(Guid id, CancellationToken ct)
+    {
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var updated = await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE beauty_appointments a SET status = 'completed',
+                   cost_snapshot = e.cost_amount,
+                   master_percent_snapshot = e.master_percent,
+                   master_payout_snapshot = CASE WHEN e.cost_amount IS NULL THEN NULL
+                                                 ELSE round(a.price_final * coalesce(e.master_percent, 0) / 100, 2) END,
+                   cost_captured_at = now(), updated_at = now()
+            FROM beauty_appointments s
+            LEFT JOIN LATERAL (SELECT c.cost_amount, c.master_percent FROM beauty_service_costs c
+                               WHERE c.service_id = s.service_id AND (c.location_id = s.location_id OR c.location_id IS NULL)
+                               ORDER BY c.location_id NULLS LAST LIMIT 1) e ON true
+            WHERE a.id = {id} AND s.id = a.id AND a.status IN ('pending', 'confirmed')
+            """, ct);
+        if (updated == 0)
+        {
+            await tx.RollbackAsync(ct);
+            db.ChangeTracker.Clear();
+            return await db.Appointments.AsNoTracking().AnyAsync(a => a.Id == id, ct) ? StoreResult<AppointmentDto>.AlreadyClosed() : null;
+        }
+        // §22.4: completed закриває scheduled-нагадування й відкриті задачі дзвінка в тій самій транзакції.
+        await ClosePlanAsync(id, ReminderSkipReasons.AppointmentInactive, includePlannerSkipped: false, ct);
+        await tx.CommitAsync(ct);
+        db.ChangeTracker.Clear();
+        return StoreResult<AppointmentDto>.Ok((await GetAppointmentAsync(id, ct))!);
     }
 
     public async Task<bool> TryClaimCancelAsync(Guid id, DateTimeOffset at, CancelOrigin origin, string? reason, CancellationToken ct)
@@ -301,10 +362,13 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
         if (appt is null) return null;
         appt.Status = AppointmentStatus.Cancelled;
         appt.CancelledAt = at;
+        // §26.6: збій оплати при створенні (автора скасування ще немає) -> payment_failed; решта шляхів - cancelled
+        var releaseReason = appt.CancelledByType is null ? "payment_failed" : "cancelled";
         appt.CancelledByType ??= CancelledByTypes.System; // збій оплати при створенні тощо; автор staff/client вже зафіксований claim-ом
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await db.SaveChangesAsync(ct);
         await ClosePlanAsync(id, ReminderSkipReasons.AppointmentInactive, includePlannerSkipped: false, ct);
+        await ReleaseCouponCoreAsync(id, releaseReason, at, ct);
         await tx.CommitAsync(ct);
         return await GetAppointmentAsync(id, ct);
     }
@@ -333,7 +397,7 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
         return false;
     }
 
-    private enum SaveOutcome { Ok, Overlap, Duplicate }
+    private enum SaveOutcome { Ok, Overlap, Duplicate, CouponTaken }
 
     /// <summary>Overlap = exclusion constraint (перетин записів спеціаліста); Duplicate = унікальний Idempotency-Key.</summary>
     private async Task<SaveOutcome> TrySaveAsync(CancellationToken ct, bool concurrentRetryable = false)
@@ -353,6 +417,11 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
             db.ChangeTracker.Clear();
             return SaveOutcome.Duplicate;
         }
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: "23505", ConstraintName: "ux_beauty_coupon_redemptions_active" })
+        {
+            db.ChangeTracker.Clear();
+            return SaveOutcome.CouponTaken;
+        }
         catch (Exception ex) when (concurrentRetryable && IsDeadlock(ex))
         {
             // 40P01: паралельний повтор того ж запису взаємно заблокував exclusion/unique перевірки; одна з транзакцій відкочена.
@@ -369,10 +438,14 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
             a.ServiceId, ServiceName = a.Service!.Name, a.ClientId, ClientName = a.Client!.FullName,
             a.StartsAt, a.EndsAt, a.DurationMinutes, a.Status, a.Source, a.PriceOriginal, a.PriceFinal, a.PromotionId,
             a.ReminderOption, a.ReminderMethod, a.ReminderOffsets, a.PaymentMethod, LocationTimezone = a.Location!.Timezone,
-            a.CancelledAt, a.CancelledByType, a.CancelReason, a.ClientConfirmedAt,
+            a.CancelledAt, a.CancelledByType, a.CancelReason, a.ClientConfirmedAt, a.CouponId, a.CampaignId,
             CancelledByName = a.CancelledByUserId == null ? null
                 : db.Users.Where(u => u.Id == a.CancelledByUserId).Select(u => u.FullName).FirstOrDefault(),
         }).ToListAsync(ct);
+        var couponIds = rows.Where(r => r.CouponId != null).Select(r => r.CouponId!.Value).Distinct().ToList();
+        var couponInfo = couponIds.Count == 0 ? [] : (await db.Coupons.AsNoTracking().Where(c => couponIds.Contains(c.Id))
+            .Select(c => new { c.Id, c.Kind, c.CodeHint, PromotionName = db.Promotions.Where(p => p.Id == c.PromotionId).Select(p => p.Name).FirstOrDefault() })
+            .ToListAsync(ct)).ToDictionary(c => c.Id);
         var reminderViews = await LoadReminderViewsAsync(rows.Select(r => (r.Id, r.StartsAt, r.ReminderOption, r.ReminderMethod, r.ReminderOffsets)).ToList(), ct);
         return rows.Select(r => new AppointmentDto(
             r.Id, r.LocationId, r.LocationName, r.SpecialistId, r.SpecialistName, r.ServiceId, r.ServiceName, r.ClientId, r.ClientName,
@@ -381,6 +454,8 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
             r.PaymentMethod is { } m ? EnumText<Ent.PaymentMethod>.ToDb(m) : null, null, r.LocationTimezone,
             r.Status == AppointmentStatus.Cancelled ? r.CancelledAt : null,
             r.Status == AppointmentStatus.Cancelled ? new CancelledByDto(r.CancelledByType ?? CancelledByTypes.System, r.CancelledByName) : null,
-            r.Status == AppointmentStatus.Cancelled ? r.CancelReason : null, reminderViews[r.Id], r.ClientConfirmedAt)).ToList();
+            r.Status == AppointmentStatus.Cancelled ? r.CancelReason : null, reminderViews[r.Id], r.ClientConfirmedAt,
+            r.CouponId is { } cid && couponInfo.TryGetValue(cid, out var ci) ? new AppointmentCouponDto(ci.Id, ci.Kind, ci.CodeHint, ci.PromotionName ?? "", CouponOutcomes.Applied) : null,
+            r.CampaignId)).ToList();
     }
 }

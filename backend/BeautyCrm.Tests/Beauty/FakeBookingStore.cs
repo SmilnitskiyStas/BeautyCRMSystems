@@ -102,7 +102,8 @@ internal sealed class FakeBookingStore : IBookingStore
         return RescheduleAsync(id, newStart, plan.LegacyReminderAt, ct);
     }
 
-    public Task<AppointmentDto?> SetStatusAsync(Guid id, string status, CancellationToken ct) => Replace(id, a => a with { Status = status });
+    public async Task<StoreResult<AppointmentDto>?> SetStatusAsync(Guid id, string status, CancellationToken ct) =>
+        await Replace(id, a => a with { Status = status }) is { } r ? StoreResult<AppointmentDto>.Ok(r) : null;
 
     public CancelOrigin? LastCancelOrigin { get; private set; }
 

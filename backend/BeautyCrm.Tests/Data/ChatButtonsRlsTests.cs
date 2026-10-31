@@ -236,7 +236,7 @@ public sealed class ChatButtonsRlsTests : IClassFixture<PostgresRlsFixture>
         Assert.Empty(missing); // індекс на кожен FK, частковий не рахується
 
         await using var cnt = new NpgsqlCommand("SELECT count(*) FROM pg_constraint WHERE contype = 'f' AND conrelid = 'beauty_chat_keyboards'::regclass", admin);
-        Assert.Equal(5L, await cnt.ExecuteScalarAsync());
+        Assert.Equal(6L, await cnt.ExecuteScalarAsync()); // TASK-776: +campaign_recipient_id (§26.3)
     }
 
     // ---------- beauty_chat_keyboards: CHECK / UNIQUE / дефолти ----------
@@ -534,7 +534,7 @@ public sealed class ChatButtonsRlsTests : IClassFixture<PostgresRlsFixture>
 
         Assert.Equal(new[]
         {
-            "id", "tenant_id", "conversation_id", "message_id", "kind", "token", "options", "proposal_id", "appointment_id", "status",
+            "id", "tenant_id", "conversation_id", "message_id", "kind", "token", "options", "proposal_id", "appointment_id", "campaign_recipient_id", "status",
             "expires_at", "used_at", "used_option", "used_by_message_id", "markup_cleared_at", "clear_attempts", "created_at", "updated_at",
         }.OrderBy(x => x), cols.Keys.OrderBy(x => x));
 

@@ -65,6 +65,11 @@ public sealed class ChatAssistantOptions
     public TimeSpan IdenticalTemplateThrottle => TimeSpan.FromSeconds(IdenticalTemplateThrottleSeconds);
     public TimeSpan RateLimitRetryDelay => TimeSpan.FromSeconds(RateLimitRetrySeconds);
 
+    /// <summary>TASK-782 (§26.2): `Marketing:ConsentTextVersion` - версія показаного тексту згоди (пишеться в options клавіатури й подію). Новий текст = нова версія.</summary>
+    public string MarketingConsentTextVersion { get; init; } = "mc-v1";
+    /// <summary>TASK-782 (§26.2): `Marketing:OfferCooldownDays` (1..365) - автоматична пропозиція згоди не частіше.</summary>
+    public int MarketingOfferCooldownDays { get; init; } = 90;
+
     public static ChatAssistantOptions Read(IConfiguration c)
     {
         static int I(IConfiguration c, string key, int def, int min, int max) =>
@@ -87,6 +92,9 @@ public sealed class ChatAssistantOptions
             MaxTemplateRepliesPerConversationPerMinute = I(c, "MaxTemplateRepliesPerConversationPerMinute", 6, 1, 120),
             IdenticalTemplateThrottleSeconds = I(c, "IdenticalTemplateThrottleSeconds", 30, 1, 3600),
             ReminderPromptTtlHours = I(c, "ReminderPromptTtlHours", 24, 1, 72),
+            MarketingConsentTextVersion = c["Marketing:ConsentTextVersion"] is { Length: > 0 and <= 32 } mv && !string.IsNullOrWhiteSpace(mv) ? mv.Trim() : "mc-v1",
+            MarketingOfferCooldownDays = int.TryParse(c["Marketing:OfferCooldownDays"], NumberStyles.Integer, CultureInfo.InvariantCulture, out var ocd)
+                ? Math.Clamp(ocd, 1, 365) : 90,
             MaxUpcomingReplan = int.TryParse(c["Reminders:MaxUpcomingReplan"], NumberStyles.Integer, CultureInfo.InvariantCulture, out var mur)
                 ? Math.Clamp(mur, 1, 500) : 50,
         };
@@ -103,6 +111,20 @@ public static class ChatJournal
     public const string ReminderChoice = "reminder_choice";
     /// <summary>«Стоп» від клієнта (TASK-740): payload {replanned, via}.</summary>
     public const string ReminderStop = "reminder_stop";
+    /// <summary>Показ питання про номер (TASK-770, §25.5.1): payload {appointmentId?, trigger, via}. Без номера.</summary>
+    public const string PhonePrompt = "phone_prompt";
+    /// <summary>Результат збереження номера (§25.5.3): payload {result, source, via, appointmentId?, duplicateLinked}. Без номера.</summary>
+    public const string PhoneSaved = "phone_saved";
+    /// <summary>Клієнт надав інший номер, ніж у картці: він у phone_pending, рішення за адміністратором. Payload {via}. Без номера.</summary>
+    public const string PhoneConflict = "phone_conflict";
+    /// <summary>TASK-782 (§26.9.2): зміна згоди клієнтом у чаті. Payload {level, via, textVersion?, changed, campaignId?}. Без ПД.</summary>
+    public const string MarketingConsent = "marketing_consent";
+    /// <summary>TASK-782: показано пропозицію згоди. Payload {textVersion}.</summary>
+    public const string MarketingOffer = "marketing_offer";
+    /// <summary>TASK-782 (§26.9.3): клієнт натиснув кнопку кампанії. Payload {campaignId, recipientId}.</summary>
+    public const string CampaignClick = "campaign_click";
+    /// <summary>TASK-782: пропозицію розмови зі знижкою поставлено (кнопка / код текстом). Payload {via, campaignId?}. Без коду купона.</summary>
+    public const string CouponOffer = "coupon_offer";
 }
 
 /// <summary>

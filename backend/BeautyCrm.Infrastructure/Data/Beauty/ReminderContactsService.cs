@@ -276,7 +276,7 @@ public sealed class ReminderContactsService(
             .Select(t => new
             {
                 t.Id, t.DueAt, t.Status, t.Reason, t.OffsetMinutes, t.CompletedAt, t.CompletedByUserId, t.Note,
-                ClientId = t.ClientId, ClientName = t.Client!.FullName, ClientPhone = t.Client.Phone,
+                ClientId = t.ClientId, ClientName = t.Client!.FullName, ClientPhone = t.Client.Phone, ClientPhonePending = t.Client.PhonePending,
                 AppointmentId = t.AppointmentId, StartsAt = t.Appointment!.StartsAt, AppointmentStatus = t.Appointment.Status,
                 ServiceName = t.Appointment.Service!.Name, SpecialistName = t.Appointment.Specialist!.FullName,
                 LocationId = t.LocationId, LocationName = t.Location!.Name, t.Location.Timezone,
@@ -293,7 +293,8 @@ public sealed class ReminderContactsService(
             var starts = TimeZoneInfo.ConvertTime(r.StartsAt, tz);
             return new CallTaskDto(
                 r.Id, r.DueAt, due.ToString("HH:mm", CultureInfo.InvariantCulture), r.Status, r.Reason, r.OffsetMinutes,
-                new CallTaskClientDto(r.ClientId, r.ClientName, string.IsNullOrWhiteSpace(r.ClientPhone) ? null : r.ClientPhone),
+                new CallTaskClientDto(r.ClientId, r.ClientName, string.IsNullOrWhiteSpace(r.ClientPhone) ? null : r.ClientPhone,
+                    string.IsNullOrWhiteSpace(r.ClientPhonePending) ? null : r.ClientPhonePending),
                 new CallTaskAppointmentDto(r.AppointmentId, r.StartsAt, starts.ToString("yyyy-MM-dd'T'HH:mm", CultureInfo.InvariantCulture),
                     r.ServiceName, r.SpecialistName, EnumText<AppointmentStatus>.ToDb(r.AppointmentStatus)),
                 new CallTaskLocationDto(r.LocationId, r.LocationName, r.Timezone),

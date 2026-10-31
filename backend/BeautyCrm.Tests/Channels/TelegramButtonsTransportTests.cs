@@ -293,7 +293,7 @@ public class TelegramButtonsTransportTests
         Assert.False(d0.RootElement.TryGetProperty("language_code", out _));
         Assert.Equal("uk", d1.RootElement.GetProperty("language_code").GetString());
         foreach (var d in new[] { d0, d1 })
-            Assert.Equal(["start", "book", "my", "cancel", "stop", "help"],
+            Assert.Equal(["start", "book", "my", "cancel", "stop", "marketing", "help"],
                 d.RootElement.GetProperty("commands").EnumerateArray().Select(c => c.GetProperty("command").GetString()!).ToArray());
         Assert.Equal("Записатися", d0.RootElement.GetProperty("commands")[1].GetProperty("description").GetString());
     }

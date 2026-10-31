@@ -51,7 +51,7 @@ internal sealed class SerializedBookingStore(FakeBookingStore inner) : IBookingS
         L(() => inner.ListAppointmentsAsync(from, to, locationId, specialistId, includeCancelled, ct));
     public Task<StoreResult<AppointmentDto>> RescheduleAsync(Guid id, DateTimeOffset newStart, DateTimeOffset? reminderAt, CancellationToken ct) =>
         L(() => inner.RescheduleAsync(id, newStart, reminderAt, ct));
-    public Task<AppointmentDto?> SetStatusAsync(Guid id, string status, CancellationToken ct) => L(() => inner.SetStatusAsync(id, status, ct));
+    public Task<StoreResult<AppointmentDto>?> SetStatusAsync(Guid id, string status, CancellationToken ct) => L(() => inner.SetStatusAsync(id, status, ct));
     public Task<bool> TryClaimCancelAsync(Guid id, DateTimeOffset at, CancelOrigin origin, string? reason, CancellationToken ct) =>
         L(() => inner.TryClaimCancelAsync(id, at, origin, reason, ct));
     public Task ReleaseCancelAsync(Guid id, string previousStatus, CancellationToken ct) => L(() => inner.ReleaseCancelAsync(id, previousStatus, ct));

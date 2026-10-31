@@ -116,7 +116,7 @@ public sealed partial class PlatformTenantService(IAuthStore store, IPasswordHas
     {
         if (modules is null) return null;
         var list = modules.Select(m => m.Trim().ToLowerInvariant()).Distinct().ToList();
-        return list.All(m => BeautyModules.All.Contains(m)) ? list : null;
+        return list.All(m => BeautyModules.Known.Contains(m)) ? list : null;
     }
 }
 

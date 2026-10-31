@@ -138,7 +138,7 @@ public sealed class OutboundDispatcher(
 }
 
 /// <summary>Реалізація IChannelMessageRepository над beauty_conversations / beauty_messages.</summary>
-public sealed class EfChannelMessageRepository(BeautyDbContext db, ChannelRequestContext context) : IChannelMessageRepository
+public sealed class EfChannelMessageRepository(BeautyDbContext db, ChannelRequestContext context, ChatPhoneOptions? phone = null) : IChannelMessageRepository
 {
     private const string UniqueViolation = "23505";
 
@@ -160,14 +160,21 @@ public sealed class EfChannelMessageRepository(BeautyDbContext db, ChannelReques
             if (conv is null)
                 db.Conversations.Add(conv = new Conversation { Id = Guid.NewGuid(), ChannelId = channel.ChannelId, ExternalChatId = m.ExternalConversationId });
             if (conv.LastMessageAt is null || m.ReceivedAt > conv.LastMessageAt) conv.LastMessageAt = m.ReceivedAt;
+            var isContact = m.Kind == InboundKinds.Contact;
+            // TASK-768 (§25.4): verdict зі списку; номер лише для own, лише у форматі E.164 (CHECK) і лише при ChatPhone:Enabled.
+            // Валідуємо до INSERT: порушення CHECK віддало б рядок з номером у PostgresException.Detail.
+            var verdict = !isContact ? null : m.ContactVerdict is ContactVerdicts.Own or ContactVerdicts.Invalid ? m.ContactVerdict : ContactVerdicts.Foreign;
+            if (verdict == ContactVerdicts.Own && !ContactPhoneNormalizer.IsE164(m.ContactPhone)) verdict = ContactVerdicts.Invalid;
             db.Messages.Add(new Message
             {
                 Id = Guid.NewGuid(), ConversationId = conv.Id, Direction = MessageDirection.Inbound, SenderType = MessageSenderType.Client,
-                Body = m.Text, Kind = m.Kind, ExternalMessageId = m.ExternalMessageId, SentAt = m.ReceivedAt, Status = "received",
+                Body = isContact ? InboundKinds.ContactBody : m.Text, Kind = m.Kind, ExternalMessageId = m.ExternalMessageId, SentAt = m.ReceivedAt, Status = "received",
                 IdempotencyKey = key,
                 // TASK-750 (§23.4): лише для kind=callback (CHECK ck_beauty_messages_callback_fields); callback_data = null, якщо формат невалідний.
                 CallbackData = m.Kind == InboundKinds.Callback ? m.CallbackData : null,
                 CallbackMessageRef = m.Kind == InboundKinds.Callback ? m.CallbackMessageRef : null,
+                ContactVerdict = verdict,
+                ContactPhone = verdict == ContactVerdicts.Own && phone is { Enabled: true } ? m.ContactPhone : null,
             });
             try
             {

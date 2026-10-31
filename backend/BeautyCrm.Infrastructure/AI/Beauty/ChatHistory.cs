@@ -313,9 +313,11 @@ public static class ChatSummaryText
         string C(string? v) => AiTextNormalizer.NeutralizeTags(AiTextNormalizer.Clean(v)).Trim();
         var inv = CultureInfo.InvariantCulture;
         // Без markdown: Telegram без parse_mode показує «~~стара~~» буквально (TASK-753): стара ціна словами.
+        // §26.9.3: купон застосовано -> «купон «назва»»; not_better / not_applicable -> окремий рядок після ціни (купон не споживається).
+        var applied = s.CouponOutcome == "applied";
         var price = s.PromotionName is not null || s.PriceFinal < s.PriceOriginal
             ? $"{Money(s.PriceFinal)} {currencyLabel} (замість {Money(s.PriceOriginal)} {currencyLabel}" +
-              (s.PromotionName is null ? "" : $", акція «{C(s.PromotionName)}»") + ")"
+              (s.PromotionName is null ? "" : applied ? $", купон «{C(s.PromotionName)}»" : $", акція «{C(s.PromotionName)}»") + ")"
             : $"{Money(s.PriceFinal)} {currencyLabel}";
         var place = string.IsNullOrWhiteSpace(s.Address) ? C(s.LocationName) : $"{C(s.LocationName)}, {C(s.Address)}";
         var sb = new StringBuilder();
@@ -326,6 +328,8 @@ public static class ChatSummaryText
         sb.AppendLine($"Дата й час: {Weekdays[(int)s.LocalDate.DayOfWeek]}, {s.LocalDate.ToString("dd.MM", inv)}, {s.LocalTime.ToString("HH:mm", inv)}, {C(s.Timezone)}");
         sb.AppendLine($"Тривалість: {s.DurationMinutes} хв");
         sb.AppendLine($"Ціна: {price}");
+        if (s.CouponOutcome == "not_better") sb.AppendLine("Купон не застосовано: діє вигідніша акція.");
+        else if (s.CouponOutcome == "not_applicable") sb.AppendLine("Купон не діє на цю послугу.");
         sb.AppendLine("Оплата в закладі.");
         sb.Append(buttons
             ? $"Натисніть «Так, записатися» або напишіть «Так». Пропозиція дійсна {ttlMinutes} хв."

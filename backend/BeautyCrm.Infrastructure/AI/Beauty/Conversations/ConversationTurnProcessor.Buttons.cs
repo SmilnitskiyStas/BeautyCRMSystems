@@ -2,6 +2,7 @@ using System.Text.Json;
 using BeautyCrm.Application.Features.BeautyChatBooking;
 using BeautyCrm.Application.Features.BeautyReminders;
 using BeautyCrm.Infrastructure.Data;
+using BeautyCrm.Infrastructure.Data.Beauty;
 using BeautyCrm.Infrastructure.Data.Entities;
 using BeautyCrm.Infrastructure.Data.Tenancy;
 using BeautyCrm.Infrastructure.Integrations.Channels;
@@ -72,7 +73,16 @@ public sealed partial class ConversationTurnProcessor
         {
             try
             {
-                foreach (var reply in spec.Replies)
+                // §25.5.3: дії над номером клієнта виконуються ПЕРЕД вставкою відповідей (текст залежить від результату), у цій самій транзакції
+                var replies = spec.Replies;
+                var composedPrompt = spec.Prompt;
+                if (spec.ComposeReplies is not null)
+                {
+                    var composed = await spec.ComposeReplies(ct);
+                    replies = composed.Replies;
+                    composedPrompt = composed.Prompt ?? spec.Prompt;
+                }
+                foreach (var reply in replies)
                 {
                     var messageId = Guid.NewGuid();
                     // L8: вихідне Telegram ≤ 4096 одиниць UTF-16. Підсумок запису (":s") обмежений за побудовою; решта обрізається без розриву пари.
@@ -81,7 +91,7 @@ public sealed partial class ConversationTurnProcessor
                     {
                         Id = messageId, ConversationId = conv.Id, Direction = MessageDirection.Outbound, SenderType = reply.Sender,
                         Body = body, Kind = InboundKinds.Text, SentAt = now, Status = reply.Draft ? "draft" : "sending",
-                        IdempotencyKey = baseKey + reply.KeySuffix,
+                        IdempotencyKey = baseKey + reply.KeySuffix, Actions = reply.ActionsJson,
                     });
                     await db.SaveChangesAsync(ct);
                     // M1: лише зв'язок пропозиції з повідомленням підсумку; prepared -> shown після ДОСТАВКИ (ChatSummaryTracker).
@@ -99,10 +109,10 @@ public sealed partial class ConversationTurnProcessor
                 foreach (var r in spec.Journal ?? []) await journal.AppendAsync(r, ct);
                 if (spec.TxWork is not null) await spec.TxWork(ct); // дія коду в ТІЙ САМІЙ транзакції (вибір нагадування, «Стоп»)
 
-                if (spec.Prompt is { } prompt)
+                if (composedPrompt is { } prompt)
                     await db.Conversations.Where(c => c.Id == conv.Id).ExecuteUpdateAsync(s => s
-                        .SetProperty(c => c.PendingPrompt, ReminderChoiceMenu.PromptKind)
-                        .SetProperty(c => c.PendingPromptAppointmentId, (Guid?)prompt.AppointmentId)
+                        .SetProperty(c => c.PendingPrompt, prompt.Kind)
+                        .SetProperty(c => c.PendingPromptAppointmentId, prompt.AppointmentId)
                         .SetProperty(c => c.PendingPromptExpiresAt, (DateTimeOffset?)prompt.ExpiresAt.ToUniversalTime()), ct);
                 if (spec.HandoffReason is { } handoffReason)
                 {
@@ -122,8 +132,12 @@ public sealed partial class ConversationTurnProcessor
                 // §23.6 «Відкликання»: вхід у handoff гасить booking_confirm/slot_pick; знято питання про нагадування - гасне reminder_choice.
                 if (spec.RevokeAiKeyboards || spec.HandoffReason is not null)
                     clear.AddRange(await Keyboards.RevokeActiveAsync(conv.Id, [KeyboardKinds.BookingConfirm, KeyboardKinds.SlotPick], ct));
-                if (!await db.Conversations.AnyAsync(c => c.Id == conv.Id && c.PendingPrompt != null, ct))
+                if (spec.RevokeReminderKeyboard || !await db.Conversations.AnyAsync(c => c.Id == conv.Id && c.PendingPrompt != null, ct))
                     clear.AddRange(await Keyboards.RevokeActiveAsync(conv.Id, [KeyboardKinds.ReminderChoice], ct));
+                await UpdateReplyKeyboardStateAsync(conv.Id, spec.OpenReplyKeyboard, created, now, ct);
+                if (spec.RedactInboundBody is { } redacted)
+                    await db.Messages.Where(m => batchIds.Contains(m.Id))
+                        .ExecuteUpdateAsync(s => s.SetProperty(m => m.Body, redacted), ct);
 
                 if (created.Count > 0)
                     await db.Conversations.Where(c => c.Id == conv.Id && (c.LastMessageAt == null || c.LastMessageAt < now))
@@ -229,6 +243,10 @@ public sealed partial class ConversationTurnProcessor
             case ChatCommand.Cancel:
                 await HandleCancelCommandAsync(t, buttons, ct);
                 return;
+            case ChatCommand.Marketing: // §26.9.2: меню згоди; за Marketing:Enabled=false сюди не доходить (T-text-only), у suggest відповідає шаблон
+                if (!await PassTemplateGateAsync(t, ct)) return;
+                await CommitAsync(t, await MarketingMenuReplyAsync(t, ct), null, null, ct);
+                return;
             default: // Stop обробляє розбиття пакета; сюди не доходить
                 await HandleStopAsync(t, ct);
                 return;
@@ -313,7 +331,7 @@ public sealed partial class ConversationTurnProcessor
 
         // «Стоп» (i:stop) - відписка від власних нагадувань: не підпадає під частотні ліміти (M3), ефект застосовується завжди.
         var parsed = CallbackAddress.TryParse(cb.CallbackData, out var addr);
-        var isStop = parsed && addr.Verb == ButtonVerbs.Stop;
+        var isStop = parsed && addr.Verb is ButtonVerbs.Stop or ButtonVerbs.MarketingOff; // відписки діють завжди (§26.9.2), поза частотним лімітом натискань
         // M3: інформаційні кнопки (довідка, «Мої записи», «Записатися», «Скасувати» зі списку) входять до ліміту шаблонних відповідей.
         var informational = parsed && InformationalVerb(addr.Verb);
 
@@ -335,11 +353,13 @@ public sealed partial class ConversationTurnProcessor
 
     /// <summary>Verb, що дає лише шаблонну відповідь без побічного ефекту (M3): ліміт шаблонних відповідей.</summary>
     private static bool InformationalVerb(string verb) =>
-        verb is ButtonVerbs.Book or ButtonVerbs.My or ButtonVerbs.Help or ButtonVerbs.CancelAsk;
+        verb is ButtonVerbs.Book or ButtonVerbs.My or ButtonVerbs.Help or ButtonVerbs.CancelAsk or ButtonVerbs.MarketingMenu;
 
     private static bool SuggestAllows(string verb) =>
         verb is ButtonVerbs.CancelAsk or ButtonVerbs.CancelYes or ButtonVerbs.CancelNo or ButtonVerbs.Attend or ButtonVerbs.ReminderChoice
-            or ButtonVerbs.Stop or ButtonVerbs.My;
+            or ButtonVerbs.Stop or ButtonVerbs.My or ButtonVerbs.Phone
+            // §26.9.1: у suggest mc / i:mkt / i:mkoff відповідають шаблоном; co лише ставить пропозицію розмови (відповідь придушує обробник)
+            or ButtonVerbs.MarketingConsent or ButtonVerbs.MarketingMenu or ButtonVerbs.MarketingOff or ButtonVerbs.CampaignOffer;
 
     private static bool DeterministicKind(string? kind) =>
         kind is KeyboardKinds.AppointmentList or KeyboardKinds.AppointmentActions or KeyboardKinds.CancelConfirm or KeyboardKinds.ReminderChoice;
@@ -410,9 +430,25 @@ public sealed partial class ConversationTurnProcessor
             }
             if (res.Option?.Method == ReminderMethods.Call && !await ReminderApplier.CallAvailableAsync(conv.ClientId, ct))
             {
+                // §25.5.1: «Зателефонувати» без номера - запит номера (rc гасне), пауза/вимкнено - шаблон
+                if (PhoneOn && await CallWithoutPhoneAsync(t, kb?.AppointmentId, explicitTrigger: false, ct) is { } phoneSpec)
+                {
+                    await CommitManyAsync(t, phoneSpec with { CallbackInboundId = t.Batch[0].Id, CallbackLabel = LabelOf(res) }, ct);
+                    return;
+                }
                 await CommitManyAsync(t, CbSpec(t, res, new Reply(ChatTemplates.ReminderCallUnavailable, MessageSenderType.System)), ct);
                 return;
             }
+        }
+
+        // «Змінити спосіб» (i:phone, §25.5.1): запит номера в будь-який момент, обходить паузу
+        if (verb == ButtonVerbs.Phone)
+        {
+            var changeSpec = PhoneOn && await CallWithoutPhoneAsync(t, null, explicitTrigger: true, ct) is { } requested
+                ? requested with { CallbackInboundId = t.Batch[0].Id, CallbackLabel = LabelOf(res) }
+                : CbSpec(t, res, await StaleReplyAsync(t, null, ct));
+            await CommitManyAsync(t, changeSpec, ct);
+            return;
         }
 
         if (InformationalVerb(verb))
@@ -459,9 +495,24 @@ public sealed partial class ConversationTurnProcessor
                 var needChoice = c.ReminderChoiceNeeded
                     || (c.AlreadyConfirmed && !await db.ClientContactPreferences.AsNoTracking().AnyAsync(x => x.ClientId == c.Appointment.ClientId, ct));
                 var (body, prompt, keyboard) = await ComposeConfirmedAsync(t, c.Appointment, needChoice, ct);
-                await Commit(CbSpec(t, res, Sys(body, keyboard)) with { Prompt = prompt });
+                await Commit(await ConfirmedSpecAsync(t, CbSpec(t, res), c.Appointment, body, prompt, keyboard, ct));
                 return;
             }
+            case ButtonResultCodes.MarketingConsentChoice: await ApplyConsentChoiceAsync(t, res, r, ct); return;
+            case ButtonResultCodes.MarketingMenu: await Commit(CbSpec(t, res, await MarketingMenuReplyAsync(t, ct))); return;
+            case ButtonResultCodes.MarketingOff:
+            {
+                // §26.9.2: ефект завжди; відповідь - в межах ліміту шаблонів (як «Стоп»)
+                var limited = limiter.IsTemplateLimited(conv.Id, opts.MaxTemplateRepliesPerConversationPerMinute);
+                if (!limited) limiter.RecordTemplate(conv.Id);
+                await Commit(CbSpec(t, res, limited ? null : Sys(ChatTemplates.MarketingOff)) with
+                    { TxWork = c => ApplyMarketingOffAsync(t, MarketingConsentVias.Button, r.CampaignRecipientId, c) });
+                return;
+            }
+            case ButtonResultCodes.CampaignOffer: await ApplyCampaignOfferAsync(t, res, r, ct); return;
+            case ButtonResultCodes.CouponUnavailable:
+                await Commit(CbSpec(t, res, Sys(ChatTemplates.CouponUnavailable)) with { TxWork = c => Offers.ClearAsync(conv.Id, c) });
+                return;
             case ButtonResultCodes.AlreadyConfirmed:
                 await Commit(CbSpec(t, res, Sys(IsCancelled(r.Confirmed!.Appointment) ? ChatTemplates.AppointmentCancelled : ChatTemplates.AlreadyConfirmed)));
                 return;
@@ -484,7 +535,7 @@ public sealed partial class ConversationTurnProcessor
                 var p = r.Prepared!;
                 var s = p.Summary;
                 var dto = new ChatBookingSummaryDto(s.ServiceName, s.SpecialistName, s.LocationName, s.Address, s.LocalDate, s.LocalTime, s.Timezone,
-                    s.DurationMinutes, s.PriceOriginal, s.PriceFinal, s.PromotionName);
+                    s.DurationMinutes, s.PriceOriginal, s.PriceFinal, s.PromotionName, s.CouponOutcome);
                 var ttl = Math.Max(1, (int)Math.Round((p.ExpiresAt - t.Now).TotalMinutes));
                 await Commit(CbSpec(t, res, new Reply(ChatSummaryText.Format(dto, ttl, promptOpts.CurrencyLabel, buttons: true), MessageSenderType.System,
                     ShowProposalId: p.ProposalId, Keyboard: KeyboardBuilder.BookingConfirm(p.ProposalId), KeySuffix: ":s")));
@@ -515,7 +566,7 @@ public sealed partial class ConversationTurnProcessor
                 // M3: ефект «Стоп» завжди; відповідь - в межах ліміту шаблонних відповідей, понад ліміт - тиша.
                 var limited = limiter.IsTemplateLimited(conv.Id, opts.MaxTemplateRepliesPerConversationPerMinute);
                 if (!limited) limiter.RecordTemplate(conv.Id);
-                await Commit(CbSpec(t, res, limited ? null : Sys(ChatTemplates.Stop)) with { TxWork = c => ReminderStop.StopAsync(conv.Id, c, "button") });
+                await Commit(CbSpec(t, res, limited ? null : Sys(StopText)) with { TxWork = c => ReminderStop.StopAsync(conv.Id, c, "button") });
                 return;
             }
             case ButtonResultCodes.Used: // програно CAS у гонці двох натискань: переможець уже відповів
@@ -535,14 +586,16 @@ public sealed partial class ConversationTurnProcessor
         var appointmentId = r.Appointment!.Id;
         try
         {
-            await CommitManyAsync(t, CbSpec(t, res, new Reply(ChatTemplates.ReminderSet(choice), MessageSenderType.System)) with
+            var setSpec = CbSpec(t, res, new Reply(ChatTemplates.ReminderSet(choice), MessageSenderType.System)) with
             {
                 TxWork = async c =>
                 {
                     var applied = await ReminderApplier.ApplyAsync(t.Conv.Id, appointmentId, choice, "chat", c, via: "button");
                     if (!applied.Applied) throw new ReminderNotAppliedException(applied);
                 },
-            }, ct);
+            };
+            // §26.9.2: після T-reminder-set (вибір зроблено) - пропозиція згоди окремим повідомленням
+            await CommitManyAsync(t, await WithMarketingOfferAsync(t, setSpec, t.Conv.ClientId, ct), ct);
         }
         catch (ReminderNotAppliedException ex)
         {

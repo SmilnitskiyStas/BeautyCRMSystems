@@ -46,6 +46,11 @@ public static class ButtonResultCodes
     public const string Help = "help";                           // i:help
     public const string Human = "human_requested";               // i:human -> handoff human_requested
     public const string Stop = "stop";                           // i:stop -> ReminderStopHandler
+    public const string MarketingConsentChoice = "marketing_consent"; // mc: CAS виконано; домен (TASK-782) ставить SetAsync з ConsentLevel/ConsentTextVersion
+    public const string CampaignOffer = "campaign_offer";        // co: без CAS; домен (TASK-782) перевіряє купон і ставить пропозицію розмови
+    public const string MarketingMenu = "marketing_menu";        // i:mkt -> T-marketing-menu
+    public const string MarketingOff = "marketing_off";          // i:mkoff -> SetAsync(none); CampaignRecipientId - з повідомлення кампанії (якщо є)
+    public const string CouponUnavailable = "coupon_unavailable"; // TASK-782: купон на підтвердженні недійсний -> T-coupon-unavailable, звичайна ціна
     public const string Used = "used";                           // CAS програно (гонка двох натискань)
     public const string Stale = "stale";                         // результат не Valid / недозволений verb
 }
@@ -59,6 +64,10 @@ public sealed record ButtonActionResult(string Code)
     public CancelPolicyPreview? Policy { get; init; }
     public IReadOnlyList<ChatAppointmentInfo>? Appointments { get; init; }
     public KeyboardOption? Option { get; init; }
+    /// <summary>TASK-781: mc - рівень і версія тексту з options у БД; co / i:mkoff - одержувач кампанії (i:mkoff - лише за повідомленням кампанії цієї розмови).</summary>
+    public string? ConsentLevel { get; init; }
+    public string? ConsentTextVersion { get; init; }
+    public Guid? CampaignRecipientId { get; init; }
     /// <summary>booking_limit | booking_failed | cancel_limit | cancel_failed | reschedule_request | human_requested.</summary>
     public string? HandoffReason { get; init; }
 }
@@ -94,6 +103,9 @@ public sealed class ChatButtonActions(
             ButtonVerbs.Reschedule => await RescheduleAsync(ctx, ct),
             ButtonVerbs.CancelYes => await CancelYesAsync(ctx, ct),
             ButtonVerbs.CancelNo => await CancelNoAsync(ctx, ct),
+            ButtonVerbs.MarketingConsent => await MarketingConsentAsync(ctx, ct),
+            ButtonVerbs.CampaignOffer => new ButtonActionResult(ButtonResultCodes.CampaignOffer)
+                { CampaignRecipientId = res.CampaignRecipientId }, // не споживає; ефекти (купон, пропозиція розмови) - домен
             _ => new ButtonActionResult(ButtonResultCodes.Stale),
         };
     }
@@ -146,6 +158,7 @@ public sealed class ChatButtonActions(
         {
             "slot_unavailable" or "slot_in_past" or "invalid_start" => new ButtonActionResult(ButtonResultCodes.SlotTaken),
             "price_changed" => new ButtonActionResult(ButtonResultCodes.PriceChanged),
+            "coupon_unavailable" or "coupon_invalid" => new ButtonActionResult(ButtonResultCodes.CouponUnavailable), // TASK-782 (§26.9.3)
             "proposal_expired" => new ButtonActionResult(ButtonResultCodes.Expired),
             "confirmation_in_progress" => new ButtonActionResult(ButtonResultCodes.InProgress),
             "booking_limit_reached" => new ButtonActionResult(ButtonResultCodes.Limit) { HandoffReason = "booking_limit" },
@@ -175,7 +188,9 @@ public sealed class ChatButtonActions(
             return new ButtonActionResult(ButtonResultCodes.Stale);
         if (!await ConsumeAsync(ctx, ct)) return new ButtonActionResult(ButtonResultCodes.Used);
 
-        var r = await booking.PrepareAsync(new ChatPrepareRequest(ctx.ConversationId, loc, svc, spec, at), ct);
+        // TASK-782 (§26.9.3): купон із пропозиції розмови додає код (як і для prepare_booking моделі)
+        var r = await services.GetRequiredService<BeautyCrm.Infrastructure.AI.Beauty.Conversations.ChatCouponOffers>()
+            .PrepareAsync(booking, new ChatPrepareRequest(ctx.ConversationId, loc, svc, spec, at), ct);
         if (r.IsOk) return new ButtonActionResult(ButtonResultCodes.SummaryReady) { Prepared = r.Value, ProposalId = r.Value!.ProposalId };
         return r.Error!.Code is "slot_not_offered" or "invalid_start"
             ? new ButtonActionResult(ButtonResultCodes.SlotTaken)
@@ -193,6 +208,17 @@ public sealed class ChatButtonActions(
             return new ButtonActionResult(ButtonResultCodes.AppointmentInactive);
         if (!await ConsumeAsync(ctx, ct)) return new ButtonActionResult(ButtonResultCodes.Used);
         return new ButtonActionResult(ButtonResultCodes.ReminderChoice) { Option = o, Appointment = appt };
+    }
+
+    // ------------------------------------------------------------------ згода (§26.9.2)
+
+    /// <summary>Лише CAS одноразовості; запис згоди (SetAsync, source=chat, via=button) виконує домен (TASK-782) з <see cref="ButtonActionResult.ConsentLevel"/>.</summary>
+    private async Task<ButtonActionResult> MarketingConsentAsync(ButtonActionContext ctx, CancellationToken ct)
+    {
+        var res = ctx.Resolution;
+        if (res.ConsentLevel is not { } level || res.ConsentTextVersion is not { } version) return new ButtonActionResult(ButtonResultCodes.Stale);
+        if (!await ConsumeAsync(ctx, ct)) return new ButtonActionResult(ButtonResultCodes.Used);
+        return new ButtonActionResult(ButtonResultCodes.MarketingConsentChoice) { ConsentLevel = level, ConsentTextVersion = version, Option = res.Option };
     }
 
     // ------------------------------------------------------------------ записи клієнта
@@ -267,6 +293,9 @@ public sealed class ChatButtonActions(
             case ButtonVerbs.Help: return new ButtonActionResult(ButtonResultCodes.Help);
             case ButtonVerbs.Human: return new ButtonActionResult(ButtonResultCodes.Human) { HandoffReason = "human_requested" };
             case ButtonVerbs.Stop: return new ButtonActionResult(ButtonResultCodes.Stop);
+            case ButtonVerbs.MarketingMenu: return new ButtonActionResult(ButtonResultCodes.MarketingMenu);
+            case ButtonVerbs.MarketingOff:
+                return new ButtonActionResult(ButtonResultCodes.MarketingOff) { CampaignRecipientId = ctx.Resolution.Keyboard?.CampaignRecipientId };
             default: return new ButtonActionResult(ButtonResultCodes.Stale);
         }
     }

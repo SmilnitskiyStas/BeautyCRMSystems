@@ -20,7 +20,8 @@ public sealed record ChatSlotsDto(string Timezone, IReadOnlyList<ChatSlotDto> Sl
 /// <summary>Дані для канонічного підсумку. Без id і токена підтвердження.</summary>
 public sealed record ChatBookingSummaryDto(
     string ServiceName, string SpecialistName, string LocationName, string? Address, DateOnly LocalDate, TimeOnly LocalTime,
-    string Timezone, int DurationMinutes, decimal PriceOriginal, decimal PriceFinal, string? PromotionName);
+    string Timezone, int DurationMinutes, decimal PriceOriginal, decimal PriceFinal, string? PromotionName,
+    string? CouponOutcome = null); // TASK-782 (§26.9.3): applied | not_better | not_applicable; купона не було - null
 
 /// <summary>
 /// Результат етапу 1. Токен підтвердження НЕ входить у DTO: адаптер його відкидає, шар ШІ його не бачить

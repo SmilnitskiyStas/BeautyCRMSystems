@@ -52,6 +52,7 @@ public static class StatelessLabels
     public const string My = "🗓 Мої записи";
     public const string Human = "👤 Адміністратор";
     public const string HumanLong = "👤 Передати адміністратору";
+    public const string Phone = "📞 Змінити спосіб";
 
     /// <summary>Підпис натиснутої безстанової кнопки без емодзі (inbox: «Клієнт натиснув: Записатися»).</summary>
     public static string BodyLabel(string verb) => verb switch
@@ -61,6 +62,9 @@ public static class StatelessLabels
         ButtonVerbs.Help => "Допомога",
         ButtonVerbs.Human => "Передати адміністратору",
         ButtonVerbs.Stop => "Не нагадувати",
+        ButtonVerbs.Phone => "Змінити спосіб",
+        ButtonVerbs.MarketingMenu => "Новини й акції",
+        ButtonVerbs.MarketingOff => "Не надсилати акції",
         _ => "",
     };
 }
@@ -122,7 +126,7 @@ public sealed class ChatKeyboardBuilder(ChatButtonsOptions opts)
     }
 
     /// <summary>[За 1 год] [За 2 год] [За 24 год] / [🔕 Не нагадувати] / [📞 Зателефонувати] (лише з телефоном і call_enabled: його вже немає в <paramref name="menu"/>).</summary>
-    public KeyboardPlan ReminderChoice(Guid appointmentId, IReadOnlyList<ReminderChoiceOption> menu, DateTimeOffset expiresAt)
+    public KeyboardPlan ReminderChoice(Guid appointmentId, IReadOnlyList<ReminderChoiceOption> menu, DateTimeOffset expiresAt, CallOffer? offer = null)
     {
         string Label(ReminderChoiceOption o) => o.Number switch
         {
@@ -134,6 +138,8 @@ public sealed class ChatKeyboardBuilder(ChatButtonsOptions opts)
         if (first.Count > 0) rows.Add(first);
         foreach (var (o, i) in menu.Select((o, i) => (o, i)).Where(x => x.o.Number > 3))
             rows.Add([new PlannedButton(Label(o), ButtonVerbs.ReminderChoice, i)]);
+        // §25.5.1: пауза після відмови - пункту «Зателефонувати» немає, є явний обхід (безстанова i:phone, не споживає rc).
+        if (offer == CallOffer.Cooldown) rows.Add([new PlannedButton(StatelessLabels.Phone, ButtonVerbs.Phone)]);
         return new KeyboardPlan(KeyboardKinds.ReminderChoice, options, rows, AppointmentId: appointmentId, ExpiresAt: expiresAt);
     }
 
@@ -179,6 +185,17 @@ public sealed class ChatKeyboardBuilder(ChatButtonsOptions opts)
 
     /// <summary>[📅 Записатися] (порожній список записів).</summary>
     public KeyboardPlan BookOnly() => Stateless([[new PlannedButton(StatelessLabels.Book, ButtonVerbs.Book)]]);
+
+    /// <summary>
+    /// TASK-782 (§26.9.1): три кнопки <c>mc</c> (повна / вибіркова / не надсилати), по одній у рядку; options несуть рівень і версію тексту
+    /// (<paramref name="textVersion"/> = <c>Marketing:ConsentTextVersion</c>). TTL ставить <see cref="ChatKeyboardService"/>.
+    /// </summary>
+    public KeyboardPlan MarketingConsent(string textVersion)
+    {
+        var options = MarketingKeyboards.ConsentOptions(textVersion);
+        return new KeyboardPlan(KeyboardKinds.MarketingConsent, options,
+            options.Select((o, i) => (IReadOnlyList<PlannedButton>)[new PlannedButton(o.Label, ButtonVerbs.MarketingConsent, i)]).ToList(), MaxPerRow: 1);
+    }
 
     /// <summary>[👤 Передати адміністратору] (T-help, помилка підготовки запису).</summary>
     public KeyboardPlan HumanOnly() => Stateless([[new PlannedButton(StatelessLabels.HumanLong, ButtonVerbs.Human)]]);

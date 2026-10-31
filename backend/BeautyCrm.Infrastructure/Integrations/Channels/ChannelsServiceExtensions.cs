@@ -49,6 +49,11 @@ public static class ChannelsServiceExtensions
         services.TryAddSingleton<TelegramPoller>();
         services.AddHostedService<TelegramPollingService>();
         services.AddScoped<OutboxProcessor>();
+        // Контакт/номер Telegram (TASK-768, §25.4): ChatPhone:*, порт читання з обнулінням для конвеєра, sweeper тимчасових номерів.
+        services.TryAddSingleton(sp => ChatPhoneOptions.Read(sp.GetRequiredService<IConfiguration>()));
+        services.TryAddScoped<IContactPhoneStore, EfContactPhoneStore>();
+        services.TryAddScoped<ContactPhoneSweeper>();
+        services.AddHostedService<ContactPhoneSweeperService>();
         // Транспорт інлайн-кнопок Telegram (TASK-750, §23.4): порт для TASK-752/753 і сервіс меню команд для API.
         services.TryAddScoped<IChannelActionsPort, ChannelActionsPort>();
         services.TryAddScoped<TelegramCommandsService>();

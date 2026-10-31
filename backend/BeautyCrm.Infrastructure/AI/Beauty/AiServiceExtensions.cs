@@ -60,6 +60,7 @@ public static class AiServiceExtensions
         services.TryAddScoped<IClientChatPort, ClientChatPortAdapter>();
         services.TryAddScoped<ClientChatToolbox>();
         services.TryAddScoped<IChatPolicyFactsPort, ChatPolicyFactsAdapter>(); // TASK-741: ФАКТИ ЗАКЛАДУ та PolicyClaimGuard
+        services.TryAddScoped<IChatMarketingFactsPort, ChatMarketingFactsAdapter>(); // TASK-782: рядки про розсилки й купон розмови
         services.TryAddScoped<ChatContextBuilder>(); // TASK-735: дата/час і каталог закладу в системному промпті ходу
         services.TryAddScoped<EfAiActionJournal>();
         services.TryAddScoped<IAiActionJournal>(sp => sp.GetRequiredService<EfAiActionJournal>());
@@ -75,6 +76,7 @@ public static class AiServiceExtensions
         services.TryAddScoped<ChatSummaryTracker>();
         services.TryAddScoped<ReminderChoiceApplier>();
         services.TryAddScoped<ReminderStopHandler>();
+        services.TryAddScoped<ChatCouponOffers>(); // TASK-782: пропозиція розмови зі знижкою (offer_*), купон у запис передає код
         services.AddBeautyChatButtons(); // TASK-752 (§23): клавіатури, перевірка callback, дії клієнта
         services.TryAddSingleton(sp => new ChatKeyboardBuilder(sp.GetRequiredService<ChatButtonsOptions>())); // TASK-753: розкладки формує код
         services.TryAddScoped<KeyboardMarkupCleaner>(); // TASK-753: прибирання кнопок (inline + sweeper)

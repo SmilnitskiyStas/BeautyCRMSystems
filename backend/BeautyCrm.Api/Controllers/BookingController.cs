@@ -66,7 +66,7 @@ public sealed class BookingController(BookingService booking, CancellationServic
     public async Task<IActionResult> Get(Guid id, CancellationToken ct) =>
         await GuardAsync(id, ct) ?? this.ToResult(await booking.GetAsync(id, ct), a => Ok(a.ForViewer(Actor!)));
 
-    /// <summary>201; 409 slot_unavailable при перетині; 422 валідація; 402 payment_failed.</summary>
+    /// <summary>201; 409 slot_unavailable при перетині; 422 валідація; 402 payment_failed; `couponCode?` (§26.6): 409 coupon_*, 422 invalid_coupon_format, 429.</summary>
     [HttpPost("appointments")]
     [ProducesResponseType<AppointmentDto>(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
@@ -75,7 +75,9 @@ public sealed class BookingController(BookingService booking, CancellationServic
         Actor is not { } actor ? Unauthorized()
         : !AppointmentAccessService.CanCreateFor(actor, request.SpecialistId)
             ? StatusCode(StatusCodes.Status403Forbidden, new ApiError("forbidden", "Specialists can only book for themselves."))
-            : this.ToResult(await booking.CreateAsync(request, ct), a => CreatedAtAction(nameof(Get), new { id = a.Id }, a));
+            : this.ToResult(await booking.CreateAsync(request, ct, null,
+                string.IsNullOrWhiteSpace(request.CouponCode) ? null : new BeautyCrm.Application.Features.BeautyCoupons.CouponUse(
+                    BeautyCrm.Application.Features.BeautyCoupons.CouponScope.Staff, request.CouponCode, RateKey: actor.UserId.ToString())), a => CreatedAtAction(nameof(Get), new { id = a.Id }, a));
 
     /// <summary>Перенос (startsAt) і/або статус (confirmed|completed|no_show).</summary>
     [HttpPatch("appointments/{id:guid}")]

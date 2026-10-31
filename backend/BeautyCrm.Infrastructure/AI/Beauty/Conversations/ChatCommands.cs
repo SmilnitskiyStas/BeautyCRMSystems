@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 
 namespace BeautyCrm.Infrastructure.AI.Beauty.Conversations;
 
-public enum ChatCommand { Unknown, Start, Book, My, Cancel, Stop, Help }
+public enum ChatCommand { Unknown, Start, Book, My, Cancel, Stop, Help, Marketing }
 
 /// <summary>
 /// Slash-команди бота (§23.7 п. 9): розбір без LLM. Регістр ігнорується, `/cmd@BotName` допускається, аргументи (deep link `/start x`) відкидаються.
@@ -34,6 +34,7 @@ public static class ChatCommands
             "cancel" => ChatCommand.Cancel,
             "stop" => ChatCommand.Stop,
             "help" => ChatCommand.Help,
+            "marketing" => ChatCommand.Marketing,
             _ => ChatCommand.Unknown,
         };
     }

@@ -12,10 +12,21 @@ public sealed record ReminderChoice(string Method, IReadOnlyList<short> Offsets)
 /// <summary>Пункт меню вибору (порядок = нумерація T-reminder-offer; підписи використає TASK-753 для кнопок).</summary>
 public sealed record ReminderChoiceOption(int Number, string Label, ReminderChoice Choice);
 
+/// <summary>
+/// Стан пропозиції дзвінка в меню нагадувань (§25.5.1): <see cref="Available"/> - телефон є; <see cref="NeedsPhone"/> - телефону немає, поза паузою
+/// (пункт є, вибір веде в запит номера); <see cref="Cooldown"/> - телефону немає, пауза (пункту немає, є «Змінити спосіб»); <see cref="Disabled"/> - немає.
+/// </summary>
+public enum CallOffer { Disabled, Available, NeedsPhone, Cooldown }
+
 /// <summary>Меню вибору нагадування (§22.7, ADR-012 §2.5): 1 - за 1 год, 2 - за 2 год, 3 - за 24 год, 4 - не нагадувати; «зателефонувати» - окремий пункт.</summary>
 public static class ReminderChoiceMenu
 {
     public const string PromptKind = "reminder_choice";
+
+    /// <summary>Питання про номер телефону (§25.5.1): <c>pending_prompt</c>, окремий від <see cref="PromptKind"/>.</summary>
+    public const string PhonePromptKind = "phone_request";
+
+    public static IReadOnlyList<ReminderChoiceOption> Options(CallOffer offer) => Options(offer is CallOffer.Available or CallOffer.NeedsPhone);
 
     public static IReadOnlyList<ReminderChoiceOption> Options(bool callAvailable)
     {

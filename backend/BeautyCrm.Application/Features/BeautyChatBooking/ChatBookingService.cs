@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Application.Features.BeautyCommon;
+using BeautyCrm.Application.Features.BeautyCoupons;
 using BeautyCrm.Application.Features.BeautyPublicBooking;
 using BeautyCrm.Application.Features.BeautyReminders;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,7 +16,7 @@ namespace BeautyCrm.Application.Features.BeautyChatBooking;
 /// </summary>
 public sealed class ChatBookingService(
     IChatBookingStore chat, IPublicBookingStore pub, IBookingStore bookings, OnlineBookingCore core,
-    ChatBookingOptions options, TimeProvider clock, IReminderContextStore? reminderContext = null)
+    ChatBookingOptions options, TimeProvider clock, IReminderContextStore? reminderContext = null, CouponService? coupons = null)
 {
     // ---------- етап 1 ----------
 
@@ -43,16 +44,28 @@ public sealed class ChatBookingService(
         if (!slots.Value!.Any(s => s.SpecialistId == req.SpecialistId && s.StartsAt.UtcTicks == req.StartsAt.UtcTicks))
             return Error.Validation("slot_not_offered", "The slot is not available.");
 
-        var quote = PromotionPricing.Quote(service.Price, req.LocationId, req.ServiceId, now, await bookings.GetPromotionRulesAsync(ct));
+        CouponCandidate? candidate = null;
+        if (req.CouponId is { } couponId)
+        {
+            if (coupons is null) return Error.Conflict(CouponService.Invalid, "The code is not valid.");
+            var resolved = await coupons.ResolveAsync(
+                new CouponUse(CouponScope.Chat, CouponId: couponId, CampaignId: req.CampaignId, RateKey: conversation.Id.ToString()), conversation.ClientId, now, ct);
+            if (!resolved.IsOk) return resolved.Error!;
+            candidate = resolved.Value;
+        }
+        var priced = PromotionPricing.QuoteWithCoupon(service.Price, req.LocationId, req.ServiceId, now, await bookings.GetPromotionRulesAsync(ct), candidate);
+        var quote = priced.Quote;
+        var appliedCoupon = priced.Outcome == CouponOutcomes.Applied ? priced.CouponId : null;
         var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant(); // 128 біт
         var proposal = await chat.CreateProposalAsync(new NewChatProposal(
             Guid.NewGuid(), conversation.Id, conversation.ClientId, req.LocationId, req.SpecialistId, req.ServiceId, req.StartsAt.ToUniversalTime(),
             service.DurationMinutes, quote.Original, quote.Final, quote.PromotionId, PublicTokenService.Hash(token),
-            now.AddMinutes(options.ProposalTtlMinutes), now), ct);
+            now.AddMinutes(options.ProposalTtlMinutes), now, appliedCoupon, appliedCoupon is null ? null : req.CampaignId ?? candidate?.CampaignId), ct);
 
         var local = TimeZoneInfo.ConvertTime(req.StartsAt, TimeZoneInfo.FindSystemTimeZoneById(location.Timezone));
         var summary = new ChatSummary(service.Name, specialist.Name, location.Name, location.Address, DateOnly.FromDateTime(local.DateTime),
-            TimeOnly.FromDateTime(local.DateTime), location.Timezone, service.DurationMinutes, quote.Original, quote.Final, quote.PromotionName);
+            TimeOnly.FromDateTime(local.DateTime), location.Timezone, service.DurationMinutes, quote.Original, quote.Final, quote.PromotionName,
+            candidate is null ? null : priced.Outcome);
         return new ChatPrepared(proposal.Id, summary, proposal.ExpiresAt, token);
     }
 
@@ -151,7 +164,8 @@ public sealed class ChatBookingService(
         var create = new CreateAppointmentRequest(p.LocationId, p.SpecialistId, p.ServiceId, p.StartsAt,
             new ClientInput(clientId, null, null, null), null, "cash", "telegram", p.PriceFinal); // reminder не задано -> за вподобанням клієнта (§22.4)
         var opts = new PublicCreateOptions(Guid.NewGuid(), null, keyHash, RequestHash(p));
-        var outcome = await core.CreateAsync(create, opts, ct);
+        var couponUse = p.CouponId is { } pc ? new CouponUse(CouponScope.Chat, CouponId: pc, CampaignId: p.CampaignId, RateKey: p.ConversationId.ToString()) : null;
+        var outcome = await core.CreateAsync(create, opts, ct, couponUse);
         if (outcome.Replay is { } raced) return await FinishReplayAsync(p, raced, now, ct);
         if (outcome.Error is { } error) return await FailAsync(p, error, now, ct);
 
@@ -188,7 +202,8 @@ public sealed class ChatBookingService(
     private static string KeyHash(Guid proposalId) => PublicTokenService.Hash("chat:" + proposalId);
 
     private static string RequestHash(ChatProposal p) =>
-        PublicTokenService.Hash(string.Join('|', "chat", p.LocationId, p.SpecialistId, p.ServiceId, p.StartsAt.UtcTicks, p.PriceFinal.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)));
+        PublicTokenService.Hash(string.Join('|', "chat", p.LocationId, p.SpecialistId, p.ServiceId, p.StartsAt.UtcTicks, p.PriceFinal.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture))
+            + (p.CouponId is { } c ? "|c:" + c : ""));
 
     private static bool TokenMatches(string token, string expectedHash) =>
         CryptographicOperations.FixedTimeEquals(System.Text.Encoding.ASCII.GetBytes(PublicTokenService.Hash(token)), System.Text.Encoding.ASCII.GetBytes(expectedHash));

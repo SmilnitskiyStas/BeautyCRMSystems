@@ -20,7 +20,10 @@ public sealed record ContactPreferencesDto(
 /// <summary>PUT: <c>applyToUpcoming</c> за замовчуванням true; відсутній <c>offsetsMinutes</c> = порожній список.</summary>
 public sealed record PutContactPreferencesRequest(string? Method, int[]? OffsetsMinutes, bool? ApplyToUpcoming);
 
-public sealed record CallTaskClientDto(Guid Id, string Name, string? Phone);
+/// <param name="PhonePending">TASK-769 (§25.7): повний непідтверджений номер, наданий у чаті; лише тут і в картці клієнта (owner/admin).</param>
+public sealed record CallTaskClientDto(
+    Guid Id, string Name, string? Phone,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PhonePending = null);
 public sealed record CallTaskAppointmentDto(Guid Id, DateTimeOffset StartsAt, string LocalStartsAt, string ServiceName, string SpecialistName, string Status);
 public sealed record CallTaskLocationDto(Guid Id, string Name, string Timezone);
 

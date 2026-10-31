@@ -12,10 +12,12 @@ public sealed record SetPriceRequest(Guid? LocationId, decimal Price);
 // ---- акції ----
 public sealed record PromotionDto(
     Guid Id, string Name, string? Description, string DiscountType, decimal DiscountValue,
-    DateTimeOffset? StartsAt, DateTimeOffset? EndsAt, bool IsActive, IReadOnlyList<Guid> LocationIds, IReadOnlyList<Guid> ServiceIds);
+    DateTimeOffset? StartsAt, DateTimeOffset? EndsAt, bool IsActive, IReadOnlyList<Guid> LocationIds, IReadOnlyList<Guid> ServiceIds,
+    string Access = "public", int ActiveCampaigns = 0);
 public sealed record UpsertPromotionRequest(
     string Name, string? Description, string DiscountType, decimal DiscountValue,
-    DateTimeOffset? StartsAt, DateTimeOffset? EndsAt, bool IsActive, IReadOnlyList<Guid>? LocationIds, IReadOnlyList<Guid>? ServiceIds);
+    DateTimeOffset? StartsAt, DateTimeOffset? EndsAt, bool IsActive, IReadOnlyList<Guid>? LocationIds, IReadOnlyList<Guid>? ServiceIds,
+    string? Access = null); // null: при створенні public, при оновленні без змін (§26.6)
 public sealed record PricePreviewItem(
     Guid ServiceId, string ServiceName, decimal PriceOriginal, decimal PriceFinal, Guid? PromotionId, string? PromotionName);
 public sealed record PricedService(Guid ServiceId, string Name, decimal Price);
@@ -37,4 +39,6 @@ public interface ICatalogStore
     Task<bool> ReferencesExistAsync(IReadOnlyCollection<Guid> locationIds, IReadOnlyCollection<Guid> serviceIds, CancellationToken ct);
     Task<PromotionDto> CreatePromotionAsync(UpsertPromotionRequest req, CancellationToken ct);
     Task<PromotionDto?> UpdatePromotionAsync(Guid id, UpsertPromotionRequest req, CancellationToken ct);
+    /// <summary>Чи є в акції кампанії у статусі scheduled|sending (§26.6 promotion_in_campaign).</summary>
+    Task<bool> HasActiveCampaignAsync(Guid promotionId, CancellationToken ct) => Task.FromResult(false);
 }

@@ -12,6 +12,13 @@ public sealed record ChatPolicyFacts(
     bool TelegramEnabled, bool CallEnabled, bool ClientHasPhone, TimeOnly QuietStart, TimeOnly QuietEnd,
     CancellationSettings Cancellation, string? LocationPhone)
 {
+    /// <summary>
+    /// TASK-770 (§25.5.8): стан запиту номера у чаті, коли телефону немає. <see cref="PhoneCaptureFact.Off"/> - <c>ChatPhone:Enabled=false</c>
+    /// (факт про дзвінок як до §25); <see cref="PhoneCaptureFact.Allowed"/> - система спитає номер, якщо клієнт обере дзвінок;
+    /// <see cref="PhoneCaptureFact.Cooldown"/> - пауза після відмови, клієнт може написати «змінити номер». Сам номер у фактах не фігурує.
+    /// </summary>
+    public PhoneCaptureFact PhoneCapture { get; init; } = PhoneCaptureFact.Off;
+
     /// <summary>Дзвінок-завдання адміністратору можливий: дзвінки ввімкнено в налаштуваннях tenant і в клієнта є телефон (§22.7).</summary>
     public bool CallAvailable => CallEnabled && ClientHasPhone;
 
@@ -20,10 +27,22 @@ public sealed record ChatPolicyFacts(
         new(true, true, false, new TimeOnly(22, 0), new TimeOnly(8, 0), CancellationSettings.Defaults, null);
 }
 
+public enum PhoneCaptureFact { Off, Allowed, Cooldown }
+
 /// <summary>Порт фактів політики для чату. Реалізація - Adapters/ChatPolicyFactsAdapter (звіряє tenant зі scope); у тестах - fake.</summary>
 public interface IChatPolicyFactsPort
 {
     /// <param name="clientId">Клієнт розмови; null - клієнта ще немає (телефону немає).</param>
     /// <param name="locationId">Заклад каналу; null - телефон закладу не віддається.</param>
     Task<ChatPolicyFacts> GetAsync(Guid tenantId, Guid? clientId, Guid? locationId, CancellationToken ct);
+}
+
+/// <summary>
+/// TASK-782 (§26.9.3): додаткові рядки блоку «ФАКТИ ЗАКЛАДУ» про розсилки й купон розмови. Окремий порт, щоб не міняти
+/// <see cref="IChatPolicyFactsPort"/>. Реалізація - Adapters/ChatMarketingFactsAdapter; немає порту - рядків немає.
+/// </summary>
+public interface IChatMarketingFactsPort
+{
+    /// <param name="conversationId">Розмова ходу (пропозиція зі знижкою - на розмову); null - лише загальні рядки.</param>
+    Task<IReadOnlyList<string>> GetLinesAsync(Guid tenantId, Guid? conversationId, Guid? locationId, CancellationToken ct);
 }

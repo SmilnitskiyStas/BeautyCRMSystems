@@ -30,12 +30,12 @@ public sealed record ChatProposal(
     Guid Id, Guid ConversationId, Guid? ClientId, Guid LocationId, Guid SpecialistId, Guid ServiceId, DateTimeOffset StartsAt,
     int DurationMinutes, decimal PriceOriginal, decimal PriceFinal, Guid? PromotionId, string Status, string TokenHash,
     Guid? SummaryMessageId, DateTimeOffset ExpiresAt, Guid? AppointmentId, string? FailureCode, DateTimeOffset CreatedAt,
-    DateTimeOffset? DecidedAt);
+    DateTimeOffset? DecidedAt, Guid? CouponId = null, Guid? CampaignId = null);
 
 public sealed record NewChatProposal(
     Guid Id, Guid ConversationId, Guid? ClientId, Guid LocationId, Guid SpecialistId, Guid ServiceId, DateTimeOffset StartsAt,
     int DurationMinutes, decimal PriceOriginal, decimal PriceFinal, Guid? PromotionId, string TokenHash,
-    DateTimeOffset ExpiresAt, DateTimeOffset CreatedAt);
+    DateTimeOffset ExpiresAt, DateTimeOffset CreatedAt, Guid? CouponId = null, Guid? CampaignId = null);
 
 public sealed record ChatConversationRef(Guid Id, Guid? ClientId);
 
@@ -73,12 +73,14 @@ public interface IChatBookingStore
 
 // ---- вхід / вихід сервісу ----
 
-public sealed record ChatPrepareRequest(Guid ConversationId, Guid LocationId, Guid ServiceId, Guid SpecialistId, DateTimeOffset StartsAt);
+public sealed record ChatPrepareRequest(Guid ConversationId, Guid LocationId, Guid ServiceId, Guid SpecialistId, DateTimeOffset StartsAt,
+    Guid? CouponId = null, Guid? CampaignId = null); // §26.6: купон із пропозиції розмови (offer_coupon_id), який передає КОД конвеєра, не модель
 
 /// <summary>Дані для канонічного підсумку (T-summary формує КОД, не LLM). Без id і токена.</summary>
 public sealed record ChatSummary(
     string ServiceName, string SpecialistName, string LocationName, string? Address, DateOnly LocalDate, TimeOnly LocalTime,
-    string Timezone, int DurationMinutes, decimal PriceOriginal, decimal PriceFinal, string? PromotionName);
+    string Timezone, int DurationMinutes, decimal PriceOriginal, decimal PriceFinal, string? PromotionName,
+    string? CouponOutcome = null); // applied | not_better | not_applicable (купона не було - null)
 
 /// <summary>
 /// Результат етапу 1. <see cref="ConfirmationToken"/> — серверний секрет: не серіалізується й не друкується; шар ШІ віддає моделі

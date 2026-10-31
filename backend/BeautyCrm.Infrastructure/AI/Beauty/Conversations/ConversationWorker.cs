@@ -204,6 +204,16 @@ public sealed class ConversationWorker(
             log.LogWarning("chat_keyboard_sweep_failed tenant={TenantId} error={ErrorType}", tenantId, ex.GetType().Name);
         }
 
+        // TASK-770 (§25.5.7): тимчасові номери контактів (contact_phone) старші за ChatPhone:ContactRetentionHours обнуляються; ідемпотентно, у лог лише кількість.
+        try
+        {
+            await sp.GetRequiredService<ContactPhoneSweeper>().SweepTenantAsync(tenantId, ct);
+        }
+        catch (Exception ex) when (ex is not (OperationCanceledException or TenantMismatchException or TenantScopeMissingException))
+        {
+            log.LogWarning("chat_contact_phone_sweep_failed tenant={TenantId} error={ErrorType}", tenantId, ex.GetType().Name);
+        }
+
         // Ходи, відкладені через тимчасову причину (M2), повторюються не раніше ніж через RateLimitRetryDelay.
         var cutoff = now - opts.SweepMinAge;
         var deferredCutoff = now - opts.RateLimitRetryDelay;

@@ -139,6 +139,25 @@ public class Client : TenantEntity
     public bool Unsubscribed { get; set; }
     /// <summary>Soft delete marker (personal data: keep history, hide from lists).</summary>
     public DateTimeOffset? DeletedAt { get; set; }
+
+    // TASK-767 (§25.3, ADR-014 ч. B): телефон, зібраний у чаті
+    /// <summary>telegram_contact | manual_chat | web_form | staff; NULL = спадковий/невідомо. Лише разом із phone.</summary>
+    public string? PhoneSource { get; set; }
+    public DateTimeOffset? CallConsentAt { get; set; }
+    /// <summary>Інший номер, наданий у чаті (E.164), очікує рішення адміністратора; phone не перезаписується. Усі три pending-поля разом або жодне.</summary>
+    public string? PhonePending { get; set; }
+    /// <summary>telegram_contact | manual_chat.</summary>
+    public string? PhonePendingSource { get; set; }
+    public DateTimeOffset? PhonePendingAt { get; set; }
+    /// <summary>Останній показ питання про номер (основа cooldown).</summary>
+    public DateTimeOffset? PhoneRequestedAt { get; set; }
+    /// <summary>М'який зв'язок «можливий дубль» (без злиття); композитний FK на beauty_clients RESTRICT.</summary>
+    public Guid? DuplicateOfClientId { get; set; }
+
+    /// <summary>TASK-776 (§26.3): остання автоматична пропозиція маркетингової згоди (основа cooldown).</summary>
+    public DateTimeOffset? MarketingOfferedAt { get; set; }
+
+    public Client? DuplicateOfClient { get; set; }
 }
 
 public class ClientNote : TenantEntity
@@ -162,6 +181,8 @@ public class Promotion : TenantEntity
     public DateTimeOffset? StartsAt { get; set; }
     public DateTimeOffset? EndsAt { get; set; }
     public bool IsActive { get; set; } = true;
+    /// <summary>TASK-776 (§26.3): public | code_only (діє лише через купон).</summary>
+    public string Access { get; set; } = "public";
 }
 
 public class PromotionLocation : ITenantEntity
@@ -204,6 +225,9 @@ public class Appointment : TenantEntity
     public decimal PriceOriginal { get; set; }
     public decimal PriceFinal { get; set; }
     public Guid? PromotionId { get; set; }
+    /// <summary>TASK-776 (§26.3): погашений купон і кампанія-джерело (атрибуція); FK RESTRICT.</summary>
+    public Guid? CouponId { get; set; }
+    public Guid? CampaignId { get; set; }
     public ReminderOption ReminderOption { get; set; } = ReminderOption.None;
     /// <summary>TASK-736 (§22.3): none | auto | telegram | call. План нагадувань на записі (знімок).</summary>
     public string ReminderMethod { get; set; } = "none";
@@ -211,6 +235,12 @@ public class Appointment : TenantEntity
     public short[] ReminderOffsets { get; set; } = [];
     /// <summary>TASK-749 (§23.3): клієнт натиснув «Підтверджую візит» у чаті; null = ні.</summary>
     public DateTimeOffset? ClientConfirmedAt { get; set; }
+    /// <summary>TASK-762 (§24.3): знімок собівартості при переході в completed; null = «собівартість не задана». Не віддається жодним DTO запису.</summary>
+    public decimal? CostSnapshot { get; set; }
+    public decimal? MasterPercentSnapshot { get; set; }
+    public decimal? MasterPayoutSnapshot { get; set; }
+    /// <summary>Момент знімка (заповнений для кожного completed, також коли собівартості немає).</summary>
+    public DateTimeOffset? CostCapturedAt { get; set; }
     public PaymentMethod? PaymentMethod { get; set; }
     public DateTimeOffset? CancelledAt { get; set; }
     /// <summary>Хто скасував (TASK-697): client | staff | system; null лише для нескасованих.</summary>
@@ -231,6 +261,8 @@ public class Appointment : TenantEntity
     public Service? Service { get; set; }
     public Client? Client { get; set; }
     public Promotion? Promotion { get; set; }
+    public Coupon? Coupon { get; set; }
+    public Campaign? Campaign { get; set; }
 }
 
 // ---------- Channels & conversations ----------
@@ -270,6 +302,8 @@ public class Conversation : TenantEntity
     public string? PendingPrompt { get; set; }
     public Guid? PendingPromptAppointmentId { get; set; }
     public DateTimeOffset? PendingPromptExpiresAt { get; set; }
+    /// <summary>TASK-767 (§25.3): у клієнта висить reply-keyboard (прибирається наступним вихідним без inline-кнопок).</summary>
+    public DateTimeOffset? ReplyKeyboardOpenAt { get; set; }
     /// <summary>TASK-724 (§21.4): active | handoff.</summary>
     public string AiState { get; set; } = "active";
     public string? HandoffReason { get; set; }
@@ -277,10 +311,16 @@ public class Conversation : TenantEntity
     /// <summary>Lease ходу ШІ: умовний UPDATE (ai_lease_until &lt; now()) дає одного виконавця на розмову.</summary>
     public DateTimeOffset? AiLeaseUntil { get; set; }
     public Guid? AiLeaseOwner { get; set; }
+    /// <summary>TASK-776 (§26.3): пропозиція розмови після кнопки кампанії / коду; усі три поля разом або жодне з offer_until.</summary>
+    public Guid? OfferCampaignId { get; set; }
+    public Guid? OfferCouponId { get; set; }
+    public DateTimeOffset? OfferUntil { get; set; }
 
     public Channel? Channel { get; set; }
     public Client? Client { get; set; }
     public Appointment? PendingPromptAppointment { get; set; }
+    public Campaign? OfferCampaign { get; set; }
+    public Coupon? OfferCoupon { get; set; }
 }
 
 public class Message : TenantEntity
@@ -301,6 +341,10 @@ public class Message : TenantEntity
     public string? CallbackData { get; set; }
     /// <summary>TASK-749: Telegram message_id повідомлення, під яким натиснули (≤ 32); лише для kind=callback.</summary>
     public string? CallbackMessageRef { get; set; }
+    /// <summary>TASK-767 (§25.3): тимчасовий E.164 власного контакту (лише kind=contact, verdict=own); обнуляється конвеєром у транзакції обробки і sweeper-ом ≤ 24 год. Не віддається API.</summary>
+    public string? ContactPhone { get; set; }
+    /// <summary>TASK-767: own | foreign | invalid; лише для kind=contact.</summary>
+    public string? ContactVerdict { get; set; }
     /// <summary>TASK-736: автор відповіді менеджера; лише для sender_type = staff.</summary>
     public Guid? SenderUserId { get; set; }
     public int Attempts { get; set; }

@@ -81,8 +81,14 @@ public sealed partial class ConversationTurnProcessor(
         public ReminderApplyResult Result { get; } = result;
     }
 
-    /// <summary>Питання про нагадування, яке ставиться в транзакції відповіді (§22.7): запис і TTL.</summary>
-    private sealed record PromptState(Guid AppointmentId, DateTimeOffset ExpiresAt);
+    /// <summary>
+    /// Питання, яке ставиться в транзакції відповіді: про нагадування (§22.7, запис обов'язковий) або про номер телефону
+    /// (§25.5.1, <see cref="ReminderChoiceMenu.PhonePromptKind"/>, запис може бути null).
+    /// </summary>
+    private sealed record PromptState(Guid? AppointmentId, DateTimeOffset ExpiresAt, string Kind = ReminderChoiceMenu.PromptKind);
+
+    /// <summary>Відповіді, обчислені всередині транзакції ходу (після дій над даними клієнта), і питання, яке вони залишають.</summary>
+    private sealed record ComposedReplies(IReadOnlyList<Reply> Replies, PromptState? Prompt = null);
 
     private sealed record Turn(Conversation Conv, List<Message> Batch, AiMode Mode, DateTimeOffset Now)
     {
@@ -95,8 +101,9 @@ public sealed partial class ConversationTurnProcessor(
 
     /// <param name="Keyboard">План клавіатури, яку КОД прикріплює до цього повідомлення (TASK-753); null - без кнопок.</param>
     /// <param name="KeySuffix">"" для основного повідомлення, ":s" для окремого підсумку (§23.6).</param>
+    /// <param name="ActionsJson">Готовий JSON `actions` (reply-клавіатура / removeReply, §25.4); взаємовиключний з <paramref name="Keyboard"/>.</param>
     private sealed record Reply(string Body, MessageSenderType Sender, bool Draft = false, Guid? ShowProposalId = null,
-        KeyboardPlan? Keyboard = null, string KeySuffix = "");
+        KeyboardPlan? Keyboard = null, string KeySuffix = "", string? ActionsJson = null);
 
     /// <summary>Усе, що фіксується однією транзакцією ходу (відповіді, стан розмови, вхідні, журнал).</summary>
     private sealed record CommitSpec(IReadOnlyList<Reply> Replies)
@@ -114,6 +121,17 @@ public sealed partial class ConversationTurnProcessor(
         public bool RevokeAiKeyboards { get; init; }
         /// <summary>awaiting_staff_since = coalesce(…, now) без зміни стану ШІ (held, §22.8).</summary>
         public bool Hold { get; init; }
+        /// <summary>
+        /// Відповіді обчислюються всередині транзакції ПЕРЕД вставкою (дії над номером клієнта, §25.5.3): замінюють <see cref="Replies"/>;
+        /// питання з результату перекриває <see cref="Prompt"/>.
+        /// </summary>
+        public Func<CancellationToken, Task<ComposedReplies>>? ComposeReplies { get; init; }
+        /// <summary>У клієнта відкрилась reply-клавіатура (питання про номер): reply_keyboard_open_at = now (§25.5.1).</summary>
+        public bool OpenReplyKeyboard { get; init; }
+        /// <summary>Питання про номер замінило меню нагадувань: клавіатура reminder_choice -> revoked (§25.5.1).</summary>
+        public bool RevokeReminderKeyboard { get; init; }
+        /// <summary>Тіло вхідних пакета замінюється (номер телефону не лишається в БД, §25.5.2).</summary>
+        public string? RedactInboundBody { get; init; }
     }
 
     // ---------------------------------------------------------------- запуск
@@ -183,6 +201,8 @@ public sealed partial class ConversationTurnProcessor(
         // «Стоп» (§22.7) діє в будь-який момент, також під час паузи: пакет ділиться на межі команди, решта йде наступним ходом цього запуску.
         var (narrowed, stopOnly) = isCallback ? (batch, false) : SplitAtStop(batch, PromptActive(conv, now));
         batch = narrowed;
+        if (!isCallback && !stopOnly) batch = NarrowForPhone(batch, conv, now); // §25.5.2: контакт - окремий хід; під питанням про номер - по одному повідомленню
+        if (!isCallback && !stopOnly) batch = await NarrowForCouponAsync(batch, ct); // §26.9.3: повідомлення з кодом купона - окремий хід (код не йде до моделі)
 
         // Відповідь на цей пакет уже є (повтор після падіння/гонка lease): лише позначити, LLM не викликати.
         var existingKey = isCallback ? CallbackKey(batch[0].Id) : ReplyKey(conv.Id, batch[^1].Id);
@@ -220,7 +240,13 @@ public sealed partial class ConversationTurnProcessor(
             var staffReplied = conv.StaffRepliedAt is { } replied && (conv.HandoffAt is null || replied >= conv.HandoffAt);
             if (conv.AiPausedUntil is null || conv.AiPausedUntil > now || staffReplied)
             {
-                await HoldWithNoticeAsync(new Turn(conv, batch, mode, now), ct);
+                var paused = new Turn(conv, batch, mode, now);
+                // §25.5.6: відповідь на питання про номер - детермінована дія над власними даними, виконується й під час паузи
+                if (PhoneOn && batch.Count == 1 && await TryPhoneAnswerAsync(paused, batch[0], true, ct)) return false;
+                // §26.9.1-§26.9.2: у handoff дозволені /marketing (меню) і відписка текстом
+                if (batch.Count == 1 && await TryMarketingInPauseAsync(paused, batch[0], ct)) return false;
+                await ClearContactPhonesAsync(batch, ct); // контакт під паузою не зберігається (§25.5.4)
+                await HoldWithNoticeAsync(paused, ct);
                 return false;
             }
             // Таймер минув без відповіді менеджера: ШІ повертається, «потрібна відповідь» (awaiting_staff_since) лишається, held не чіпаємо.
@@ -232,6 +258,14 @@ public sealed partial class ConversationTurnProcessor(
         var t = new Turn(conv, batch, mode, now);
         var texts = batch.Where(m => m.Kind == InboundKinds.Text).ToList();
 
+        // 3a. контакт Telegram (§25.5.2/§25.5.4): відповідь на питання про номер або «контакт без питання»; ChatPhone вимкнено - як unsupported
+        if (PhoneOn && batch.Count == 1 && batch[0].Kind == InboundKinds.Contact)
+        {
+            await TryPhoneAnswerAsync(t, batch[0], false, ct);
+            return false;
+        }
+        if (!PhoneOn) await ClearContactPhonesAsync(batch, ct);
+
         // 4. команди й медіа: шаблон без LLM
         if (texts.Count == 0)
         {
@@ -239,8 +273,15 @@ public sealed partial class ConversationTurnProcessor(
             return false;
         }
 
+        // 4a'. телефон для дзвінка (§25.5.1-§25.5.3): відповідь на питання про номер і «змінити номер» (код, без LLM, також у suggest)
+        if (await HandlePhoneChatAsync(t, texts, ct)) return false;
+
         // 4a. нагадування: меню «нагадування» і відповідь на питання про нагадування (код, без LLM, поза лімітами LLM)
         if (await HandleReminderChatAsync(t, texts, ct)) return false;
+
+        // 4b. код купона текстом (§26.9.3): до моделі; код маскується в збереженому тілі. 4c. меню «акції» і відписка текстом (§26.9.2)
+        if (await HandleCouponCodeAsync(t, texts, ct)) return false;
+        if (await HandleMarketingTextAsync(t, texts, ct)) return false;
 
         // 5. підтвердження запису (до LLM, у коді)
         if (await HandleActiveProposalAsync(t, texts, ct)) return false;
@@ -330,7 +371,7 @@ public sealed partial class ConversationTurnProcessor(
         if ((t.AutoReplies || viaCommand) && !limiter.IsTemplateLimited(t.Conv.Id, opts.MaxTemplateRepliesPerConversationPerMinute))
         {
             limiter.RecordTemplate(t.Conv.Id);
-            reply = new Reply(ChatTemplates.Stop, MessageSenderType.System);
+            reply = new Reply(StopText, MessageSenderType.System);
         }
         await CommitAsync(t, reply, null, null, ct, txWork: c => ReminderStop.StopAsync(t.Conv.Id, c, viaCommand ? "command" : "text"));
     }
@@ -368,17 +409,28 @@ public sealed partial class ConversationTurnProcessor(
         var choice = parsed.Choice!;
         if (choice.Method == ReminderMethods.Call && !await ReminderApplier.CallAvailableAsync(conv.ClientId, ct))
         {
+            // §25.5.1: «зателефонувати» без номера - запит номера (або пауза/вимкнено), а не відмова
+            if (PhoneOn && await CallWithoutPhoneAsync(t, appointmentId, explicitTrigger: false, ct) is { } phoneSpec)
+            {
+                await CommitManyAsync(t, phoneSpec, ct);
+                return true;
+            }
             if (await PassTemplateGateAsync(t, ct))
                 await CommitAsync(t, new Reply(ChatTemplates.ReminderCallUnavailable, MessageSenderType.System), null, null, ct);
             return true;
         }
         try
         {
-            await CommitAsync(t, new Reply(ChatTemplates.ReminderSet(choice), MessageSenderType.System), null, null, ct, txWork: async c =>
+            // §26.9.2: після T-reminder-set (вибір зроблено) - пропозиція згоди окремим повідомленням
+            var setSpec = await WithMarketingOfferAsync(t, new CommitSpec([new Reply(ChatTemplates.ReminderSet(choice), MessageSenderType.System)])
             {
-                var result = await ReminderApplier.ApplyAsync(conv.Id, appointmentId, choice, "chat", c);
-                if (!result.Applied) throw new ReminderNotAppliedException(result);
-            });
+                TxWork = async c =>
+                {
+                    var result = await ReminderApplier.ApplyAsync(conv.Id, appointmentId, choice, "chat", c);
+                    if (!result.Applied) throw new ReminderNotAppliedException(result);
+                },
+            }, conv.ClientId, ct);
+            await CommitManyAsync(t, setSpec, ct);
         }
         catch (ReminderNotAppliedException ex)
         {
@@ -404,11 +456,12 @@ public sealed partial class ConversationTurnProcessor(
             await CommitAsync(t, new Reply(ChatTemplates.ReminderNoAppointments, MessageSenderType.System), null, null, ct);
             return true;
         }
-        var options = ReminderChoiceMenu.Options(await ReminderApplier.CallAvailableAsync(conv.ClientId, ct));
+        var offer = await CallOfferAsync(conv.ClientId, ct);
+        var options = ReminderChoiceMenu.Options(offer);
         var prompt = NewPrompt(next.Id, next.StartsAt, t.Now);
         var buttons = ButtonsAvailable(conv);
-        await CommitAsync(t, new Reply(ChatTemplates.ReminderOfferFor(next.ServiceName, next.StartsAt, next.Timezone, options, buttons), MessageSenderType.System,
-                Keyboard: buttons ? KeyboardBuilder.ReminderChoice(next.Id, options, prompt.ExpiresAt) : null),
+        await CommitAsync(t, new Reply(ChatTemplates.ReminderOfferFor(next.ServiceName, next.StartsAt, next.Timezone, options, buttons, offer), MessageSenderType.System,
+                Keyboard: buttons ? KeyboardBuilder.ReminderChoice(next.Id, options, prompt.ExpiresAt, offer) : null),
             null, null, ct, prompt: prompt);
         return true;
     }
@@ -434,10 +487,11 @@ public sealed partial class ConversationTurnProcessor(
         var body = ChatTemplates.Confirmed(appt, promptOpts.CurrencyLabel, buttons);
         if (reminderChoiceNeeded)
         {
-            var options = ReminderChoiceMenu.Options(await ReminderApplier.CallAvailableAsync(appt.ClientId, ct));
+            var offer = await CallOfferAsync(appt.ClientId, ct);
+            var options = ReminderChoiceMenu.Options(offer);
             var prompt = NewPrompt(appt.Id, appt.StartsAt, t.Now);
-            return (body + "\n\n" + ChatTemplates.ReminderOffer(options, buttons), prompt,
-                buttons ? KeyboardBuilder.ReminderChoice(appt.Id, options, prompt.ExpiresAt) : null);
+            return (body + "\n\n" + ChatTemplates.ReminderOffer(options, buttons, offer), prompt,
+                buttons ? KeyboardBuilder.ReminderChoice(appt.Id, options, prompt.ExpiresAt, offer) : null);
         }
         var line = appt.Reminders is null ? body : body + "\n" + ChatTemplates.ReminderLine(appt.Reminders);
         return (line, null, buttons && ButtonsOpts.CancelEnabled ? KeyboardBuilder.AppointmentActions(appt.Id) : null);
@@ -456,7 +510,7 @@ public sealed partial class ConversationTurnProcessor(
 
         // Slash-команди (§23.7 п. 9): код без LLM.
         var command = t.Batch.Where(m => m.Kind == InboundKinds.Command).Select(m => ChatCommands.Parse(m.Body))
-            .FirstOrDefault(c => c is not null and not ChatCommand.Unknown);
+            .FirstOrDefault(c => c is not null and not ChatCommand.Unknown && (c != ChatCommand.Marketing || MarketingOn)); // /marketing за Marketing:Enabled=false - T-text-only (§26.2)
         if (command is { } known)
         {
             await HandleCommandAsync(t, known, ct);
@@ -602,13 +656,18 @@ public sealed partial class ConversationTurnProcessor(
             else
             {
                 var (body, prompt, keyboard) = await ComposeConfirmedAsync(t, confirmed.Appointment, confirmed.ReminderChoiceNeeded, ct);
-                await CommitAsync(t, new Reply(body, MessageSenderType.System, Keyboard: keyboard), null, [ConfirmJournal(t, proposalId, confirmed.Appointment.Id)], ct, prompt: prompt);
+                await CommitManyAsync(t, await ConfirmedSpecAsync(t, new CommitSpec([]) { Journal = [ConfirmJournal(t, proposalId, confirmed.Appointment.Id)] },
+                    confirmed.Appointment, body, prompt, keyboard, ct), ct);
             }
             return true;
         }
 
         switch (r.Error!.Code)
         {
+            case "coupon_unavailable" or "coupon_invalid":
+                // §26.9.3: купон на підтвердженні недійсний -> пропозиція розмови знімається, наступний підсумок - за звичайною ціною
+                await CommitAsync(t, new Reply(ChatTemplates.CouponUnavailable, MessageSenderType.System), null, null, ct, txWork: c => Offers.ClearAsync(t.Conv.Id, c));
+                return true;
             case "slot_unavailable" or "slot_in_past" or "invalid_start":
                 await CommitAsync(t, new Reply(ChatTemplates.SlotTaken, MessageSenderType.System), null, null, ct);
                 return true;
@@ -668,7 +727,8 @@ public sealed partial class ConversationTurnProcessor(
         var journaled = await ConfirmJournaledAsync(t.Conv.Id, p.Id, ct);
         var needChoice = !await db.ClientContactPreferences.AsNoTracking().AnyAsync(x => x.ClientId == appt.ClientId, ct);
         var (body, prompt, keyboard) = await ComposeConfirmedAsync(t, appt, needChoice, ct);
-        await CommitAsync(t, new Reply(body, MessageSenderType.System, Keyboard: keyboard), null, journaled ? null : [ConfirmJournal(t, p.Id, appt.Id)], ct, prompt: prompt);
+        await CommitManyAsync(t, await ConfirmedSpecAsync(t, new CommitSpec([]) { Journal = journaled ? null : [ConfirmJournal(t, p.Id, appt.Id)] },
+            appt, body, prompt, keyboard, ct), ct);
         return true;
     }
 
@@ -937,7 +997,8 @@ public sealed partial class ConversationTurnProcessor(
         var batchIds = t.Batch.Select(m => m.Id).ToList();
         var older = await db.Messages.AsNoTracking()
             .Where(m => m.ConversationId == t.Conv.Id && !batchIds.Contains(m.Id)
-                && ((m.Direction == MessageDirection.Inbound && m.Kind != InboundKinds.Command && m.Kind != InboundKinds.Callback && (m.Status == Processed || m.Status == Skipped || m.Status == Held))
+                // §25.5.8: контакт (kind=contact) не входить в історію LLM; тіла «[номер телефону]» входять як є
+                && ((m.Direction == MessageDirection.Inbound && m.Kind != InboundKinds.Command && m.Kind != InboundKinds.Callback && m.Kind != InboundKinds.Contact && (m.Status == Processed || m.Status == Skipped || m.Status == Held))
                     || (m.Direction == MessageDirection.Outbound && (m.Status == "sent" || m.Status == "pending" || m.Status == "sending"))))
             .OrderByDescending(m => m.CreatedAt).Take(promptOpts.HistoryMessages).ToListAsync(ct);
         older.Reverse();

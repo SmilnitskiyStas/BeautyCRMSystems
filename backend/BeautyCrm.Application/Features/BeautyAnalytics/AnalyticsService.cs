@@ -74,12 +74,14 @@ public sealed class AnalyticsService(IAnalyticsStore store, TimeProvider clock)
         {
             var pt = await TotalsAsync(p, re, ct);
             previous = new NetworkPrevious(Iso(p.From), Iso(p.To), pt.Appointments, pt.Completed, pt.Cancelled, pt.NoShow, pt.Revenue,
-                pt.AverageCheck, pt.CancellationRate, pt.NewClients);
+                pt.AverageCheck, pt.CancellationRate, pt.NewClients, pt.Cost, pt.MasterPayout, pt.NetIncome, pt.MarginPercent,
+                pt.WithoutCost, pt.RevenueWithoutCost);
         }
         return Result<object>.Ok(new NetworkReport(Iso(cur.From), Iso(cur.To), re.TimezoneId,
             SlotCalculator.ToOffset(cur.From, TimeOnly.MinValue, re.Zone), SlotCalculator.ToOffset(cur.To.AddDays(1), TimeOnly.MinValue, re.Zone),
             totals.Appointments, totals.Completed, totals.Cancelled, totals.NoShow, totals.Revenue, totals.AverageCheck,
-            totals.CancellationRate, totals.NewClients, previous));
+            totals.CancellationRate, totals.NewClients, totals.Cost, totals.MasterPayout, totals.NetIncome, totals.MarginPercent,
+            totals.WithoutCost, totals.RevenueWithoutCost, previous));
     }
 
     public async Task<Result<object>> LocationsAsync(string? from, string? to, bool compare, CancellationToken ct)
@@ -112,8 +114,9 @@ public sealed class AnalyticsService(IAnalyticsStore store, TimeProvider clock)
             if (!loc.IsActive && c.Appointments == 0 && (pr?.Appointments ?? 0) == 0) continue;
             rows.Add(new LocationReport(loc.Id, loc.Name, c.Appointments, c.Completed, c.Cancelled, c.Revenue, c.NoShow, loc.Timezone,
                 loc.IsActive, c.Busy, c.Avail, LoadOf(c.Busy, c.Avail),
+                c.Cost, c.MasterPayout, c.NetIncome, MarginOf(c.Revenue, c.NetIncome), c.WithoutCost,
                 pr is null ? null : new LocationPrevious(pr.Appointments, pr.Completed, pr.Cancelled, pr.NoShow, pr.Revenue, pr.Busy, pr.Avail,
-                    LoadOf(pr.Busy, pr.Avail))));
+                    LoadOf(pr.Busy, pr.Avail), pr.Cost, pr.MasterPayout, pr.NetIncome, MarginOf(pr.Revenue, pr.NetIncome), pr.WithoutCost)));
         }
         return Result<object>.Ok(rows.OrderByDescending(r => r.Revenue).ThenBy(r => r.Name, StringComparer.Ordinal).ThenBy(r => r.LocationId).ToList());
     }
@@ -175,6 +178,9 @@ public sealed class AnalyticsService(IAnalyticsStore store, TimeProvider clock)
             if (end > r.To) end = r.To;
             int appts = 0, completed = 0, cancelled = 0, noShow = 0;
             var revenue = 0m;
+            var cost = 0m;
+            var payout = 0m;
+            var withoutCost = 0;
             for (var d = cursor; d <= end; d = d.AddDays(1))
             {
                 if (!days.TryGetValue(d, out var rows)) continue;
@@ -182,6 +188,9 @@ public sealed class AnalyticsService(IAnalyticsStore store, TimeProvider clock)
                 {
                     appts += row.Count;
                     revenue += row.Revenue;
+                    cost += row.Cost;
+                    payout += row.MasterPayout;
+                    withoutCost += row.WithoutCost;
                     switch (row.Status)
                     {
                         case "completed": completed += row.Count; break;
@@ -190,7 +199,8 @@ public sealed class AnalyticsService(IAnalyticsStore store, TimeProvider clock)
                     }
                 }
             }
-            points.Add(new SeriesPoint(Iso(cursor), Iso(end), appts, completed, cancelled, noShow, revenue));
+            points.Add(new SeriesPoint(Iso(cursor), Iso(end), appts, completed, cancelled, noShow, revenue,
+                cost, payout, revenue - cost - payout, withoutCost));
             cursor = end.AddDays(1);
         }
         return new SeriesReport(Iso(r.From), Iso(r.To), re.TimezoneId, granularity, points);
@@ -348,7 +358,12 @@ public sealed class AnalyticsService(IAnalyticsStore store, TimeProvider clock)
     // =====================================================================================================================
 
     private sealed record Totals(int Appointments, int Completed, int Cancelled, int NoShow, decimal Revenue, decimal AverageCheck,
-        decimal CancellationRate, int NewClients);
+        decimal CancellationRate, int NewClients, decimal Cost, decimal MasterPayout, decimal NetIncome, decimal? MarginPercent,
+        int WithoutCost, decimal RevenueWithoutCost);
+
+    /// <summary>marginPercent = revenue == 0 ? null : round(netIncome / revenue * 100, 1), half away from zero (§24.5).</summary>
+    public static decimal? MarginOf(decimal revenue, decimal netIncome) =>
+        revenue == 0m ? null : Math.Round(netIncome / revenue * 100m, 1, MidpointRounding.AwayFromZero);
 
     private async Task<Totals> TotalsAsync(DateRange r, Reference re, CancellationToken ct)
     {
@@ -357,21 +372,28 @@ public sealed class AnalyticsService(IAnalyticsStore store, TimeProvider clock)
         var total = rows.Sum(x => x.Count);
         var completed = Count("completed");
         var cancelled = Count("cancelled");
-        var revenue = rows.Where(x => x.Status == "completed").Sum(x => x.Revenue);
+        var done = rows.Where(x => x.Status == "completed").ToList();
+        var revenue = done.Sum(x => x.Revenue);
+        var cost = done.Sum(x => x.Cost);
+        var payout = done.Sum(x => x.MasterPayout);
+        var net = revenue - cost - payout;
         var newClients = await store.NewClientsAsync(
             SlotCalculator.ToOffset(r.From, TimeOnly.MinValue, re.Zone).ToUniversalTime(),
             SlotCalculator.ToOffset(r.To.AddDays(1), TimeOnly.MinValue, re.Zone).ToUniversalTime(), ct);
         return new Totals(total, completed, cancelled, Count("no_show"), revenue,
             completed == 0 ? 0m : Math.Round(revenue / completed, 2),
-            total == 0 ? 0m : Math.Round((decimal)cancelled / total, 4), newClients);
+            total == 0 ? 0m : Math.Round((decimal)cancelled / total, 4), newClients,
+            cost, payout, net, MarginOf(revenue, net), done.Sum(x => x.WithoutCost), done.Sum(x => x.RevenueWithoutCost));
     }
 
     // =====================================================================================================================
     // Заклади й завантаження (§19.4)
     // =====================================================================================================================
 
-    private sealed record LocationStats(int Appointments, int Completed, int Cancelled, int NoShow, decimal Revenue, int Busy, int Avail)
+    private sealed record LocationStats(int Appointments, int Completed, int Cancelled, int NoShow, decimal Revenue, int Busy, int Avail,
+        decimal Cost = 0m, decimal MasterPayout = 0m, int WithoutCost = 0)
     {
+        public decimal NetIncome => Revenue - Cost - MasterPayout;
         public static readonly LocationStats Empty = new(0, 0, 0, 0, 0m, 0, 0);
     }
 
@@ -447,7 +469,9 @@ public sealed class AnalyticsService(IAnalyticsStore store, TimeProvider clock)
         {
             int Count(string s) => g.Where(x => x.Status == s).Sum(x => x.Count);
             result[g.Key] = new LocationStats(g.Sum(x => x.Count), Count("completed"), Count("cancelled"), Count("no_show"),
-                g.Where(x => x.Status == "completed").Sum(x => x.Revenue), 0, 0);
+                g.Where(x => x.Status == "completed").Sum(x => x.Revenue), 0, 0,
+                g.Where(x => x.Status == "completed").Sum(x => x.Cost), g.Where(x => x.Status == "completed").Sum(x => x.MasterPayout),
+                g.Where(x => x.Status == "completed").Sum(x => x.WithoutCost));
         }
         foreach (var (loc, minutes) in busy.GroupBy(b => b.LocationId).Select(g => (g.Key, g.Sum(b => b.Minutes))))
             result[loc] = result.GetValueOrDefault(loc, LocationStats.Empty) with { Busy = minutes };

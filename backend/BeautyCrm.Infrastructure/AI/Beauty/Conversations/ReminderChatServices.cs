@@ -125,7 +125,8 @@ public sealed class ReminderChoiceApplier(BeautyDbContext db, TenantContext tena
 /// Ідемпотентний. Викликає конвеєр (текст) і TASK-753 (<c>/stop</c>, <c>i:stop</c>).
 /// </summary>
 public sealed class ReminderStopHandler(BeautyDbContext db, TenantContext tenant, IAiActionJournal journal, AiTenantRuntime runtime,
-    IReminderReplanStore replan, ChatAssistantOptions opts, TimeProvider clock) : ReminderChatServiceBase(db, tenant, journal, runtime)
+    IReminderReplanStore replan, ChatAssistantOptions opts, TimeProvider clock, BeautyCrm.Infrastructure.Data.Beauty.MarketingConsentService? marketing = null)
+    : ReminderChatServiceBase(db, tenant, journal, runtime)
 {
     public Task<ReminderStopResult> StopAsync(Guid conversationId, CancellationToken ct, string via = "text") =>
         InTransactionAsync(() => StopCoreAsync(conversationId, via, ct), _ => true, ct);
@@ -148,6 +149,8 @@ public sealed class ReminderStopHandler(BeautyDbContext db, TenantContext tenant
             await Db.Clients.Where(c => c.Id == clientId && c.DeletedAt == null && !c.Unsubscribed)
                 .ExecuteUpdateAsync(s => s.SetProperty(c => c.Unsubscribed, true), ct);
             replanned = await replan.ReplanUpcomingAsync(clientId, ReminderMethods.None, [], opts.MaxUpcomingReplan, now, ct);
+            // TASK-782 (§26.4, §26.9.2): «Стоп» вимикає й маркетинг - none/stop для всіх каналів (працює й за Marketing:Enabled=false)
+            if (marketing is not null) await marketing.StopAsync(clientId, via is "button" or "command" ? via : "text", conversationId, ct);
         }
         await ClearPromptAsync(conversationId, ct);
         await AppendJournalAsync(conversationId, ChatJournal.ReminderStop, $"conversation:{conversationId}", new { replanned, via }, now, ct);

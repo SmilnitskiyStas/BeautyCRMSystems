@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using BeautyCrm.Application.Features.BeautyAuth;
 using BeautyCrm.Application.Features.BeautyChatBooking;
 using BeautyCrm.Application.Features.BeautyCommon;
+using BeautyCrm.Application.Features.BeautyPublicBooking;
 using BeautyCrm.Infrastructure.AI.Beauty;
 using BeautyCrm.Infrastructure.AI.Beauty.Adapters;
 using BeautyCrm.Infrastructure.Data;
@@ -65,7 +66,8 @@ public sealed partial class InboxService(
 
     /// <summary>Натискання кнопки показується лише текстом-міткою <c>"[кнопка] {підпис}"</c>; сирий callback_data у тілі неможливий (§23.10).</summary>
     private static string InboxBody(Message m) =>
-        m.Kind == "callback" && !m.Body.StartsWith(CallbackBody.Prefix, StringComparison.Ordinal) ? CallbackBody.Prefix : m.Body;
+        m.Kind == "callback" && !m.Body.StartsWith(CallbackBody.Prefix, StringComparison.Ordinal) ? CallbackBody.Prefix
+        : m.Kind == InboundKinds.Contact ? InboundKinds.ContactBody : m.Body; // §25.4: тіло контакту лише маркер
 
     private static string Preview(string? body)
     {
@@ -112,6 +114,8 @@ public sealed partial class InboxService(
         public string? LocationName { get; init; }
         public Guid? ClientId { get; init; }
         public string? ClientName { get; init; }
+        public string? ClientPhone { get; init; } // лише для маски; у DTO не потрапляє
+        public bool ClientPhonePending { get; init; }
         public string AiState { get; init; } = "";
         public string? HandoffReason { get; init; }
         public DateTimeOffset? AiPausedUntil { get; init; }
@@ -134,6 +138,8 @@ public sealed partial class InboxService(
         LocationName = c.Channel.Location != null ? c.Channel.Location.Name : null,
         ClientId = c.Client != null && c.Client.DeletedAt == null ? c.ClientId : null,
         ClientName = c.Client != null && c.Client.DeletedAt == null ? c.Client.FullName : null,
+        ClientPhone = c.Client != null && c.Client.DeletedAt == null ? c.Client.Phone : null,
+        ClientPhonePending = c.Client != null && c.Client.DeletedAt == null && c.Client.PhonePending != null,
         AiState = c.AiState,
         HandoffReason = c.HandoffReason,
         AiPausedUntil = c.AiPausedUntil,
@@ -152,7 +158,7 @@ public sealed partial class InboxService(
     private static InboxConversationDto ToDto(Row r) => new(
         r.Id, new InboxChannelDto(r.ChannelId, EnumText<ChannelType>.ToDb(r.ChannelType), r.ChannelName),
         r.LocationId is { } lid ? new InboxLocationDto(lid, r.LocationName ?? "") : null,
-        r.ClientId is { } cid ? new InboxClientDto(cid, r.ClientName ?? "") : null,
+        r.ClientId is { } cid ? new InboxClientDto(cid, r.ClientName ?? "", PhoneNormalizer.Mask(r.ClientPhone), r.ClientPhonePending) : null,
         TitleFor(r.ClientName, r.ChannelType), r.AiState, r.HandoffReason, r.AiPausedUntil, r.AwaitingStaffSince, r.LastMessageAt,
         Preview(r.LastBody), r.LastSender is { } s ? EnumText<MessageSenderType>.ToDb(s) : null, r.Unread);
 
@@ -288,7 +294,8 @@ public sealed partial class InboxService(
             m.SentAt, m.CreatedAt,
             // §23.10: підписи кнопок вихідного (без callback_data і токенів) і підпис натиснутої кнопки
             m.Direction == MessageDirection.Outbound && m.Actions is not null && ChatKeyboardLayout.ReadLabels(m.Actions) is { Count: > 0 } labels ? labels : null,
-            m.Kind == "callback" ? CallbackBody.LabelOf(m.Body) : null)).ToList();
+            m.Kind == "callback" ? CallbackBody.LabelOf(m.Body) : null,
+            m.Kind == InboundKinds.Contact ? m.ContactVerdict : null)).ToList();
 
         var now = clock.GetUtcNow();
         var proposal = await db.ChatBookingProposals.AsNoTracking()
