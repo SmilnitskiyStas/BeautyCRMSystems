@@ -16,7 +16,6 @@
       "Read(./**/yarn.lock)",
       "Read(./**/Migrations/*.Designer.cs)",
       "Read(./**/Migrations/*ModelSnapshot.cs)",
-      "Read(./worker/src/testing/schema.sql)",
       "Read(./scripts/dev/.state/*.pid)",
       "Read(./scripts/dev/.state/dev-state.json)"
     ]

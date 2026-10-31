@@ -2036,3 +2036,1185 @@ API вподобань, `call-tasks` і `settings/reminders` (§22.6.2–§22.6.
 - **Змінені очікування наявних тестів.** `InboxServiceTests.text_length_is_counted…` (3500 емодзі: було ok, тепер `invalid_length`), `ChatButtonsPipelineTests.slash_commands_are_answered_by_code_without_llm` (повтор `/book` лише після 31 с), `ChatButtonsDbTests.create_uses_default_ttl…` (appointment_list відкликається), `failed_refund_keeps…` (резерв `failed` не рахується).
 - **Тести.** `Conversations/ChatSecurity759Tests.cs` (ліміт шаблонів і відновлення через хвилину, throttle /help /start /book, «Стоп» при вичерпаному ліміті командою й кнопкою, «Стоп» поза лімітом натискань, інформаційні кнопки, нові розмови, одна appointment_list, кнопки каналу вимкнено, адаптер із емодзі), `ChatButtonsDbTests` (гонка двох розмов одного клієнта при `MaxPerClientPerDay=1`, 3 раунди; L10 на каналі й глобально).
 - **Не перевірено.** Кілька інстансів API (ліміт шаблонів in-memory, L4); реальний Telegram; Node-воркер (довжина його вихідних - окремо, TASK-760).
+
+## §24. Собівартість, чистий дохід і деталі дня в аналітиці (v0.27, 2026-10-26)
+
+Архітектура описана в **ADR-014** частина A (статус `proposed`; gate §24.11). Розділ адитивний, окрім місць **«Зміна»**.
+- **Зміна §19.6:** усі `/analytics/*` відповідають з `Cache-Control: no-store` (також 4xx).
+- **Зміна §19.5:** CSV `network` отримує фінансові колонки; додано CSV деталей (§24.7).
+- **Зміна §19.7 тест 10:** інваріанти доповнено фінансовими полями (§24.5).
+- Доступ до `/analytics/*` не змінився: owner/admin (`Management`) + `beauty_analytics`, specialist → 403. Тому фінансові поля бачать лише owner/admin.
+
+Позначка *(можна змінити)* — припущення архітектора.
+
+### 24.1 Поточний код (2026-10-26)
+Деталі — ADR-014 §1.1:
+- собівартості немає;
+- `GET /services/{id}/prices` читає і specialist (`Staff`);
+- `completed` — кінцевий статус;
+- `SetStatusAsync` працює без CAS;
+- валюти в схемі немає (₴);
+- `RevenueChart` без кліку.
+
+### 24.2 Конфігурація
+| Ключ | За замовч. | Призначення |
+|---|---|---|
+| `Analytics:DetailsPerUserPerMinute` | `60` (10..600) | Ліміт `GET /analytics/network/details` на користувача → `429 rate_limited` + `Retry-After` (in-memory, як inbox) |
+| `ServiceCosts:WritePerUserPerMinute` | `60` (10..600) | Ліміт PUT/DELETE собівартості → `429 rate_limited` |
+
+Максимальний діапазон деталей — 31 день (константа, не налаштовується).
+
+### 24.3 Схема (міграція `beauty_service_costs`, адитивна, без backfill)
+- **`beauty_service_costs`:**
+  - `id`, `tenant_id`, AK `(tenant_id, id)`;
+  - `service_id` (FK `beauty_services` CASCADE), `location_id uuid NULL` (NULL = мережа; FK `beauty_locations` CASCADE);
+  - `cost_amount numeric(12,2) NOT NULL`, `master_percent numeric(5,2) NULL`;
+  - `updated_by_user_id uuid NOT NULL` (FK `users` RESTRICT), `created_at`, `updated_at`;
+  - CHECK `ck_beauty_service_costs_cost`: `cost_amount >= 0 AND cost_amount <= 1000000`; `ck_beauty_service_costs_master_percent`: `master_percent IS NULL OR master_percent BETWEEN 0 AND 100`;
+  - UNIQUE `ux_beauty_service_costs_scope (tenant_id, service_id, location_id)` NULLS NOT DISTINCT (одна мережева + ≤ 1 override на заклад);
+  - індекси на кожен FK.
+- **`beauty_service_cost_audit`** (append-only, без значень):
+  - `id`, `tenant_id`, `service_id` (FK CASCADE), `location_id NULL` (FK CASCADE), `user_id NOT NULL` (FK `users` RESTRICT);
+  - `action varchar(8)` CHECK ∈ `set|delete`; `changed_fields text[] NOT NULL` CHECK `changed_fields <@ '{cost_amount,master_percent}'`;
+  - `created_at`; індекс `(tenant_id, service_id, created_at)`.
+- **`beauty_appointments`** (знімок):
+  - `cost_snapshot numeric(12,2) NULL`, `master_percent_snapshot numeric(5,2) NULL`, `master_payout_snapshot numeric(12,2) NULL`, `cost_captured_at timestamptz NULL`;
+  - CHECK `ck_beauty_appointments_cost_values`: значення ≥ 0, `master_percent_snapshot` 0..100;
+  - `ck_beauty_appointments_cost_status`: усі чотири NULL або `status='completed'`;
+  - `ck_beauty_appointments_cost_consistency`: `cost_snapshot IS NULL OR cost_captured_at IS NOT NULL`, `master_payout_snapshot IS NULL OR cost_snapshot IS NOT NULL`, `master_percent_snapshot IS NULL OR master_payout_snapshot IS NOT NULL`.
+  - Записи, завершені до розгортання, лишаються з NULL («собівартість не задана», ADR-014 §2.2). Нових індексів немає (вимір §19 «Уточнення TASK-706»).
+- **RLS:** ENABLE+FORCE `tenant_isolation` (USING + WITH CHECK) на 2 нових таблицях. `DO`-блок падає, якщо FORCE немає на них, на `beauty_appointments`, `beauty_services`, `beauty_service_prices`. Усі FK композитні `(tenant_id, …)`.
+- **GRANT** (runbook; у міграції не виконується): API-роль SELECT/INSERT/UPDATE/DELETE на `beauty_service_costs`, SELECT/INSERT на `beauty_service_cost_audit`. Ролі воркера — нічого.
+- `worker/src/testing/schema.sql` синхронізувати (schema-drift).
+- **Down:** видаляє таблиці й колонки знімка; знімки втрачаються (зафіксувати в runbook).
+
+### 24.4 Знімок при переході в `completed`
+- Шлях: `PATCH /appointments/{id}` `{status:"completed"}` → `BookingService.PatchAsync` → `store.SetStatusAsync`. Для `completed` — **один** умовний UPDATE у транзакції з `ClosePlanAsync` (§22.4):
+  ```sql
+  UPDATE beauty_appointments a SET status='completed',
+         cost_snapshot = e.cost_amount, master_percent_snapshot = e.master_percent,
+         master_payout_snapshot = CASE WHEN e.cost_amount IS NULL THEN NULL
+                                       ELSE round(a.price_final * coalesce(e.master_percent, 0) / 100, 2) END,
+         cost_captured_at = now(), updated_at = now()
+  FROM beauty_appointments s
+  LEFT JOIN LATERAL (SELECT c.cost_amount, c.master_percent FROM beauty_service_costs c
+                     WHERE c.service_id = s.service_id AND (c.location_id = s.location_id OR c.location_id IS NULL)
+                     ORDER BY c.location_id NULLS LAST LIMIT 1) e ON true
+  WHERE a.id = @id AND s.id = a.id AND a.status IN ('pending','confirmed');
+  ```
+- 0 рядків (паралельне завершення / скасування) → `409 appointment_closed`, як для закритого запису.
+- Інші переходи (`confirmed`, `no_show`) знімок не пишуть.
+- API для зміни знімка немає. `AppointmentDto`, публічні DTO, `GET /services`, `GET /services/{id}/prices` полів собівартості не отримують.
+- Ефективне значення = рядок закладу запису, інакше мережевий. Override закладу діє на весь рядок: `master_percent = NULL` у закладі означає «без виплати», навіть якщо мережевий відсоток заданий *(можна змінити)*.
+
+### 24.5 Правила обчислень
+- **Запис** (`completed`):
+  - `net = price_final − coalesce(cost_snapshot,0) − coalesce(master_payout_snapshot,0)`, може бути < 0 (акція 100%, собівартість > ціни);
+  - `costMissing = cost_snapshot IS NULL`;
+  - `discount = price_original − price_final`;
+  - `masterPayout = round(price_final × master_percent / 100, 2)` (half away from zero, як PostgreSQL `round`; рахується лише в SQL знімка).
+- **Агрегат** (лише `completed` у діапазоні за локальною датою закладу, §19.1):
+  - `revenue = Σ price_final`;
+  - `cost = Σ coalesce(cost_snapshot,0)`;
+  - `masterPayout = Σ coalesce(master_payout_snapshot,0)`;
+  - `netIncome = revenue − cost − masterPayout`;
+  - `withoutCost = count(cost_snapshot IS NULL)`, `revenueWithoutCost = Σ price_final` таких записів;
+  - `discountTotal = Σ (price_original − price_final)`;
+  - `marginPercent = revenue = 0 ? null : round(netIncome / revenue × 100, 1)` (half away from zero).
+- Гроші — `decimal(12,2)`, суми точні (повторного округлення сум немає). Відсотки — число з 1 знаком. Порожній період: усі суми 0, `marginPercent = null`, `withoutCost = 0`.
+- `cancelled`, `no_show` і повернення у виручку не входять. Часткового повернення для `completed` за ADR-007 немає (скасування `completed` → `appointment_closed`), тож коригування виручки у V1 відсутнє. Майбутній облік — V2 (ADR-014 §2.3).
+- Записи без собівартості рахуються з нулем. UI показує попередження, якщо `withoutCost > 0`.
+- **Інваріанти:**
+  - Σ точок `series` = `network` за всіма фінансовими полями;
+  - Σ рядків `locations` = `network`;
+  - `details.summary` за `from..to` точки = ця точка;
+  - Σ `details.locations` = `details.summary`;
+  - Σ `items[].net` по всіх сторінках = `summary.netIncome`.
+- Прогноз за `confirmed` — поза V1.
+
+### 24.6 API
+**24.6.1 Собівартість послуг** (модуль `beauty_catalog`):
+- доступ: owner/admin; specialist → `403 forbidden_role` (фільтр до прив'язки тіла, як `[ReminderRoles]`);
+- `Cache-Control: no-store`, `[RequestSizeLimit(2 КБ)]`.
+
+| Метод | Шлях | Тіло / відповідь |
+|---|---|---|
+| GET | `/service-costs?includeInactive=false` | `{items: [{serviceId, serviceName, isActive, network?: Cost, locations: [Cost & {locationId, locationName}]}]}` — для таблиці послуг |
+| GET | `/services/{id}/costs` | `{serviceId, network?: Cost, locations: [Cost & {locationId, locationName}]}` |
+| PUT | `/services/{id}/costs` | `{locationId: uuid\|null, costAmount: number, masterPercent?: number\|null}` → `200 Cost & {locationId}` |
+| DELETE | `/services/{id}/costs?locationId=` | `204` (без `locationId` — мережевий рядок) |
+
+- `Cost = {costAmount, masterPercent: number|null, updatedAt, updatedBy?: {id, name}}`.
+- Помилки:
+  - `404 service_not_found`;
+  - `404 location_not_found` (невідомий/чужий; власний неактивний дозволений);
+  - `404 cost_not_found` (DELETE);
+  - `422 invalid_cost` (відсутнє, < 0, > 1 000 000, > 2 знаків після коми);
+  - `422 invalid_master_percent` (< 0, > 100, > 2 знаків);
+  - `429 rate_limited`.
+- Запис: upsert `ON CONFLICT (tenant_id, service_id, location_id)`; `updated_by_user_id` = автор. Якщо змін немає — 200 без рядка аудиту. Інакше рядок аудиту з `changed_fields` (лише змінені), а DELETE пише `action=delete`.
+- Лог: `service_cost_updated service={id} scope={network|location} location={id|-} user={id} action={set|delete} changed={…}`. Суми й відсотки не логуються.
+
+**24.6.2 Аналітика — адитивні поля** (лише датний режим; legacy без змін; specialist → 403 як раніше):
+
+| Ендпоінт | Нові поля |
+|---|---|
+| `GET /analytics/network` (+ `previous`) | `cost, masterPayout, netIncome, marginPercent, withoutCost, revenueWithoutCost` |
+| `GET /analytics/network/series` → `points[]` | `cost, masterPayout, netIncome, withoutCost` |
+| `GET /analytics/locations` → рядок (+ `previous`) | `cost, masterPayout, netIncome, marginPercent, withoutCost` |
+| `breakdown`, `promotions` | без змін у V1 |
+
+Наявний агрегат «заклад × дата × статус» отримує Σ знімків і лічильник без собівартості. Кількість SQL-запитів не змінюється (перевіряє тест §19 «Уточнення TASK-706»). Delta для нових полів рахує клієнт за §19.3 (`marginPercent` — як частка, у п.п.).
+
+**24.6.3 Деталі періоду: `GET /analytics/network/details`** (той самий `AnalyticsController`)
+- **Параметри:**
+  - `date=yyyy-MM-dd` (день) **або** `from&to` (кошик тижня/місяця з `series`);
+  - `locationId?`; `cursor?`; `take?` (за замовч. 100, обмежено 1..200).
+- **Валідація:**
+  - немає ні `date`, ні `from/to`, або `date` разом з `from|to` → `422 invalid_range`;
+  - `date` невалідна/неіснуюча/рік поза 2000..2100 → `422 invalid_date`;
+  - `from/to` — правила §19.1 датного режиму (значення з часом → `invalid_range`) + `to − from + 1 ≤ 31` → інакше `422 invalid_range`;
+  - `locationId` невідомий/чужий → `404 location_not_found` (власний неактивний дозволений);
+  - `cursor` нерозбірний або від інших параметрів → `422 invalid_cursor`.
+- **Відповідь:**
+  ```
+  {fromDate, toDate, timezone, location?: {id, name, timezone},
+   summary: {appointments, completed, cancelled, noShow, revenue, discountTotal, cost, masterPayout, netIncome, marginPercent, withoutCost, revenueWithoutCost},
+   locations: [{locationId, name, timezone, completed, revenue, cost, masterPayout, netIncome, marginPercent, withoutCost}],
+   items: [{appointmentId, localDate, localTime, location: {id, name}, service: {id, name}, specialist: {id, name},
+            priceOriginal, discount, promotion?: {id, name}, priceFinal, cost, masterPercent, masterPayout, net, costMissing}],
+   hasMore, nextCursor?}
+  ```
+  - `timezone` — еталонна зона (§19.1). Запис належить дню за локальною датою **свого закладу**. `localDate` (`yyyy-MM-dd`) і `localTime` (`HH:mm`) — у зоні закладу.
+  - `summary` і `locations` рахуються за весь діапазон (з урахуванням `locationId`) і від сторінки не залежать. `appointments|cancelled|noShow` — усі статуси, фінанси — лише `completed`.
+  - `locations` — заклади з ≥ 1 записом будь-якого статусу; сортування `revenue` desc, `name` (ordinal), `locationId`.
+  - `items` — лише `completed`, сортування `(starts_at, id)`, keyset-курсор (base64url `{ticks}|{id}|{hash параметрів}`). `cost`/`masterPercent`/`masterPayout` = `null`, якщо `costMissing`. `promotion.name` — поточна назва акції (знімка назви немає).
+  - **Не містить:** імені, телефону, email, `clientId`, нотаток, причини скасування.
+- Фіксована кількість запитів (≤ 4: агрегат по закладах, сторінка, назви). Попередній фільтр UTC-вікном ±14 год, як §19.6.
+- Заголовки: `Cache-Control: no-store`; `429 rate_limited` + `Retry-After`; 401 / 403 / `403 module_disabled` — як зараз.
+
+### 24.7 CSV (лише клієнт, правила §19.5: BOM, `;`, CRLF, RFC 4180, захист від CSV-injection, `,` у грошах)
+- **`network` (Зміна §19.5):** після `Виручка, ₴` додаються `Собівартість, ₴; Виплата майстрам, ₴; Чистий дохід, ₴; Маржа, %; Без собівартості`. Колонки є в точках, у `Разом` і в рядку `Попередній період`. `Зміна, %` — для грошових колонок; для маржі — п.п.
+- **Деталі:** `beauty-analytics-details-{fromDate}_{toDate}.csv`. Колонки: `Дата; Час; Заклад; Послуга; Майстер; Ціна до знижки, ₴; Знижка, ₴; Акція; Ціна продажу, ₴; Собівартість, ₴; Виплата майстру, ₴; Чистий внесок, ₴; Без собівартості`. Для `costMissing` комірки собівартості й виплати порожні, а `Без собівартості` = `так`. Останній рядок `Разом` береться з `summary`.
+- Якщо `hasMore`, кнопка послідовно довантажує сторінки (≤ 10 × 200 = 2000 рядків). Понад це експортуються перші 2000 і додається рядок `Неповний список: {n} з {summary.completed}`.
+- Персональних даних і GUID-ів немає (`appointmentId` не експортується).
+
+### 24.8 Frontend
+**24.8.1 Аналітика (TASK-765):**
+- **KPI «Мережа»:** + «Собівартість», «Виплата майстрам», «Чистий дохід» (примітка «маржа {x}%»), delta за `compare`. Якщо `withoutCost > 0` — банер `role="status"`: «{n} завершених записів без собівартості ({сума} ₴ виручки) — чистий дохід завищено. Задати собівартість →» (посилання на послуги).
+- **`RevenueChart`:**
+  - кожен стовпець — `<button type="button">` на всю висоту колонки; Enter/Space нативно, видимий фокус;
+  - `aria-label` «{pointFullLabel}: виручка {x} ₴, чистий дохід {y} ₴. Відкрити деталі»; ціль ≥ 24 px за висотою;
+  - для `week`/`month` передаються `from/to` точки;
+  - тултіп і режим порівняння не змінюються (у `series` порівняння немає).
+- **Панель «Деталі дня {пт, 24.10}»** / «Деталі тижня {27.10–02.11}» / «Деталі місяця {жовтень}»:
+  - `role="dialog"` `aria-modal`, пастка фокуса, Esc, повернення фокуса на стовпець;
+  - ≥ 768 px — бічна панель 480 px, < 768 px — повноекранна;
+  - на 320 px без горизонтального скролу: рядки записів — картки;
+  - вміст: підсумок (виручка / собівартість / виплата / чистий дохід / маржа / завершено / без собівартості + банер), чипи закладів (фільтр `locationId`), таблиця закладів, список записів із «Показати ще» (`nextCursor`), «Експорт CSV»;
+  - стани завантаження, помилки, порожньо («Завершених записів немає»);
+  - ключ React Query `['analytics-details', from, to, locationId]`.
+- KPI таблиці «Заклади» — колонки «Чистий дохід», «Маржа».
+- `mock-client` за контрактом (+ тест узгодженості, як `mock-consistency.test.ts`).
+
+**24.8.2 Редактор собівартості (TASK-766):**
+- Розділ «Собівартість і виплата майстру» у формі послуги. Показується лише owner/admin; для specialist запитів немає.
+- Поля «Собівартість, ₴» (≥ 0, 2 знаки) і «Виплата майстру, % від ціни продажу» (необов'язково, 0..100).
+- Таблиця override закладів: «Додати для закладу», видалення з підтвердженням.
+- Підказка «Діє на записи, завершені після збереження; минулі записи не змінюються.» Попередження, якщо собівартість + виплата (за мережевою ціною або ціною закладу) > ціни.
+- «Оновлено {ім'я}, {дата}». Помилки 422 показуються під полями.
+- Список послуг — колонка «Собівартість» (owner/admin) з `GET /service-costs`.
+
+### 24.9 Безпека й ПД
+- **Ролі:** фінансові поля й CRUD собівартості — лише owner/admin; specialist → 403 до читання тіла. `AppointmentDto` і ціни без знімків (тест на тілах).
+- **Ізоляція:** RLS FORCE, композитні FK, чужий `serviceId`/`locationId` → 404 без розкриття.
+- **Обмеження вивантаження:** деталі ≤ 31 день, `take ≤ 200`, ліміт на користувача, `no-store`. Даних клієнта немає у відповідях і CSV (тест-сканер тіл на ім'я/телефон/`clientId`).
+- **Цілісність:** знімок лише в UPDATE переходу; `completed` кінцевий; аудит змін собівартості без значень; логи без сум.
+
+### 24.10 Тестові сценарії
+Backend (реальна БД, RLS):
+1. **Рівні:** мережа 120 + заклад A 150 → запис A бере 150, запис B — 120; override закладу з `master_percent NULL` при мережевому 40% → виплата 0.
+2. **Знімок:** `completed` → поля заповнені, `cost_captured_at`; зміна собівартості після цього не змінює запис; `no_show`/`cancelled` → NULL; повторний PATCH `completed` → `409 appointment_closed`; два паралельні завершення → один знімок, другий 409.
+3. **Округлення:** `price_final 333.33 × 33.33% = 111.10` (111.0988…→111.10); `1.00 × 0.5% = 0.005` → `0.01`; акція 100% → виплата 0, `net = −cost`.
+4. **Без собівартості:** 3 записи, 1 без → `withoutCost=1`, `revenueWithoutCost` правильна, `netIncome` рахує його з 0; записи, завершені до міграції, → `withoutCost`.
+5. **Акції:** `discount = original − final`, виплата від `price_final`, `promotion` у деталях.
+6. **Межі дня (Kyiv):** запис 31.10 23:30 local — день 31.10; 01.11 00:15 local (31.10 22:15 UTC) — 01.11. Заклад Auckland 01.10 08:00 local → 01.10.
+7. **DST:** 25.10.2026 — два записи о 03:30 (обидва входження) у деталях дня 25.10 з `localTime=03:30`, порядок за UTC; 29.03.2026 (23 год) — без зсуву.
+8. **Інваріанти §24.5:** series vs network, locations vs network, details vs точка (day/week/month), Σ `net` сторінок = `netIncome`.
+9. **Пагінація:** 450 записів → сторінки 200/200/50, `hasMore` true/true/false, без дублів і пропусків при однаковому `starts_at`; курсор з іншим `locationId` → `422 invalid_cursor`; `take=500` → 200.
+10. **Валідація:** `date=2026-02-30` → `invalid_date`; `date` + `from` → `invalid_range`; 32 дні → `invalid_range`; значення з часом → `invalid_range`; без параметрів → `invalid_range`.
+11. **Ролі/IDOR:** specialist → 403 (details, costs, network); вимкнений модуль → `module_disabled`; чужий `locationId`/`serviceId` → 404; дані tenant B не в сумах; `GET /services/{id}/prices` і `GET /appointments` для specialist без полів собівартості.
+12. **CRUD:** PUT/DELETE, `invalid_cost` (−1, 1 000 000.01, 1.234), `invalid_master_percent` (101, −0.01), без змін → без аудиту, аудит без значень, логи без сум; паралельні PUT → один рядок.
+13. **Legacy/заголовки:** legacy-запит без нових полів; усі `/analytics/*` мають `no-store`; ліміт деталей → 429.
+14. **Кількість запитів:** `network?compare=true` і `locations?compare=true` — як у TASK-706; details ≤ 4.
+
+Frontend (vitest):
+
+15. Клік / Enter / Space по стовпцю відкриває панель із правильними `from/to` (day/week/month); фокус повертається на стовпець; 320 px без горизонтального скролу (тест розмітки карток).
+16. Банер `withoutCost`; `marginPercent=null` → `—`; delta нових KPI.
+17. CSV: нові колонки network; CSV деталей (порожні комірки для `costMissing`, `так`, `Разом`, префікс `'` для `=SUM`, від'ємний `net` без префікса), неповний список > 2000.
+18. Редактор собівартості: валідація, override закладу, specialist не бачить розділ.
+
+### 24.11 Human gate і ризики (ADR-014 §8)
+1. **Міграція** `beauty_service_costs` без backfill (минулі записи «без собівартості») — потрібне погодження.
+2. **Продукт:** NULL для завершених до розгортання; override закладу на весь рядок *(можна змінити)*; admin редагує собівартість (рішення є, підтвердити аудит).
+3. **Security review** TASK-773 (межа доступу, масове вивантаження).
+4. **Ризики:**
+   - власник сприйме «чистий дохід» без собівартості як реальний — банер і `withoutCost`;
+   - зміна собівартості не діє ретроспективно (очікувана поведінка, підказка в UI);
+   - виплата майстру не враховує інших моделей оплати (оклад, фіксована ставка) — V2;
+   - утримана частина при скасуванні у виручку не входить.
+
+### 24.12 Розподіл задач (§24)
+Порядок: контракт → БД → (snapshot+CRUD ∥ аналітика) → frontend (на mock раніше) → QA → security review (§25.13) → docs. ID запропоновані, остаточні призначає `project-manager`.
+
+| Задача | Агент | Обсяг | Залежить |
+|---|---|---|---|
+| TASK-762 | database-engineer | Міграція `beauty_service_costs` (§24.3): 2 таблиці, колонки знімка, CHECK, UNIQUE NULLS NOT DISTINCT, RLS FORCE, `DO`-блок, EF-сутності, snapshot, `schema.sql`, тести БД (FORCE, CHECK, крос-tenant, Down) | контракт |
+| TASK-763 | backend-developer | Знімок у `SetStatusAsync` (умовний UPDATE, §24.4), CRUD собівартості + аудит + ліміт (§24.6.1). Тести 1–3, 11 (CRUD/DTO), 12 | TASK-762 |
+| TASK-764 | backend-developer | Аналітика: нові поля `network`/`series`/`locations` (§24.6.2), `network/details` (§24.6.3), `no-store`, ліміт. Тести 4–11, 13–14 (знімки в тестах сідуються напряму) | TASK-762 (∥ TASK-763) |
+| TASK-765 | frontend-developer | DTO/`http-client`/`mock-client`, KPI й банер, клікабельний `RevenueChart`, панель деталей, CSV (§24.7–24.8.1). Тести 15–17 | контракт (mock) → TASK-764 |
+| TASK-766 | frontend-developer | Редактор собівартості (§24.8.2) + картка клієнта / inbox / дзвінки для телефону (§25.8). Тест 18 і §25.10 п. 21 | контракт (mock) → TASK-763, TASK-769 |
+| TASK-771 | qa-engineer | Повний §24.10 + e2e: діапазон → клік по стовпцю → панель → CSV; регресія §19.7 | TASK-763, TASK-764, TASK-765, TASK-766 (частина собівартості) |
+
+- TASK-763 ∥ TASK-764: різні файли (`Catalog*`, `EfBeautyStore.Booking.cs` проти `AnalyticsService.cs`, `EfBeautyStore.ClientsAnalytics.cs`). Спільна лише сутність із TASK-762. TASK-765 ∥ TASK-766 (різні екрани).
+
+## §25. Телефон клієнта для дзвінка в чаті (v0.28, 2026-10-26)
+
+Архітектура описана в **ADR-014** частина B (статус `proposed`; gate §25.12; юридичне — ВІДКРИТО). Розділ адитивний, окрім місць **«Зміна»**.
+- **Зміна ADR-011 §2.2 / §22.7 / §22.9:** телефон запитується в чаті, але лише в сценарії дзвінка. Змінено T-reminder-call-unavailable і рядок фактів про дзвінок.
+- **Зміна §22.13 / §23.12:** `request_contact` зі згодою — V1.
+- **Зміна §22.7 / §23.8 (`reminder_choice`):** «Зателефонувати» показується за `call_enabled` і без телефону (поза cooldown).
+- **Зміна §23.3/§23.4:** `kind=contact`; `actions` приймає reply-keyboard і `removeReply`. **Зміна §23.5:** безстанова дія `i:phone`.
+
+Позначка *(можна змінити)* — припущення архітектора.
+
+### 25.1 Поточний код (2026-10-26)
+ADR-014 §1.1:
+- контакт → `unsupported` без номера;
+- меню дзвінка лише з телефоном;
+- `pending_prompt` = `reminder_choice` з обов'язковим записом;
+- `PhoneNormalizer` (Application) нормалізує до E.164;
+- staff-пошук клієнта за телефоном — точний і неоднозначний.
+
+### 25.2 Конфігурація
+| Ключ | За замовч. | Призначення |
+|---|---|---|
+| `ChatPhone:Enabled` | `false` | Головний вимикач. `false`: поведінка до §25 (дзвінок у меню лише з телефоном, старий T-reminder-call-unavailable, рядок фактів без змін). Контакт: номер обнуляється, відповідь як для `unsupported`. Поза dev — лише після gate §25.12 п. 1 |
+| `ChatPhone:PromptTtlHours` | `24` (1..72) | TTL питання: `min(now + TTL, starts_at запису)` |
+| `ChatPhone:CooldownDays` | `30` (1..365) | Автоматичне повторне питання не частіше |
+| `ChatPhone:DefaultCountry` | `UA` | Національний формат `0XXXXXXXXX` → `+380…` (у V1 лише UA) |
+| `ChatPhone:ContactRetentionHours` | `24` (1..72) | Sweeper обнуляє `contact_phone`, старші за це |
+
+### 25.3 Схема (міграція `beauty_client_phone_capture`, адитивна, без backfill)
+- **`beauty_clients`:**
+  - `phone_source varchar(16) NULL` CHECK ∈ `telegram_contact|manual_chat|web_form|staff` (NULL = спадковий/невідомо); CHECK `phone_source IS NULL OR phone IS NOT NULL`;
+  - `call_consent_at timestamptz NULL`;
+  - `phone_pending varchar(16) NULL` CHECK `~ '^\+[1-9][0-9]{7,14}$'`, `phone_pending_source varchar(16) NULL` CHECK ∈ `telegram_contact|manual_chat`, `phone_pending_at timestamptz NULL`; CHECK `ck_beauty_clients_phone_pending_all_or_none`;
+  - `phone_requested_at timestamptz NULL` (останній показ питання; основа cooldown);
+  - `duplicate_of_client_id uuid NULL` (композитний FK на `beauty_clients` RESTRICT; CHECK `<> id`; індекс).
+  - CHECK формату на спадковий `phone` не накладається.
+- **`beauty_conversations`:**
+  - CHECK `pending_prompt` ∈ `reminder_choice|phone_request` (надмножина);
+  - `ck_beauty_conversations_pending_prompt_all_or_none` замінюється на: `(pending_prompt IS NULL AND pending_prompt_appointment_id IS NULL AND pending_prompt_expires_at IS NULL) OR (pending_prompt='reminder_choice' AND pending_prompt_appointment_id IS NOT NULL AND pending_prompt_expires_at IS NOT NULL) OR (pending_prompt='phone_request' AND pending_prompt_expires_at IS NOT NULL)`;
+  - `reply_keyboard_open_at timestamptz NULL` (у клієнта висить reply-keyboard).
+- **`beauty_messages`:**
+  - CHECK `ck_beauty_messages_kind` → `text|command|unsupported|callback|contact` (надмножина);
+  - `contact_phone varchar(16) NULL` (E.164, тимчасово), `contact_verdict varchar(8) NULL` CHECK ∈ `own|foreign|invalid`;
+  - CHECK `kind='contact' OR (contact_phone IS NULL AND contact_verdict IS NULL)`; `contact_phone IS NULL OR (contact_verdict='own' AND contact_phone ~ '^\+[1-9][0-9]{7,14}$')`;
+  - частковий індекс `(tenant_id, created_at) WHERE contact_phone IS NOT NULL` (sweeper).
+- **RLS:** нових таблиць немає. `DO`-блок перевіряє FORCE на `beauty_clients`, `beauty_conversations`, `beauty_messages`. FK композитні.
+- **GRANT:** без змін (API-роль уже має UPDATE на ці таблиці). Роль воркера має SELECT на `beauty_messages`, але `contact_phone` не читає. Це прийнятно: значення тимчасове.
+- `worker/src/testing/schema.sql` синхронізувати.
+- **Down:** `contact` → `unsupported` (номер обнуляється), `phone_request` → `pending_prompt=NULL`, колонки видаляються (pending-номери втрачаються); FORCE знімається лише на час UPDATE.
+
+### 25.4 Транспорт (Telegram)
+- **Парсер `message.contact`** (наявний фільтр приватного чату й не бота):
+  - `InboundMessage` адитивно: `Kind=contact`, `Text="[контакт]"`, `ContactVerdict`, `ContactPhone`;
+  - `own`: `contact.user_id` (число) `== message.from.id` і номер нормалізується. `foreign`: `user_id` відсутній або інший, номер **відкидається**. `invalid`: власний, але номер не нормалізується;
+  - нормалізація `phone_number`: ASCII-цифри з необов'язковим `+`; 11..15 цифр без `+` → `+` + цифри; далі правила §25.5.3 (E.164, `+380` = 12 цифр);
+  - `vcard`, імена, `user_id` не зберігаються;
+  - ключ дедуплікації як у `message`.
+- **Збереження:** `beauty_messages.contact_phone` / `contact_verdict`, `body="[контакт]"`.
+- **Вихід:** `ChatActionLayout` адитивно:
+  - `Reply` (`{Rows: [[{Label, RequestContact}]], OneTime, Resize, Placeholder}`);
+  - `RemoveReply: bool`.
+
+  Рівно одне з `Rows` / `Reply` / `RemoveReply`. Reply ≤ 4 кнопки, ≤ 2 рядки, підпис ≤ 32, `Placeholder` ≤ 64. Невалідна розкладка → лише текст.
+  - JSON у `actions`: `{"reply":{"rows":[[{"label":"📱 Поділитися контактом","requestContact":true}],[{"label":"Не треба"}]],"oneTime":true,"resize":true,"placeholder":"+380XXXXXXXXX"}}` / `{"removeReply":true}`.
+  - Telegram: `reply_markup: {keyboard: [[{text, request_contact}]], one_time_keyboard, resize_keyboard, input_field_placeholder}` / `{remove_keyboard: true}`. Без `parse_mode`.
+  - Для reply-keyboard рядків `beauty_chat_keyboards` немає (натискання = звичайне `message`).
+  - Instagram і mock-и `Reply`/`RemoveReply` ігнорують. Воркер (TASK-751) невідому розкладку шле як текст, тож змін воркера немає (текст питання має інструкцію «напишіть номер»).
+- **`i:phone`:** regex безстанових дій `^i:(book|my|help|human|stop|phone)$` (`TelegramAdapter.IsValidCallbackData`, `ChatKeyboardLayout`, `ResolveCallbackAsync` → `Stateless`).
+- **Inbox (адитивно):** `messages[].contactVerdict?` для `kind=contact`; `messages[].buttons` включає підписи reply-keyboard.
+- **Логи:** без номера, `user_id`, імен контакту й chat id.
+
+### 25.5 Конвеєр (`PhoneCaptureService`, `ChatPhoneParser`; код, без LLM)
+**25.5.1 Коли питаємо.** Умови: `ChatPhone:Enabled`, `call_enabled`, `conversation.client_id` (інакше T-phone-no-client), режим будь-який (§25.5.6).
+
+| Подія | Телефон є | Немає, поза cooldown | Немає, cooldown (`phone_requested_at > now − CooldownDays`) |
+|---|---|---|---|
+| «зателефонувати» під `reminder_choice` (текст / `rc` call) | `call` як зараз | T-phone-request, запис = запис питання | T-reminder-call-unavailable (новий текст) |
+| `i:phone`, «змінити номер / змінити спосіб / мій номер» (точний збіг після `Normalize`, будь-коли) | T-phone-request, запис = NULL | T-phone-request, запис = найближчий майбутній `pending\|confirmed` клієнта (або NULL) | те саме (явний обхід cooldown) |
+
+- `call_enabled=false` → T-call-disabled.
+- **Меню** (`ReminderChoiceMenu.Options(callOffer)`, текст і клавіатура `rc`): `Available` (телефон є) і `NeedsPhone` (немає, поза cooldown) → пункт «Зателефонувати»; `Cooldown` → пункту немає, у клавіатурі рядок [📞 Змінити спосіб] (`i:phone`), у тексті «Щоб адміністратор телефонував, напишіть «змінити номер»»; `Disabled` → немає.
+- **Показ питання** (одна транзакція):
+  - `pending_prompt='phone_request'`, `pending_prompt_appointment_id`, `expires_at = min(now + PromptTtlHours, starts_at)`;
+  - `phone_requested_at=now`;
+  - клавіатура `reminder_choice` → `revoked`;
+  - T-phone-request з `actions.reply` (без `SupportsActions` — текстовий варіант);
+  - `reply_keyboard_open_at=now`;
+  - журнал `phone_prompt` `{appointmentId?, trigger: call_choice|explicit, via}`.
+- Активне питання + новий тригер → той самий T-phone-request (throttle однакових шаблонів 30 с, TASK-759), `phone_requested_at` не зсувається.
+
+**25.5.2 Відповідь на питання** (крок 4a, перед розбором `reminder_choice`; пакет = 1 контакт або 1 текст):
+- Питання протерміноване → знімається (для cooldown це відмова). Повідомлення йде звичайним шляхом: контакт → §25.5.4.
+- **Контакт:** `own` → збереження (§25.5.3, `telegram_contact`); `foreign` → T-phone-foreign (питання й клавіатура лишаються); `invalid` → T-phone-invalid.
+- **Текст** (`ChatPhoneParser`):
+  - `Phone` → збереження (`manual_chat`), тіло → `"[номер телефону]"`;
+  - `Invalid` (схоже на номер) → тіло → `"[номер телефону]"`, T-phone-invalid (питання лишається);
+  - `Decline` (`не треба|ні|не хочу|не потрібно|відміна`, кнопка «Не треба») → питання знімається, T-phone-declined з `removeReply`. Якщо є активний запис — другим повідомленням T-reminder-offer без дзвінка + клавіатура `rc` + `pending_prompt='reminder_choice'` (запис);
+  - `NotAPhone` → питання знімається, хід іде далі (кроки 4a…8), reply-keyboard прибирається за §25.5.5.
+- Будь-яке оброблене повідомлення `kind=contact` отримує `contact_phone=NULL` у тій самій транзакції. Статус `processed`.
+
+**25.5.3 Розбір і збереження номера**
+- **`ChatPhoneParser`:**
+  - після trim і необов'язкового префікса (`мій номер`, `номер`, `телефон`, `тел`, `тел.`, `ось`, з `:` чи без) решта мусить бути `^[+0-9 ().-]{7,32}$` (лише ASCII), інакше `NotAPhone`;
+  - кілька номерів (≥ 2 групи по ≥ 7 цифр через слово чи кому) → `Invalid`;
+  - нормалізація — `PhoneNormalizer.Normalize` (`+CC…`, `00CC…`, `0XXXXXXXXX` → `+380…`, 11–15 цифр без `+`) + правило: `+380…` = рівно 12 цифр; результат `^\+[1-9][0-9]{7,14}$`, інакше `Invalid`.
+- **Збереження** (одна транзакція, `pg_advisory_xact_lock(hashtextextended('client-phone:{tenant}:{client}',0))`):
+  1. Клієнт = `conversation.client_id`, не видалений (інакше T-phone-no-client).
+  2. Порівняння за цифрами (`regexp_replace(phone,'\D','','g')`):
+     - телефону немає → `phone=e164`, `phone_source`, `call_consent_at=now`, `result=saved`. Дублікати: інші активні клієнти з тими самими цифрами (`LIMIT 2`); рівно 1 → `duplicate_of_client_id` = він; 0 або 2 → без зв'язку;
+     - ті самі цифри → `call_consent_at = coalesce(call_consent_at, now)`, `result=unchanged`;
+     - інші цифри → `phone_pending=e164`, `phone_pending_source`, `phone_pending_at=now`; розмова `awaiting_staff_since=coalesce(…, now)`; журнал `phone_conflict`; `result=pending_conflict`. Наявний номер **не** змінюється.
+  3. Запис питання не NULL → `ReminderChoiceApplier.ApplyAsync(conv, appt, call {1440}, source="chat", via=contact|text)` у тій самій транзакції (телефон уже є, тож `CallAvailable`), і `ReminderPlanner` створює call-task (§22.4). `AppointmentInactive` → T-phone-saved (без рядка про візит).
+  4. `pending_prompt=NULL`; журнал `phone_saved` `{result, source, via, appointmentId?, duplicateLinked}` без номера.
+  5. Відповідь з `removeReply`, `reply_keyboard_open_at=NULL`: `saved|unchanged` + запис → T-phone-saved-call; без запису → T-phone-saved; `pending_conflict` → T-phone-pending.
+
+**25.5.4 Контакт без питання** (або `ChatPhone:Enabled=false`): `contact_phone=NULL`, номер не зберігається. T-contact-unexpected не частіше разу на 10 хв на розмову, статус `processed`. Під час паузи handoff відповіді немає, статус `held`.
+
+**25.5.5 Прибирання reply-keyboard.** Якщо `reply_keyboard_open_at IS NOT NULL` і `pending_prompt <> 'phone_request'`, перше вихідне повідомлення ходу конвеєра без inline `actions` отримує `{"removeReply":true}`, а `reply_keyboard_open_at=NULL` (та сама транзакція). Відповіді менеджера (Inbox) у V1 клавіатуру не прибирають.
+
+**25.5.6 Режими й handoff.**
+- Відповідь на `phone_request` (контакт, номер, відмова) і тригери §25.5.1 — детерміновані дії над власними даними. Вони виконуються під час паузи handoff і в `suggest` з шаблоном-відповіддю, як `rc` (§23.6) *(можна змінити, gate п. 3)*. `awaiting_staff_since` не змінюється, окрім `pending_conflict`.
+- Під час паузи текст, що не є відповіддю, стає `held` (як раніше), а питання не знімається.
+- Для `i:phone` політика handoff (§23.6) дозволяє: `i:phone` додається до переліку дозволених.
+
+**25.5.7 Sweeper** (`ConversationWorker.SweepTenantAsync`): `UPDATE beauty_messages SET contact_phone=NULL WHERE contact_phone IS NOT NULL AND created_at < now() - ContactRetentionHours` (пакети по 500).
+
+**25.5.8 ШІ.**
+- `kind=contact` не входить в історію LLM. Тіла `[номер телефону]` входять як є.
+- `ChatRules` +: «Не проси номер телефону й не обіцяй дзвінка без нього: номер запитує система, коли клієнт обирає дзвінок у меню нагадувань.»
+- Рядок фактів §22.9 (стан «телефону немає», за `ChatPhone:Enabled`): «дзвінок-нагадування поки недоступний: потрібен номер; клієнт може написати «нагадування» й обрати «зателефонувати», тоді система попросить номер».
+- Рядок фактів для стану cooldown: «…може написати «змінити номер»».
+- `PolicyClaimGuard` без змін.
+
+### 25.6 Шаблони (`ChatTemplates`, українською; копірайтер править текст без зміни контракту, текст згоди — лише після юридичного gate)
+- **T-phone-request:** «Щоб адміністратор зателефонував, потрібен ваш номер телефону.» / «Натисніть «📱 Поділитися контактом» нижче або напишіть номер у форматі +380XXXXXXXXX.» / «Надаючи номер, ви погоджуєтесь, що адміністратор зателефонує щодо цього запису.» / «Не хочете — натисніть «Не треба», і ми нагадаємо тут, у Telegram.»
+  - Без запису: «…щодо ваших записів».
+  - Без кнопок: без згадки кнопок, «або напишіть «не треба»».
+  - Клавіатура: [📱 Поділитися контактом] / [Не треба], placeholder `+380XXXXXXXXX`.
+- **T-phone-saved-call:** «Дякуємо, номер збережено. Адміністратор зателефонує вам напередодні візиту {пт, 31.10 о 14:30}. Змінити — напишіть «нагадування».»
+- **T-phone-saved:** «Дякуємо, номер збережено.»
+- **T-phone-pending:** «Дякуємо! У нас уже є інший ваш номер, тож адміністратор перевірить новий і зателефонує щодо запису.»
+- **T-phone-foreign:** «Це контакт іншої людини. Надішліть, будь ласка, свій — кнопкою «📱 Поділитися контактом» — або напишіть свій номер.»
+- **T-phone-invalid:** «Не вдалося розпізнати номер. Напишіть його у форматі +380501112233 або натисніть «📱 Поділитися контактом».»
+- **T-phone-declined:** «Добре, номер не потрібен.»
+- **T-reminder-call-unavailable (Зміна §22.7):** «Дзвінок-нагадування недоступний без номера телефону. Щоб надати номер, напишіть «змінити номер». Або можу нагадати тут, у Telegram: 1, 2 або 3.» Якщо `ChatPhone:Enabled=false`, текст лишається старим.
+- **T-contact-unexpected:** «Номер не збережено: ми запитуємо його лише для дзвінка-нагадування. Якщо хочете, щоб адміністратор телефонував, напишіть «нагадування» й оберіть «Зателефонувати».»
+- **T-call-disabled:** «Дзвінки-нагадування в цьому закладі не передбачені. Можу нагадати тут, у Telegram — напишіть «нагадування».»
+- **T-phone-no-client:** «Номер знадобиться після запису. Напишіть, на яку послугу бажаєте записатися.»
+
+### 25.7 API (адитивно; owner/admin; `no-store`)
+| Метод | Шлях | Зміна |
+|---|---|---|
+| GET | `/clients/{id}` | + `phoneSource?`, `callConsentAt?`, `phonePending?: {phone, source, at}`, `possibleDuplicate?: {id, name}` (видалений не віддається) |
+| POST | `/clients/{id}/phone-pending` | **новий**: `{action: accept\|reject}` → `200 {phone, phoneSource, callConsentAt, phonePending: null}` |
+| GET | `/call-tasks` | `client.phonePending?` (повний номер, лише тут і в картці) |
+| GET | `/conversations`, `/conversations/{id}` | `client.phoneMasked?` (`+` і останні 2 цифри, решта `•`), `client.phonePending: bool`; `messages[].kind` може бути `contact`, `contactVerdict?` |
+
+- **`phone-pending`:**
+  - `404 client_not_found`, `409 no_pending_phone`, `422 invalid_action`;
+  - advisory-lock як у §25.5.3;
+  - `accept`: `phone = phone_pending`, `phone_source = phone_pending_source`, `call_consent_at = phone_pending_at`, pending очищується, `duplicate_of_client_id` перераховується за правилом §25.5.3;
+  - `reject`: pending очищується;
+  - лог `client_phone_pending_resolved client={id} user={id} action={a}`.
+- **Створення клієнта з телефоном:** публічний запис → `phone_source=web_form`; staff (`POST /clients`, новий клієнт у `POST /appointments`) → `staff`. Наявний клієнт не змінюється.
+- **Пошук клієнта за телефоном** (`ResolveClientAsync`, публічні ліміти за телефоном): сортування `duplicate_of_client_id IS NULL DESC, created_at, id` (детерміновано, перевага оригіналу). Нормалізація staff-шляху — поза V1.
+- `/clients` (список), `AppointmentDto` і публічні DTO не змінюються.
+
+### 25.8 Frontend (TASK-766)
+- **Картка клієнта:** телефон з бейджем джерела («з Telegram-контакту» / «введено в чаті» / «з онлайн-запису» / «внесено адміністратором»), «згода на дзвінок {дата}». Блок «Клієнт надав інший номер у чаті: {phone} ({дата})» з кнопками [Замінити] [Залишити поточний] і підтвердженням. «Можливий дубль: {ім'я} →».
+- **Inbox:** чип «Клієнт поділився своїм контактом» / «Надіслано чужий контакт — відхилено» / «Некоректний номер»; тіло `[номер телефону]` — чип «Клієнт написав номер»; маска телефону в заголовку; бейдж «Надано інший номер» з посиланням на картку; reply-кнопки — неактивні чипи.
+- **Дзвінки:** рядок «Новий номер (не підтверджено): {phone}» з `tel:`.
+- `errors.ts`: `no_pending_phone`, `invalid_action`.
+
+### 25.9 Безпека й ПД
+- **Номер:**
+  - приймається лише власний контакт (`user_id == from.id`) у приватному чаті; чужий номер не зберігається ніде;
+  - ручний номер — лише під активним питанням, із показаним текстом згоди;
+  - контакт без питання не зберігається.
+- **Де зберігається:** `beauty_clients.phone`/`phone_pending` і тимчасово `beauty_messages.contact_phone` (обнулення в транзакції обробки, sweeper ≤ 24 год). Тіла: `[контакт]` / `[номер телефону]`. Повний номер віддається лише в картці клієнта й `call-tasks` (owner/admin); inbox показує маску.
+- **Логи** (`chat_phone conversation={id} trigger={call_choice|explicit|-} result={prompted|saved|unchanged|pending_conflict|foreign|invalid|declined|expired|unexpected|disabled}`) і журнал `beauty_ai_actions` містять лише коди. Заборонено: номер чи його частини, `contact.user_id`, імена контакту, chat id.
+- **Без мовчазного перезапису:** інший номер іде в pending і на рішення адміністратора; злиття клієнтів немає.
+- **Спам і повтори:**
+  - питання лише після вибору дзвінка або явного запиту, cooldown 30 діб, одне активне питання;
+  - ліміт шаблонів (TASK-759) і throttle однакових;
+  - дедуп за `message_id`; повтор того самого контакту → `unchanged`.
+- **Підробка:** переслана чи чужа картка контакту → `foreign`; групові чати ігноруються. Залишковий ризик модифікованого клієнта — ADR-014 §4.
+- **Ін'єкції:** питання й розбір — код; модель номер не запитує й не бачить (`ChatRules`, факти — лише булеве).
+
+### 25.10 Тестові сценарії
+Fake Telegram (`sendMessage` з `reply_markup.keyboard` / `remove_keyboard`), mock ШІ з лічильником, реальна БД (RLS).
+1. **Парсер:** `contact.user_id == from.id` → `kind=contact`, `own`, E.164 у `contact_phone`, `body=[контакт]`; без `user_id` / інший `user_id` → `foreign`, `contact_phone=NULL`; `phone_number` «380501112233» → `+380501112233`; «12345» → `invalid`; група → ігнор.
+2. **Відправка:** T-phone-request має точний `reply_markup.keyboard` з `request_contact:true`, `one_time_keyboard`, `resize_keyboard`, placeholder; `beauty_chat_keyboards` не створюється; Instagram/mock — лише текст; невалідна розкладка (Rows + Reply) → лише текст.
+3. **Потік (текст):** запис → меню → «зателефонувати» без телефону → T-phone-request, `pending_prompt=phone_request`, `phone_requested_at`; контакт `own` → `phone`, `phone_source=telegram_contact`, `call_consent_at`, вподобання `call {1440}`, call-task `open` з правильним `due_at`, T-phone-saved-call з `remove_keyboard`, `contact_phone=NULL`, журнал без номера.
+4. **Потік (кнопка):** `rc` «Зателефонувати» без телефону → те саме; `rc` клавіатура `revoked`.
+5. **Ручне введення (E.164):**
+   - приймаються: `+380501112233`, `380501112233`, `0501112233`, `050 111 22 33`, `(050) 111-22-33`, `00380501112233`, `мій номер: 050 111 22 33`, `+1 202 555 0143`, `+44 20 7946 0958`;
+   - `Invalid`: `+38050111223`, `+3805011122334`, `+0501112233`, `050111` (6 цифр), `0501112233, 0671112233`, повноширинні/арабські цифри;
+   - `NotAPhone`: `а скільки коштує?` (питання знімається, хід до LLM).
+   Для прийнятих і `Invalid` тіло стає `[номер телефону]`.
+6. **Чужий контакт:** → T-phone-foreign, номер ніде не збережено (БД-скан), питання лишається; потім власний → збережено.
+7. **Відмова:** «Не треба» → T-phone-declined (`remove_keyboard`) + меню без дзвінка (`rc`), `pending_prompt=reminder_choice`; «2» → Telegram `{120}`.
+8. **TTL / cooldown:** без відповіді 24 год → питання знято; «зателефонувати» через 10 днів → T-reminder-call-unavailable (новий текст), у меню [📞 Змінити спосіб]; `i:phone` → питання (обхід); через 31 день «зателефонувати» → питання.
+9. **Конфлікт:** у клієнта `+380671112233`, надає `+380501112233` → `phone` не змінено, `phone_pending`, `awaiting_staff_since`, журнал `phone_conflict`, call-task створено, T-phone-pending; `accept` → `phone` замінено; `reject` → pending очищено; повтор `accept` → `409 no_pending_phone`. Той самий номер в іншому форматі (`050 111 22 33` проти `+380501112233`) → `unchanged`.
+10. **Дубль:** веб-клієнт з `+380501112233`, клієнт чату надає той самий → `duplicate_of_client_id` = веб-клієнт, записи не переносяться; два веб-клієнти з цим номером → зв'язку немає; `POST /appointments` (staff) з цим номером → обирається оригінал (без `duplicate_of_client_id`).
+11. **Контакт без питання:** номер не збережено, T-contact-unexpected (раз на 10 хв); під час handoff — `held`, без відповіді, `contact_phone=NULL`.
+12. **Handoff / suggest:** під час паузи контакт на активне питання → збережено, відповідь, `awaiting_staff_since` без змін; «а коли?» → `held`; у suggest — відповідь шаблоном, LLM 0 викликів.
+13. **Гонка й повтор:** два контакти в одному пакеті / паралельно (advisory lock) → один `saved`, другий `unchanged`; повтор `message_id` → дубль відкинуто.
+14. **Запис скасовано між питанням і відповіддю** → номер збережено, T-phone-saved, call-task не створено.
+15. **Вимкнено:** `ChatPhone:Enabled=false` → «зателефонувати» без телефону — старий шаблон, меню без дзвінка, контакт → `contact_phone=NULL`, шаблон unsupported; `call_enabled=false` → T-call-disabled.
+16. **removeReply:** після `NotAPhone` перша відповідь конвеєра без inline-кнопок несе `remove_keyboard`, `reply_keyboard_open_at=NULL`; відповідь з inline-кнопками — ні.
+17. **Sweeper:** необроблений `contact_phone` старше 24 год → NULL.
+18. **API:** картка (`phoneSource`, `callConsentAt`, `phonePending`, `possibleDuplicate`); `phone-pending` specialist → 403, чужий клієнт → 404, `invalid_action`; inbox віддає лише маску, `call-tasks` — повний `phonePending`; `no-store`.
+19. **ПД у логах:** сканер (API, воркер) за сценаріями 1–18 — немає номерів (у т.ч. частин ≥ 4 цифр поспіль із номера), `user_id`, імен контакту, chat id.
+20. **RLS / схема:** CHECK `kind`, `contact_*`, `pending_prompt` (новий all-or-none), `phone_pending_all_or_none`, формат E.164, FK дубля на інший tenant неможливий, `DO`-блок, schema-drift, Down.
+21. **Frontend (vitest):** картка (pending accept/reject з підтвердженням, бейдж джерела, дубль), inbox-чипи `contact`, маска, рядок pending у «Дзвінках».
+22. **Регрес:** §22.12, §23.13, `ReminderChatTests`, `ChatButtonsPipelineTests` проходять. Змінені очікування (меню з дзвінком без телефону, новий T-reminder-call-unavailable за `ChatPhone:Enabled=true`) — у task log.
+
+### 25.11 Поетапність
+- **V1:** §25.2–§25.10.
+- **V2:**
+  - злиття клієнтів;
+  - нормалізація спадкових телефонів і staff-шляху (міграція даних);
+  - самостійна зміна номера без адміністратора;
+  - телефон із веб-форми → Telegram через deep link;
+  - Instagram;
+  - прибирання reply-keyboard відповіддю менеджера;
+  - кілька номерів клієнта.
+
+### 25.12 Human gate і ризики (ADR-014 §8)
+1. **Юридичне — ВІДКРИТО (нове):** підстава й текст згоди, строк зберігання `phone_pending`/`call_consent_at`, доступ адміністраторів до повного номера. До закриття `ChatPhone:Enabled=false` поза dev, без мерджу в `main` і прод-деплою. Попередні юридичні пункти (§22.14 п. 1, §23.15 п. 4) теж відкриті.
+2. **Міграція** `beauty_client_phone_capture` (CHECK надмножиною, послаблений all-or-none, без backfill) — потрібне погодження.
+3. **Продукт (підтвердити):**
+   - відповідь на питання телефону під час handoff і в `suggest`;
+   - контакт без питання не зберігається;
+   - м'який зв'язок дублікатів замість злиття;
+   - cooldown на автоматичне питання з обходом через «Змінити спосіб» / «змінити номер»;
+   - текст згоди «…щодо ваших записів» для сценарію без запису.
+4. **Security review** TASK-773.
+5. **Ризики:**
+   - модифікований клієнт Telegram підробляє `user_id` (залишковий; конфлікт не перезаписує наявний номер);
+   - дублікати клієнтів за спадковими ненормалізованими телефонами (порівняння за цифрами пом'якшує);
+   - reply-keyboard лишається до наступного повідомлення конвеєра;
+   - клієнт очікує дзвінок на новий номер у стані pending — шаблон це пояснює, а «Дзвінки» показують обидва номери.
+
+### 25.13 Розподіл задач (§25 і спільні)
+Порядок: контракт → БД (після TASK-762, спільний EF snapshot) → (транспорт ∥ API клієнтів) → конвеєр → frontend (на mock раніше, TASK-766 з §24.12) → QA → security review → docs → gate. ID запропоновані, остаточні призначає `project-manager`.
+
+| Задача | Агент | Обсяг | Залежить |
+|---|---|---|---|
+| TASK-767 | database-engineer | Міграція `beauty_client_phone_capture` (§25.3): колонки клієнтів/розмов/повідомлень, CHECK надмножиною, новий all-or-none, FK дубля, частковий індекс, `DO`-блок, EF, snapshot, `schema.sql`, тести БД (сц. 20) | TASK-762 (послідовно, той самий snapshot) |
+| TASK-768 | integrations-developer | Транспорт (§25.4): парсер `contact` (`own/foreign/invalid`, нормалізація), поля `InboundMessage` і збереження, `ChatActionLayout.Reply/RemoveReply` → `reply_markup`, `i:phone` у regex, inbox `contactVerdict`/підписи reply. Тести 1–2, 19 (транспорт) | TASK-767 |
+| TASK-769 | backend-developer | API (§25.7): картка клієнта, `phone-pending`, `call-tasks.phonePending`, inbox `phoneMasked`/`phonePending`, `phone_source` при створенні, детермінований пошук за телефоном. Тести 9 (API), 10 (пошук), 18 | TASK-767 (∥ TASK-768); після TASK-763, якщо в одній гілці (`EfBeautyStore.Booking.cs`) |
+| TASK-770 | ai-agent-developer | Конвеєр (§25.5–25.6): `PhoneCaptureService`, `ChatPhoneParser`, тригери й меню (`callOffer`), крок 4a phone, збереження/конфлікт/дубль, `ReminderChoiceApplier` → call-task, відмова → меню, контакт без питання, `removeReply`, handoff/suggest, sweeper, `ChatRules`, факти, шаблони. Тести 3–8, 11–17, 22 | TASK-768, TASK-769 |
+| TASK-772 | qa-engineer | Повний §25.10 (fake Telegram, mock ШІ, реальна БД), smoke з тестовим ботом (контакт, ручний номер, відмова, конфлікт), сканер логів | TASK-766, TASK-770 |
+| TASK-773 | security-reviewer | Рев'ю TASK-762…770 за ADR-014 §4, §24.9, §25.9: доступ до собівартості, вивантаження деталей, `contact`-поверхня, ПД телефону, конфлікти/дублі, RLS | TASK-771, TASK-772 |
+| TASK-774 | documentation-writer | Runbook (міграції, конфіг §24.2/§25.2, GRANT, `ChatPhone:Enabled`, Down), `api.md`, `database.md`, `.env.example` (плейсхолдери). Після `accepted` — примітки «уточнено ADR-014» в ADR-007/011/012/013 | TASK-773 |
+
+- TASK-768 ∥ TASK-769 (різні файли; спільна лише схема TASK-767). TASK-770 послідовно після TASK-753/759 (ті самі `ConversationTurnProcessor*`, `ChatTemplates`, `ChatKeyboardBuilder`). TASK-766 стартує на mock після контракту.
+- §24 і §25 незалежні: TASK-763/764/765 можна вести паралельно з TASK-767…770. Спільні лише TASK-766, TASK-773, TASK-774 і послідовність міграцій TASK-762 → TASK-767.
+- Тексти шаблонів §25.6 може правити `copywriter` без зміни контракту (текст згоди — після юридичного gate).
+
+### Уточнення (TASK-762)
+
+Міграція `20261026091203_beauty_service_costs` (§24.3, ADR-014 частина A), адитивна, без backfill. Контракт §24.3 виконано дослівно; нижче лише рішення поза текстом §24.3.
+- Сутності: `ServiceCost` (`beauty_service_costs`), `ServiceCostAuditRow` (`beauty_service_cost_audit`), `DbSet` `ServiceCosts`/`ServiceCostAudit`; `Appointment.CostSnapshot|MasterPercentSnapshot|MasterPayoutSnapshot|CostCapturedAt`.
+- UNIQUE `ux_beauty_service_costs_scope (tenant_id, service_id, location_id)` один індекс `NULLS NOT DISTINCT` (як у цінах), а не два часткових; він же індекс FK `service_id`. Додано індекси FK `location_id` і `updated_by_user_id` (таблиця costs), `(tenant_id, location_id)`, `(tenant_id, user_id)` та `(tenant_id, service_id, created_at)` (аудит).
+- `changed_fields` у аудиті `NOT NULL` без дефолта (порожній масив допустимий); CHECK `changed_fields <@ ARRAY['cost_amount','master_percent']`.
+- Append-only аудиту забезпечується GRANT (SELECT/INSERT, runbook), не тригером; тест перевіряє роль із такими правами (UPDATE/DELETE -> 42501).
+- Down видаляє обидві таблиці, три CHECK і чотири колонки знімка; собівартості, аудит і знімки втрачаються.
+- `DO`-блок FORCE: 2 нові таблиці + `beauty_appointments`, `beauty_services`, `beauty_service_prices`.
+- Застосунок (TASK-763) мусить дотримуватися CHECK: у `completed` без собівартості писати лише `cost_captured_at`; виплату писати разом із `cost_snapshot`, відсоток разом з виплатою (§24.4 SQL це вже робить: усі поля або NULL, `cost_captured_at = now()`).
+- `worker/src/testing/schema.sql` НЕ оновлено агентом (каталог `worker/src/testing` заборонений налаштуваннями дозволів сесії); згенерований без BOM скрипт: див. task log TASK-762, потрібно покласти вручну (schema-drift).
+
+### Уточнення (TASK-767)
+
+Міграція `20261026093343_beauty_client_phone_capture` (§25.3, ADR-014 частина B), адитивна, без backfill. Нових таблиць немає; `tenant_isolation` і FORCE незмінні. Рішення поза текстом §25.3:
+- **Виправлення SQL CHECK з §25.3.** Дослівні вирази давали NULL (а CHECK пропускає NULL) для двох випадків: `pending_prompt IS NULL` з заповненим `expires_at` (гілка `phone_request`) і `contact_phone` без `contact_verdict`. У міграції гілки мають явне `pending_prompt IS NOT NULL AND …` та `contact_verdict IS NOT NULL AND contact_verdict = 'own' AND …`. Семантика §25.3 збережена, тести це перевіряють.
+- Сутності: `Client.PhoneSource|CallConsentAt|PhonePending|PhonePendingSource|PhonePendingAt|PhoneRequestedAt|DuplicateOfClientId|DuplicateOfClient`, `Conversation.ReplyKeyboardOpenAt`, `Message.ContactPhone|ContactVerdict`.
+- Імена CHECK `beauty_clients`: `ck_beauty_clients_phone_source`, `…_phone_source_requires_phone`, `…_phone_pending_format`, `…_phone_pending_source`, `…_phone_pending_all_or_none`, `…_duplicate_not_self`. `beauty_messages`: `ck_beauty_messages_kind` (+`contact`), `…_contact_verdict`, `…_contact_fields`, `…_contact_phone`. `beauty_conversations`: `ck_beauty_conversations_pending_prompt` (+`phone_request`), `…_pending_prompt_all_or_none` (замінено).
+- FK дубля: `fk_beauty_clients_beauty_clients_tenant_id_duplicate_of_client` композитний `(tenant_id, duplicate_of_client_id)` RESTRICT (оригінал з посиланнями не видаляється; клієнти й так soft-delete). Індекс `(tenant_id, duplicate_of_client_id)`.
+- Частковий індекс sweeper: `ix_beauty_messages_contact_phone (tenant_id, created_at) WHERE contact_phone IS NOT NULL`.
+- Ширини колонок: `contact_phone` і `phone_pending` varchar(16), тож E.164 максимум 15 цифр; `contact_verdict` varchar(8).
+- Down: `contact` -> `unsupported`, `phone_request` -> `pending_prompt*` = NULL (FORCE знімається лише на час UPDATE), колонки/CHECK/індекс/FK знімаються; `phone_pending`, `phone_source`, `call_consent_at`, `duplicate_of_client_id` і `contact_phone` втрачаються, `phone` лишається.
+- `DO`-блок FORCE: `beauty_clients`, `beauty_conversations`, `beauty_messages`. GRANT без змін.
+- `worker/src/testing/schema.sql` регенеровано (`migrations script --idempotent`, без BOM): лише додавання, включно з міграцією TASK-762 (її відкритий пункт про schema.sql закрито).
+
+### Уточнення (TASK-763)
+
+Знімок собівартості (§24.4) і CRUD собівартості (§24.6.1) реалізовано без нових міграцій. Рішення поза текстом §24:
+- **Шляхи CRUD** — за §24.6.1: `GET /service-costs`, `GET|PUT|DELETE /services/{id}/costs` (PUT: `locationId` у тілі, DELETE: `?locationId=`). Шляхи `/services/{id}/cost` і `/locations/{id}/cost` не вводились.
+- **`IBookingStore.SetStatusAsync`** повертає `StoreResult<AppointmentDto>?`: `null` = запис не знайдено, `AlreadyClosed()` (`AppointmentClosed = true`) = умовний UPDATE зачепив 0 рядків (`BookingService.PatchAsync` -> `409 appointment_closed`). Єдиний умовний UPDATE зі знімком лише для `completed`; `confirmed` і `no_show` лишилися read-modify-write без знімка (CAS для них не додавався).
+- Повторне `completed` вичерпується ще в `PatchAsync` (`appointment_closed`), у БД знімок не перезаписується за будь-якої гонки (`WHERE status IN ('pending','confirmed')`).
+- **PUT**: `costAmount` обов'язковий (відсутній/`null` -> `422 invalid_cost`); `masterPercent` відсутній = `null`. Рядок береться `FOR UPDATE` у транзакції; відсутній -> INSERT (паралельний програвач ловить `23505` і повторює як оновлення, до 3 спроб). Створення пише в `changed_fields` `cost_amount` (+ `master_percent`, якщо задано); оновлення лише змінені поля; без змін -> `200` без рядка аудиту. DELETE пише `action=delete` з іменами наявних полів.
+- Порядок перевірок PUT: роль (`403`, до прив'язки тіла) -> ліміт `429` -> `invalid_cost`/`invalid_master_percent` -> `service_not_found` -> `location_not_found`.
+- Ліміт `ServiceCosts:WritePerUserPerMinute` (за замовч. 60, обмежений 10..600) — in-memory `ServiceCostThrottle` на (tenant, user), `429 rate_limited` + `Retry-After: 60`; лише PUT і DELETE, читання не лімітується.
+- Відповіді CRUD (також 4xx, `403`) мають `Cache-Control: no-store` (`[InboxNoStore]`); `[RequestSizeLimit(2 КБ)]` на PUT і DELETE.
+- `AppointmentDto`, `GET /services`, `GET /services/{id}/prices` і публічні DTO полів собівартості не отримали (тест на тілах для owner і specialist).
+- GRANT для API-ролі на нові таблиці лишається за runbook (TASK-774).
+
+### Уточнення (TASK-764)
+
+Backend §24.5-§24.6.2-§24.6.3 (аналітика). Міграцій немає; знімки читаються з колонок `beauty_appointments`, які пише TASK-763.
+- **Новий сервіс** `AnalyticsDetailsService` (+ порт `IAnalyticsDetailsStore`, окремо від `IAnalyticsStore`, щоб не ламати наявні фейки): `GET /analytics/network/details`. Еталонна зона й заклад-IDOR як у series.
+- **Валідація:** `date` + `from|to` -> `invalid_range`; нічого / лише одна з `from`,`to` -> `invalid_range` (дефолтів для деталей немає); `date` невалідна або рік поза 2000..2100 (також значення з часом) -> `invalid_date`; `from/to` не `yyyy-MM-dd`, `from > to`, > 31 дня -> `invalid_range`. Порядок перевірок: діапазон -> `locationId` (404) -> `cursor` (`invalid_cursor`). `take` обмежується до 1..200 (0 -> 1, 500 -> 200, за замовч. 100).
+- **Курсор:** base64url `{UtcTicks}|{id:N}|{12 hex SHA-256(fromDate|toDate|locationId)}`; keyset `(starts_at, id) > (…)`, `ORDER BY starts_at, id`; запит бере `take+1` для `hasMore`. `nextCursor`, `location`, `promotion` відсутні (не `null`), коли не заповнені.
+- **Запити:** деталі = 3 SQL (заклади для еталонної зони, агрегат по закладах із назвами, сторінка з JOIN назв), не залежить від кількості записів/закладів. `discountTotal` у `summary` = лише `completed` (`Σ price_original − price_final`).
+- **Агрегат `DailyAsync`** тепер віддає й `cost`, `master_payout`, `without_cost`, `revenue_without_cost` (лише `completed`, `COALESCE(...,0)`): кількість запитів `network`/`series`/`locations` не змінилась. `marginPercent` = `AnalyticsService.MarginOf` (`MidpointRounding.AwayFromZero`). `LocationPrevious`/`NetworkPrevious` теж отримали `cost, masterPayout, netIncome, marginPercent, withoutCost` (+ `revenueWithoutCost` у `network`); `breakdown` і `promotions` без змін. Legacy-відповіді побайтно як раніше.
+- **Ліміт:** `AnalyticsDetailsThrottle` (singleton, фіксоване вікно 1 хв на пару tenant+user, `Analytics:DetailsPerUserPerMinute`, 10..600, за замовч. 60) перевіряється в контролері **до** валідації (невалідні запити теж витрачають ліміт); `429 rate_limited` + `Retry-After` (секунди). Specialist відсіюється політикою `Management` (403) раніше.
+- **`no-store`:** middleware `UseBeautyAnalyticsNoStore` для шляху `/api/beauty/analytics` ставить заголовок в `OnStarting`, тож він є і на 401/403/404/422/429.
+- Файли: `AnalyticsDetails.cs`, `AnalyticsModels.cs`, `AnalyticsService.cs`, `EfBeautyStore.ClientsAnalytics.cs`, `ClientsAnalyticsController.cs`, `AnalyticsApiSupport.cs`, реєстрація в `Program.cs`, `BeautyServiceExtensions.cs`, `DataServiceExtensions.cs`.
+
+### Уточнення (TASK-768)
+
+Транспорт контакту/номера Telegram (§25.4), без міграцій. Рішення поза текстом §25.4:
+- **Парсер** (`TelegramAdapter`): `own` лише якщо `contact.user_id` (число) == `from.id`, `chat.id == from.id` і немає полів пересилання (`forward_origin|forward_from|forward_from_chat|forward_sender_name|forward_date|via_bot`); інакше `foreign`. Номер Telegram нормалізується строго (`ContactPhoneNormalizer`): ASCII-цифри з необов'язковим `+`; з `+` 8..15 цифр, без `+` 11..15, перша не 0, `380` = рівно 12 цифр. `0XXXXXXXXX` без `+` для контакту — `invalid` (національний формат лише для ручного тексту, TASK-770). `contact` не-об'єкт -> `unsupported`; текст поруч із `contact` лишається `text`.
+- **Збереження** (`EfChannelMessageRepository`): тіло завжди `[контакт]`; verdict перевіряється списком, номер лише для `own` у форматі E.164 (валідація до INSERT, щоб CHECK не віддав рядок із номером у `PostgresException.Detail`). **`ChatPhone:Enabled=false`: номер не пишеться взагалі** (verdict лишається). Новий клас `ChatPhoneOptions` (`Enabled`, `ContactRetentionHours` 1..72, за замовч. 24); TASK-770 додає до нього решту ключів §25.2.
+- **`InboundMessage`**: `ContactVerdict`, `ContactPhone`; `ToString` друкує лише `Channel` і `Kind`. Константи `InboundKinds.Contact|ContactBody|PhoneTextBody`, `ContactVerdicts`.
+- **Вихід**: `ChatActionLayout.Reply` (`ChatReplyKeyboard`: ≤2 рядки, ≤4 кнопки, підпис ≤32 кодових точки, placeholder ≤64, без керівних символів) і `RemoveReply`; рівно одне з `Rows|Reply|RemoveReply`, інакше лише текст. Фабрики `ChatActionLayout.ForReply/ForRemoveReply`, `ChatReplyKeyboard.ContactRequest()` (типова клавіатура §25.6), `ToActionsJson()`, `RemoveReplyJson`. Instagram/mock ігнорують. Підписи reply показує inbox (`ReadLabels`); `InboxMessageDto.ContactVerdict?` (лише `kind=contact`).
+- **`i:phone`**: `ButtonVerbs.Phone` у `Stateless`, регексах адаптера й `CallbackAddress`, дозволений у handoff. До TASK-770 `StatelessAsync` дає `Stale`.
+- **Порти для TASK-770**: `IContactPhoneStore` (`ReadAsync`, `TakeAsync` — один `UPDATE…RETURNING`, бере участь у транзакції конвеєра, `ClearContactPhoneAsync`); `ContactPhoneSweeper.SweepTenantAsync` (пакети по 500, лог лише `count`) і hosted `ContactPhoneSweeperService` (кожні 10 хв, tenants з ingest/polling; працює і при `Enabled=false`). 770 може викликати sweeper із `ConversationWorker.SweepTenantAsync` (ідемпотентно).
+- **Воркер**: змін немає; `parseActions` повертає null для `reply`/`removeReply`, тож воркер шле такі повідомлення текстом без клавіатури (reply-повідомлення мусить відправляти .NET `OutboxProcessor`/TelegramAdapter).
+- Змінений наявний тест: `TelegramPollingTests` більше не очікує `[contact]`/`unsupported` для контакту.
+
+### Уточнення (TASK-769)
+
+API клієнтів для телефону (§25.7) і сервіс для конвеєра TASK-770, без міграцій. Рішення поза текстом §25:
+- **`PhoneNormalizer`** (Application): `Normalize` тепер E.164 8..15 цифр, `+380` = рівно 12 цифр; нові `Digits`, `MatchCandidates` (сирі цифри, нормалізовані, національний `0XXXXXXXXX`), `Mask` (`+`, • замість цифр, крім останніх двох).
+- **Порівняння за цифрами** (`ClientPhoneQueries`, `regexp_replace`): `PhoneExistsAsync` (`POST /clients` -> `409 phone_exists`) і `ResolveClientAsync` (публічний/staff запис). Порядок збігів: `duplicate_of_client_id IS NULL DESC, created_at, id`. Телефон нового staff-клієнта зберігається як введено (нормалізація staff-шляху поза V1).
+- **`phone_source`**: `ClientInput.PhoneSource` (необов'язковий); `BookingService` ставить `web_form` для публічного шляху (`publicOptions`), інакше `staff`; `POST /clients` з телефоном -> `staff`. Наявний клієнт не змінюється.
+- **Картка** `GET /clients/{id}`: поля в `client` (`hasPhone`, `phoneSource?`, `callConsentAt?`, `phonePending?{phone,source,at}`, `possibleDuplicate?{id,name}`); у списку їх немає. `/clients` — політика Management, specialist отримує 403.
+- **`POST /clients/{id}/phone-pending`** (`ClientPhoneController`): ролі owner/admin (specialist `403 forbidden_role` до тіла), `no-store`, ліміт тіла 1 КБ. Порядок: роль, `422 invalid_action` (також порожнє тіло), `404 client_not_found`, `409 no_pending_phone`. Відповідь `{phone, phoneSource, callConsentAt, phonePending:null}`. `accept` перераховує `duplicate_of_client_id`; обидві дії знімають `awaiting_staff_since` лише в розмов клієнта з `ai_state=active` без `held`-вхідних. Лог `client_phone_pending_resolved client user action`.
+- **Дублікат**: рівно один ІНШИЙ активний клієнт -> посилання; 0 або ≥ 2 -> знімається; взаємного посилання не створюється.
+- **Inbox**: `client.phoneMasked?` і `client.phonePending: bool` (список і деталі). **call-tasks**: `client.phonePending?` (рядок, повний номер).
+- **`ClientPhoneService`** (Infrastructure/Data/Beauty, scoped): `SavePhoneAsync(tenantId, clientId, phone, source telegram_contact|manual_chat, consent, conversationId?)` -> `PhoneSaveResult` (`Saved|Unchanged|PendingConflict|InvalidPhone|InvalidSource|ClientNotFound|ConversationMismatch`, `DuplicateLinked`); `GetRequestStateAsync` (`HasPhone|Allowed|Cooldown|ClientNotFound`, `ChatPhone:CooldownDays`, 30); `MarkPhoneRequestedAsync`; `ResolvePendingAsync`. Транзакція з `pg_advisory_xact_lock('client-phone:{tenant}:{client}')`, а якщо виклик уже в транзакції — використовується вона. `tenantId` мусить збігатися зі scope (інакше `TenantMismatchException`). Журнал `phone_conflict`/`phone_saved` пише конвеєр (TASK-770), не сервіс.
+
+### Уточнення (TASK-770)
+
+Конвеєр збору телефону (§25.5-§25.6, ADR-014 ч. B), без міграцій і без змін воркера/frontend; увесь код під `ChatPhone:Enabled` (за замовч. false). Рішення поза текстом §25:
+- **Код.** `ConversationTurnProcessor.Phone.cs` (тригери, відповідь на питання, збереження, відмова, контакт без питання, прибирання reply-keyboard), `ChatPhoneParser` (`NotAPhone|Phone|Invalid|Decline|ChangeNumber`; <6 цифр = не номер, ≥6 цифр, схоже на номер, що не нормалізується, або цифри не ASCII, або ≥2 груп по ≥7 цифр = `Invalid`), `ReminderChoiceMenu.Options(CallOffer)` (`Available|NeedsPhone|Cooldown|Disabled`), `ChatPhoneOptions` розширено (`PromptTtlHours`, `CooldownDays`, `DefaultCountry`).
+- **Крок 4a'** (перед 4a нагадувань) працює й у `suggest`: відповідь на питання про номер і «змінити номер / змінити спосіб / мій номер» дають шаблон-відповідь без LLM (як `rc`, §25.5.6). Уточнення до завдання: у `suggest` відповідь клієнту надсилається, а не мовчить; лише текстове «зателефонувати» під `reminder_choice` у `suggest`, як і раніше, не обробляється (крок 4a має `AutoReplies`).
+- **Сегментація.** Контакт - окремий хід; поки висить активне `phone_request`, пакет ділиться по одному повідомленню (`NarrowForPhone`). Два контакти поспіль: перший `saved`, другий (питання вже знято) - тиха відповідь `unchanged`, якщо номер збігається з карткою, інакше T-contact-unexpected (throttle 10 хв).
+- **Handoff.** Під паузою обробляються лише відповіді на активне `phone_request` (контакт, номер, відмова, «змінити номер»); текст-не-відповідь і контакт без питання - `held` без відповіді, `contact_phone` обнуляється. Текстові тригери «зателефонувати» під `reminder_choice` і «змінити номер» без активного питання під паузою лишаються `held` (як усі текстові відповіді меню). Кнопки `rc` і `i:phone` дозволені політикою handoff.
+- **Реалізація транзакції.** `CommitSpec.ComposeReplies` виконується в транзакції ПЕРЕД вставкою відповідей (Take контакту -> `SavePhoneAsync` -> `ReminderChoiceApplier(call {1440})` -> журнал), бо текст відповіді залежить від результату; `PromptState` має `Kind` і nullable запис; `Reply.ActionsJson` несе reply-keyboard/`removeReply`; `RedactInboundBody` замінює тіло на `[номер телефону]` в тій самій транзакції. Друге повідомлення відмови (меню без дзвінка) має ключ `…:rc`.
+- **Дзвінок після конфлікту.** `ReminderChoiceApplier` викликається, лише якщо питання було про запис; «змінити номер» за наявного телефону запису не має (call-task не створюється). Результати `Saved|Unchanged|PendingConflict` застосовують дзвінок; відповідь на `PendingConflict` - T-phone-pending без повного номера.
+- **Прибирання reply-keyboard (§25.5.5)** централізовано в `CommitManyAsync`: після всіх змін стану, якщо `reply_keyboard_open_at` задано, питання вже не `phone_request` і є перша відповідь без inline `actions`, вона отримує `removeReply`; відповідь, що сама несе `removeReply`, лише скидає позначку.
+- **`i:phone`** обробляє конвеєр (без `ChatButtonActions`); ChatPhone вимкнено -> T-action-stale. Підпис кнопки «📞 Змінити спосіб» додається в `rc` лише в стані `Cooldown`; тіло вхідного `[кнопка] Змінити спосіб`.
+- **Відмова** додатково оновлює `phone_requested_at` (пауза рахується від відмови); мовчання - від показу питання. Ліміт шаблонів (TASK-759): ефект (збереження) завжди, відповідь лише в межах ліміту.
+- **ШІ.** `kind=contact` виключено з історії LLM; `ChatRules` + правило про номер (безумовне); `ChatPolicyFacts.PhoneCapture` (`Off|Allowed|Cooldown`) дає рядок фактів про дзвінок за §25.5.8; `ChatPolicyFactsAdapter` читає `phone_requested_at` без номера.
+- **Журнал/логи:** `phone_prompt {appointmentId?, trigger, via}`, `phone_saved {result, source, via, appointmentId?, duplicateLinked}`, `phone_conflict {via}`; лог `chat_phone conversation trigger result` (`prompted|saved|unchanged|pending_conflict|foreign|invalid|declined|expired|unexpected|disabled|cooldown|no_client`). Номера, chat id, імен контакту немає.
+- **Sweeper:** `ConversationWorker.SweepTenantAsync` викликає `ContactPhoneSweeper.SweepTenantAsync` (ідемпотентно, збій не ламає прохід).
+- **Наявні тести** (`ReminderChatTests`, `ChatButtonsPipelineTests`) не змінено: за замовчуванням прапорець вимкнений, поведінка до §25 збережена. Нові очікування (меню з дзвінком без телефону, T-reminder-call-unavailable за `Enabled=true`) - у `ChatPhoneTests`.
+
+### Уточнення (TASK-775)
+
+Календар «Записи»: зміна статусу в UI і виправлення оновлення після змін; backend і контракт API НЕ змінено.
+- **Корінь «перенесення не працює» (frontend).** Ключ запиту тижня `["beauty","calendar", chosenId, ...]`, де у owner/admin `chosenId = ""` («перший майстер»). Мутації перенесення/скасування інвалідували `["beauty","calendar", <id майстра з відповіді>]`, тобто префікс, що НЕ збігався з ключем: PATCH повертав 200 («Запис перенесено.»), але календар не перечитувався, і блок лишався на старому часі до ручного оновлення сторінки. Specialist (`chosenId` = власний id) і owner після кліку по чипу майстра цього не бачили. Тепер усі мутації запису інвалідують спільний префікс `["beauty","calendar"]`.
+- **Перевірено на реальному API (окремий салон):** PATCH `startsAt` (UTC `Z`, `.000Z`, зі зсувом, без зсуву) 200; той самий день і інший день 200; `outside_working_hours` 422, `outside_location_hours` 409, `slot_in_past` 422, `slot_unavailable` 409 (перетин із сусіднім записом); `status` confirmed/completed/no_show 200; повторна зміна completed/no_show -> `409 appointment_closed`; `completed` пише `cost_captured_at` (знімок §24.4). Завершення запису в МАЙБУТНЬОМУ backend дозволяє (перевірки часу немає) - UI дозволяє з попередженням. `completed` лише з pending|confirmed (інакше 409 appointment_closed).
+- **UI.** Панель запису: бейдж статусу; «Підтвердити запис» (лише pending, без діалогу), «Завершити візит» і «Не прийшов» (inline-підтвердження з фокусом; завершення пояснює фіксацію ціни й собівартості). Доступно owner/admin і specialist лише для власних записів (чужий backend віддає 404). `409 appointment_closed` -> дружній текст і перечитування календаря. Після зміни статусу інвалідуються календар, огляд, клієнти/картка клієнта, аналітика. Повідомлення про перенесення містить новий час.
+- **Mock.** `setAppointmentStatus`: статуси, `409 appointment_closed` (також для переносу), 404 для чужого запису specialist; знімок собівартості у mock-аналітиці береться зі статусу запису (`costSnapshotFor`).
+
+## §26. Маркетингова згода, розсилки (кампанії), аудиторії й купони (v0.29, 2026-10-26)
+
+Архітектура — **ADR-015** (статус `proposed`; gate §26.16; юридичне ВІДКРИТО). Розділ адитивний, окрім місць **«Зміна»**. Позначка *(можна змінити)* — припущення архітектора.
+- **Зміна §4 / ADR-003:** `beauty.campaign.run` (BullMQ) → DB-поллер `pollCampaigns`; ключ повідомлення `campaign:{campaignId}:{clientId}`.
+- **Зміна §12:** `client.marketingConsent` публічної форми ігнорується (поле приймається, ефекту немає).
+- **Зміна §9 / `PromotionPricing`:** акції `access=code_only` не входять у загальний `Quote`, публічний каталог і `get_active_promotions`.
+- **Зміна §22.7 / ADR-012 §8.3:** «Стоп» вимикає і нагадування, і маркетинг (згода `none`, `source=stop`). Змінено текст T-stop.
+- **Зміна §23.4 / §23.5:** команда `/marketing`; verb `mc`, `co`; безстанові `i:mkt`, `i:mkoff`; види клавіатур `marketing_consent`, `campaign_offer`.
+- **Зміна поведінки воркера:** `pollWinback` лише з `WORKER_WINBACK_ENABLED=true`; маркетингова придатність береться з таблиці згод.
+
+### 26.1 Поточний код (2026-10-26)
+ADR-015 §1.1:
+- згода — два булеві поля без історії;
+- кампанії у воркері — заглушки (`getCampaign` → `null`, `enqueueCampaign` кидає виняток);
+- `delayUntilAllowed` з фіксованим offset (DST-баг);
+- winback щодня без прапорця;
+- `UNSUBSCRIBE_NOTE` «надішліть STOP»;
+- купонів і акцій «лише за кодом» немає;
+- `build_audience` віддає моделі `clientIds`;
+- `launchAiCampaign` (frontend) — заглушка.
+
+### 26.2 Конфігурація
+| Ключ | За замовч. | Призначення |
+|---|---|---|
+| `Marketing:Enabled` | `false` | Кампанії API, пропозиція згоди й меню в чаті, кнопка `co`. `false`: API кампаній → `403 marketing_disabled`; `i:mkt`, `/marketing` → T-action-stale / T-text-only; **відписка (`i:mkoff`, «Стоп», PUT зі зниженням) працює завжди** |
+| `Marketing:LegalGateApproved` | `false` | Поза Development `Marketing:Enabled=true` без нього → API не стартує (як `ChatAssistant:LegalGateApproved`) |
+| `Marketing:ConsentTextVersion` | `mc-v1` | Версія показаного тексту згоди; пишеться в `options` клавіатури й у подію. Новий текст = нова версія (copywriter + юридичний gate) |
+| `Marketing:OfferCooldownDays` | `90` (1..365) | Автоматична пропозиція згоди не частіше |
+| `Marketing:ConsentKeyboardTtlHours` | `168` (1..720) | TTL клавіатури `marketing_consent` |
+| `Marketing:AdminGrantEnabled` | `false` | Дозвіл адміну підвищувати згоду з підставою (§26.4) |
+| `Marketing:FavoriteServicesDays` | `365` (30..1095) | «Улюблені» послуги для рівня `selective` *(можна змінити)* |
+| `Marketing:ClientMinIntervalDays` | `7` (1..60) | Частота для перегляду; **має дорівнювати** `WORKER_MARKETING_CLIENT_INTERVAL_DAYS` |
+| `Marketing:DailyLimit` | `200` | Лише для оцінки в перегляді; **має дорівнювати** `WORKER_MARKETING_DAILY_LIMIT` |
+| `Marketing:MaxRecipientsPerCampaign` | `5000` | Більше → `409 audience_too_large` при підтвердженні |
+| `Marketing:MaxScheduleDaysAhead` | `30` | Межа `scheduledAt` |
+| `Marketing:UnsubscribeAttributionDays` | `7` | Відписка «після розсилки» в статистиці |
+| `Marketing:WritePerUserPerMinute` / `PreviewPerUserPerMinute` | `30` / `20` | `429 rate_limited` + `Retry-After` (in-memory) |
+| `Coupons:ConversationHoldHours` | `72` (1..720) | Скільки діє пропозиція розмови після `co` / коду текстом (не довше строку купона) |
+| `Coupons:ChatInvalidPerConversationPerHour` | `5` | Невдалих кодів у чаті; понад → T-coupon-locked, коди не розбираються до кінця години |
+| `Coupons:PublicCheckPerIpPer10Min` | `10` | Публічна перевірка / створення з кодом (невдалі й успішні) |
+| `Coupons:StaffCheckPerUserPerMinute` | `30` | Staff-перевірка коду |
+| `WORKER_CAMPAIGNS_ENABLED` (воркер) | `false` | Без `true` `pollCampaigns` нічого не робить. Поза dev — лише після gate §26.16 п. 1 (старт падає без `WORKER_MARKETING_LEGAL_APPROVED=true`, якщо `ASPNETCORE_ENVIRONMENT≠Development`) |
+| `WORKER_WINBACK_ENABLED` | `false` | **Нове.** `pollWinback` лише з `true`; dev-скрипт його не вмикає |
+| `WORKER_MARKETING_DAILY_LIMIT` | `200` | Є; тепер рахується й при постановці (§26.8) |
+| `WORKER_MARKETING_CLIENT_INTERVAL_DAYS` | `7` | Частота на клієнта |
+| `WORKER_CAMPAIGN_BATCH` | `50` (1..500) | Одержувачів за прохід на tenant |
+
+Вікно відправки V1 — константа **09:00–20:00** (`[09:00, 20:00)`) за локальним часом «домашнього закладу» одержувача (§26.8); інших вікон і налаштувань tenant у V1 немає.
+
+### 26.3 Схема (міграція `beauty_marketing_consent_campaigns_coupons`, адитивна + скидання прапорця)
+Після TASK-767 (спільний EF snapshot). Усі нові таблиці: `tenant_id`, AK `(tenant_id, id)` (де є `id`), композитні FK `(tenant_id, …)`, індекс на кожен FK, RLS ENABLE+FORCE `tenant_isolation` (USING + WITH CHECK).
+- **`beauty_marketing_consents`** (поточний стан):
+  - PK `(tenant_id, client_id, channel)`; FK `beauty_clients` RESTRICT;
+  - `channel varchar(16)` CHECK ∈ `telegram|push`; `level varchar(16)` CHECK ∈ `full|selective|none`; `source varchar(16)` CHECK ∈ `chat|admin|stop`;
+  - `text_version varchar(32) NULL`; `updated_by_user_id uuid NULL` (FK `users` RESTRICT); `conversation_id uuid NULL` (FK RESTRICT); `created_at`, `updated_at`;
+  - CHECK `ck_…_admin`: `(source='admin') = (updated_by_user_id IS NOT NULL)`; CHECK `ck_…_version`: `source<>'chat' OR level='none' OR text_version IS NOT NULL`.
+- **`beauty_marketing_consent_events`** (append-only):
+  - `id`, `client_id` (FK RESTRICT), `channel`, `level_from varchar(16) NULL` (NULL = рядка не було), `level_to varchar(16) NOT NULL`, `source`, `via varchar(16) NULL` CHECK ∈ `button|command|text|api`;
+  - `text_version`, `actor_user_id NULL` (FK users), `basis varchar(16) NULL` CHECK ∈ `written|in_person|other`, `basis_note varchar(200) NULL`, `campaign_id NULL` (FK campaigns), `conversation_id NULL`, `created_at`;
+  - CHECK: `basis` лише для `source='admin'`; `basis IS NOT NULL ⇒ basis_note IS NOT NULL`; `level_from IS DISTINCT FROM level_to`;
+  - індекси `(tenant_id, client_id, created_at)`, `(tenant_id, campaign_id, created_at) WHERE campaign_id IS NOT NULL`.
+- **`beauty_campaigns`:**
+  - `id`, `name varchar(200)`, `type varchar(8)` CHECK ∈ `promo|news`, `promotion_id NULL` (FK RESTRICT);
+  - сегмент: `segment_kind varchar(16)` CHECK ∈ `lapsed|frequent|new|all_consented`, `segment_days smallint NULL` (1..730), `segment_service_id NULL` (FK services), `segment_min_visits smallint NULL` (1..100), `segment_period_days smallint NULL` (1..730), `location_id NULL` (FK locations);
+  - `template varchar(1000) NOT NULL`, `coupon_mode varchar(8)` CHECK ∈ `none|personal|shared`, `shared_coupon_id NULL` (FK coupons), `coupon_valid_from`, `coupon_valid_to` (timestamptz NULL);
+  - `status varchar(12)` CHECK ∈ `draft|scheduled|sending|done|cancelled`, `revision int NOT NULL DEFAULT 1`, `scheduled_at NULL`, `recipients_total int NULL`;
+  - `created_by_user_id`, `confirmed_by_user_id NULL`, `confirmed_at NULL`, `confirm_key_hash char(64) NULL`, `cancelled_by_user_id NULL`, `cancelled_at NULL`, `started_at NULL`, `finished_at NULL`, `created_at`, `updated_at` (усі user — FK `users` RESTRICT);
+  - CHECK-и:
+    - `type='news' ⇒ promotion_id IS NULL AND coupon_mode='none'`; `type='promo' ⇒ promotion_id IS NOT NULL`;
+    - `lapsed ⇒ segment_days NOT NULL AND segment_min_visits IS NULL AND segment_period_days IS NULL`;
+    - `frequent ⇒ segment_min_visits, segment_period_days NOT NULL AND segment_days IS NULL AND segment_service_id IS NULL`;
+    - `new|all_consented ⇒ усі segment_* NULL`;
+    - `coupon_mode='shared' ⇔ shared_coupon_id IS NOT NULL`; `coupon_mode='personal' ⇒ coupon_valid_to IS NOT NULL`; `coupon_valid_to > coupon_valid_from`, якщо обидва задані;
+    - `status IN (scheduled,sending,done) ⇒ confirmed_by_user_id, confirmed_at, scheduled_at NOT NULL`; `status='cancelled' ⇔ cancelled_at IS NOT NULL`;
+  - індекси `(tenant_id, status, scheduled_at)`, `(tenant_id, promotion_id)`.
+- **`beauty_campaign_recipients`:**
+  - `id`, `campaign_id` (FK RESTRICT), `client_id` (FK RESTRICT), `status varchar(8)` CHECK ∈ `pending|queued|sent|failed|skipped`, `skip_reason varchar(32) NULL` (код §26.8);
+  - `conversation_id NULL`, `message_id NULL` (FK messages), `coupon_id NULL` (FK coupons), `queued_at`, `sent_at`, `clicked_at` (NULL), `created_at`, `updated_at`;
+  - UNIQUE `(tenant_id, campaign_id, client_id)`; CHECK `status IN (queued,sent,failed) ⇒ message_id IS NOT NULL`; CHECK `status='skipped' ⇒ skip_reason IS NOT NULL`;
+  - індекси `(tenant_id, campaign_id, status)`, `(tenant_id, client_id, queued_at)` (частота).
+- **`beauty_coupons`:**
+  - `id`, `kind varchar(8)` CHECK ∈ `personal|shared`, `promotion_id` (FK RESTRICT), `campaign_id NULL` (FK), `client_id NULL` (FK);
+  - `code_hash char(64) NOT NULL` CHECK `~ '^[0-9a-f]{64}$'`, `code varchar(20) NULL`, `code_hint varchar(4) NOT NULL`;
+  - `valid_from`, `valid_to` (timestamptz NOT NULL, CHECK `valid_to > valid_from`), `max_uses int NULL`, `uses_count int NOT NULL DEFAULT 0`, `status varchar(8)` CHECK ∈ `active|revoked`;
+  - `created_by_user_id NULL`, `created_at`, `updated_at`;
+  - CHECK `personal ⇒ client_id, campaign_id NOT NULL AND code IS NULL AND max_uses=1`; `shared ⇒ client_id IS NULL AND code IS NOT NULL`; `uses_count >= 0 AND (max_uses IS NULL OR uses_count <= max_uses)`; `max_uses IS NULL OR max_uses BETWEEN 1 AND 100000`;
+  - UNIQUE `(tenant_id, code_hash)`; індекси `(tenant_id, client_id) WHERE client_id IS NOT NULL`, `(tenant_id, campaign_id)`.
+- **`beauty_coupon_redemptions`:**
+  - `id`, `coupon_id` (FK RESTRICT), `appointment_id` (FK RESTRICT), `client_id` (FK RESTRICT), `discount_amount numeric(12,2) NOT NULL CHECK >= 0`;
+  - `status varchar(8)` CHECK ∈ `active|released`, `release_reason varchar(16) NULL` CHECK ∈ `cancelled|payment_failed`, `released_at NULL`, `created_at`;
+  - CHECK `(status='released') = (released_at IS NOT NULL AND release_reason IS NOT NULL)`;
+  - UNIQUE `(tenant_id, appointment_id)`; частковий UNIQUE `(tenant_id, coupon_id, client_id) WHERE status='active'`.
+- **Наявні таблиці (адитивно):**
+  - `beauty_promotions.access varchar(16) NOT NULL DEFAULT 'public'` CHECK ∈ `public|code_only`;
+  - `beauty_appointments.coupon_id NULL`, `campaign_id NULL` (FK RESTRICT; індекси часткові `WHERE … IS NOT NULL`);
+  - `beauty_chat_booking_proposals.coupon_id NULL`, `campaign_id NULL` (FK RESTRICT);
+  - `beauty_conversations.offer_campaign_id NULL`, `offer_coupon_id NULL` (FK RESTRICT), `offer_until timestamptz NULL`; CHECK `offer_until IS NULL ⇒ offer_campaign_id IS NULL AND offer_coupon_id IS NULL`; `offer_until IS NOT NULL ⇒ (offer_campaign_id IS NOT NULL OR offer_coupon_id IS NOT NULL)`;
+  - `beauty_clients.marketing_offered_at timestamptz NULL`;
+  - `beauty_chat_keyboards`: CHECK `kind` → надмножина `…|marketing_consent|campaign_offer`; `campaign_recipient_id uuid NULL` (FK recipients RESTRICT); CHECK `kind='campaign_offer' ⇒ campaign_recipient_id IS NOT NULL`.
+- **Дані:** `UPDATE beauty_clients SET marketing_consent=false WHERE marketing_consent` (без перенесення в нову таблицю; FORCE знімається лише на час UPDATE і одразу повертається). Gate §26.16 п. 2.
+- **`DO`-блок** падає без FORCE на 5 нових таблицях і на `beauty_clients`, `beauty_promotions`, `beauty_appointments`, `beauty_conversations`, `beauty_chat_keyboards`, `beauty_chat_booking_proposals`.
+- **GRANT** (runbook; у міграції не виконується):
+  - API-роль: SELECT/INSERT/UPDATE на consents, campaigns, recipients, coupons, redemptions; DELETE на campaigns (лише draft, перевіряє код); SELECT/INSERT на consent_events;
+  - роль воркера: SELECT на consents, campaigns, promotions (+`_services`, `_locations`), services, locations, coupons; UPDATE на campaigns (`status`, `started_at`, `finished_at`, `updated_at`), recipients; INSERT/UPDATE на coupons (персональні, `revoked`); INSERT на `beauty_chat_keyboards` (є).
+- `worker/src/testing/schema.sql` синхронізувати (schema-drift).
+- **Down:** таблиці й колонки видаляються; рядки клавіатур `marketing_consent|campaign_offer` → `revoked`, потім старий CHECK `kind` (рядки видаляються, якщо CHECK не дозволяє); скинутий `marketing_consent` не відновлюється.
+
+### 26.4 Згода (`MarketingConsentService`, Application + EF store)
+- **Рівні:** `full` (акції, знижки, новини), `selective` (лише кампанії `promo`, чиї послуги перетинаються з «улюбленими» клієнта), `none`. Рядка немає = `none` (у звітах — «не обирав»).
+- **Один метод** `SetAsync(clientId, channel, level, source, via, textVersion?, actorUserId?, basis?, basisNote?, campaignId?, conversationId?)`, в одній транзакції під `pg_advisory_xact_lock('marketing-consent:{tenant}:{client}')`:
+  1. рівень без змін → нічого не пишеться (ідемпотентно, `changed=false`);
+  2. upsert стану + подія;
+  3. похідний `beauty_clients.marketing_consent = EXISTS(level<>'none' AND channel='telegram')`;
+  4. `source=chat` і `level<>none` → `unsubscribed=false`.
+- **Правила джерел:**
+  - `chat`: лише кнопка `mc` (рівень і `textVersion` з `options` клавіатури) або відписка (`i:mkoff`, текст «не надсилати акції», `via=button|text`);
+  - `stop`: «Стоп» / `/stop` / `i:stop` → `none` для **усіх** каналів (наявні рядки й `telegram`, навіть якщо рядка не було — для історії) + наявна логіка §22.7. Лінивий клієнт після `reminders_stop_at` створюється з рядком `none`/`stop`;
+  - `admin`: зниження (`full→selective`, `*→none`) — завжди; підвищення (`none|відсутній→selective|full`, `selective→full`) — лише з `basis` + `basisNote` (1..200) і за `Marketing:AdminGrantEnabled=true`, інакше `409 admin_grant_disabled`. Без `basis` → `422 basis_required`.
+- `push` у V1: модель і CHECK є, API відповідає `422 channel_unsupported`.
+- Лог: `marketing_consent_changed client={id} channel={c} from={l|-} to={l} source={s} via={v} user={id|-}`.
+
+### 26.5 Аудиторії (`AudienceQuery`, .NET; той самий SQL для перегляду й підтвердження)
+- **Базова множина:** клієнти tenant з `deleted_at IS NULL`. «Completed-візит» = `beauty_appointments.status='completed'`, час = `starts_at`. Межі днів — абсолютні (N × 24 год від `now`), **включні** для «давності» *(можна змінити)*.
+- **Сегменти** (`L` = `location_id`, якщо задано):
+  - `lapsed {days=N (дефолт 60)}`: останній completed-візит `<= now − N`; без майбутніх `pending|confirmed` записів; з `L` — мав ≥ 1 completed у `L`, а давність рахується по всій мережі;
+  - `lapsed {days=N, serviceId=X}`: мав completed-візит на `X` (з `L` — у `L`); останній completed на `X` `<= now − N`; без майбутнього активного запису на `X`. Візити на інші послуги не впливають;
+  - `frequent {minVisits=N (3), periodDays=M (90)}`: кількість completed з `starts_at > now − M` (з `L` — лише в `L`) `>= N`;
+  - `new`: рівно 1 completed-візит за весь час (з `L` — і він у `L`);
+  - `all_consented`: усі (з `L` — ≥ 1 completed у `L`).
+- **Придатність** (порядок; клієнт рахується за першою причиною):
+  1. `noTelegram` — немає розмови в активному Telegram-каналі (`client_id`, `is_active`, `type=telegram`);
+  2. `unsubscribed` — рядок згоди `telegram` з `level='none'` (явна відмова або «Стоп»);
+  3. `noConsent` — рядка згоди немає;
+  4. `levelMismatch` — `selective` для `news` або без перетину послуг акції з «улюбленими»;
+  5. `frequency` — є одержувач цього tenant зі `status IN (queued,sent)` і `queued_at > now − ClientMinIntervalDays` (або повідомлення `winback:` за той самий період).
+- **Перегляд** (§26.11.3) повертає `matched` (у сегменті), `recipients` (придатні), `excluded {noTelegram, unsubscribed, noConsent, levelMismatch, frequency}`. Імен, id, телефонів немає.
+
+### 26.6 Купони й ціна
+- **Акція `code_only`** — звичайна `Promotion` (percent|fixed, заклади, послуги, період, `is_active`), яка діє лише через купон. Купони створюються тільки на `code_only` (інакше `422 promotion_not_code_only`); кампанія `promo` з купоном вимагає `code_only`, кампанія без купона — `public`.
+- **Код:**
+  - персональний: 10 символів алфавіту Crockford `0123456789ABCDEFGHJKMNPQRSTVWXYZ`, показ `XXXXX-XXXXX`, CSPRNG (`crypto.randomInt`), 50 біт; колізія `code_hash` → нова генерація (≤ 3);
+  - загальний: менеджер задає 4..20 символів `[A-Za-z0-9]`, зберігається `code` у верхньому регістрі;
+  - `normalize(code)` = верхній регістр, без пробілів і `-`, `O→0`, `I|L→1`; `code_hash = lower(hex(SHA-256(UTF-8("coupon:" + normalize(code)))))`; `code_hint` = останні 3 символи нормалізованого коду. Тестовий вектор у TASK-778 / TASK-780 — однаковий у .NET і TS.
+- **Строк купона:**
+  - персональний — `coupon_valid_from|to` кампанії (за замовч. період акції; без кінця акції — `now + 30 днів`), має лежати в періоді акції (`422 coupon_period_outside_promotion`);
+  - загальний — задає менеджер.
+  - Чинність перевіряється на момент створення запису: `now ∈ [valid_from, valid_to)`.
+- **`PromotionPricing.QuoteWithCoupon(original, location, service, at, publicRules, CouponCandidate?)`:**
+  - `publicRules` — лише `access=public`;
+  - кандидат купона = його акція з `StartsAt = max(promo.starts, valid_from)`, `EndsAt = min(promo.ends, valid_to)`, `IsActive = promo.is_active ∧ coupon.status='active' ∧ (max_uses IS NULL ∨ uses_count < max_uses)`;
+  - береться найбільша знижка; купон перемагає лише **строго більшою** знижкою;
+  - результат: `PriceQuote` + `CouponId?` + `CouponOutcome ∈ applied|not_applicable|not_better|none`; округлення як у `Quote`. Старий `Quote` — обгортка без купона (поведінка й тести без змін).
+- **Перевірка коду** (`CouponService.ResolveAsync(code, clientId?, scope)`, пошук за хешем під RLS). Внутрішні причини: `not_found`, `revoked`, `expired`, `not_started`, `exhausted`, `foreign_client` (personal і `client_id ≠ клієнт`), `already_used` (активне погашення цього клієнта), `promotion_inactive`. Назовні:
+  - staff — деталізовані коди;
+  - чат і публічний шлях — один `coupon_invalid`;
+  - публічний шлях для personal завжди дає `coupon_invalid`.
+- **Погашення** (у транзакції `AddAppointmentAsync`, лише при `CouponOutcome=applied`):
+  - `UPDATE beauty_coupons SET uses_count=uses_count+1, updated_at=now WHERE id=@c AND status='active' AND (max_uses IS NULL OR uses_count<max_uses) AND now>=valid_from AND now<valid_to`;
+  - 0 рядків або `23505` на UNIQUE погашень → відкат → `409 coupon_unavailable` (публічний → `409 coupon_invalid`);
+  - INSERT `beauty_coupon_redemptions` (`discount_amount = original − final`);
+  - запис: `coupon_id`, `promotion_id` = акція купона, `campaign_id` (з пропозиції розмови / null).
+- **Повернення:**
+  - скасування (`CancellationService`, будь-яке джерело) — у кроці фіналізації після успішного повернення коштів (разом із закриттям нагадувань);
+  - збій оплати при створенні (`MarkCancelledAsync`);
+  - дія: `UPDATE redemptions SET status='released', release_reason, released_at WHERE appointment_id AND status='active'` + `uses_count = uses_count − 1` в одній транзакції.
+  - `ReleaseCancelAsync` (повернення коштів не вдалося) погашення не чіпає. `completed`, `no_show`, перенос — без змін.
+- **Шляхи запису:**
+  - staff `POST /appointments` + `couponCode?`;
+  - публічний `POST /api/public/{slug}/appointments` + `couponCode?` (лише shared; клієнт — за телефоном, як зараз);
+  - чат — купон із пропозиції розмови (`offer_coupon_id`), а не з тексту моделі.
+  - `ExpectedPriceFinal` / `price_changed` (§21.6) діє з урахуванням купона.
+- **Зміна акції в кампанії:** `PUT /promotions/{id}` для акції кампанії `scheduled|sending` зі зміною `discountType|discountValue|startsAt|endsAt|locationIds|serviceIds|access` → `409 promotion_in_campaign`; зміна лише `isActive=false` дозволена.
+
+### 26.7 Кампанія: життєвий цикл
+- `draft` (створення, редагування, `revision+1` на кожен PUT, видалення) → **`confirm`** → `scheduled` → (воркер, `scheduled_at <= now`) `sending` → `done`. `cancelled` — з `draft|scheduled|sending`.
+- **Валідація draft** (422):
+  - `invalid_name` (1..200), `invalid_type`;
+  - `promotion_required` / `promotion_not_found` / `promotion_not_code_only` (купон) / `promotion_must_be_public` (без купона, `promo`);
+  - `invalid_segment` (вид і параметри §26.5), `service_not_found`, `location_not_found`;
+  - `invalid_template` (порожній, > 1000, керівні символи крім `\n`, невідома підстановка, `{code}` при `coupon_mode=none`, `{discount|service|valid_from|valid_to}` у `news`);
+  - `invalid_coupon_mode`, `coupon_not_found` / `coupon_not_shared` / `coupon_promotion_mismatch`, `coupon_period_outside_promotion`.
+- **Підтвердження** `POST /campaigns/{id}/confirm` (одна транзакція):
+  1. перевірка `Idempotency-Key` (8..128): той самий ключ і тіло → `200` з поточним станом;
+  2. `revision` = поточна, інакше `409 campaign_changed`;
+  3. CAS `UPDATE … SET status='scheduled', scheduled_at=coalesce(@at, now), confirmed_by_user_id, confirmed_at, confirm_key_hash WHERE id AND status='draft'`; 0 рядків → `409 campaign_not_draft` (або replay);
+  4. акція активна і не закінчиться раніше `scheduled_at` (`409 promotion_inactive`);
+  5. `AudienceQuery` → INSERT одержувачів `pending` (`recipients_total`); 0 → відкат, `409 audience_empty`; > `MaxRecipientsPerCampaign` → `409 audience_too_large`;
+  6. `scheduledAt` у минулому більш ніж на 5 хв або далі `MaxScheduleDaysAhead` → `422 invalid_schedule`.
+  - Журнал: лог `campaign_confirmed campaign={id} user={id} recipients={n}`.
+- **Скасування** `POST /campaigns/{id}/cancel` (ідемпотентно): CAS статусу → `cancelled`, `pending` одержувачі → `skipped:campaign_cancelled`. `queued` відсікає воркер (§26.8), їхні персональні купони → `revoked`; доставлені купони лишаються чинними. `done` → `409 campaign_finished`; повтор на `cancelled` → `200`.
+
+### 26.8 Відправка (Node-воркер, `pollCampaigns`, лише `WORKER_CAMPAIGNS_ENABLED=true`)
+- **Порти** (`ports.ts`, адитивно):
+  - `getCampaign(id)` → `CampaignInfo {id, tenantId, status, type, promotion?: {discountType, discountValue, startsAt?, endsAt?, isActive, serviceNames[]}, couponMode, sharedCode?, couponValidFrom?, couponValidTo?, template, locationId?, scheduledAt}`; поле `utcOffsetMinutes` прибирається;
+  - `listCampaignAudience(campaignId, limit)` → `pending` одержувачі `[{recipientId, clientId}]` (`ORDER BY id`);
+  - `listDueCampaigns(now)` → `scheduled` з `scheduled_at <= now` і `sending`;
+  - `startCampaign(id)` (CAS `scheduled→sending`, `started_at`), `finishCampaignIfDrained(id)` (`done`, `finished_at`, якщо немає `pending|queued`);
+  - `enqueueCampaignMessage(recipientId, now, opts)` → `queued | deferred_window | deferred_limit | skipped:{code}`;
+  - `QueuePort.enqueueCampaign` → no-op (як `enqueueReminder`); `beauty-campaign.ts` переписується на ці порти; `delayUntilAllowed` видаляється.
+- **`enqueueCampaignMessage`** — одна транзакція, `SELECT … FOR UPDATE SKIP LOCKED` рядка `pending`. Перевірки по порядку (перша невдача → `skipped` + `skip_reason`, якщо не сказано інше):
+  1. кампанія `sending` (інакше `campaign_cancelled`);
+  2. клієнт не видалений (`client_deleted`);
+  3. розмова в активному Telegram-каналі (`telegram_conversation_id` вподобання, інакше остання розмова клієнта в активному Telegram-каналі) (`no_channel`);
+  4. рядок згоди `telegram`: немає → `no_consent`, `none` → `unsubscribed`, рівень несумісний (§26.5) → `level_mismatch`;
+  5. пропозиція ще чинна: акція активна, `now < ends_at` / `coupon_valid_to` (`offer_expired`);
+  6. частота: §26.5 п. 5 (`frequency`);
+  7. вікно: локальний час «домашнього закладу» (заклад останнього запису клієнта будь-якого статусу; інакше `location_id` кампанії; інакше перший активний заклад за назвою) ∉ `[09:00, 20:00)` → **рядок лишається `pending`** (`deferred_window`). Зона — IANA (`Intl`), DST коректно;
+  8. ліміт: `pg_advisory_xact_lock(hashtextextended('marketing-daily:'||tenant,0))`, `count(beauty_messages WHERE idempotency_key ~ '^(campaign|winback):' AND created_at > now−24h AND status <> 'failed') >= WORKER_MARKETING_DAILY_LIMIT` → рядок лишається `pending` (`deferred_limit`); прохід tenant зупиняється;
+  9. купон: `personal` → INSERT `beauty_coupons` (код CSPRNG, хеш, строк кампанії); `shared` → код кампанії;
+  10. текст (§26.10) і INSERT `beauty_messages` (`campaign:{campaignId}:{clientId}`, `system`, `pending`; конфлікт ключа → рядок `queued` із наявним `message_id`, без другого повідомлення);
+  11. клавіатура `campaign_offer` + `actions` (§26.9.3), якщо канал `assistant.enabled=true` і `buttons≠false` (ознака як у TASK-751);
+  12. одержувач `queued`, `message_id`, `coupon_id`, `conversation_id`, `queued_at`.
+- **Outbox** (`processOutbox`, `MARKETING_KINDS`) безпосередньо перед відправкою (адитивно до наявного):
+  - кампанія `cancelled` → `failed` `campaign_cancelled`;
+  - згода (з таблиці) несумісна → `failed` `consent_withdrawn`.
+  - В обох випадках одержувач `skipped` з тим самим кодом, персональний купон `revoked`.
+  - Вікно — наявний фільтр `listPendingOutbox` (09–20 за зоною закладу останнього запису); ліміт за `sent` — як зараз.
+- **Результат доставки** (`setMessageStatus` / `recordSendFailure`, за ключем `^campaign:([0-9a-f-]{36}):([0-9a-f-]{36})$`, як для `reminder:`):
+  - `sent` → одержувач `sent`, `sent_at`;
+  - фінальна помилка → `failed` + `skip_reason` = код (`bot_blocked|chat_not_found|channel_inactive|token_missing|send_failed`), персональний купон `revoked`.
+  - Задач дзвінків для кампаній немає; згода не змінюється.
+- **Завершення:** після проходу `finishCampaignIfDrained`. `pending` чекають вікна / ліміту (наступного ранку / дня).
+- **`CLIENT_SQL` / `getClient`:** `marketingConsent` = рядок згоди `telegram` з `level<>'none'` (не `unsubscribed`, не `pref_none`); `optedOut` без змін (відгуки).
+- **Winback:** `pollWinback` лише з `WORKER_WINBACK_ENABLED=true`; придатність — згода `full` або `selective` (як `promo` без обмеження послуг) + частота. Текст — з рядком відписки §26.10.
+- **Логи:** `campaign_recipient campaign={id} recipient={id} result={queued|deferred_window|deferred_limit|skipped:{code}}`, `campaign_state campaign={id} status={s}`. Без тексту, коду купона, хешу, імені, chat id.
+- **Коди `skip_reason`:** `campaign_cancelled|client_deleted|no_channel|no_consent|unsubscribed|level_mismatch|offer_expired|frequency|consent_withdrawn|bot_blocked|chat_not_found|channel_inactive|token_missing|send_failed`.
+
+### 26.9 Чат: згода, кнопки, купон (код, без LLM)
+**26.9.1 Транспорт (адитивно до §23.4–§23.5, §25.4):**
+- regex станових: `^(by|bn|bo|sp|rc|ac|aa|ar|cy|cn|mc|co):[A-Za-z0-9_-]{22}(:[0-9])?$`; безстанових: `^i:(book|my|help|human|stop|phone|mkt|mkoff)$`;
+- verb ↔ kind: `mc` ↔ `marketing_consent` (index 0..2, споживає); `co` ↔ `campaign_offer` (без index, не споживає);
+- `options`: `marketing_consent` — `[{verb:"mc", label, level, textVersion}]` × 3; `campaign_offer` — `[{verb:"co", label}, {verb:"i:mkoff", label}]`;
+- `setMyCommands` (§23.4) + `marketing «Новини й акції»` після `stop`;
+- політика handoff: дозволено `mc|i:mkt|i:mkoff`; заблоковано `co`. `suggest`: `mc|i:mkt|i:mkoff`, `/marketing` відповідають шаблоном; `co` ставить пропозицію розмови без шаблону (`processed`).
+
+**26.9.2 Згода:**
+- **Пропозиція після запису.** У транзакції відповіді, після T-confirmed (вподобання нагадувань уже є) або після T-reminder-set (вибір зроблено), **окремим** повідомленням (ключ `…:m`) T-marketing-offer + клавіатура `marketing_consent` (TTL `ConsentKeyboardTtlHours`) і `marketing_offered_at=now`. Умови (усі):
+  - `Marketing:Enabled`, кнопки доступні (§23 TASK-753);
+  - є `conversation.client_id`, рядка згоди `telegram` немає;
+  - `marketing_offered_at IS NULL OR < now − OfferCooldownDays`;
+  - режим `confirm|auto`, не handoff.
+  
+  Без кнопок пропозиції немає (згода — лише кнопкою).
+- **Меню:** `/marketing`, `i:mkt`, текст (точний збіг після `Normalize`) `акції|розсилки|новини й акції` → T-marketing-menu (поточний рівень) + `marketing_consent`. Без клієнта → T-marketing-no-client. `Marketing:Enabled=false` → `/marketing` T-text-only, `i:mkt` T-action-stale. Ліміт шаблонів TASK-759 діє.
+- **`mc`** → CAS клавіатури → `SetAsync(source=chat, via=button, level, textVersion з options)` → T-marketing-set-{full|selective|none}. Клієнта немає → T-marketing-no-client.
+- **«Не надсилати акції»:** `i:mkoff` або текст `не надсилати акції|без акцій` (точний збіг) → `SetAsync(none, source=chat, via=button|text)`; `campaign_id` — з одержувача, чиє повідомлення = `callback_message_ref` (якщо знайдено) → T-marketing-off. Діє **завжди** (також за `Marketing:Enabled=false`, вимкнених кнопок, handoff; поза лімітами — ефект завжди, відповідь у межах ліміту шаблонів, як `i:stop`). Нагадування не змінюються.
+- **«Стоп»** (§22.7): додатково `SetAsync(none, source=stop)` для всіх каналів; новий текст T-stop.
+
+**26.9.3 Кнопка кампанії `co` і код текстом:**
+- **`co`** → одержувач `keyboard.campaign_recipient_id`: `recipient.conversation_id = conversation`, `recipient.client_id = conversation.client_id`. Інакше `foreign_conversation` (§23.5).
+  - Купон (personal `recipient.coupon_id` / shared кампанії / немає) перевіряється `ResolveAsync`. Недійсний → T-coupon-unavailable + [📅 Записатися] (`i:book`).
+  - Успіх → `offer_campaign_id`, `offer_coupon_id`, `offer_until = min(now + ConversationHoldHours, coupon.valid_to | promotion.ends_at | ∞)`, `recipient.clicked_at = coalesce(…, now)`, журнал `campaign_click` (`{campaignId, recipientId}`), T-campaign-book-start.
+  - Повторне натискання — ідемпотентне (без нового журналу, відповідь у межах throttle 30 с).
+- **Код текстом (крок 4b**, після 4a'/4a, до 5; пакет = 1 текстове повідомлення; не handoff):
+  - текст після trim і необов'язкового префікса `код|промокод|купон` (з `:` чи без) = `^[A-Za-z0-9 -]{4,24}$`;
+  - персональний формат (10 символів після `normalize`) або збіг хешу загального → `ResolveAsync(clientId = conversation.client_id)`;
+  - успіх → пропозиція розмови (`offer_coupon_id`, `offer_campaign_id = coupon.campaign_id`) + T-coupon-applied;
+  - невдача (лише для персонального формату або знайденого коду) → T-coupon-invalid і лічильник `Coupons:ChatInvalidPerConversationPerHour`; понад ліміт → T-coupon-locked (раз на годину), далі коди не розбираються;
+  - інший текст іде далі без відповіді про купон.
+  - Персональний код без клієнта розмови → T-coupon-invalid.
+  - Тіло вхідного з кодом → `"[код купона]"` у тій самій транзакції (код не лишається в історії LLM / inbox).
+- **Запис:** `PrepareAsync` бере дійсну пропозицію розмови (`offer_until > now`) і рахує `QuoteWithCoupon`. Пропозиція запису отримує `coupon_id` (лише `applied`) і `campaign_id`. T-summary (§23.8):
+  - `applied` — «Ціна: 400 грн (замість 500 грн, купон «{назва акції}»)»;
+  - `not_better` — рядок «Купон не застосовано: діє вигідніша акція.»;
+  - `not_applicable` — «Купон не діє на цю послугу.».
+- **`ConfirmAsync`:**
+  - погашення в транзакції запису, після успіху `offer_* = NULL`;
+  - `coupon_unavailable` → пропозиція `failed`, `offer_*` = NULL, T-coupon-unavailable, наступний хід — звичайна ціна;
+  - лінивий клієнт: shared погашається на нового клієнта; personal без клієнта неможливий.
+- **ШІ:**
+  - `ChatContextBuilder` (блок «ФАКТИ ЗАКЛАДУ», код) + рядок, якщо пропозиція дійсна: «У клієнта активна знижка за купоном: {discount} на {послуги} до {дата}; ціну з купоном рахує система в підсумку.» + рядок «Розсилки акцій — лише за згодою клієнта; керувати — /marketing.»;
+  - `ChatRules` +: «Не обіцяй знижок, купонів і кодів, яких немає у фактах чи tools; не вигадуй і не повторюй кодів.»;
+  - `get_active_promotions` без `code_only`; `kind=callback` і тіла `[код купона]` — як зараз.
+
+### 26.10 Тексти (`ChatTemplates` і воркер, українською; копірайтер править без зміни контракту; тексти згоди й відписки — лише після юридичного gate)
+- **T-marketing-offer:** «Хочете отримувати від нас акції та знижки в цьому чаті? Оберіть варіант — змінити можна будь-коли командою /marketing.» Клавіатура: [📰 Повна інформація] / [🏷 Лише акції на мої послуги] / [🔕 Не надсилати]. Кожна версія тексту має `Marketing:ConsentTextVersion`.
+- **T-marketing-menu:** «Зараз: {повна інформація | лише акції на ваші послуги | розсилки вимкнено}. Оберіть:» + та сама клавіатура.
+- **T-marketing-set-full:** «Готово: надсилатимемо акції, знижки й новини, не частіше разу на тиждень, з 9:00 до 20:00. Вимкнути — кнопка «Не надсилати акції» під повідомленням або /marketing.»
+- **T-marketing-set-selective:** «Готово: надсилатимемо лише акції та знижки на послуги, якими ви користуєтесь. …» (решта як вище).
+- **T-marketing-set-none / T-marketing-off:** «Добре, акцій і новин не надсилатимемо. Нагадування про візити працюють як раніше.»
+- **T-marketing-no-client:** «Налаштувати розсилки можна після першого запису. Напишіть, на яку послугу бажаєте записатися.»
+- **T-stop (Зміна §22.7):** «Добре, більше не надсилатимемо нагадувань, акцій і новин. Увімкнути — напишіть «нагадування» або /marketing.»
+- **T-campaign-book-start:** «Знижку {discount} на {послуга/послуги} закріплено за вами до {дата}. Напишіть, на коли бажаєте записатися.»
+- **T-coupon-applied:** «Код прийнято: {discount} на {послуги}, діє до {дата}. Напишіть, на яку послугу й коли бажаєте записатися.»
+- **T-coupon-invalid:** «Код не підходить: він недійсний, використаний або вже не діє.»
+- **T-coupon-locked:** «Забагато спроб ввести код. Спробуйте пізніше або напишіть адміністратору — /help.»
+- **T-coupon-unavailable:** «Цей купон уже недійсний або використаний. Можу записати вас за звичайною ціною.»
+- **Повідомлення кампанії** (воркер; плейн-текст без `parse_mode`, ≤ 3500 кодових точок, ≤ 4096 UTF-16):
+  ```
+  {шаблон менеджера з підстановками}
+
+  Умови: знижка {discount} на {service}, діє з {valid_from} по {valid_to}. Одна знижка на запис, не сумується з іншими акціями.   ← лише promo
+  Ваш код: {code}   ← лише з купоном, якщо {code} немає в шаблоні
+  Щоб не отримувати акції, напишіть «Стоп» або натисніть кнопку «Не надсилати акції».
+  ```
+  - Рядки «Умови», код і відписку додає код (менеджер їх не прибирає). Без кнопок: «…напишіть «не надсилати акції» (або «Стоп» — тоді вимкнуться й нагадування).» і «Щоб записатися зі знижкою, напишіть сюди код {code}» / «…напишіть «Записатися»».
+  - Кнопки (`campaign_offer`): [🎟 Записатися зі знижкою] (з купоном) або [📅 Записатися] (без) (`co`), [🔕 Не надсилати акції] (`i:mkoff`). `expires_at` = `coupon_valid_to` | кінець акції | `queued_at + 30 днів`.
+- **Підстановки** (whitelist; інші `{…}` → 422):
+  - `{name}` — перше слово `full_name`, санітизоване, ≤ 30 символів; «Клієнт Telegram»/порожнє → «Вітаємо»;
+  - `{discount}` — «15%» / «100 грн» (`ChatAssistant:CurrencyLabel`);
+  - `{service}` — назви послуг акції (≤ 3, далі «та ще N»; без обмеження — «усі послуги»);
+  - `{valid_from}`, `{valid_to}` — `dd.MM.yyyy` у зоні домашнього закладу; кінець виключний, тож показується дата `valid_to − 1 с`; відкритий кінець → «без обмеження строку»;
+  - `{code}` — `XXXXX-XXXXX` / загальний код.
+  - Значення санітизуються (один рядок, без керівних символів, ≤ 80 символів), як TASK-735.
+- **Перегляд** рендерить текст на прикладі: `{name}`=«Олена», `{code}`=«ABCDE-FGHJK» (або загальний код), реальні discount/service/дати.
+
+### 26.11 API (`/api/beauty`, помилка = `{code, message}`; усі відповіді — `Cache-Control: no-store`, також 4xx)
+**26.11.1 Доступ:**
+- кампанії й купони — модуль **`beauty_marketing`** (новий; tenants без нього → `403 module_disabled`, backfill модуля немає) + `Marketing:Enabled` (інакше `403 marketing_disabled`), owner/admin; specialist → `403 forbidden_role` (фільтр до прив'язки тіла, як `[ReminderRoles]`);
+- згода в картці — `beauty_clients`, owner/admin, працює й за `Marketing:Enabled=false`;
+- перевірка коду staff — усі ролі персоналу, модуль `beauty_booking`.
+- `[RequestSizeLimit]`: 16 КБ кампанії, 2 КБ решта. Чужий id → 404 без розкриття.
+
+**26.11.2 Згода:**
+
+| Метод | Шлях | Тіло / відповідь |
+|---|---|---|
+| GET | `/clients/{id}/marketing-consent` | `{channels: [{channel, level, state: unset\|set, source?, textVersion?, updatedAt?, updatedBy?: {id, name}}], offeredAt?, telegramAvailable, history: [{at, channel, levelFrom?, levelTo, source, via?, actor?: {id, name}, basis?, campaignId?}]}` (≤ 50 подій, нові першими; `basisNote` віддається лише owner) |
+| PUT | `/clients/{id}/marketing-consent` | `{channel: "telegram", level, basis?, basisNote?}` → `200` те саме. 404 `client_not_found`; 422 `invalid_level`, `channel_unsupported` (push), `basis_required`, `invalid_basis`, `invalid_basis_note`; 409 `admin_grant_disabled` |
+
+- `GET /clients/{id}` (адитивно): `marketing: {level, updatedAt?}` (telegram). `marketingConsent` (похідний) лишається.
+
+**26.11.3 Аудиторія й кампанії:**
+
+| Метод | Шлях | Тіло / відповідь |
+|---|---|---|
+| POST | `/marketing/audience/preview` | `{type, promotionId?, segment: {kind, days?, serviceId?, minVisits?, periodDays?}, locationId?}` → `{matched, recipients, excluded: {noTelegram, unsubscribed, noConsent, levelMismatch, frequency}}` (ліміт Preview) |
+| GET | `/campaigns?status&cursor&take=50` | `{items: [{id, name, type, status, promotion?: {id, name}, scheduledAt?, recipientsTotal?, sent, createdAt}], nextCursor?}` |
+| POST | `/campaigns` | `CampaignRequest {name, type, promotionId?, segment, locationId?, template, couponMode, sharedCouponId?, couponValidFrom?, couponValidTo?}` → `201 CampaignDto` (`draft`) |
+| GET | `/campaigns/{id}` | `CampaignDto {…request, id, status, revision, scheduledAt?, recipientsTotal?, confirmedBy?, confirmedAt?, cancelledBy?, cancelledAt?, startedAt?, finishedAt?, createdBy, createdAt}` |
+| PUT | `/campaigns/{id}` | повна заміна draft → `200` (`revision+1`); інакше `409 campaign_not_draft` |
+| DELETE | `/campaigns/{id}` | лише draft → `204` |
+| GET | `/campaigns/{id}/preview` | `{revision, sampleText, buttons: string[], matched, recipients, excluded{…}, limits: {dailyLimit, clientIntervalDays, estimatedDays}, window: {from: "09:00", to: "20:00"}, warnings: [promotion_ends_soon\|coupon_expires_before_send\|exceeds_daily_limit\|no_buttons_channel]}` |
+| POST | `/campaigns/{id}/confirm` | `Idempotency-Key` + `{revision, scheduledAt?}` → `200 CampaignDto`; помилки §26.7; `400 idempotency_key_required`; `409 idempotency_conflict` (той самий ключ, інше тіло) |
+| POST | `/campaigns/{id}/cancel` | → `200 CampaignDto`; `409 campaign_finished` |
+| GET | `/campaigns/{id}/stats` | §26.11.5 |
+
+- Створює, підтверджує й скасовує owner або admin (одна людина може створити й підтвердити; автори фіксуються).
+- `POST /promotions` / `PUT` (адитивно): `access: public|code_only` (за замовч. `public`); `PromotionDto.access`, `activeCampaigns` (кількість `scheduled|sending`). `409 promotion_in_campaign` (§26.6).
+
+**26.11.4 Купони:**
+
+| Метод | Шлях | Тіло / відповідь |
+|---|---|---|
+| GET | `/coupons?promotionId&kind=shared` | `[{id, kind:"shared", promotionId, code, validFrom, validTo, maxUses?, usesCount, status}]` |
+| POST | `/coupons` | `{promotionId, code, validFrom, validTo, maxUses?}` → `201`; 422 `invalid_code`, `invalid_period`, `invalid_max_uses`, `promotion_not_code_only`; 409 `coupon_code_taken` |
+| PATCH | `/coupons/{id}` | `{status: "revoked"}` → `200` (ідемпотентно) |
+| GET | `/campaigns/{id}/coupons/summary` | `{issued, redeemedActive, released, revoked}` (без кодів) |
+| GET | `/clients/{id}/coupons` | `[{id, kind, codeHint, promotion: {id, name}, campaign?: {id, name}, validFrom, validTo, status, usedAt?, appointmentId?}]` (personal; повний код не віддається) |
+| POST | `/coupons/check` | (усі ролі персоналу) `{code, locationId, serviceId, clientId?}` → `{outcome: applied\|not_applicable\|not_better, priceOriginal, priceFinal, couponId, promotionName}` або 409 `coupon_not_found\|coupon_expired\|coupon_not_started\|coupon_exhausted\|coupon_revoked\|coupon_foreign_client\|coupon_already_used\|promotion_inactive`; `429` |
+
+- Staff `POST /appointments` + `couponCode?`: ті самі 409, `422 invalid_coupon_format`; `not_better|not_applicable` → запис без купона. `AppointmentDto` (адитивно): `coupon?: {id, kind, codeHint, promotionName, outcome}`, `campaignId?`.
+- Публічний:
+  - `GET /api/public/{slug}/coupons/check?code&locationId&serviceId` → `200 {outcome, priceOriginal, priceFinal}` або `404 {code: "coupon_invalid"}` (однакове тіло для всіх причин і для personal);
+  - `POST /appointments` + `couponCode?` → `409 coupon_invalid` (однакове тіло);
+  - ліміт `PublicCheckPerIpPer10Min`; `PublicAppointment` + `couponApplied: bool`.
+
+**26.11.5 Статистика** (`GET /campaigns/{id}/stats`):
+```
+{recipients, byStatus: {pending, queued, sent, failed, skipped},
+ failed: {botBlocked, chatNotFound, other}, skipped: {<skip_reason>: n},
+ clicks,            // одержувачі з clicked_at
+ bookings,          // записи з campaign_id (будь-який статус, крім скасованих через збій оплати)
+ bookingsWithCoupon, couponRedemptionsActive,
+ revenue,           // Σ price_final записів completed з campaign_id
+ unsubscribedAfter, // події level_to=none одержувачів у [sent_at, sent_at + UnsubscribeAttributionDays] або з campaign_id
+ viewed: null}      // Telegram не надає «переглянуто»/«прочитано» — поле завжди null, UI пояснює
+```
+Список одержувачів (імена, id) у V1 **не** віддається.
+
+**26.11.6 Логи** (без текстів, кодів купонів, хешів, імен, телефонів, chat id):
+- `campaign_created|updated|deleted|confirmed|cancelled campaign={id} user={id} [recipients={n}]`;
+- `coupon_created|revoked coupon={id} user={id}`;
+- `coupon_redeemed|released coupon={id} appointment={id} reason={r}`;
+- `coupon_check scope={staff|public|chat} result={code}`.
+
+### 26.12 Frontend
+- **Акції** (`promos-screen`):
+  - перемикач «Лише за кодом (купон)» (`access`);
+  - вкладка «Коди» (загальні: створення, ліміт, строк, відкликання, лічильник);
+  - кнопка «Сповістити клієнтів / Розіслати» в картці й після збереження акції → майстер кампанії з підставленою акцією;
+  - бейдж «В активній розсилці» блокує поля, які не можна змінювати (409 `promotion_in_campaign` → пояснення).
+- **«Розсилки»** (`/beauty/campaigns`, меню, owner/admin):
+  - список (статус, акція, одержувачі, відправлено, дата);
+  - майстер: 1) акція (або «Новина»); 2) сегмент (вид, N/M, послуга, заклад) з живим лічильником `audience/preview`; 3) текст (редактор з кнопками підстановок, лічильник символів, незмінні рядки умов і відписки показано сірим); 4) купон (немає / персональні з датами / загальний код); 5) перегляд (бульбашка Telegram з кнопками, кількість, розбивка виключень з поясненнями, оцінка днів за лімітом, вікно 09–20, попередження); 6) «Запустити зараз» / «Запланувати на…» → **діалог підтвердження** («Надіслати {n} клієнтам? Дію не можна скасувати для вже надісланих.»), `Idempotency-Key` на спробу, `revision`, 409 `campaign_changed` → оновити перегляд;
+  - сторінка кампанії: статус, прогрес, «Скасувати» з підтвердженням, статистика §26.11.5 з поясненням «Telegram не показує перегляди».
+- **Картка клієнта:** картка «Розсилки» (рівень, коли й як змінено, історія; «Вимкнути» / «Лише акції» — зниження; підвищення — лише за `admin_grant_disabled=false`, з вибором підстави й нотаткою); «Купони клієнта» (`codeHint`, акція, строк, статус).
+- **Календар** (створення запису): поле «Промокод» + «Перевірити» (`/coupons/check`), ціна до / після, `not_better` — «діє вигідніша акція».
+- **Публічна форма:** поле «Промокод» (shared), перевірка, ціна; чекбокс маркетингової згоди **прибрати** (Зміна §12).
+- **Inbox:** чипи «Клієнт обрав розсилки: …», «Клієнт відписався від акцій», «Клієнт натиснув «Записатися зі знижкою»»; тіло `[код купона]` — «Клієнт ввів код».
+- **`ai-screen`:** `launchAiCampaign` (заглушка) → посилання на майстер розсилок; ШІ-кампанії — V2.
+- `errors.ts`: усі нові коди §26.6–§26.11. Тексти в console / аналітику не пишуться.
+
+### 26.13 Безпека, ПД, спам, юридичне
+- **Межі:** ролі й модулі §26.11.1; RLS FORCE; композитні FK; чужий id → 404; tenant лише з JWT / каналу.
+- **Human gate у продукті:** без `confirm` кампанія не надсилається (воркер бере лише `scheduled|sending`); підтвердження — одноразовий CAS з `Idempotency-Key` і `revision`.
+- **Спам:** вікно 09–20 за зоною закладу (DST за IANA), 200 / 24 год на tenant (при постановці під advisory lock і при відправці), 1 / 7 днів на клієнта, ≤ 5000 одержувачів, один ключ `campaign:{id}:{client}`, «Стоп» / «Не надсилати акції» в кожному повідомленні й діють завжди.
+- **Згода:** лише кнопкою клієнта з версією тексту з БД; LLM і текст згоду не вмикають; адмін не підвищує без підстави (і прапорця); журнал append-only.
+- **Купони:** CSPRNG 50 біт, хеш у БД, прив'язка до клієнта, однакові відповіді чату / публічного шляху, ліміти невдалих спроб, CAS + UNIQUE для погашення; коди не в логах і журналі; тіло вхідного з кодом редагується.
+- **ПД:** перегляд і статистика — лише кількості; список одержувачів не віддається; тексти розсилки в логах відсутні; `basisNote` не логується.
+- **Ін'єкції:** шаблон — plain text, whitelist підстановок, санітизація значень; кнопки й `callback_data` формує код; модель не бачить кодів.
+- **Юридичне — ВІДКРИТО** (§26.16 п. 1): до закриття — без мерджу в `main`, `Marketing:Enabled=false`, `WORKER_CAMPAIGNS_ENABLED=false`, `WORKER_WINBACK_ENABLED=false` поза dev; модуль `beauty_marketing` не вмикається.
+
+### 26.14 Тестові сценарії
+Реальна БД (RLS), fake Telegram (`sendMessage` з `reply_markup`), mock ШІ з лічильником, керований годинник (зони Europe/Kyiv, America/New_York).
+1. **Сегмент lapsed:** останній completed рівно `now − 60 днів` → входить; `now − 60 днів + 1 хв` → ні; майбутній `confirmed` → ні; `cancelled`/`no_show` не рахуються як візит.
+2. **Lapsed + послуга X:** X completed 70 днів тому + Y вчора → входить; X 10 днів тому → ні; без X ніколи → ні; майбутній запис на X → ні, на Y → входить.
+3. **Frequent:** 3 completed за 90 днів → так; 2 → ні; візит рівно на межі `now − 90 днів` → не рахується (`>`); `cancelled` не рахується.
+4. **New:** 1 completed → так; 0 або 2 → ні; 1 completed + 1 `cancelled` → так.
+5. **Заклад:** lapsed з `L` — візити лише в `M` → ні; останній в `L` 70 днів тому, а в `M` вчора → ні (давність по мережі); frequent рахує лише візити в `L`.
+6. **Придатність і перегляд:** клієнти без розмови / Instagram / неактивний канал → `noTelegram`; `none`/«Стоп» → `unsubscribed`; без рядка → `noConsent`; `selective` + `news` → `levelMismatch`; `selective` + акція на непройдену послугу → `levelMismatch`, на пройдену / без обмеження → так; одержувач іншої кампанії 3 дні тому → `frequency`, 8 днів → так; видалений не рахується; суми `recipients + Σexcluded = matched`; відповідь без імен / id / телефонів (скан JSON).
+7. **Згода в чаті:** «Так» → T-confirmed → T-reminder-set → T-marketing-offer окремим повідомленням; `mc` «Повна» → рядок `full`, подія з `textVersion`, `marketing_consent=true`; повторне натискання → `used`; через 30 днів нового запису пропозиції немає (рядок є); клієнт без рядка через 91 день → пропозиція знову; suggest / handoff → без пропозиції; `mc` у handoff → працює.
+8. **Відписка:** `i:mkoff` під повідомленням кампанії → `none`, подія з `campaign_id`, нагадування без змін; `i:mkoff` за `Marketing:Enabled=false` і вимкнених кнопок → працює; «Стоп» → згода `none` (`stop`) + нагадування `none` + `unsubscribed`; після «Стоп» `mc` «Повна» → `full`, `unsubscribed=false`, нагадування лишаються `none`; текст «не надсилати акції» → `none`.
+9. **Адмін:** зниження `full→none` → `source=admin`, автор; підвищення без підстави → 422, з підставою за `AdminGrantEnabled=false` → 409; з `true` → подія з `basis`; specialist → 403; чужий → 404; `push` → 422.
+10. **Підтвердження:** без confirm воркер нічого не шле; confirm зі старим `revision` → 409 `campaign_changed`; два паралельні confirm різними ключами → один `scheduled`, другий 409; повтор того самого ключа → 200, одержувачі не дублюються; порожня аудиторія → 409 без зміни статусу; specialist → 403; PUT після confirm → 409.
+11. **Вікно й DST:** поллер о 08:59 / 09:00 / 19:59 / 20:00 за Kyiv → лише `[09:00, 20:00)`; день переходу (березень/жовтень) — вікно за локальним часом, не фіксованим offset; одержувач із закладом у New York — окреме вікно; поза вікном рядок `pending`, ранком надсилається.
+12. **Ліміт 200/добу:** 250 одержувачів → 200 `queued`, 50 `pending` до звільнення вікна 24 год; два воркери паралельно → не більше 200 (advisory lock); winback враховується в тому самому ліміті.
+13. **Частота:** клієнт в аудиторіях двох кампаній одного дня → друга `skipped:frequency`.
+14. **Дубль:** повтор проходу / два воркери → одне повідомлення `campaign:{id}:{client}`, один персональний купон.
+15. **Відписка між постановкою й відправкою:** `queued` → клієнт «Стоп» → outbox `failed:consent_withdrawn`, одержувач `skipped`, купон `revoked`, Telegram не викликано.
+16. **Скасування:** під час `sending` → `pending` `skipped:campaign_cancelled`, `queued` → `failed:campaign_cancelled`; доставлений купон далі діє; повтор cancel → 200; cancel `done` → 409.
+17. **403 бот заблокований:** одержувач `failed:bot_blocked`, купон `revoked`, згода без змін, задачі дзвінка немає; статистика `failed.botBlocked=1`.
+18. **Купон personal:** `co` → T-campaign-book-start → підсумок із купонною ціною → «Так» → запис `coupon_id`, `promotion_id`, `campaign_id`, `price_original`/`price_final`, погашення `active`; друге використання → `coupon_unavailable`; код текстом іншим клієнтом → T-coupon-invalid; staff з чужим клієнтом → `409 coupon_foreign_client`; публічна форма з personal → `409 coupon_invalid`.
+19. **Гонка:** два паралельні записи з одним personal → один успіх, другий `coupon_unavailable`; shared `maxUses=1` двома клієнтами → один успіх; той самий клієнт двічі shared → `coupon_already_used`.
+20. **Строк:** `now = valid_to − 1 с` → діє; `= valid_to` → ні; до `valid_from` → `coupon_not_started`; акція деактивована → `promotion_inactive`.
+21. **Вигідніша акція:** публічна 20%, купон 15% → запис без купона, купон не витрачено, `not_better` у підсумку; купон 25% → купон; рівні знижки → публічна.
+22. **Повернення купона:** скасування клієнтом у чаті / staff / публічне → `released`, `uses_count−1`, купон знову дійсний до `valid_to`; збій оплати при створенні → `released`; `no_show`/`completed` → `active`; збій повернення коштів (`ReleaseCancel`) → погашення `active`.
+23. **Підбір коду:** 6 невдалих кодів у чаті → T-coupon-locked, 7-й валідний не розбирається до кінця години; публічний check 11-й за 10 хв → 429; однакове тіло 404 для невідомого / простроченого / personal / вичерпаного.
+24. **`code_only`:** акція `code_only` не змінює `priceFinal` у публічному каталозі, staff `Quote`, `list_services`, `get_active_promotions`; `PUT` акції активної кампанії → 409 `promotion_in_campaign`, `isActive=false` → дозволено, одержувачі `offer_expired`.
+25. **Шаблон:** невідома підстановка → 422; `{code}` без купона → 422; `<b>` надсилається буквально; рядки умов і відписки завжди є; ≤ 4096 UTF-16; `{name}` для «Клієнт Telegram» → «Вітаємо»; дата `valid_to` (виключна) показується попереднім днем у зоні закладу.
+26. **Статистика:** sent / failed / clicks / bookings / revenue (лише `completed`) / unsubscribedAfter; `viewed=null`.
+27. **ПД і секрети в логах** (API, воркер): немає кодів купонів (і їх частин ≥ 4 символи), хешів, текстів розсилки, імен, chat id, `basisNote`.
+28. **RLS / схема:** 5 таблиць недоступні іншому tenant (API-роль і роль воркера); CHECK-и §26.3; UNIQUE хешу per tenant (той самий код у двох tenants дозволено); events — UPDATE/DELETE → 42501 для API-ролі; `DO`-блок; schema-drift; Down.
+29. **Winback:** без `WORKER_WINBACK_ENABLED` не шле; з ним — лише за згодою з таблиці, з рядком відписки.
+30. **Регрес:** §12, §21.10, §22.12, §23.13, §25.10, `PromotionPricingTests` проходять; змінені очікування (T-stop, `/help`, команди меню, ігнор `client.marketingConsent`) — у task log.
+
+### 26.15 Поетапність
+- **V1:** §26.2–§26.14.
+- **V2:**
+  - ШІ-чернетка тексту (роль `analytics`, ADR-010) лише в `draft` з тим самим підтвердженням;
+  - `build_audience` / `suggest_promotion` на `AudienceQuery` (кількості, без `clientIds`) і `code_only`;
+  - push (мобільний застосунок) і веб-згода з версією;
+  - вікно й ліміти per tenant;
+  - кілька закладів у фільтрі;
+  - імена одержувачів owner на запит з аудитом;
+  - виключення `bot_blocked`;
+  - Instagram;
+  - «Мої купони» в боті;
+  - повторна відправка невдалим;
+  - сповіщення про зміну цін — не плануються без нового ADR.
+
+### 26.16 Human gate (ADR-015 §8)
+1. **Юридичне — ВІДКРИТО (нове):** підстава маркетингу в Telegram; тексти згоди (3 рівні, версія `mc-v1`), відписки й нового T-stop; кнопка як згода; 09–20, 200/добу, 1/7 днів; строк зберігання журналу згод; коди в повідомленнях. Попередні пункти (ADR-010 §7.3, ADR-011 §8.3, ADR-012 §8.1, ADR-014 §8.1) теж відкриті. До закриття — без мерджу в `main` і прод-деплою.
+2. **Міграція даних:** скидання `marketing_consent` без перенесення; CHECK `kind` клавіатур надмножиною; нові колонки в 6 таблицях — потрібне погодження.
+3. **Продукт (підтвердити):** вигідніша знижка замість «купон завжди»; строк купона на момент запису; повернення купона при будь-якому скасуванні; доставлені купони чинні після скасування кампанії; знімок одержувачів при підтвердженні; «улюблені» = 365 днів; адмін не підвищує згоду у V1; пропозиція згоди раз на 90 днів і лише кнопками; `news` у V1; публічна форма — лише shared-коди.
+4. **Security review** TASK-787.
+
+### 26.17 Розподіл задач (TASK-776+)
+Порядок: контракт → БД → (згода ∥ купони ∥ кампанії ∥ воркер ∥ транспорт) → чат → frontend (на mock раніше) → QA → security review → docs/devops → gate. Тексти — копірайтер паралельно від контракту. ID запропоновані, остаточні призначає `project-manager`.
+
+| Задача | Агент | Обсяг | Залежить |
+|---|---|---|---|
+| TASK-776 | database-engineer | Міграція §26.3: 5 таблиць, колонки (`promotions.access`, `appointments/proposals.coupon_id`, `campaign_id`, `conversations.offer_*`, `clients.marketing_offered_at`, `chat_keyboards.kind`, `campaign_recipient_id`), CHECK, UNIQUE, скидання `marketing_consent`, RLS FORCE, `DO`-блок, EF, snapshot, `schema.sql`, тести БД (сц. 28) | контракт; після TASK-767 (snapshot) |
+| TASK-777 | backend-developer | `MarketingConsentService` (§26.4: стан + подія, похідний прапорець, правила джерел, advisory lock), API згоди в картці (§26.11.2), `GET /clients/{id}.marketing`, ігнор `client.marketingConsent` у публічному записі. Тести 9, частина 8 (сервіс) | TASK-776 |
+| TASK-778 | backend-developer | Купони й ціна (§26.6): `access` у акціях (API, `GetPromotionRulesAsync`, публічний каталог, `get_active_promotions` без `code_only`), `QuoteWithCoupon`, `CouponService` (normalize / hash, shared CRUD, check, rate limits), погашення в `AddAppointmentAsync` (staff / публічний / `OnlineBookingCore`), повернення в `CancellationService` / збій оплати, `couponCode` staff і публічний + check, DTO, `409 promotion_in_campaign`. Тести 18 (staff / публічний), 19–22, 23 (публічний / staff), 24 | TASK-776 (∥ TASK-777) |
+| TASK-779 | backend-developer | Аудиторії й кампанії (§26.5, §26.7, §26.11.3, §26.11.5): `AudienceQuery`, preview, CRUD, confirm (CAS, ідемпотентність, `revision`, матеріалізація), cancel, stats, модуль `beauty_marketing`, `Marketing:Enabled` + legal guard на старті, ліміти, логи. Тести 1–6, 10, 16 (API), 26 | TASK-776, TASK-777 (читання згоди); ∥ TASK-778 (різні файли; спільна реєстрація DI — послідовні коміти) |
+| TASK-780 | backend-developer (skill `beauty-worker-jobs`) | Воркер (§26.8): `pollCampaigns`, порти й `PgBeautyData` (`getCampaign`, `listCampaignAudience`, `enqueueCampaignMessage`, `start/finish`), генерація персонального купона + хеш (тестовий вектор як у TASK-778), рендер тексту §26.10, клавіатура `campaign_offer` + `actions`, повторні перевірки в outbox, мапінг результату на одержувача, IANA-вікно (прибрати `delayUntilAllowed`), денний ліміт з advisory lock, частота, `CLIENT_SQL` зі згодою, `WORKER_CAMPAIGNS_ENABLED`, `WORKER_WINBACK_ENABLED`, логи. Тести 11–17, 25 (воркер), 27 (воркер), 29 | TASK-776 (∥ TASK-777…779) |
+| TASK-781 | integrations-developer | Транспорт (§26.9.1): regex verb `mc`, `co` і `i:mkt`, `i:mkoff` (`TelegramAdapter.IsValidCallbackData`, `ChatKeyboardLayout`, `CallbackAddress`), `KeyboardKinds` + валідація `options`, `setMyCommands` + `/marketing`, дозволи handoff. Тести парсера / розкладки / команд | TASK-776 |
+| TASK-782 | ai-agent-developer | Конвеєр (§26.9.2–§26.9.3): пропозиція згоди після запису, `/marketing` / `i:mkt` / текст, `mc`, `i:mkoff` / текст, «Стоп» → згода, `co` → пропозиція розмови, крок 4b (код текстом, ліміт, редагування тіла), `PrepareAsync`/`ConfirmAsync` з купоном пропозиції (порт від TASK-778), T-summary, факти й `ChatRules`, шаблони §26.10. Тести 7, 8, 18 (чат), 23 (чат), 30 (чат) | TASK-777, TASK-778, TASK-781; після TASK-770 (ті самі `ConversationTurnProcessor*`, `ChatTemplates`) |
+| TASK-783 | copywriter | Тексти §26.10 (згода 3 рівні + версія, меню, підтвердження, відписка, T-stop, купонні шаблони, рядки умов / відписки, 3 приклади шаблонів розсилки), пакет для юридичного gate | контракт (паралельно) |
+| TASK-784 | frontend-developer | Акції (`access`, вкладка «Коди», «Сповістити клієнтів»), `/beauty/campaigns` (список, майстер, перегляд, підтвердження з `Idempotency-Key` / `revision`, скасування, статистика), DTO / http-client / mock, `errors.ts` | контракт (mock) → TASK-778, TASK-779 |
+| TASK-785 | frontend-developer | Картка клієнта (згода + історія + зміна, купони клієнта), календар «Промокод», публічна форма (промокод; прибрати чекбокс згоди), inbox-чипи, `ai-screen` → майстер | контракт (mock) → TASK-777, TASK-778 |
+| TASK-786 | qa-engineer | Повний §26.14 (реальна БД, fake Telegram, mock ШІ, керований годинник), smoke з тестовим ботом і dev-воркером (згода → кампанія → кнопка → запис із купоном → скасування → повернення купона), сканер логів | TASK-779…785 |
+| TASK-787 | security-reviewer | Рев'ю TASK-776…785 за ADR-015 §3 і §26.13: згода, підбір / гонка купонів, масова відправка, IDOR, ПД у перегляді / логах, RLS / GRANT | TASK-786 |
+| TASK-788 | devops-engineer | `scripts/dev/start-worker.ps1` / `status.ps1`: `WORKER_CAMPAIGNS_ENABLED` за прапорцем, `WORKER_WINBACK_ENABLED=false`, показ узгодженості `Marketing:DailyLimit` ↔ `WORKER_MARKETING_DAILY_LIMIT`; GRANT ролей (API, воркер) | TASK-780 |
+| TASK-789 | documentation-writer | Runbook (конфіг §26.2, GRANT, міграція, legal guard, Down), `api.md`, `database.md`, `.env.example` (плейсхолдери); після `accepted` — примітки «уточнено ADR-015» в ADR-003/005/011/012/013 | TASK-787 |
+
+- TASK-777 ∥ TASK-778 ∥ TASK-780 ∥ TASK-781 після TASK-776 (різні файли). TASK-779 після TASK-777. TASK-782 послідовно після TASK-770 і спирається на TASK-777/778/781. TASK-784/785 стартують на mock після контракту. TASK-783 паралельно з усім; фінальні тексти — після юридичного gate.
+- Мінімальний вертикальний зріз для раннього smoke: TASK-776 → 777 → 781 → 782 (лише згода) → 779 (кампанія без купона) → 780 → 786 (частково); купони (778 і частини 782 / 785) — другим зрізом.
+
+### Уточнення (TASK-776)
+Міграція `20261026203521_beauty_marketing` (§26.3) реалізована; відхилення від буквального тексту §26.3:
+- **Назва міграції** `beauty_marketing` (а не `beauty_marketing_consent_campaigns_coupons`); EF-сутності в `Data/Entities/BeautyMarketingEntities.cs`.
+- **Скидання `marketing_consent`:** `UPDATE … WHERE marketing_consent` під тимчасовим `NO FORCE` (роль-власник) для всіх tenant; нічого не переноситься в `beauty_marketing_consents` і не пишеться в `beauty_marketing_consent_events` (рядок історії з `level_from = level_to` суперечить CHECK, а «згоди» як факту немає). `updated_at` не змінюється.
+- **Дірка у дослівному CHECK `ck_…_redemptions_released`:** `(status='released') = (released_at IS NOT NULL AND release_reason IS NOT NULL)` пропускає `active` з одним із двох полів (AND з NULL). Додано `ck_beauty_coupon_redemptions_released_pair`: `(released_at IS NULL) = (release_reason IS NULL)`.
+- **Явні `IS NOT NULL` у CHECK** (урок TASK-767): `personal ⇒ max_uses IS NOT NULL AND max_uses = 1`; `status IN (scheduled,sending,done) ⇒ …NOT NULL`.
+- **Додані (не суперечать §26.3) CHECK-словники** у events (`level_from|level_to|source|channel`), `revision >= 1`, `recipients_total >= 0`; `skip_reason` без словника (коди §26.8 живуть у коді).
+- **Самі назви обмежень:** `ck_beauty_campaigns_type_promotion`, `…_segment_params|ranges`, `…_shared_coupon`, `…_personal_valid_to`, `…_coupon_period`, `…_confirmed`, `…_cancelled`; `ck_beauty_coupons_kind_fields|uses|max_uses|code_hash|period`; UNIQUE `ux_beauty_campaign_recipients_campaign_client`, `ux_beauty_coupons_code_hash`, `ux_beauty_coupon_redemptions_appointment|active`.
+- **Індекси на FK:** nullable FK мають часткові індекси `WHERE … IS NOT NULL` (як §26.3 для appointments); виняток - `beauty_chat_keyboards.campaign_recipient_id`: звичайний індекс, бо наявний тест TASK-749 не зараховує часткові індекси як покриття FK.
+- **Наявні тести змінені (2 рядки, неминуче через нову колонку §26.3):** `ChatButtonsRlsTests` - список колонок `beauty_chat_keyboards` (+`campaign_recipient_id`) і кількість FK (5 → 6).
+- **FK `conversation_id`** (consents, events, recipients) - композитні RESTRICT на `beauty_conversations` (§26.3 називає FK лише для consents).
+- **GRANT** не в міграції (runbook, TASK-788/789): API - SELECT/INSERT/UPDATE, на `consent_events` лише SELECT/INSERT (тест на ролі зі SELECT/INSERT: UPDATE/DELETE → 42501).
+- **Down:** таблиці й нові колонки видаляються; клавіатури `marketing_consent|campaign_offer` видаляються (під тимчасовим `NO FORCE`), потім старий CHECK `kind`; скинутий прапорець не відновлюється; згоди, кампанії, купони, погашення й журнал згод втрачаються.
+- `worker/src/testing/schema.sql` регенеровано (`dotnet ef migrations script --idempotent`, без BOM).
+
+### Уточнення (TASK-780)
+Воркер §26.8 реалізовано (`worker/`); відхилення й рішення:
+- **Код розбитий:** `jobs/beauty-campaign.ts` (вікно, `renderCampaignText`, клавіатура, `processCampaign`), `jobs/coupon-code.ts` (Crockford, `normalize`, `hash`, `hint`; нормалізація/хеш за §26.6, тестовий вектор .NET↔TS треба звірити в TASK-778), `adapters/pg-campaign.ts` (SQL, одна транзакція на одержувача). `delayUntilAllowed`, `utcOffsetMinutes`, `allowedFromHour/ToHour` видалено; `delayUntilWindow`/`inCampaignWindow` рахують 09:00–20:00 за IANA-зоною (DST через `Intl`).
+- **Порти** (`ports.ts`): `listCampaignAudience(id, limit, afterId?)` (курсор додано, щоб відкладені через вікно рядки не блокували решту), `listDueCampaigns`, `startCampaign`, `finishCampaignIfDrained`, `enqueueCampaignMessage` (результат `queued|deferred_window|deferred_limit|not_pending|skipped:{code}`; `not_pending` = рядок зайнятий/оброблений іншим поллером), `campaignSendGuard(messageId)`. `listLapsedClients(now, days, minIntervalDays?)`. `QueuePort.enqueueCampaign` = no-op.
+- **Персональний код** генерує воркер на етапі 9 (`crypto.randomInt`); у БД `code=NULL`, хеш + hint; повний код лише в тексті повідомлення. Спільний код — `beauty_coupons.code` спільного купона. Код не логується.
+- **Вікно:** зона = заклад останнього запису клієнта (будь-який статус), інакше заклад кампанії, інакше перший активний за назвою, інакше `WORKER_DEFAULT_TIMEZONE`. Фільтр outbox `listPendingOutbox` лишився (fallback — лише default-зона, не заклад кампанії): різниця може лише затримати відправку.
+- **«Улюблені» послуги `selective`:** послуги completed-записів клієнта за `WORKER_MARKETING_FAVORITE_SERVICES_DAYS` (365); акція без обмеження послуг — перетин є. Зона `{valid_to}`: кінець виключний, показується `valid_to − 1 с` у зоні закладу.
+- **Згода:** `CLIENT_SQL.marketingConsent` = рядок `telegram` з `level<>'none'` (+ `unsubscribed`/`pref none` як і раніше); `clients.marketing_consent` воркер більше не читає. Winback: рівні `full|selective` + частота (campaign recipients `queued|sent` і `winback:{client}:*` за N днів).
+- **Outbox:** для `campaign` перед відправкою `campaignSendGuard` → `failed` з `campaign_cancelled|consent_withdrawn`, одержувач `skipped`, персональний купон `revoked`. Фінальна помилка доставки → одержувач `failed` + код (`bot_blocked|chat_not_found|channel_inactive|token_missing`, інакше `send_failed`); `sent` → одержувач `sent` (`setMessageStatus`/`recordSendFailure`). Кампанія → `done`, коли немає `pending|queued` (перевірка кожен прохід `pollCampaigns`).
+- **Ліміт 200/добу:** рахується під `pg_advisory_xact_lock('marketing-daily:{tenant}')` за `created_at` повідомлень `campaign|winback` (не `failed`) за 24 год; `created_at` повідомлення = `now` воркера.
+- **Прапорці:** `WORKER_CAMPAIGNS_ENABLED`, `WORKER_WINBACK_ENABLED` (за замовч. false в `main.ts`; незаданий `campaignsEnabled/winbackEnabled` у ручному `PollContext` = увімкнено, як `reviewsEnabled`). Нові env: `WORKER_MARKETING_CLIENT_INTERVAL_DAYS` (7), `WORKER_CAMPAIGN_BATCH` (50, ≤500), `WORKER_MARKETING_FAVORITE_SERVICES_DAYS` (365). Поллер `beauty.campaigns` щохвилини.
+- **Тексти:** за §26.10 (не за чернеткою copywriter). `UNSUBSCRIBE_NOTE` → «Щоб не отримувати акції, напишіть «не надсилати акції» (або «Стоп» — тоді вимкнуться й нагадування).» (winback і канали без кнопок); з кнопками — `UNSUBSCRIBE_NOTE_BUTTONS`. Клавіатура `campaign_offer`: `co:{token}` + `i:mkoff`, `expires_at` = кінець купона | кінець акції | +30 днів.
+- **Наявні тести змінено (стара поведінка):** `jobs/beauty.test.ts` — видалено блок `campaign` (старі порти) і кампанійну частину тесту тексту відписки, перевірка рядка «STOP» → «Стоп»; `integration/pipeline.integration.test.ts`, `integration/optout.integration.test.ts` — seed додає рядок у `beauty_marketing_consents` (замість прапорця клієнта), перевірка рядка відписки. Нові тести: `integration/campaign.integration.test.ts` (17).
+- GRANT воркера (runbook, TASK-788/789): SELECT на `beauty_marketing_consents`, `beauty_promotion_services`, `beauty_coupons`, `beauty_campaigns`; INSERT/UPDATE `beauty_coupons`; UPDATE `beauty_campaigns`, `beauty_campaign_recipients`; INSERT `beauty_chat_keyboards`.
+
+### Уточнення (TASK-778)
+Купони й ціна (§26.6, §26.11.4) реалізовано без міграцій. Відхилення й рішення:
+- **Pricing:** `PromotionPricing.QuoteWithCoupon(original, location, service, at, publicRules, CouponCandidate?)` → `CouponQuote(Quote, CouponId?, Outcome)`. «Строго вигідніше» порівнюється за ОКРУГЛЕНОЮ фінальною ціною (купон дає меншу `Final`, ніж найкраща публічна акція; рівні → публічна, `not_better`). Старий `Quote` без змін.
+- **`access=code_only`:** `GetPromotionRulesAsync` (запис, публічний каталог, чат), `PromotionService.PreviewAsync` без `promotionId` і `get_active_promotions` віддають лише `public`. CRUD акцій (`GET/POST/PUT /promotions`) бачить обидва види: `UpsertPromotionRequest.Access` (null: при створенні `public`, при PUT без змін; `422 invalid_access`), `PromotionDto.Access`, `PromotionDto.ActiveCampaigns`. `PUT` акції кампанії `scheduled|sending` зі зміною умов → `409 promotion_in_campaign`; `isActive=false` дозволено.
+- **Коди:** `CouponCodes` (Application): `Normalize`, `Hash` (SHA-256 `"coupon:"+normalize`, вектор `ABCDE12345` → `60ca79e6…987b`), `Hint`, `GeneratePersonal` (10 символів, `RandomNumberGenerator`), `Display`. Персональний: у БД лише хеш і `code_hint`, `code=NULL`; повний код — тільки в `IssuedCoupon` (не серіалізується, не друкується). Загальний: 4..20 `[A-Za-z0-9]`, `code` у верхньому регістрі.
+- **`CouponService`:** `IssueAsync` (персональний, ≤ 3 спроби при колізії хешу), `CreateSharedAsync`/`ListSharedAsync`/`RevokeAsync` (лише shared; персональний → 404), `ResolveAsync` (Validate), `CheckAsync`, `ReleaseAsync`, `ListForClientAsync`. Погашення (Redeem) — НЕ окремий виклик, а крок транзакції `AddAppointmentAsync`: CAS `UPDATE beauty_coupons … WHERE status='active' AND (max_uses IS NULL OR uses_count<max_uses) AND valid_from<=now<valid_to AND (client_id IS NULL OR client_id=@client)` + INSERT погашення; 0 рядків або `23505` `ux_beauty_coupon_redemptions_active` → відкат, `409 coupon_unavailable` (публічний `409 coupon_invalid`).
+- **Відповіді:** staff — деталізовані `409 coupon_not_found|revoked|expired|not_started|exhausted|foreign_client|already_used|promotion_inactive`, `422 invalid_coupon_format`; чат і публічний шлях — єдиний `409 coupon_invalid` (публічна перевірка `GET /api/public/{slug}/coupons/check` → `404 coupon_invalid`). Публічний шлях ніколи не приймає `personal`.
+- **Ліміти (in-memory `CouponAttemptLimiter`, `Coupons:*`):** чат — невдалі спроби на розмову (понад `ChatInvalidPerConversationPerHour` → `429 coupon_locked`, код не розбирається, поки не мине година); публічний — усі звернення на IP (`PublicCheckPerIpPer10Min` → `429 rate_limited`); staff — на користувача (`StaffCheckPerUserPerMinute`). Нова помилка `ErrorKind.TooManyRequests` → HTTP 429.
+- **Повернення:** у `MarkCancelledAsync` (після успішного повернення коштів / збій оплати): погашення `active → released` + `uses_count−1` одним оператором; `release_reason=payment_failed`, якщо автора скасування ще немає (збій оплати), інакше `cancelled`. `ReleaseCancelAsync`, `no_show`, `completed`, перенос погашення не чіпають.
+- **Запис:** `CreateAppointmentRequest.CouponCode?` (staff, `RateKey` = id користувача); публічний `PublicCreateAppointmentRequest.CouponCode?` (відбиток запиту містить хеш коду) і `PublicAppointmentDto.CouponApplied`; чат — `ChatPrepareRequest.CouponId?/CampaignId?` (значення з пропозиції розмови передає КОД конвеєра TASK-782), `ChatSummary.CouponOutcome`, `ChatProposal.CouponId/CampaignId` (зберігається лише при `applied`). `AppointmentDto.Coupon {id, kind, codeHint, promotionName, outcome}` і `CampaignId`; `not_better|not_applicable` → запис без купона, купон не споживається.
+- **API (`beauty_marketing` + `Marketing:Enabled`, owner/admin, `no-store`, `403 forbidden_role` до тіла):** `GET/POST /coupons`, `PATCH /coupons/{id}` (`{status:"revoked"}`); `GET /clients/{id}/coupons` (`beauty_clients`, без кодів); `POST /coupons/check` (усі ролі персоналу, `beauty_booking`). `GET /campaigns/{id}/coupons/summary` — у TASK-779.
+- **Логи:** `coupon_created|revoked|released`, `coupon_check scope=… result=…` — без кодів і хешів. Не зроблено (інші задачі): редагування тіла вхідного повідомлення з кодом у чаті (TASK-782), `coupon_redeemed` лог.
+- Наявні тести не змінювалися. Нові: `Tests/Coupons/CouponTests.cs` (unit: розрахунок, коди; БД: code_only, CRUD, одноразовість, гонки, строки, вигідніша знижка, повернення, публічний шлях, підбір, логи, RLS, чат).
+
+### Уточнення (TASK-777)
+`MarketingConsentService` (Infrastructure/Data/Beauty) і API згоди в картці (§26.4, §26.11.2) реалізовані; уточнення:
+- **Єдиний запис** `SetConsentAsync(SetConsentCommand)`: транзакція (або приєднання до поточної) + `pg_advisory_xact_lock(hashtextextended('marketing-consent:{tenant}:{client}',0))`; рівень без змін -> `changed=false`, подія не пишеться. Похідний `marketing_consent` = рівень telegram `<> none` (push його не змінює); явне підвищення з `source=chat` скидає `unsubscribed`. `StopAsync` ставить `none/stop` для всіх наявних каналів + telegram (навіть без рядка) і `unsubscribed=true`; `MarkOfferedAsync` ставить `marketing_offered_at`.
+- **`admin_grant_disabled` = 409** (за §26.4/§26.11.2, не 403). Порядок перевірок підвищення адміном: `basis_required` (422) -> `admin_grant_disabled` (409). `invalid_basis`/`invalid_basis_note` перевіряються, коли `basis` задано; `basis` без нотатки = `invalid_basis_note`. Відсутній/невідомий `channel` у PUT = 422 `channel_unsupported`.
+- **Прапорці:** `Marketing:AdminGrantEnabled` читає сервіс; `RequireMarketingEnabledAttribute` (Api/Tenancy, Order 10, після модуля) дає `403 marketing_disabled` для staff API кампаній/купонів (TASK-779); API згоди ним НЕ закрите (працює за `Marketing:Enabled=false`). Модуль `beauty_marketing`: `BeautyModules.Marketing`; не входить у `BeautyModules.All` (не вмикається за замовчуванням), додано в `BeautyModules.Known` (приймається при створенні/зміні tenant).
+- `GET /clients/{id}` (картка): `client.marketing: {level, updatedAt?}` (`none` без `updatedAt`, якщо рядка немає). `basisNote` у історії бачить лише owner.
+- **Ігнор поля форми:** `PublicBookingService` завжди передає `MarketingConsent=false`; staff `POST /clients` теж не бере `marketingConsent`. Відкрите: staff `POST /appointments` з `client.marketingConsent=true` (EfBeautyStore.Booking, файл TASK-778) досі створює клієнта з прапорцем без рядка згоди - прибрати там.
+- Змінено наявний тест: `PublicBookingApiTests.honeypot_...` (прапорець `false`, таблиці згод порожні). Нові тести: `Tests/Marketing/MarketingConsentTests.cs`.
+
+### Уточнення (TASK-781)
+Транспорт §26.9.1 реалізовано в `Integrations/Channels/**`; уточнення:
+- `mc`: index 0..2 обов'язковий; `options[i] = {verb:"mc", label, level, textVersion}` (рівно 3, різні level, однакова непорожня textVersion <= 32). Рівень і версія беруться з БД; `CallbackResolution.ConsentLevel/ConsentTextVersion`. Споживає клавіатуру (CAS у `ChatButtonActions`, код `marketing_consent`); запис згоди - домен (TASK-782).
+- `co`: не споживає; `campaign_offer` вимагає `campaign_recipient_id` з recipient цієї розмови й клієнта (інакше `recipient_not_found` при створенні, `foreign_conversation` при натисканні, перевірка щоразу). Код результату `campaign_offer` з `CampaignRecipientId`; купон, `offer_*`, `clicked_at` - домен.
+- Строки: `marketing_consent` - `Marketing:ConsentKeyboardTtlHours` (168), нова замінює попередню активну; `campaign_offer` - явний `ExpiresAt` воркера, інакше 30 днів, не замінюється.
+- `Marketing:Enabled=false`: `mc`, `co`, `i:mkt` -> Disabled (T-action-stale, розмітка прибирається). `i:mkoff` діє завжди (також кнопки вимкнені, handoff) і не потребує клавіатури; `CampaignRecipientId` віддається лише за `callback_message_ref` кампанії цієї розмови й клієнта.
+- handoff: дозволено `mc|i:mkt|i:mkoff`, `co` -> handoff_blocked.
+- `setMyCommands`: `marketing «Новини й акції»` між `stop` і `help` (default і uk). Змінено наявний тест списку команд.
+- Згоду текстом не надаємо: для каналів без кнопок пропозиції згоди немає; для розсилки є текстовий фолбек (`MarketingKeyboards.OfferFallback`).
+- Парсер slash-команд (`ChatCommands.cs`, `/marketing` і псевдоніми) - у зоні TASK-782, не робився.
+
+### Уточнення (TASK-779)
+Аудиторії й кампанії (§26.5, §26.7, §26.11.3, §26.11.5) реалізовано без міграцій; відхилення й рішення:
+- **Шари:** `AudienceService` і `CampaignService` (Infrastructure/Data/Beauty, EF під RLS; сегмент і придатність обчислює тільки .NET, воркер сегмент не рахує), DTO й `CampaignTemplate` (валідація/приклад тексту) в `Application/Features/BeautyMarketing`, `CampaignsController`. Доступ: `[RequireModule("beauty_marketing")]` + `[RequireMarketingEnabled]` + `[ReminderRoles(owner, admin)]` + no-store; чужий id -> `404 campaign_not_found`. `PUT` спершу перевіряє існування кампанії (404), потім тіло.
+- **Перегляд аудиторії без кампанії:** `POST /marketing/audience/preview` `{type?, promotionId?, segment, locationId?}` (`type` за замовч. `promo`) -> `{matched, recipients, excluded{noTelegram, unsubscribed, noConsent, levelMismatch, frequency}}`, лише кількості. Перегляд кампанії доступний і `GET`, і `POST /campaigns/{id}/preview` (для чернетки; інакше `409 campaign_not_draft`); додано `limits.{dailyLimit, clientIntervalDays, estimatedDays}`, `window`, `warnings` (`promotion_ends_soon` — акція закінчується раніше за 3 дні + тривалість відправки, `coupon_expires_before_send`, `exceeds_daily_limit`, `no_buttons_channel` — немає активного Telegram-каналу з `assistant.enabled` і `buttons≠false`), `sampleText` (приклад: `{name}`=«Олена», код `ABCDE-FGHJK` або загальний).
+- **Сегмент:** дефолти підставляє сервіс (lapsed 60 днів; frequent 3/90). `serviceId` лише для `lapsed`; зайві параметри виду -> `422 invalid_segment`. Межі: `lapsed` включна (`<= now − N × 24 год`), `frequent` — `starts_at > now − M` (рівно M днів не рахується). Придатність/порядок причин — §26.5; «улюблені» послуги — completed за `Marketing:FavoriteServicesDays`; частота рахує одержувачів `queued|sent` за `Marketing:ClientMinIntervalDays` і повідомлення `winback:{clientId}:*` (не `failed`).
+- **Підтвердження — рішення:**
+  - код помилки зміненої кампанії `409 revision_changed` (за ТЗ задачі; контракт §26.7 мав `campaign_changed`), `revision` обов'язковий (`422 revision_required`).
+  - Все в одній транзакції під `pg_advisory_xact_lock(campaign:{tenant}:{id})` (серіалізує confirm/PUT/DELETE/cancel). Порядок: 404 → replay (той самий ключ: тіло збігається → `200`; інше `revision`/`scheduledAt` → `409 idempotency_conflict`) → інший ключ на не-чернетці → `409 campaign_not_draft` → `revision_changed` → `422 invalid_schedule` (`scheduledAt`: не раніше −5 хв, не далі `MaxScheduleDaysAhead`; береться з тіла, інакше з чернетки, інакше `now`) → акція (`409 promotion_inactive`; не змінює access: `422 promotion_must_be_public|promotion_not_code_only`; `409 promotion_in_campaign` — акція вже в іншій `scheduled|sending` кампанії) → купон (`409 coupon_unavailable`) → аудиторія (`409 audience_empty|audience_too_large`) → CAS + одержувачі `pending`. Ключ зберігається як SHA-256 у `confirm_key_hash`.
+  - **Персональні купони при підтвердженні НЕ випускаються:** повний код існує лише в тексті повідомлення, тож їх генерує воркер при постановці в чергу (§26.8 п. 9, TASK-780); `CouponService.IssueAsync` для кампаній не викликається. Перевіряється лише чинність `coupon_valid_to` (персональний) / загального купона на момент `scheduledAt`.
+- **Чернетка:** `POST/PUT` приймають `scheduledAt?` (зберігається; на підтвердженні `scheduledAt` з тіла має пріоритет). Персональний купон без `couponValidTo` -> кінець акції, без кінця акції `now + 30 днів` (колонка NOT NULL); `couponValidFrom|To` для `none|shared` -> `422 invalid_coupon_mode`; `couponValidTo <= From` -> `422 invalid_coupon_period`. Додаткові коди: `invalid_cursor`, `invalid_status`. `news` з акцією -> `422 invalid_type`, з купоном -> `422 invalid_coupon_mode`.
+- **Шаблон:** довжина ≤ 1000, керівні символи крім `\n` і HTML-подібні теги (`<…>`) -> `422 invalid_template`; незбалансовані `{}`; найгірший випадок підстановок (name 30, code 11, решта 80) має вкладатися в 3000 кодових точок. Рядки «Умови», код і відписку додає система (приклад у перегляді дзеркалить `renderCampaignText` воркера; кнопки — «🎟 Записатися зі знижкою|📅 Записатися» + «🔕 Не надсилати акції»).
+- **Скасування:** `pending -> skipped:campaign_cancelled`; `queued` НЕ чіпаємо — їх відсікає guard воркера перед відправкою (`failed campaign_cancelled`, одержувач `skipped`, персональний купон `revoked`); `sent|failed` без змін. Повтор на `cancelled` -> `200`; `done` -> `409 campaign_finished`.
+- **Статистика V1** (`GET /campaigns/{id}/stats`, §26.11.5): «записи кампанії» = запис із `campaign_id` АБО з купоном цієї кампанії (`coupons.campaign_id`); `bookings` без скасованих через збій оплати (`cancelled` без `cancelled_by_type`); `bookingsWithCoupon` — з `coupon_id`; `couponRedemptionsActive` — активні погашення таких записів; `revenue` = Σ `price_final` completed таких записів; `unsubscribedAfter` — клієнти з подією `level_to=none` з `campaign_id` кампанії або в `[sent_at, sent_at + UnsubscribeAttributionDays]` одержувача; `viewed` завжди `null`; `skipped` — словник причин, `failed{botBlocked, chatNotFound, other}`. Списку одержувачів немає. `GET /campaigns/{id}/coupons/summary` -> `{issued, redeemedActive, released, revoked}` за `coupons.campaign_id` (загальні купони кампанії сюди не входять).
+- **Ліміти й старт:** `Marketing:WritePerUserPerMinute` (30) / `PreviewPerUserPerMinute` (20), in-memory (`CouponAttemptLimiter`), `429 rate_limited` + `Retry-After: 60`. `Marketing:Enabled=true` поза Development без `Marketing:LegalGateApproved=true` — API не стартує. Логи: `campaign_created|updated|deleted|confirmed|cancelled campaign= user= [recipients=]` без текстів/імен/кодів.
+- **Виправлення TASK-777:** staff `POST /appointments` більше не створює клієнта з `marketingConsent=true` (прапорець примусово `false`, рядків згоди немає).
+- **Golden-вектор Node↔.NET:** `abcde-12345` -> `60ca79e65ce75a6d75b70701e1316a2687f621fe41be01cd4fda45234af1987b` збігається в .NET (`CampaignTests`, `CouponTests`) і воркері (`worker/src/jobs/coupon-code.test.ts`, лише тест).
+- Наявні тести не змінювались. Нові: `Tests/Marketing/CampaignTests.cs`.
+
+### Уточнення (TASK-782)
+Розмовна логіка згоди й купона в чаті (§26.9.2-§26.9.3) реалізована в `Infrastructure/AI/Beauty/Conversations/**` (новий `ConversationTurnProcessor.Marketing.cs`, `ChatMarketingParser`, `ChatCouponOffers`); без міграцій. Уточнення й відхилення:
+- **Нумерація:** у завданні «потік згоди §26.7 / купон §26.8» - це §26.9.2 / §26.9.3 (§26.7-§26.8 - життєвий цикл і воркер).
+- **Прапорець:** `Marketing:Enabled` читає `ChatButtonsOptions.MarketingEnabled` (одне джерело з транспортом). `false`: `/marketing` -> T-text-only, `i:mkt`/`mc`/`co` -> T-action-stale, пропозиції згоди, текстових аліасів меню й кодів текстом немає (повідомлення йдуть до моделі як раніше). Працює завжди: `i:mkoff`, текст «не надсилати акції»/«без акцій», «Стоп» (пише `none/stop` для всіх каналів навіть за вимкненого маркетингу; текст T-stop у цьому режимі - старий).
+- **Порядок кроків ходу:** ... 4a' телефон -> 4a нагадування -> **4b код купона** -> **4c меню «акції» / відписка текстом** -> 5 підтвердження -> LLM. Код-подібне повідомлення в пакеті з кількох виділяється окремим ходом (`NarrowForCouponAsync`), щоб код не потрапив у пакет до моделі.
+- **Розпізнавання коду:** `^[A-Za-z0-9 -]{4,24}$` після необов'язкового префікса `код|промокод|купон[:]`; кандидат = префікс, АБО персональний формат (10 символів Crockford після `normalize`), АБО збіг хешу загального коду (`ICouponStore.FindByHashAsync`). Відхилення від буквального §26.9.3: десять ЛИШЕ ЦИФР без префікса не вважається персональним форматом (це номер телефону, наприклад `0501112233`); з префіксом `код 0501112233` або при збігу хешу - так.
+- **Невдалі спроби:** єдина T-coupon-invalid; після `Coupons:ChatInvalidPerConversationPerHour` -> T-coupon-locked раз на годину, далі тиша (повідомлення з кодом усе одно маскується); у locked-стані загальний код розпізнається за хешем лише для маскування, без відповіді про його чинність. Тіло вхідного -> `[код купона]` у тій самій транзакції (`CommitSpec.RedactInboundBody`). Невдача ходу до коміту лишає сире тіло до `MaxTurnAttempts` (як для номера телефону).
+- **suggest:** `/marketing`, `mc`, `i:mkt`, `i:mkoff` і відписка текстом відповідають шаблоном; `co` і код текстом ставлять пропозицію розмови й маскують тіло БЕЗ відповіді (nothing is sent automatically). **handoff:** `mc|i:mkt|i:mkoff` і текст «не надсилати акції», `/marketing` працюють (відповідь шаблоном); `co` -> T-action-handoff; код текстом і аліаси меню текстом тримаються для менеджера (held, без маскування).
+- **Пропозиція згоди:** окреме повідомлення `…:m` у транзакції відповіді, `marketing_offered_at` через `MarkOfferedAsync`; журнал `marketing_offer`. Після T-confirmed - лише коли вибір нагадування вже є (інакше після T-reminder-set текстом чи кнопкою `rc`). Кулдаун `Marketing:OfferCooldownDays` (`ChatAssistantOptions.MarketingOfferCooldownDays`), версія тексту `Marketing:ConsentTextVersion` (`MarketingConsentTextVersion`). Клієнт беруть з записаного запису (`appt.ClientId`), бо `conversation.client_id` на момент ходу може бути ще порожнім.
+- **`mc`:** `SetConsentAsync(source=chat, via=button, textVersion з options)` у транзакції відповіді; журнал `marketing_consent`. Те саме натискання повторно - без нової події. Меню без клієнта - T-marketing-no-client; без кнопок на каналі меню показує стан і підказку про «не надсилати акції» (згода лише кнопкою).
+- **`co`:** `recipient.coupon_id` -> інакше спільний купон кампанії (`campaign.shared_coupon_id`) -> інакше без купона (лише `offer_campaign_id`, відповідь T-book-start). Перевірка `CouponService.ResolveAsync` за `CouponId` БЕЗ ключа лічильника спроб (id не вгадується, чат-лічильник не збільшується). Нова пропозиція замінює активну; активна пропозиція запису (`prepared|shown`) стає `superseded`, а її клавіатури гаснуть (ціна підсумку застаріла).
+- **Ціна й запис:** `ChatCouponOffers.PrepareAsync` додає `CouponId/CampaignId` до `ChatPrepareRequest` з `offer_*` (`ClientChatPortAdapter` для `prepare_booking` моделі і `ChatButtonActions.SlotPickAsync` для кнопки слота). Недійсний купон при підготовці (`coupon_invalid|coupon_locked`) -> пропозиція знімається, підсумок за звичайною ціною. `ChatBookingSummaryDto.CouponOutcome` -> T-summary: `applied` «Ціна: 400 грн (замість 500 грн, купон «назва»)»; `not_better` / `not_applicable` - окремий рядок після ціни. Після запису з купоном `offer_*=NULL`; `not_better` пропозицію не знімає (купон не споживається). `coupon_unavailable|coupon_invalid` при «Так»/`bk` -> T-coupon-unavailable, `offer_*=NULL`, пропозиція `failed`; для кнопки додано код `ButtonResultCodes.CouponUnavailable` та мапінг у `ChatButtonActions.ConfirmAsync` (інакше було б `booking_failed` handoff).
+- **ШІ:** блок «ФАКТИ ЗАКЛАДУ» доповнює `IChatMarketingFactsPort` (рядок «Розсилки акцій - лише за згодою клієнта; керувати - /marketing.» лише за `Marketing:Enabled`; рядок про дійсну знижку розмови без коду купона); `ChatContextBuilder.BuildAsync(…, conversationId)`. `PromptComposer.ChatRules` +«Не обіцяй знижок, купонів і кодів, яких немає у фактах чи tools; не вигадуй і не повторюй кодів.» `ChatPolicyFacts` і `PolicyClaimGuard` не змінювались (нові шаблони й факти їх не зачіпають).
+- **«Стоп»:** `ReminderStopHandler` (необов'язкова залежність `MarketingConsentService`) викликає `StopAsync` у тій самій транзакції; нова константа `ChatTemplates.StopMarketing` (T-stop з §26.10) використовується за `Marketing:Enabled=true`, `ChatTemplates.Stop` лишився для вимкненого маркетингу.
+- **Тексти:** за §26.10; де копірайтер (`marketing-texts.md` v1) розходиться з §26 - слідуємо §26: коротший T-marketing-offer без описів рівнів і підпис «Лише акції на мої послуги», T-marketing-set-none без «Передумаєте - /marketing», T-coupon-invalid без «Перевірте код…», T-coupon-locked «Спробуйте пізніше», рядки not_better/not_applicable без «Запис - за звичайною ціною». Не реалізовано (немає в §26): T-marketing-unchanged, T-marketing-off-coupon, T-coupon-released(-expired), хвіст про вимкнені нагадування після «Стоп». Нові тексти без аналога в §26: меню для каналу без кнопок («…напишіть «не надсилати акції»»).
+- **Журнал `beauty_ai_actions`:** `marketing_consent`, `marketing_offer`, `campaign_click` (раз на одержувача), `coupon_offer`; payload без коду купона й без ПД.
+- **Не в зоні (відкрито):** лінивий клієнт після «Стоп» до першого запису не отримує рядка `none/stop` у `beauty_marketing_consents` (`EfChatBookingStore.EnsureClientAsync`, §26.4) - зона TASK-777; `setMyCommands`/транспорт без змін.
+- **Наявні тести:** змінено не було. Нові: `Tests/Conversations/ChatMarketingTests.cs` (юніт: розбір, шаблони, розкладка, summary, ChatRules/PolicyClaimGuard; БД: `/marketing`, `mc` ×3 + версія в події, пропозиція один раз, «Стоп» поверх, `mkoff` за вимкненого маркетингу, `co` -> один запис із купоном, `not_better`, чужий/старий/використаний токен, відкликаний купон на підтвердженні, код текстом валідний/невалідний/ліміт/загальний/пакет, сканер коду, handoff, suggest, факти/ChatRules, прапорець вимкнено).

@@ -646,7 +646,7 @@ Move or change status.
 
 **Response:** `200` AppointmentDto.
 
-**Errors:** `409 slot_unavailable|specialist_unavailable`, `422 validation_failed`, `404 appointment_not_found`.
+**Errors:** `409 slot_unavailable|specialist_unavailable|location_closed|outside_location_hours|appointment_closed`, `422 slot_in_past|outside_working_hours|invalid_status|nothing_to_change`, `404 appointment_not_found`. `completed` фіксує знімок собівартості (§24.4); закритий запис (completed/cancelled/no_show) не змінюється (`409 appointment_closed`).
 
 ### POST /beauty/appointments/{id}/cancel
 **Access:** owner, admin, specialist (specialist: self only)
