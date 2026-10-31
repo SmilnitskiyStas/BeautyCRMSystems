@@ -393,13 +393,17 @@ public sealed class ChatMarketingPipelineTests : IClassFixture<PostgresRlsFixtur
         Assert.Equal(ChatTemplates.TextOnly, e.H.Bot.Messages.Last().Text);
         await e.H.PressAsync(e.S, "i:mkt", "1");
         Assert.Equal(ChatTemplates.ActionStale, e.H.Bot.Messages.Last().Text);
-        // «акції» і код-подібний текст - звичайні повідомлення для моделі, тіло не маскується
+        // «акції» і код-подібний текст - звичайні повідомлення для моделі; TASK-790 (L10): код за шаблоном маскується в тілі й за вимкненого маркетингу
         e.H.Ai.Enqueue(ChatHarness.Text("Вітаю."), ChatHarness.Text("Не розумію."));
         await e.H.SayAsync(e.S, "акції");
         await e.H.SayAsync(e.S, Code);
         Assert.Equal(2, e.H.Ai.Calls.Count);
         await using (var ctx = _db.CreateContext(e.Tenant))
-            Assert.Contains(await ctx.Messages.AsNoTracking().Where(m => m.Direction == MessageDirection.Inbound).Select(m => m.Body).ToListAsync(), b => b == Code);
+        {
+            var bodies = await ctx.Messages.AsNoTracking().Where(m => m.Direction == MessageDirection.Inbound).Select(m => m.Body).ToListAsync();
+            Assert.DoesNotContain(bodies, b => b.Contains("ABCDE"));
+            Assert.Contains(bodies, b => b == ChatMarketingParser.CodeBodyRedacted);
+        }
         // перша пропозиція згоди не показується; «Стоп» відповідає старим текстом, але відписку в таблиці згод фіксує
         await SetConsentRowAsync(e, "full");
         await e.H.SayAsync(e.S, "Стоп");

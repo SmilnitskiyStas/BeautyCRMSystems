@@ -511,8 +511,78 @@ public sealed class CampaignTests(AuthApiFixture fx) : IClassFixture<AuthApiFixt
             Assert.Equal("marketing_disabled", await CodeOf(r));
             NoStore(r);
         }
-        Assert.Equal("marketing_disabled", await CodeOf(await off.Client.SendAsync(Http(HttpMethod.Get, "/api/beauty/campaigns", w.Owner))));
+        // TASK-790 (M4): читання кампаній доступне й при Marketing:Enabled=false (було marketing_disabled)
+        Assert.Equal(HttpStatusCode.OK, (await off.Client.SendAsync(Http(HttpMethod.Get, "/api/beauty/campaigns", w.Owner))).StatusCode);
         Assert.Equal("marketing_disabled", await CodeOf(await off.Client.SendAsync(Http(HttpMethod.Post, "/api/beauty/marketing/audience/preview", w.Owner, new { }))));
+    }
+
+    // ---- TASK-790 (рев'ю безпеки маркетингу)
+
+    [SkippableFact]
+    public async Task m4_cancel_and_reads_stay_available_when_marketing_is_disabled_but_writes_and_confirm_do_not()
+    {
+        NeedDb();
+        var w = await NewWorldAsync();
+        var on = NewEnv();
+        var id = await CreateAsync(on, w.Owner, Req(await PromotionAsync(w)));
+        var off = NewEnv(marketing: false);
+
+        foreach (var url in new[] { "/api/beauty/campaigns", Camp(id), Camp(id, "/stats"), Camp(id, "/coupons/summary") })
+            Assert.Equal(HttpStatusCode.OK, (await off.Client.SendAsync(Http(HttpMethod.Get, url, w.Owner))).StatusCode);
+        foreach (var (m, url, body, key) in new (HttpMethod, string, object?, string?)[]
+                 {
+                     (HttpMethod.Post, Camp(id, "/confirm"), new { revision = 1 }, "key-12345678"), (HttpMethod.Put, Camp(id), Req(null), null),
+                     (HttpMethod.Post, Camp(id, "/preview"), null, null), (HttpMethod.Delete, Camp(id), null, null),
+                 })
+        {
+            var r = await off.Client.SendAsync(Http(m, url, w.Owner, body, key));
+            Assert.Equal(HttpStatusCode.Forbidden, r.StatusCode);
+            Assert.Equal("marketing_disabled", await CodeOf(r));
+        }
+        var cancel = await off.Client.SendAsync(Http(HttpMethod.Post, Camp(id, "/cancel"), w.Owner));
+        Assert.Equal(HttpStatusCode.OK, cancel.StatusCode);
+        Assert.Equal("cancelled", (await J(cancel)).GetProperty("status").GetString());
+        // ідемпотентно
+        Assert.Equal(HttpStatusCode.OK, (await off.Client.SendAsync(Http(HttpMethod.Post, Camp(id, "/cancel"), w.Owner))).StatusCode);
+
+        // без модуля beauty_marketing скасування недоступне так само, як решта API
+        var noModule = await NewWorldAsync(marketingModule: false);
+        Assert.Equal(HttpStatusCode.Forbidden, (await off.Client.SendAsync(Http(HttpMethod.Post, Camp(id, "/cancel"), noModule.Owner))).StatusCode);
+    }
+
+    [SkippableFact]
+    public async Task l7_coupon_check_hides_detailed_reasons_from_specialists_and_coupon_writes_are_rate_limited()
+    {
+        NeedDb();
+        var w = await NewWorldAsync();
+        await using (var ctx = fx.Db.CreateContext(w.Id))
+        {
+            ctx.Add(new ServicePrice { ServiceId = w.B.ServiceId, LocationId = null, Price = 500m });
+            await ctx.SaveChangesAsync();
+        }
+        var e = NewEnv(extra: new() { ["Coupons:WritePerUserPerMinute"] = "2" });
+        var probe = new { code = "NOSUCH77", locationId = w.B.LocationId, serviceId = w.B.ServiceId };
+
+        var owner = await e.Client.SendAsync(Http(HttpMethod.Post, "/api/beauty/coupons/check", w.Owner, probe));
+        Assert.Equal("coupon_not_found", await CodeOf(owner)); // owner/admin бачать причину
+        var spec = await e.Client.SendAsync(Http(HttpMethod.Post, "/api/beauty/coupons/check", w.Spec, probe));
+        Assert.Equal(HttpStatusCode.Conflict, spec.StatusCode);
+        Assert.Equal("coupon_invalid", await CodeOf(spec)); // майстер - узагальнена відповідь
+        var badFormat = await e.Client.SendAsync(Http(HttpMethod.Post, "/api/beauty/coupons/check", w.Spec, new { code = "!", locationId = w.B.LocationId, serviceId = w.B.ServiceId }));
+        Assert.Equal("coupon_invalid", await CodeOf(badFormat));
+
+        var promo = await PromotionAsync(w, "code_only");
+        var statuses = new List<HttpStatusCode>();
+        HttpResponseMessage? last = null;
+        foreach (var code in new[] { "ZEBRA771", "ZEBRA772", "ZEBRA773" })
+        {
+            last = await e.Client.SendAsync(Http(HttpMethod.Post, "/api/beauty/coupons", w.Owner,
+                new { promotionId = promo, code, validFrom = DateTimeOffset.UtcNow.AddDays(-1), validTo = DateTimeOffset.UtcNow.AddDays(5) }));
+            statuses.Add(last.StatusCode);
+        }
+        Assert.Equal([HttpStatusCode.Created, HttpStatusCode.Created, HttpStatusCode.TooManyRequests], statuses);
+        Assert.True(last!.Headers.Contains("Retry-After"));
+        Assert.Equal("rate_limited", await CodeOf(last));
     }
 
     [SkippableFact]

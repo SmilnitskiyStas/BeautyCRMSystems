@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using BeautyCrm.Application.Features.BeautyAuth;
 using BeautyCrm.Application.Features.BeautyChatBooking;
 using BeautyCrm.Application.Features.BeautyCommon;
+using BeautyCrm.Application.Features.BeautyCoupons;
 using BeautyCrm.Application.Features.BeautyPublicBooking;
 using BeautyCrm.Infrastructure.AI.Beauty;
 using BeautyCrm.Infrastructure.AI.Beauty.Adapters;
@@ -67,11 +68,13 @@ public sealed partial class InboxService(
     /// <summary>Натискання кнопки показується лише текстом-міткою <c>"[кнопка] {підпис}"</c>; сирий callback_data у тілі неможливий (§23.10).</summary>
     private static string InboxBody(Message m) =>
         m.Kind == "callback" && !m.Body.StartsWith(CallbackBody.Prefix, StringComparison.Ordinal) ? CallbackBody.Prefix
-        : m.Kind == InboundKinds.Contact ? InboundKinds.ContactBody : m.Body; // §25.4: тіло контакту лише маркер
+        : m.Kind == InboundKinds.Contact ? InboundKinds.ContactBody
+        : CouponCodeMasker.Mask(m.Body); // §25.4: тіло контакту лише маркер; TASK-790 (M1): код купона в API не віддається
 
     private static string Preview(string? body)
     {
         if (string.IsNullOrEmpty(body)) return "";
+        body = CouponCodeMasker.Mask(body);
         var head = body.Length > PreviewLength * 2 ? body[..(PreviewLength * 2)] : body;
         var flat = Whitespace().Replace(string.Concat(head.Select(ch => char.IsControl(ch) ? ' ' : ch)), " ").Trim();
         return string.Concat(flat.EnumerateRunes().Take(PreviewLength).Select(r => r.ToString()));
@@ -301,7 +304,7 @@ public sealed partial class InboxService(
         var proposal = await db.ChatBookingProposals.AsNoTracking()
             .Where(p => p.ConversationId == id && ActiveProposal.Contains(p.Status) && p.ExpiresAt > now)
             .OrderByDescending(p => p.CreatedAt)
-            .Select(p => new InboxProposalDto(p.Status, p.ExpiresAt, p.SummaryMessage != null ? p.SummaryMessage.Body : null))
+            .Select(p => new InboxProposalDto(p.Status, p.ExpiresAt, p.SummaryMessage != null ? CouponCodeMasker.Mask(p.SummaryMessage.Body) : null))
             .FirstOrDefaultAsync(ct);
 
         IReadOnlyList<InboxAppointmentDto> upcoming = [];

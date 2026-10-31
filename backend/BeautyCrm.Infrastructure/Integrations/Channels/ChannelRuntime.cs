@@ -138,7 +138,9 @@ public sealed class OutboundDispatcher(
 }
 
 /// <summary>Реалізація IChannelMessageRepository над beauty_conversations / beauty_messages.</summary>
-public sealed class EfChannelMessageRepository(BeautyDbContext db, ChannelRequestContext context, ChatPhoneOptions? phone = null) : IChannelMessageRepository
+public sealed class EfChannelMessageRepository(
+    BeautyDbContext db, ChannelRequestContext context, ChatPhoneOptions? phone = null,
+    InboundUnsubscribeHandler? unsubscribe = null, BeautyCrm.Infrastructure.AI.Beauty.Conversations.ChatAssistantOptions? assistant = null) : IChannelMessageRepository
 {
     private const string UniqueViolation = "23505";
 
@@ -165,10 +167,18 @@ public sealed class EfChannelMessageRepository(BeautyDbContext db, ChannelReques
             // Валідуємо до INSERT: порушення CHECK віддало б рядок з номером у PostgresException.Detail.
             var verdict = !isContact ? null : m.ContactVerdict is ContactVerdicts.Own or ContactVerdicts.Invalid ? m.ContactVerdict : ContactVerdicts.Foreign;
             if (verdict == ContactVerdicts.Own && !ContactPhoneNormalizer.IsE164(m.ContactPhone)) verdict = ContactVerdicts.Invalid;
+            // TASK-790 (H1): відписка на вході, транзакційно з прийомом, незалежно від ШІ-конвеєра. Конвеєр вимкнено - повідомлення processed (мовчки).
+            var unsub = unsubscribe is null ? InboundUnsubscribeKind.None
+                : InboundUnsubscribeHandler.Classify(m, conv.PendingPrompt == BeautyCrm.Infrastructure.AI.Beauty.Conversations.ReminderChoiceMenu.PromptKind
+                    && conv.PendingPromptExpiresAt is { } pe && m.ReceivedAt < pe);
+            var pipelineOn = unsub != InboundUnsubscribeKind.None && assistant is { Enabled: true }
+                && BeautyCrm.Infrastructure.AI.Beauty.Conversations.ConversationTurnProcessor.ChannelAssistantEnabled(
+                    await db.Channels.AsNoTracking().Where(c => c.Id == channel.ChannelId).Select(c => c.Settings).FirstOrDefaultAsync(ct));
+            await using var tx = db.Database.CurrentTransaction is null ? await db.Database.BeginTransactionAsync(ct) : null;
             db.Messages.Add(new Message
             {
                 Id = Guid.NewGuid(), ConversationId = conv.Id, Direction = MessageDirection.Inbound, SenderType = MessageSenderType.Client,
-                Body = isContact ? InboundKinds.ContactBody : m.Text, Kind = m.Kind, ExternalMessageId = m.ExternalMessageId, SentAt = m.ReceivedAt, Status = "received",
+                Body = isContact ? InboundKinds.ContactBody : m.Text, Kind = m.Kind, ExternalMessageId = m.ExternalMessageId, SentAt = m.ReceivedAt, Status = unsub != InboundUnsubscribeKind.None && !pipelineOn ? "processed" : "received",
                 IdempotencyKey = key,
                 // TASK-750 (§23.4): лише для kind=callback (CHECK ck_beauty_messages_callback_fields); callback_data = null, якщо формат невалідний.
                 CallbackData = m.Kind == InboundKinds.Callback ? m.CallbackData : null,
@@ -179,6 +189,8 @@ public sealed class EfChannelMessageRepository(BeautyDbContext db, ChannelReques
             try
             {
                 await db.SaveChangesAsync(ct);
+                if (unsub != InboundUnsubscribeKind.None) await unsubscribe!.ApplyAsync(conv.Id, conv.ClientId, m, unsub, ct);
+                if (tx is not null) await tx.CommitAsync(ct);
                 fresh.Add(m with { ConversationId = conv.Id });
             }
             catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: UniqueViolation })

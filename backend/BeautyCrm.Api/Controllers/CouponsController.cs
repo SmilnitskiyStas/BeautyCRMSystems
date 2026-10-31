@@ -3,6 +3,7 @@ using BeautyCrm.Api.Infrastructure;
 using BeautyCrm.Api.Tenancy;
 using BeautyCrm.Application.Features.BeautyAuth;
 using BeautyCrm.Application.Features.BeautyCoupons;
+using BeautyCrm.Application.Features.BeautyStaff;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
@@ -35,8 +36,12 @@ public sealed class CouponsController(CouponService coupons) : ControllerBase
     [HttpPost]
     [RequestSizeLimit(2 * 1024)]
     [ProducesResponseType<SharedCouponDto>(StatusCodes.Status201Created)]
-    public async Task<IActionResult> Create([FromBody] CreateSharedCouponRequest request, CancellationToken ct) =>
-        this.ToResult(await coupons.CreateSharedAsync(request, this.UserId(), ct), c => StatusCode(StatusCodes.Status201Created, c));
+    public async Task<IActionResult> Create([FromBody] CreateSharedCouponRequest request, CancellationToken ct)
+    {
+        var r = await coupons.CreateSharedAsync(request, this.UserId(), ct);
+        if (!r.IsOk && r.Error!.Kind == BeautyCrm.Application.Features.BeautyCommon.ErrorKind.TooManyRequests) Response.Headers.RetryAfter = "60";
+        return this.ToResult(r, c => StatusCode(StatusCodes.Status201Created, c));
+    }
 
     /// <summary>Лише {status: "revoked"} (ідемпотентно). Персональні купони сюди не потрапляють (404).</summary>
     [HttpPatch("{id:guid}")]
@@ -45,6 +50,7 @@ public sealed class CouponsController(CouponService coupons) : ControllerBase
     {
         if (request.Status != "revoked") return UnprocessableEntity(new ApiError("invalid_status", "status must be revoked."));
         var r = await coupons.RevokeAsync(id, this.UserId(), ct);
+        if (!r.IsOk && r.Error!.Kind == BeautyCrm.Application.Features.BeautyCommon.ErrorKind.TooManyRequests) Response.Headers.RetryAfter = "60";
         return r.IsOk ? Ok(new { id, status = "revoked" }) : this.ToError(r.Error!);
     }
 }
@@ -84,8 +90,13 @@ public sealed class CouponCheckController(CouponService coupons) : ControllerBas
             return UnprocessableEntity(new ApiError("invalid_request", "locationId and serviceId are required."));
         var r = await coupons.CheckAsync(new CouponUse(CouponScope.Staff, request.Code, RateKey: actor.UserId.ToString()), loc, svc, request.ClientId, ct);
         if (!r.IsOk && r.Error!.Kind == BeautyCrm.Application.Features.BeautyCommon.ErrorKind.TooManyRequests) Response.Headers.RetryAfter = "60";
+        // TASK-790 (L7): майстер (specialist) не отримує деталізованих причин - підбір і розвідка станів кодів; owner/admin бачать повні коди
+        if (!r.IsOk && !StaffRoles.IsManager(actor) && IsCodeReason(r.Error!.Code))
+            return this.ToError(BeautyCrm.Application.Features.BeautyCommon.Error.Conflict(CouponService.Invalid, "The code is not valid."));
         return this.ToResult(r);
     }
+
+    private static bool IsCodeReason(string code) => code.StartsWith("coupon_", StringComparison.Ordinal) || code is "invalid_coupon_format" or "promotion_inactive";
 }
 
 /// <summary>403 marketing_disabled, якщо Marketing:Enabled=false (§26.2). Працює до прив'язки тіла.</summary>

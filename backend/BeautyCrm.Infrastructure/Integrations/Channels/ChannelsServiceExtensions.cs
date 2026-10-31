@@ -32,6 +32,7 @@ public static class ChannelsServiceExtensions
         services.AddSingleton<ChannelRegistry>();
         services.TryAddSingleton<ChannelRequestContext>();
         services.TryAddSingleton<IChannelCredentialsProvider, AmbientChannelCredentialsProvider>();
+        services.TryAddScoped<InboundUnsubscribeHandler>(); // TASK-790 (H1): відписка на вході
         services.TryAddScoped<IChannelMessageRepository, EfChannelMessageRepository>();
         services.TryAddSingleton<ConversationSignals>(); // сигнал для ConversationWorker (TASK-728); замінює лише-логуючу DeferredChannelQueue
         services.TryAddScoped<IChannelQueue, ChannelSignalQueue>();

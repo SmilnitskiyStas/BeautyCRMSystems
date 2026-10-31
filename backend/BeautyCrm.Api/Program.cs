@@ -60,6 +60,12 @@ builder.Services.Replace(ServiceDescriptor.Singleton(new BeautyCrm.Application.F
     PublicCheckPerIpPer10Min = builder.Configuration.GetValue("Coupons:PublicCheckPerIpPer10Min", 10),
     StaffCheckPerUserPerMinute = builder.Configuration.GetValue("Coupons:StaffCheckPerUserPerMinute", 30),
     ConversationHoldHours = builder.Configuration.GetValue("Coupons:ConversationHoldHours", 72),
+    ChatBareLookupPerConversationPerHour = builder.Configuration.GetValue("Coupons:ChatBareLookupPerConversationPerHour", 20),
+    ChatBareLookupPerTenantPerHour = builder.Configuration.GetValue("Coupons:ChatBareLookupPerTenantPerHour", 200),
+    WritePerUserPerMinute = builder.Configuration.GetValue("Coupons:WritePerUserPerMinute", 20),
+    BlockedCodes = new HashSet<string>(BeautyCrm.Application.Features.BeautyCoupons.CouponOptions.DefaultBlockedCodes
+        .Concat((builder.Configuration["Coupons:BlockedCodes"] ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(w => w.ToUpperInvariant())), StringComparer.Ordinal),
 }));
 builder.Services.AddScoped<ITenantModuleProvider, DbTenantModuleProvider>(); // tenants.modules
 builder.Services.AddBeautyDbRoleGuard(); // старт падає, якщо runtime-роль БД superuser/BYPASSRLS (H1)

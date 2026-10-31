@@ -14,8 +14,14 @@ namespace BeautyCrm.Infrastructure.Integrations.Channels.Buttons;
 /// Усі запити йдуть під RLS tenant-а контексту; чужий tenant = токен не знайдено. Логи: лише id і коди (без токена, callback_data,
 /// chat id, підписів і текстів). Виконується в поточній транзакції контексту або у власній.
 /// </summary>
-public sealed class ChatKeyboardService(BeautyDbContext db, ChatButtonsOptions opts, TimeProvider clock, ILogger<ChatKeyboardService> log)
+public sealed class ChatKeyboardService(
+    BeautyDbContext db, ChatButtonsOptions opts, TimeProvider clock, ILogger<ChatKeyboardService> log,
+    BeautyCrm.Infrastructure.Data.Beauty.MarketingModuleGate? marketingModule = null)
 {
+    /// <summary>Marketing:Enabled І модуль beauty_marketing tenant-а (TASK-790, L4).</summary>
+    private async Task<bool> MarketingOnAsync(CancellationToken ct) =>
+        opts.MarketingEnabled && (marketingModule is null || await marketingModule.IsEnabledAsync(ct));
+
     private static readonly TimeSpan DefaultReminderChoiceTtl = TimeSpan.FromHours(24);
 
     // ------------------------------------------------------------------ створення
@@ -185,7 +191,7 @@ public sealed class ChatKeyboardService(BeautyDbContext db, ChatButtonsOptions o
             // «Стоп» - відписка від власних нагадувань, діє завжди; решта безстанових кнопок старої клавіатури -> Disabled + прибрати розмітку.
             if (!buttonsOn && addr.Verb != ButtonVerbs.Stop)
                 return Done(CallbackOutcome.Disabled, addr, await KeyboardOfMessageAsync(conversationId, callbackMessageRef, ct));
-            if (addr.Verb == ButtonVerbs.MarketingMenu && !opts.MarketingEnabled)
+            if (addr.Verb == ButtonVerbs.MarketingMenu && !await MarketingOnAsync(ct))
                 return Done(CallbackOutcome.Disabled, addr, await KeyboardOfMessageAsync(conversationId, callbackMessageRef, ct));
             return handoff && !ButtonVerbs.AllowedInHandoff(addr.Verb) ? Done(CallbackOutcome.HandoffBlocked, addr) : Done(CallbackOutcome.Stateless, addr);
         }
@@ -244,7 +250,7 @@ public sealed class ChatKeyboardService(BeautyDbContext db, ChatButtonsOptions o
         // вимкнені кнопки: стара клавіатура -> Stale + прибирання
         if (!buttonsOn) return Done(CallbackOutcome.Disabled, addr, info, option, pos);
         // §26.2: Marketing:Enabled=false -> mc / co як застарілі (T-action-stale); відписка (i:mkoff) діє вище
-        if (addr.Verb is ButtonVerbs.MarketingConsent or ButtonVerbs.CampaignOffer && !opts.MarketingEnabled)
+        if (addr.Verb is ButtonVerbs.MarketingConsent or ButtonVerbs.CampaignOffer && !await MarketingOnAsync(ct))
             return Done(CallbackOutcome.Disabled, addr, info, option, pos);
 
         // 8. політика handoff

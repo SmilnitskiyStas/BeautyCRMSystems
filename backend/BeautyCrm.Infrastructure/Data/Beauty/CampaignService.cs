@@ -23,8 +23,12 @@ namespace BeautyCrm.Infrastructure.Data.Beauty;
 /// </summary>
 public sealed class CampaignService(
     BeautyDbContext db, TenantContext tenant, AudienceService audience, IConfiguration config, CouponAttemptLimiter limiter,
-    TimeProvider clock, ILogger<CampaignService> log)
+    TimeProvider clock, ILogger<CampaignService> log, MarketingModuleGate? moduleGate = null)
 {
+    /// <summary>TASK-790 (L4): модуль beauty_marketing tenant-а (захист у глибину поза HTTP-фільтром). Скасування й читання не залежать від нього.</summary>
+    private async Task<Error?> ModuleGuardAsync(CancellationToken ct) =>
+        moduleGate is null || await moduleGate.IsEnabledAsync(ct) ? null : Error.Forbidden("module_disabled", "Module 'beauty_marketing' is not enabled.");
+
     private int Cfg(string key, int fallback) => int.TryParse(config[key], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : fallback;
     private bool CfgBool(string key) => bool.TryParse(config[key], out var b) && b;
 
@@ -183,6 +187,7 @@ public sealed class CampaignService(
     public async Task<Result<CampaignDto>> CreateAsync(Actor actor, CampaignRequest req, CancellationToken ct)
     {
         if (Guard(actor) is { } denied) return denied;
+        if (await ModuleGuardAsync(ct) is { } noModule) return noModule;
         if (RateWrite(actor) is { } limited) return limited;
         var now = clock.GetUtcNow();
         var v = await ValidateAsync(req, now, ct);
@@ -199,6 +204,7 @@ public sealed class CampaignService(
     public async Task<Result<CampaignDto>> UpdateAsync(Actor actor, Guid id, CampaignRequest req, CancellationToken ct)
     {
         if (Guard(actor) is { } denied) return denied;
+        if (await ModuleGuardAsync(ct) is { } noModule) return noModule;
         if (RateWrite(actor) is { } limited) return limited;
         var now = clock.GetUtcNow();
         if (!await db.Campaigns.AsNoTracking().AnyAsync(x => x.Id == id, ct)) return NotFound(); // чужий/відсутній id - 404 до валідації тіла
@@ -379,6 +385,7 @@ public sealed class CampaignService(
     public async Task<Result<CampaignDto>> ConfirmAsync(Actor actor, Guid id, string idempotencyKey, ConfirmCampaignRequest req, CancellationToken ct)
     {
         if (Guard(actor) is { } denied) return denied;
+        if (await ModuleGuardAsync(ct) is { } noModule) return noModule;
         if (RateWrite(actor) is { } limited) return limited;
         if (req.Revision is not { } revision) return Error.Validation("revision_required", "revision from the preview is required.");
         var keyHash = KeyHash(idempotencyKey);
@@ -388,6 +395,14 @@ public sealed class CampaignService(
         await LockAsync(actor.TenantId, id, ct);
         var c = await db.Campaigns.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
         if (c is null) return NotFound();
+        // TASK-790 (L6): замки акції й спільного купона - зміна акції / відкликання купона не розходяться з перевіркою нижче
+        if (c.Status == CampaignStatuses.Draft)
+        {
+            if (c.PromotionId is { } lockPromo)
+                await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock(hashtextextended({EfBeautyStore.PromotionLockKey(lockPromo)}, 0))", ct);
+            if (c.SharedCouponId is { } lockCoupon)
+                await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock(hashtextextended({EfBeautyStore.CouponLockKey(lockCoupon)}, 0))", ct);
+        }
 
         if (c.Status != CampaignStatuses.Draft)
         {

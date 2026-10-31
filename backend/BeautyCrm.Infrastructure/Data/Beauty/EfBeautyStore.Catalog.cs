@@ -131,6 +131,19 @@ public sealed partial class EfBeautyStore
             db.PromotionServices.Add(new Ent.PromotionService { PromotionId = promotionId, ServiceId = s });
     }
 
+    /// <summary>TASK-790 (L6): ключ замка акції; той самий у <see cref="CampaignService.ConfirmAsync"/>.</summary>
+    internal static string PromotionLockKey(Guid promotionId) => "promotion-campaign:" + promotionId;
+    internal static string CouponLockKey(Guid couponId) => "coupon-campaign:" + couponId;
+
+    public async Task<T> UnderPromotionLockAsync<T>(Guid promotionId, Func<Task<T>> work, CancellationToken ct)
+    {
+        await using var tx = db.Database.CurrentTransaction is null ? await db.Database.BeginTransactionAsync(ct) : null;
+        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock(hashtextextended({PromotionLockKey(promotionId)}, 0))", ct);
+        var r = await work();
+        if (tx is not null) await tx.CommitAsync(ct);
+        return r;
+    }
+
     public Task<bool> HasActiveCampaignAsync(Guid promotionId, CancellationToken ct) =>
         db.Campaigns.AsNoTracking().AnyAsync(c => c.PromotionId == promotionId && (c.Status == "scheduled" || c.Status == "sending"), ct);
 

@@ -71,7 +71,12 @@ public sealed record AppointmentDto(
     /// </summary>
     public AppointmentDto ForViewer(Actor actor) => StaffRoles.IsManager(actor)
         ? this
-        : this with { CancelledBy = CancelledBy is null ? null : new CancelledByDto(CancelledBy.Type), CancelReason = null };
+        // TASK-790 (L8): codeHint купона (останні 3 символи коду) бачить лише owner/admin; майстру - порожній рядок (купон і результат лишаються)
+        : this with
+        {
+            CancelledBy = CancelledBy is null ? null : new CancelledByDto(CancelledBy.Type), CancelReason = null,
+            Coupon = Coupon is null ? null : Coupon with { CodeHint = "" },
+        };
 }
 
 /// <summary>§22.6.1: план нагадувань запису. Points - лише для staff-DTO (публічний бачить method + offsetsMinutes).</summary>

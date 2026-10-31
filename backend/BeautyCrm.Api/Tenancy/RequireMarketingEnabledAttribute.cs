@@ -9,6 +9,10 @@ namespace BeautyCrm.Api.Tenancy;
 /// -> 403 <c>marketing_disabled</c>. Для відкликання/зниження згоди НЕ застосовується (воно працює завжди).
 /// Ставити після <see cref="RequireModuleAttribute"/> (модуль beauty_marketing): порядок фільтрів один і той самий, Order = 10.
 /// </summary>
+/// <summary>Дія, що лишається доступною при <c>Marketing:Enabled=false</c> (скасування кампанії, читання). Модуль beauty_marketing усе одно потрібен.</summary>
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class AllowWhenMarketingDisabledAttribute : Attribute;
+
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method)]
 public sealed class RequireMarketingEnabledAttribute : Attribute, IActionFilter, IOrderedFilter
 {
@@ -17,6 +21,8 @@ public sealed class RequireMarketingEnabledAttribute : Attribute, IActionFilter,
 
     public void OnActionExecuting(ActionExecutingContext context)
     {
+        // TASK-790 (M4): kill switch має зупиняти, а не блокувати зупинку - скасування й читання кампаній доступні при Marketing:Enabled=false
+        if (context.ActionDescriptor.EndpointMetadata.OfType<AllowWhenMarketingDisabledAttribute>().Any()) return;
         var config = context.HttpContext.RequestServices.GetRequiredService<IConfiguration>();
         if (config.GetValue<bool>("Marketing:Enabled")) return;
         context.Result = new ObjectResult(new ApiError(Code, "Marketing is not enabled."))

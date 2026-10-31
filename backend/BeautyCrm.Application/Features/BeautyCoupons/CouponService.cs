@@ -88,7 +88,9 @@ public sealed class CouponService(
 
     public async Task<Result<SharedCouponDto>> CreateSharedAsync(CreateSharedCouponRequest req, Guid? userId, CancellationToken ct)
     {
-        if (!CouponCodes.IsValidSharedInput(req.Code)) return Error.Validation("invalid_code", "Code must be 4-20 characters A-Z, a-z, 0-9.");
+        if (WriteLimited(userId) is { } limited) return limited;
+        if (!CouponCodes.IsValidSharedInput(req.Code)) return Error.Validation("invalid_code", "Code must be 6-20 characters A-Z, a-z, 0-9.");
+        if (IsBlockedCode(req.Code!)) return Error.Validation("invalid_code", "This code is too easy to guess; choose a less obvious one.");
         if (req.ValidFrom is not { } from || req.ValidTo is not { } to || to <= from)
             return Error.Validation("invalid_period", "validFrom and validTo are required and validTo must be after validFrom.");
         if (req.MaxUses is { } m && (m < 1 || m > 100_000)) return Error.Validation("invalid_max_uses", "maxUses must be 1..100000.");
@@ -104,8 +106,21 @@ public sealed class CouponService(
         return created;
     }
 
+    /// <summary>TASK-790 (M5): код з блок-списку (за літерами без цифр: SALE, SALE10, 2024SALE).</summary>
+    private bool IsBlockedCode(string code)
+    {
+        var upper = code.Trim().ToUpperInvariant();
+        return options.BlockedCodes.Contains(upper) || options.BlockedCodes.Contains(new string(upper.Where(char.IsAsciiLetter).ToArray()));
+    }
+
+    /// <summary>TASK-790 (L7): rate limit запису загальних кодів на користувача.</summary>
+    private Error? WriteLimited(Guid? userId) =>
+        limiter.TryHit($"coupon-write:{userId}", options.WritePerUserPerMinute, TimeSpan.FromMinutes(1))
+            ? null : Error.TooMany("rate_limited", "Too many requests. Try again later.");
+
     public async Task<Result<bool>> RevokeAsync(Guid id, Guid? userId, CancellationToken ct)
     {
+        if (WriteLimited(userId) is { } limited) return limited;
         if (!await store.RevokeSharedAsync(id, ct)) return Error.NotFound("coupon_not_found", "Coupon not found.");
         log?.LogInformation("coupon_revoked coupon={Coupon} user={User}", id, userId);
         return true;
@@ -135,7 +150,8 @@ public sealed class CouponService(
     /// </summary>
     public async Task<Result<CouponCandidate>> ResolveAsync(CouponUse use, Guid? clientId, DateTimeOffset now, CancellationToken ct)
     {
-        var key = use.RateKey is null ? null : $"{use.Scope}:{use.RateKey}";
+        // TASK-790 (M5): IPv6 публічного ліміту - за підмережею /64 (одна «адреса» не множиться на 2^64 варіантів)
+        var key = use.RateKey is null ? null : $"{use.Scope}:{(use.Scope == CouponScope.Public ? ClientIpKey.Normalize(use.RateKey) : use.RateKey)}";
         if (key is not null)
         {
             switch (use.Scope)

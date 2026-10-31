@@ -77,14 +77,15 @@ public sealed class BookingController(BookingService booking, CancellationServic
             ? StatusCode(StatusCodes.Status403Forbidden, new ApiError("forbidden", "Specialists can only book for themselves."))
             : this.ToResult(await booking.CreateAsync(request, ct, null,
                 string.IsNullOrWhiteSpace(request.CouponCode) ? null : new BeautyCrm.Application.Features.BeautyCoupons.CouponUse(
-                    BeautyCrm.Application.Features.BeautyCoupons.CouponScope.Staff, request.CouponCode, RateKey: actor.UserId.ToString())), a => CreatedAtAction(nameof(Get), new { id = a.Id }, a));
+                    BeautyCrm.Application.Features.BeautyCoupons.CouponScope.Staff, request.CouponCode, RateKey: actor.UserId.ToString())),
+                a => CreatedAtAction(nameof(Get), new { id = a.Id }, a.ForViewer(actor)));
 
     /// <summary>Перенос (startsAt) і/або статус (confirmed|completed|no_show).</summary>
     [HttpPatch("appointments/{id:guid}")]
     [ProducesResponseType<AppointmentDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Patch(Guid id, [FromBody] PatchAppointmentRequest request, CancellationToken ct) =>
-        await GuardAsync(id, ct) ?? this.ToResult(await booking.PatchAsync(id, request, ct));
+        await GuardAsync(id, ct) ?? this.ToResult(await booking.PatchAsync(id, request, ct), a => Ok(a.ForViewer(Actor!)));
 
     /// <summary>
     /// Скасування; refundAmount рахується за налаштуваннями tenant-а (/settings/cancellation). Необов'язкове тіло `{reason}` (до 300);

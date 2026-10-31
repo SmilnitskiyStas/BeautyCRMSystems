@@ -41,4 +41,9 @@ public interface ICatalogStore
     Task<PromotionDto?> UpdatePromotionAsync(Guid id, UpsertPromotionRequest req, CancellationToken ct);
     /// <summary>Чи є в акції кампанії у статусі scheduled|sending (§26.6 promotion_in_campaign).</summary>
     Task<bool> HasActiveCampaignAsync(Guid promotionId, CancellationToken ct) => Task.FromResult(false);
+    /// <summary>
+    /// TASK-790 (L6): виконати <paramref name="work"/> під замком акції (той самий, що бере підтвердження кампанії): перевірка «акція в кампанії»
+    /// і зміна не розходяться з паралельним confirm. Типово - без замка.
+    /// </summary>
+    Task<T> UnderPromotionLockAsync<T>(Guid promotionId, Func<Task<T>> work, CancellationToken ct) => work();
 }

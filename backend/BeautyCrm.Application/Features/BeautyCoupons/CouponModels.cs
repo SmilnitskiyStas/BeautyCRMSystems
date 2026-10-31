@@ -23,7 +23,21 @@ public sealed record CouponUse(CouponScope Scope, string? Code = null, Guid? Cou
 
 public sealed class CouponOptions
 {
-    private int _chat = 5, _public = 10, _staff = 30, _hold = 72;
+    private int _chat = 5, _public = 10, _staff = 30, _hold = 72, _bare = 20, _bareTenant = 200, _write = 20;
+    /// <summary>`Coupons:ChatBareLookupPerConversationPerHour` (M5): пошуків за хешем для тексту БЕЗ префікса «код…» і без формату персонального коду, що не знайшли купон; понад - хеш не шукається.</summary>
+    public int ChatBareLookupPerConversationPerHour { get => _bare; set => _bare = Math.Clamp(value, 1, 1000); }
+    /// <summary>`Coupons:ChatBareLookupPerTenantPerHour` (M5): те саме на tenant (розмови можна плодити).</summary>
+    public int ChatBareLookupPerTenantPerHour { get => _bareTenant; set => _bareTenant = Math.Clamp(value, 1, 100_000); }
+    /// <summary>`Coupons:WritePerUserPerMinute` (L7): створення / відкликання загальних кодів на користувача.</summary>
+    public int WritePerUserPerMinute { get => _write; set => _write = Math.Clamp(value, 1, 1000); }
+    /// <summary>`Coupons:BlockedCodes` (M5): очевидні слова, які не можна використовувати як загальний код (порівняння за літерами без цифр; додається до типового списку).</summary>
+    public HashSet<string> BlockedCodes { get; set; } = new(DefaultBlockedCodes, StringComparer.Ordinal);
+    public static readonly string[] DefaultBlockedCodes =
+    [
+        "SALE", "PROMO", "PROMOCODE", "VIP", "DISCOUNT", "COUPON", "CODE", "GIFT", "FREE", "NEW", "WELCOME", "BONUS", "TEST", "HELLO", "ADMIN",
+        "SKIDKA", "AKCIYA", "AKCIA", "PODAROK", "ZNIZHKA", "BEAUTY", "SALON", "BLACKFRIDAY", "SUPER", "MEGA",
+        "ABCD", "ABCDEF", "QWERTY", "PASSWORD", "ALL", "ONE", "TWO",
+    ];
     /// <summary>`Coupons:ChatInvalidPerConversationPerHour`: невдалих кодів у чаті за годину; понад - coupon_locked.</summary>
     public int ChatInvalidPerConversationPerHour { get => _chat; set => _chat = Math.Clamp(value, 1, 1000); }
     /// <summary>`Coupons:PublicCheckPerIpPer10Min`: публічна перевірка / створення з кодом (невдалі й успішні).</summary>

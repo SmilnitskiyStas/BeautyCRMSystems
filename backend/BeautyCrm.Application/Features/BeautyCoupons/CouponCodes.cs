@@ -14,6 +14,8 @@ public static class CouponCodes
     public const int PersonalLength = 10;
     public const int SharedMinLength = 4;
     public const int SharedMaxLength = 20;
+    /// <summary>TASK-790 (M5): мінімальна довжина НОВОГО загального коду (існуючі 4-5 символів лишаються чинними).</summary>
+    public const int SharedCreateMinLength = 6;
     public const string HashPrefix = "coupon:";
 
     /// <summary>Верхній регістр, без пробілів і '-', O→0, I|L→1.</summary>
@@ -59,5 +61,5 @@ public static class CouponCodes
 
     /// <summary>Загальний код менеджера: 4..20 символів [A-Za-z0-9] (без пробілів і дефісів).</summary>
     public static bool IsValidSharedInput(string? code) =>
-        code is { Length: >= SharedMinLength and <= SharedMaxLength } && code.All(c => c is (>= '0' and <= '9') or (>= 'A' and <= 'Z') or (>= 'a' and <= 'z'));
+        code is { Length: >= SharedCreateMinLength and <= SharedMaxLength } && code.All(c => c is (>= '0' and <= '9') or (>= 'A' and <= 'Z') or (>= 'a' and <= 'z'));
 }

@@ -77,6 +77,11 @@ public sealed class AudienceService(BeautyDbContext db, IConfiguration config)
             .Where(m => m.Channel == "telegram" && matchedIds.Contains(m.ClientId))
             .Select(m => new { m.ClientId, m.Level }).ToListAsync(ct)).ToDictionary(x => x.ClientId, x => x.Level);
 
+        // TASK-790 (L2): як у воркері (consentVerdict) - beauty_clients.unsubscribed або вподобання нагадувань none теж виключають («unsubscribed»)
+        var optedOut = (await db.Clients.AsNoTracking().Where(c => matchedIds.Contains(c.Id) && c.Unsubscribed).Select(c => c.Id).ToListAsync(ct)).ToHashSet();
+        optedOut.UnionWith(await db.ClientContactPreferences.AsNoTracking().Where(p => p.Method == "none" && matchedIds.Contains(p.ClientId))
+            .Select(p => p.ClientId).ToListAsync(ct));
+
         // «улюблені» послуги - лише для selective у promo-кампанії з обмеженням послуг акції
         HashSet<(Guid Client, Guid Service)> favorites = [];
         HashSet<Guid> promoServices = [];
@@ -112,7 +117,7 @@ public sealed class AudienceService(BeautyDbContext db, IConfiguration config)
         {
             if (!telegram.Contains(id)) { noTelegram++; continue; }
             if (!levels.TryGetValue(id, out var level)) { noConsent++; continue; }
-            if (level == "none") { unsubscribed++; continue; }
+            if (level == "none" || optedOut.Contains(id)) { unsubscribed++; continue; }
             if (level == "selective"
                 && (s.Type != CampaignTypes.Promo || (promoServices.Count > 0 && !promoServices.Any(sv => favorites.Contains((id, sv))))))
             {

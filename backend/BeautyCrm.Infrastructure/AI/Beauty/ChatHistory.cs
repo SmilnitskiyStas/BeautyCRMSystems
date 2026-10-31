@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using BeautyCrm.Application.Features.BeautyCoupons;
 
 namespace BeautyCrm.Infrastructure.AI.Beauty;
 
@@ -103,11 +104,12 @@ public static class ChatHistory
 
     private static string Render(ChatHistoryItem item)
     {
+        // TASK-790 (M1): код купона не йде до провайдера ШІ - ні з тексту клієнта, ні з тіл кампанії/шаблонів.
         if (item.Role == ChatHistoryRole.Client)
-            return item.Kind == ChatHistoryKind.Unsupported ? UnsupportedMarker : PromptInjectionGuard.Prepare(item.Text).Trim();
+            return item.Kind == ChatHistoryKind.Unsupported ? UnsupportedMarker : PromptInjectionGuard.Prepare(CouponCodeMasker.Mask(item.Text)).Trim();
 
         // Тексти асистента/персоналу/шаблонів теж із БД: знешкоджуємо теги-розділювачі й обмежуємо довжину.
-        var clean = AiTextNormalizer.NeutralizeLabels(AiTextNormalizer.NeutralizeTags(AiTextNormalizer.Clean(item.Text))).Trim();
+        var clean = AiTextNormalizer.NeutralizeLabels(AiTextNormalizer.NeutralizeTags(AiTextNormalizer.Clean(CouponCodeMasker.Mask(item.Text)))).Trim();
         if (clean.Length == 0) return "";
         clean = AiTextNormalizer.TruncateCodePoints(clean, MaxAssistantChars);
         return item.Kind switch

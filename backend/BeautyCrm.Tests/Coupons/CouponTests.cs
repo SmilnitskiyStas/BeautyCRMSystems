@@ -324,6 +324,38 @@ public sealed class CouponDbTests : IClassFixture<PostgresRlsFixture>
         Assert.NotEmpty(personal);
     }
 
+    [SkippableFact]
+    public async Task m5_new_shared_codes_need_six_characters_and_may_not_be_obvious_words()
+    {
+        SkipIfNoDb();
+        var w = await SeedAsync();
+        string? Code(string code) => WithRigAsync(w, r => r.Coupons.CreateSharedAsync(
+            new CreateSharedCouponRequest(w.CodeOnlyPromo, code, w.Clock.Now, w.Clock.Now.AddDays(1), null), null, default)).Result.Error?.Code;
+        Assert.Equal("invalid_code", Code("ABCDE"));   // 5 символів
+        Assert.Equal("invalid_code", Code("DONE"));
+        foreach (var obvious in new[] { "PROMO", "promocode", "SALE10", "welcome", "VIP", "discount2024" })
+            Assert.Equal("invalid_code", Code(obvious));
+        Assert.Null(Code("ZEBRA77"));
+        w.Options.BlockedCodes.Add("MYBRAND"); // конфіг додає слова
+        Assert.Equal("invalid_code", Code("MYBRAND25"));
+    }
+
+    [SkippableFact]
+    public async Task l7_shared_coupon_writes_are_rate_limited_per_user()
+    {
+        SkipIfNoDb();
+        var w = await SeedAsync();
+        w.Options.WritePerUserPerMinute = 2;
+        var codes = new[] { "ZEBRA701", "ZEBRA702", "ZEBRA703" };
+        var results = new List<string?>();
+        foreach (var c in codes)
+            results.Add((await WithRigAsync(w, r => r.Coupons.CreateSharedAsync(
+                new CreateSharedCouponRequest(w.CodeOnlyPromo, c, w.Clock.Now, w.Clock.Now.AddDays(1), null), w.UserId, default))).Error?.Code);
+        Assert.Equal(new string?[] { null, null, "rate_limited" }, results);
+        var id = (await WithRigAsync(w, r => r.Ctx.Coupons.AsNoTracking().Where(c => c.Code == "ZEBRA701").Select(c => c.Id).SingleAsync()));
+        Assert.Equal("rate_limited", (await WithRigAsync(w, r => r.Coupons.RevokeAsync(id, w.UserId, default))).Error!.Code);
+    }
+
     // ---------- запис з купоном ----------
 
     [SkippableFact]
@@ -385,10 +417,10 @@ public sealed class CouponDbTests : IClassFixture<PostgresRlsFixture>
         Assert.Equal((1, 1, 0), await StateAsync(w, s.Id));
 
         var w2 = await SeedAsync();
-        var s2 = await SharedAsync(w2, "TWICE", maxUses: 5);
-        Assert.True((await BookAsync(w2, w2.ClientA, 0, "TWICE")).IsOk);
-        Assert.Equal("coupon_already_used", (await BookAsync(w2, w2.ClientA, 1, "TWICE")).Error!.Code);
-        Assert.True((await BookAsync(w2, w2.ClientB, 1, "TWICE")).IsOk); // інший клієнт - дозволено
+        var s2 = await SharedAsync(w2, "TWICE25", maxUses: 5);
+        Assert.True((await BookAsync(w2, w2.ClientA, 0, "TWICE25")).IsOk);
+        Assert.Equal("coupon_already_used", (await BookAsync(w2, w2.ClientA, 1, "TWICE25")).Error!.Code);
+        Assert.True((await BookAsync(w2, w2.ClientB, 1, "TWICE25")).IsOk); // інший клієнт - дозволено
         Assert.Equal(2, (await StateAsync(w2, s2.Id)).Uses);
     }
 
@@ -405,10 +437,10 @@ public sealed class CouponDbTests : IClassFixture<PostgresRlsFixture>
         w.Clock.Now = to;
         Assert.Equal("coupon_expired", (await BookAsync(w, w.ClientB, 1, "WINDOW")).Error!.Code); // = valid_to -> ні
 
-        var later = await SharedAsync(w, "LATER");
+        var later = await SharedAsync(w, "LATER25");
         await using (var ctx = _db.CreateContext(w.TenantId))
             await ctx.Coupons.Where(c => c.Id == later.Id).ExecuteUpdateAsync(x => x.SetProperty(c => c.ValidFrom, to.AddDays(1)).SetProperty(c => c.ValidTo, to.AddDays(2)));
-        Assert.Equal("coupon_not_started", (await BookAsync(w, w.ClientB, 1, "LATER")).Error!.Code);
+        Assert.Equal("coupon_not_started", (await BookAsync(w, w.ClientB, 1, "LATER25")).Error!.Code);
 
         var rev = await SharedAsync(w, "REVOKED");
         await WithRigAsync(w, r => r.Coupons.RevokeAsync(rev.Id, null, default));
@@ -490,8 +522,8 @@ public sealed class CouponDbTests : IClassFixture<PostgresRlsFixture>
         var b = await BookAsync(w, w.ClientA, 2, "RELEASE");
         await WithRigAsync(w, r => r.Booking.PatchAsync(b.Value!.Id, new PatchAppointmentRequest(null, "no_show"), default));
         Assert.Equal(1, (await StateAsync(w, s.Id)).Uses);
-        var s2 = await SharedAsync(w, "DONE", maxUses: 3);
-        var c = await BookAsync(w, w.ClientB, 3, "DONE");
+        var s2 = await SharedAsync(w, "DONE25", maxUses: 3);
+        var c = await BookAsync(w, w.ClientB, 3, "DONE25");
         await WithRigAsync(w, r => r.Booking.PatchAsync(c.Value!.Id, new PatchAppointmentRequest(null, "completed"), default));
         Assert.Equal((1, 1, 0), await StateAsync(w, s2.Id));
     }

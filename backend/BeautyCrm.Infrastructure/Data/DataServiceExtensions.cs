@@ -62,6 +62,7 @@ public static class DataServiceExtensions
         services.AddScoped<BeautyCrm.Application.Features.BeautyReminders.IReminderReplanStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.TryAddSingleton(TimeProvider.System);
         services.AddScoped<ReminderContactsService>(); // TASK-738: вподобання, call-tasks, settings/reminders
+        services.AddScoped<MarketingModuleGate>(); // TASK-790 (L4): модуль beauty_marketing поза HTTP
         services.AddScoped<MarketingConsentService>(); // TASK-777: маркетингова згода (§26.4), API картки клієнта
         services.AddScoped<AudienceService>(); // TASK-779: аудиторії (§26.5)
         services.AddScoped<CampaignService>(); // TASK-779: кампанії (§26.7, §26.11.3)

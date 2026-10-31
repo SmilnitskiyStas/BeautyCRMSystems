@@ -52,11 +52,15 @@ public sealed class PromotionService(ICatalogStore store, TimeProvider clock)
     public async Task<Result<PromotionDto>> UpdateAsync(Guid id, UpsertPromotionRequest req, CancellationToken ct)
     {
         if (await ValidateAsync(req, ct) is { } err) return err;
-        // §26.6: акція активної кампанії (scheduled|sending) - умови знижки не змінюються; isActive=false дозволено
-        if (await store.GetPromotionAsync(id, ct) is { } current && await store.HasActiveCampaignAsync(id, ct) && ChangesTerms(current, req))
-            return Error.Conflict("promotion_in_campaign", "The promotion is used by an active campaign; only isActive=false is allowed.");
-        return await store.UpdatePromotionAsync(id, Normalize(req), ct) is { } p
-            ? p : Error.NotFound("promotion_not_found", "Promotion not found.");
+        // §26.6: акція активної кампанії (scheduled|sending) - умови знижки не змінюються; isActive=false дозволено.
+        // TASK-790 (L6): перевірка й зміна під замком акції, який бере й confirm кампанії.
+        return await store.UnderPromotionLockAsync<Result<PromotionDto>>(id, async () =>
+        {
+            if (await store.GetPromotionAsync(id, ct) is { } current && await store.HasActiveCampaignAsync(id, ct) && ChangesTerms(current, req))
+                return Error.Conflict("promotion_in_campaign", "The promotion is used by an active campaign; only isActive=false is allowed.");
+            return await store.UpdatePromotionAsync(id, Normalize(req), ct) is { } p
+                ? p : Error.NotFound("promotion_not_found", "Promotion not found.");
+        }, ct);
     }
 
     /// <summary>

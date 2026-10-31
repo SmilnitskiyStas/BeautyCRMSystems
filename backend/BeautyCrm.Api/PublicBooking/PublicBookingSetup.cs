@@ -66,7 +66,7 @@ public static class PublicBookingSetup
         {
             void Add(string name, int permit) => o.AddPolicy(name, http => RateLimitPartition.GetFixedWindowLimiter(
                 // Ключ — IP клієнта (за reverse proxy потрібен ForwardedHeaders із довіреними проксі).
-                http.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                BeautyCrm.Application.Features.BeautyCoupons.ClientIpKey.Normalize(http.Connection.RemoteIpAddress?.ToString()),
                 _ => new FixedWindowRateLimiterOptions { PermitLimit = permit, Window = window, QueueLimit = 0 }));
             Add(PublicRateLimit.Read, config.GetValue("PublicBooking:RateLimit:ReadPermit", 120));
             Add(PublicRateLimit.Token, config.GetValue("PublicBooking:RateLimit:TokenPermit", 30));

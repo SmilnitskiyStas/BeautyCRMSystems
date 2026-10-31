@@ -67,8 +67,12 @@ public sealed partial class EfBeautyStore : ICouponStore
     public async Task<bool> RevokeSharedAsync(Guid id, CancellationToken ct)
     {
         if (!await db.Coupons.AsNoTracking().AnyAsync(c => c.Id == id && c.Kind == "shared", ct)) return false;
+        // TASK-790 (L6): відкликання серіалізується з confirm кампанії, що посилається на цей купон
+        await using var tx = db.Database.CurrentTransaction is null ? await db.Database.BeginTransactionAsync(ct) : null;
+        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock(hashtextextended({CouponLockKey(id)}, 0))", ct);
         await db.Coupons.Where(c => c.Id == id && c.Kind == "shared" && c.Status != "revoked")
             .ExecuteUpdateAsync(s => s.SetProperty(c => c.Status, "revoked").SetProperty(c => c.UpdatedAt, DateTimeOffset.UtcNow), ct);
+        if (tx is not null) await tx.CommitAsync(ct);
         return true;
     }
 

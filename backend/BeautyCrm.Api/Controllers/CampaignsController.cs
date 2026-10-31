@@ -11,7 +11,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace BeautyCrm.Api.Controllers;
 
 /// <summary>
-/// Кампанії розсилок (§26.11.3, ADR-015): модуль beauty_marketing + Marketing:Enabled (інакше 403 marketing_disabled), лише owner/admin
+/// Кампанії розсилок (§26.11.3, ADR-015): модуль beauty_marketing + Marketing:Enabled (інакше 403 marketing_disabled; виняток TASK-790: GET кампаній/stats/summary і cancel доступні й без прапорця), лише owner/admin
 /// (specialist -> 403 forbidden_role до прив'язки тіла). Відповіді - Cache-Control: no-store (також 4xx). Чужий id -> 404.
 /// </summary>
 [ApiController]
@@ -41,6 +41,7 @@ public sealed class CampaignsController(CampaignService service) : ControllerBas
         User.ToActor() is { } actor ? Map(await service.PreviewAudienceAsync(actor, request, ct)) : Unauthorized();
 
     [HttpGet("campaigns")]
+    [AllowWhenMarketingDisabled]
     [ProducesResponseType<CampaignListDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> List([FromQuery] string? status, [FromQuery] string? cursor, [FromQuery] int? take, CancellationToken ct) =>
         User.ToActor() is { } actor ? Map(await service.ListAsync(actor, status, cursor, take, ct)) : Unauthorized();
@@ -56,6 +57,7 @@ public sealed class CampaignsController(CampaignService service) : ControllerBas
             : Unauthorized();
 
     [HttpGet("campaigns/{id:guid}")]
+    [AllowWhenMarketingDisabled]
     [ProducesResponseType<CampaignDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Get(Guid id, CancellationToken ct) =>
@@ -101,18 +103,21 @@ public sealed class CampaignsController(CampaignService service) : ControllerBas
 
     /// <summary>Ідемпотентно (повтор на cancelled -> 200); done -> 409 campaign_finished.</summary>
     [HttpPost("campaigns/{id:guid}/cancel")]
+    [AllowWhenMarketingDisabled]
     [ProducesResponseType<CampaignDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Cancel(Guid id, CancellationToken ct) =>
         User.ToActor() is { } actor ? Map(await service.CancelAsync(actor, id, ct)) : Unauthorized();
 
     [HttpGet("campaigns/{id:guid}/stats")]
+    [AllowWhenMarketingDisabled]
     [ProducesResponseType<CampaignStatsDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> Stats(Guid id, CancellationToken ct) =>
         User.ToActor() is { } actor ? Map(await service.StatsAsync(actor, id, ct)) : Unauthorized();
 
     /// <summary>Лише кількості, без кодів.</summary>
     [HttpGet("campaigns/{id:guid}/coupons/summary")]
+    [AllowWhenMarketingDisabled]
     [ProducesResponseType<CampaignCouponSummaryDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> CouponSummary(Guid id, CancellationToken ct) =>
         User.ToActor() is { } actor ? Map(await service.CouponSummaryAsync(actor, id, ct)) : Unauthorized();

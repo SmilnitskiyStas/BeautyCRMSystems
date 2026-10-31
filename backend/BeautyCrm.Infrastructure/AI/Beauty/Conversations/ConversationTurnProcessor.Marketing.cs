@@ -21,7 +21,10 @@ public sealed partial class ConversationTurnProcessor
     private ChatCouponOffers Offers => services.GetRequiredService<ChatCouponOffers>();
 
     /// <summary><c>Marketing:Enabled</c>: пропозиція згоди, меню, кнопка <c>co</c>, коди текстом.</summary>
-    private bool MarketingOn => ButtonsOpts.MarketingEnabled;
+    private bool MarketingOn => ButtonsOpts.MarketingEnabled && _marketingModule;
+
+    /// <summary>TASK-790 (L4): модуль <c>beauty_marketing</c> tenant-а (читається на початку <c>RunAsync</c>); без модуля маркетингові функції чату вимкнені.</summary>
+    private bool _marketingModule;
 
     /// <summary>T-stop за §22.7 (Зміна TASK-782): з маркетингом «Стоп» вимикає й акції.</summary>
     private string StopText => MarketingOn ? ChatTemplates.StopMarketing : ChatTemplates.Stop;
@@ -250,11 +253,38 @@ public sealed partial class ConversationTurnProcessor
     // ---------------------------------------------------------------- купон: код текстом (крок 4b)
 
     /// <summary>Кандидат у коди: вигляд коду (префікс / персональний формат) або збіг хешу загального коду. Без звернення до БД, якщо вигляд очевидний.</summary>
-    private async Task<ChatMarketingParser.CodeShape?> CodeCandidateAsync(string? body, CancellationToken ct)
+    private async Task<ChatMarketingParser.CodeShape?> CodeCandidateAsync(string? body, Guid conversationId, CancellationToken ct)
     {
         if (ChatMarketingParser.ParseCode(body) is not { } shape) return null;
         if (shape.LooksLikeCode) return shape;
-        return await CouponStore.FindByHashAsync(CouponCodes.Hash(shape.Code), ct) is not null ? shape : null;
+        // TASK-790 (M5): пошук за хешем для тексту без префікса/формату рахується (промахи): понад ліміт на розмову/tenant хеш не шукається,
+        // текст іде далі як звичайний. Підбір загальних кодів через «голі» повідомлення обмежений так само, як і через «код …».
+        var window = TimeSpan.FromHours(1);
+        var opts = services.GetRequiredService<CouponOptions>();
+        var lim = services.GetRequiredService<CouponAttemptLimiter>();
+        string convKey = $"coupon-bare:conv:{conversationId}", tenantKey = $"coupon-bare:tenant:{_tenantId}";
+        if (lim.IsBlocked(convKey, opts.ChatBareLookupPerConversationPerHour, window) || lim.IsBlocked(tenantKey, opts.ChatBareLookupPerTenantPerHour, window))
+            return null;
+        if (await CouponStore.FindByHashAsync(CouponCodes.Hash(shape.Code), ct) is not null) return shape;
+        lim.Record(convKey, window);
+        lim.Record(tenantKey, window);
+        return null;
+    }
+
+    /// <summary>
+    /// TASK-790 (L10): у тілі вхідного (текст) код купона за шаблоном (префікс «код…», <c>XXXXX-XXXXX</c>, 10 символів) замінюється на «[код купона]»
+    /// у БД: для hold під час handoff і для вимкненого <c>Marketing:Enabled</c> (коли конвеєр купонів не діє). Решта тексту лишається.
+    /// </summary>
+    private async Task RedactCodeBodiesAsync(List<Message> batch, CancellationToken ct)
+    {
+        foreach (var m in batch.Where(x => x.Kind == InboundKinds.Text).ToList())
+        {
+            var masked = CouponCodeMasker.Mask(m.Body);
+            if (masked == m.Body) continue;
+            var id = m.Id;
+            await db.Messages.Where(x => x.Id == id).ExecuteUpdateAsync(s => s.SetProperty(x => x.Body, masked), ct);
+            m.Body = masked;
+        }
     }
 
     /// <summary>Повідомлення з кодом обробляється окремим ходом: код не має потрапити в пакет, який піде до моделі.</summary>
@@ -263,7 +293,7 @@ public sealed partial class ConversationTurnProcessor
         if (!MarketingOn || batch.Count <= 1) return batch;
         for (var i = 0; i < batch.Count; i++)
         {
-            if (batch[i].Kind != InboundKinds.Text || await CodeCandidateAsync(batch[i].Body, ct) is null) continue;
+            if (batch[i].Kind != InboundKinds.Text || await CodeCandidateAsync(batch[i].Body, batch[i].ConversationId, ct) is null) continue;
             return i == 0 ? [batch[0]] : batch.Take(i).ToList();
         }
         return batch;
@@ -277,7 +307,7 @@ public sealed partial class ConversationTurnProcessor
     private async Task<bool> HandleCouponCodeAsync(Turn t, List<Message> texts, CancellationToken ct)
     {
         if (!MarketingOn || t.Batch.Count != 1 || texts.Count != 1) return false;
-        if (await CodeCandidateAsync(texts[0].Body, ct) is not { } shape) return false;
+        if (await CodeCandidateAsync(texts[0].Body, t.Conv.Id, ct) is not { } shape) return false;
 
         var conv = t.Conv;
         var resolved = await Coupons.ResolveAsync(new CouponUse(CouponScope.Chat, Code: shape.Code, RateKey: conv.Id.ToString()), conv.ClientId, t.Now, ct);

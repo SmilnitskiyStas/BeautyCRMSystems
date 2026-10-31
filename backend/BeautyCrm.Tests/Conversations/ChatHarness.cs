@@ -184,7 +184,8 @@ internal sealed class ChatHarness
         await using (var admin = new NpgsqlConnection(Db.AdminConnectionString))
         {
             await admin.OpenAsync();
-            await using var cmd = new NpgsqlCommand($"INSERT INTO tenants (id, name, slug) VALUES ('{tenantId}', 'T', 'cv-{tenantId:N}')", admin);
+            // TASK-790 (L4): модуль beauty_marketing потрібен для маркетингових функцій чату
+            await using var cmd = new NpgsqlCommand($"INSERT INTO tenants (id, name, slug, modules) VALUES ('{tenantId}', 'T', 'cv-{tenantId:N}', ARRAY['beauty_marketing'])", admin);
             await cmd.ExecuteNonQueryAsync();
         }
         var protector = Sp.GetRequiredService<ISecretProtector>();

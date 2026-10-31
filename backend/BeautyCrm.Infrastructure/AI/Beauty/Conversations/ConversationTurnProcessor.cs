@@ -5,6 +5,7 @@ using BeautyCrm.Application.Features.BeautyChatBooking;
 using BeautyCrm.Application.Features.BeautyReminders;
 using BeautyCrm.Infrastructure.AI.Beauty.Adapters;
 using BeautyCrm.Infrastructure.Data;
+using BeautyCrm.Infrastructure.Data.Beauty;
 using BeautyCrm.Infrastructure.Data.Entities;
 using BeautyCrm.Infrastructure.Data.Tenancy;
 using BeautyCrm.Infrastructure.Integrations.Channels;
@@ -145,6 +146,7 @@ public sealed partial class ConversationTurnProcessor(
 
         _owner = Guid.NewGuid();
         _tenantId = tenantId;
+        _marketingModule = ButtonsOpts.MarketingEnabled && await services.GetRequiredService<MarketingModuleGate>().IsEnabledAsync(ct);
         if (!await TryLeaseAsync(conversationId, ct)) return TurnRunResult.Busy;
         try
         {
@@ -203,6 +205,7 @@ public sealed partial class ConversationTurnProcessor(
         batch = narrowed;
         if (!isCallback && !stopOnly) batch = NarrowForPhone(batch, conv, now); // §25.5.2: контакт - окремий хід; під питанням про номер - по одному повідомленню
         if (!isCallback && !stopOnly) batch = await NarrowForCouponAsync(batch, ct); // §26.9.3: повідомлення з кодом купона - окремий хід (код не йде до моделі)
+        if (!isCallback && !MarketingOn) await RedactCodeBodiesAsync(batch, ct); // TASK-790 (L10): маркетинг вимкнено - код усе одно не зберігається у тілі
 
         // Відповідь на цей пакет уже є (повтор після падіння/гонка lease): лише позначити, LLM не викликати.
         var existingKey = isCallback ? CallbackKey(batch[0].Id) : ReplyKey(conv.Id, batch[^1].Id);
@@ -354,6 +357,7 @@ public sealed partial class ConversationTurnProcessor(
     {
         var ids = batch.Select(m => m.Id).ToList();
         await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await RedactCodeBodiesAsync(batch, ct); // TASK-790 (L10): код купона не лишається у тілі, яке бачить менеджер
         await db.Messages.Where(m => ids.Contains(m.Id) && m.Status == Received)
             .ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, Held).SetProperty(m => m.UpdatedAt, now), ct);
         await db.Conversations.Where(c => c.Id == conversationId)
@@ -1162,7 +1166,7 @@ public sealed partial class ConversationTurnProcessor(
 
     private static string ReplyKey(Guid conversationId, Guid lastInboundId) => $"{KeyPrefix}{conversationId}:{lastInboundId}";
 
-    private static bool ChannelAssistantEnabled(string? settings)
+    internal static bool ChannelAssistantEnabled(string? settings)
     {
         if (string.IsNullOrWhiteSpace(settings)) return false;
         try

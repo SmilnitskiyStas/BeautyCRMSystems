@@ -9,7 +9,7 @@ namespace BeautyCrm.Infrastructure.Data.Beauty;
 /// Порт запису з чату над EF (TASK-726, §21.6). Tenant задає RLS; кожен метод із conversationId фільтрує за розмовою,
 /// тож пропозиція чужої розмови недосяжна. Статуси змінюються умовним UPDATE (CAS).
 /// </summary>
-public sealed class EfChatBookingStore(BeautyDbContext db) : IChatBookingStore
+public sealed class EfChatBookingStore(BeautyDbContext db, MarketingConsentService? marketing = null) : IChatBookingStore
 {
     private static readonly string[] Active = [ChatProposalStatus.Prepared, ChatProposalStatus.Shown];
     private static readonly string[] Terminal = [ChatProposalStatus.Confirmed, ChatProposalStatus.Rejected, ChatProposalStatus.Expired,
@@ -85,6 +85,8 @@ public sealed class EfChatBookingStore(BeautyDbContext db) : IChatBookingStore
             });
         await db.SaveChangesAsync(ct);
         await db.Conversations.Where(c => c.Id == conversationId).ExecuteUpdateAsync(s => s.SetProperty(c => c.ClientId, client.Id), ct);
+        // TASK-790 (L3): «Стоп» до появи клієнта -> рядок згоди none/stop одразу (тоді пропозиція згоди не показується: вона лише коли рядка немає).
+        if (stopAt is not null && marketing is not null) await marketing.StopAsync(client.Id, MarketingConsentVias.Text, conversationId, ct);
         await tx.CommitAsync(ct);
         db.ChangeTracker.Clear();
         return client.Id;
