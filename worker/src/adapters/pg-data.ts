@@ -1,10 +1,11 @@
 import type { PoolClient } from "pg";
 import type {
-  AppointmentInfo, AppointmentStatus, ChatActions, BeautyDataPort, CampaignInfo, ClientInfo, LapsedClient, OutboundMessage,
+  AppointmentInfo, AppointmentStatus, ChatActions, BeautyDataPort, CampaignEnqueueOptions, CampaignEnqueueResult, CampaignInfo, CampaignRecipientRef, ClientInfo, LapsedClient, OutboundMessage,
   ReminderOption, StoredMessage,
 } from "../ports";
 import { currentTenantId, type TenantDb } from "../db/tenant-db";
-import { CALL_TASK_CODES, isChannelErrorCode } from "../jobs/beauty-common";
+import { CALL_TASK_CODES, DEFAULT_CLIENT_INTERVAL_DAYS, isChannelErrorCode } from "../jobs/beauty-common";
+import { PgCampaigns } from "./pg-campaign";
 
 /** beauty_channels.type -> adapter id (mirrors ChannelTypeMap in the backend). */
 export const toAdapterId = (type: string): string => (type.toLowerCase() === "facebook" ? "messenger" : type.toLowerCase());
@@ -18,10 +19,11 @@ export function kindFromKey(key: string | null): OutboundMessage["kind"] {
 
 /** Latest active conversation of a client = where we can reach them (channel + chat id). */
 const CLIENT_SQL = `
-  SELECT cl.id, cl.tenant_id, cl.full_name, cl.marketing_consent, cl.unsubscribed,
+  SELECT cl.id, cl.tenant_id, cl.full_name, coalesce(mc.level <> 'none', false) AS marketing_consent, cl.unsubscribed,
          coalesce(pref.method = 'none', false) AS pref_none,
          conv.external_chat_id, conv.type
   FROM beauty_clients cl
+  LEFT JOIN beauty_marketing_consents mc ON mc.tenant_id = cl.tenant_id AND mc.client_id = cl.id AND mc.channel = 'telegram'
   LEFT JOIN beauty_client_contact_preferences pref ON pref.tenant_id = cl.tenant_id AND pref.client_id = cl.id
   JOIN LATERAL (
     SELECT c.external_chat_id, ch.type FROM beauty_conversations c
@@ -65,7 +67,8 @@ const toStatus = (s: string): StoredMessage["status"] => (s === "sent" ? "sent" 
 
 /** BeautyDataPort over PostgreSQL. All access is through TenantDb (RLS + app.tenant_id per transaction). */
 export class PgBeautyData implements BeautyDataPort {
-  constructor(private readonly db: TenantDb, private readonly now: () => Date = () => new Date()) {}
+  private readonly campaigns: PgCampaigns;
+  constructor(private readonly db: TenantDb, private readonly now: () => Date = () => new Date()) { this.campaigns = new PgCampaigns(db); }
 
   async getAppointment(id: string): Promise<AppointmentInfo | null> {
     const { rows } = await this.db.tx((c) => c.query(
@@ -82,21 +85,29 @@ export class PgBeautyData implements BeautyDataPort {
     return rows[0] ? toClient(rows[0]) : null;
   }
 
-  /** The schema has no campaigns/segments table yet (open question): campaigns cannot be loaded. */
-  async getCampaign(): Promise<CampaignInfo | null> { return null; }
-  async listCampaignAudience(): Promise<ClientInfo[]> { return []; }
+  getCampaign(id: string): Promise<CampaignInfo | null> { return this.campaigns.getCampaign(id); }
+  listCampaignAudience(campaignId: string, limit: number, afterId?: string): Promise<CampaignRecipientRef[]> { return this.campaigns.listCampaignAudience(campaignId, limit, afterId); }
+  listDueCampaigns(now: Date): Promise<string[]> { return this.campaigns.listDueCampaigns(now); }
+  startCampaign(id: string, now: Date): Promise<boolean> { return this.campaigns.startCampaign(id, now); }
+  finishCampaignIfDrained(id: string, now: Date): Promise<boolean> { return this.campaigns.finishCampaignIfDrained(id, now); }
+  enqueueCampaignMessage(recipientId: string, now: Date, opts: CampaignEnqueueOptions): Promise<CampaignEnqueueResult> { return this.campaigns.enqueueCampaignMessage(recipientId, now, opts); }
+  campaignSendGuard(messageId: string) { return this.campaigns.campaignSendGuard(messageId); }
 
-  async listLapsedClients(now: Date, inactiveDays: number): Promise<LapsedClient[]> {
+  async listLapsedClients(now: Date, inactiveDays: number, minIntervalDays = DEFAULT_CLIENT_INTERVAL_DAYS): Promise<LapsedClient[]> {
     const { rows } = await this.db.tx((c) => c.query<ClientRow & { last_visit: Date }>(
       `SELECT x.*, v.last_visit FROM (${CLIENT_SQL}
-         WHERE cl.deleted_at IS NULL AND cl.marketing_consent AND NOT cl.unsubscribed
+         WHERE cl.deleted_at IS NULL AND coalesce(mc.level IN ('full', 'selective'), false) AND NOT cl.unsubscribed
                AND NOT coalesce(pref.method = 'none', false)) x
        JOIN LATERAL (SELECT max(a.starts_at) AS last_visit FROM beauty_appointments a
                      WHERE a.client_id = x.id AND a.status = 'completed') v ON v.last_visit IS NOT NULL
        WHERE v.last_visit < $1::timestamptz - make_interval(days => $2::int)
          AND NOT EXISTS (SELECT 1 FROM beauty_appointments f WHERE f.client_id = x.id
                          AND f.status IN ('pending', 'confirmed') AND f.starts_at >= $1::timestamptz)
-       ORDER BY v.last_visit`, [now, inactiveDays]));
+         AND NOT EXISTS (SELECT 1 FROM beauty_campaign_recipients r WHERE r.client_id = x.id AND r.status IN ('queued', 'sent')
+                         AND r.queued_at > $1::timestamptz - make_interval(days => $3::int))
+         AND NOT EXISTS (SELECT 1 FROM beauty_messages m WHERE m.idempotency_key LIKE 'winback:' || x.id::text || ':%'
+                         AND m.created_at > $1::timestamptz - make_interval(days => $3::int))
+       ORDER BY v.last_visit`, [now, inactiveDays, minIntervalDays]));
     return rows.map((r) => ({ ...toClient(r), lastVisitAt: r.last_visit }));
   }
 
@@ -150,6 +161,7 @@ export class PgBeautyData implements BeautyDataPort {
            last_error = CASE WHEN $2::varchar = 'sent' THEN NULL ELSE last_error END,
            sent_at = CASE WHEN $2::varchar = 'sent' THEN $3::timestamptz ELSE sent_at END
          WHERE id = $1 AND direction = 'outbound' RETURNING idempotency_key`, [id, dbStatus, now, ext]);
+      if (status === "sent") await PgCampaigns.applyDelivery(c, rows[0]?.idempotency_key ?? null, { sent: true }, now);
       const rid = rows[0]?.idempotency_key ? REMINDER_KEY.exec(rows[0].idempotency_key)?.[1] : undefined;
       if (rid && status !== "queued") {
         await c.query(
@@ -182,6 +194,7 @@ export class PgBeautyData implements BeautyDataPort {
       const { rows } = await c.query<{ idempotency_key: string | null }>(
         `UPDATE beauty_messages SET attempts = $2, last_error = $3, status = $4, updated_at = $5
          WHERE id = $1 AND direction = 'outbound' RETURNING idempotency_key`, [id, attempt, err, final ? "failed" : "pending", now]);
+      if (final) await PgCampaigns.applyDelivery(c, rows[0]?.idempotency_key ?? null, { code: err }, now);
       const rid = rows[0]?.idempotency_key ? REMINDER_KEY.exec(rows[0].idempotency_key)?.[1] : undefined;
       if (rid && final) {
         const code = isChannelErrorCode(err) ? err : null;

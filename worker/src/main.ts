@@ -7,11 +7,12 @@ import { DEFAULT_WINDOW, PgPollStore } from "./adapters/pg-poll-store";
 import { LoggerNotificationLog, PgAdvisoryIdempotency, PgQueuePort, consoleLogger } from "./adapters/pg-support";
 import { TenantDb } from "./db/tenant-db";
 import { StaticTenantDirectory, type TenantDirectory } from "./db/tenants";
-import { DEFAULT_MARKETING_DAILY_LIMIT } from "./jobs/beauty-common";
+import { DEFAULT_CLIENT_INTERVAL_DAYS, DEFAULT_MARKETING_DAILY_LIMIT } from "./jobs/beauty-common";
+import { DEFAULT_CAMPAIGN_BATCH, DEFAULT_FAVORITE_SERVICES_DAYS } from "./jobs/beauty-campaign";
 import { DEFAULT_MIN_LEAD_MINUTES } from "./jobs/beauty-reminder";
 import type { BeautyDeps } from "./ports";
 import { Scheduler } from "./scheduler/scheduler";
-import { pollOutbox, pollReminders, pollReviews, pollWinback, type PollContext } from "./scheduler/pollers";
+import { pollCampaigns, pollOutbox, pollReminders, pollReviews, pollWinback, type PollContext } from "./scheduler/pollers";
 
 const MIN = 60_000;
 
@@ -25,6 +26,8 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
   await db.assertRlsEnforced();
   const lockPool = new pg.Pool({ connectionString: url, max: 10 });
   const now = () => new Date();
+  const posInt = (v: string | undefined, d: number) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : d);
+  const defaultTimezone = env.WORKER_DEFAULT_TIMEZONE ?? DEFAULT_WINDOW.defaultTimezone;
   const deps: BeautyDeps = {
     now,
     data: new PgBeautyData(db, now),
@@ -34,6 +37,11 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
     log: new LoggerNotificationLog(consoleLogger),
     queue: new PgQueuePort(),
     marketingDailyLimit: Number(env.WORKER_MARKETING_DAILY_LIMIT) > 0 ? Number(env.WORKER_MARKETING_DAILY_LIMIT) : DEFAULT_MARKETING_DAILY_LIMIT,
+    marketingClientIntervalDays: posInt(env.WORKER_MARKETING_CLIENT_INTERVAL_DAYS, DEFAULT_CLIENT_INTERVAL_DAYS),
+    campaign: {
+      batch: Math.min(500, posInt(env.WORKER_CAMPAIGN_BATCH, DEFAULT_CAMPAIGN_BATCH)), defaultTimezone,
+      favoriteServicesDays: posInt(env.WORKER_MARKETING_FAVORITE_SERVICES_DAYS, DEFAULT_FAVORITE_SERVICES_DAYS),
+    },
   };
   const store = new PgPollStore(db, { ...DEFAULT_WINDOW, defaultTimezone: env.WORKER_DEFAULT_TIMEZONE ?? DEFAULT_WINDOW.defaultTimezone });
   const lead = Number(env.WORKER_REMINDER_MIN_LEAD_MINUTES);
@@ -43,6 +51,9 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
     remindersEnabled: /^true$/i.test(env.WORKER_REMINDERS_ENABLED ?? ""),
     // TASK-760 (M2): review requests only with an explicit WORKER_REVIEWS_ENABLED=true.
     reviewsEnabled: /^true$/i.test(env.WORKER_REVIEWS_ENABLED ?? ""),
+    // §26.2: campaigns and winback are off unless explicitly enabled (legal gate §26.16).
+    campaignsEnabled: /^true$/i.test(env.WORKER_CAMPAIGNS_ENABLED ?? ""),
+    winbackEnabled: /^true$/i.test(env.WORKER_WINBACK_ENABLED ?? ""),
     reminderButtonsEnabled: /^true$/i.test(env.WORKER_REMINDER_BUTTONS_ENABLED ?? ""),
     reminderMinLeadMinutes: Number.isFinite(lead) && lead >= 0 && env.WORKER_REMINDER_MIN_LEAD_MINUTES ? lead : DEFAULT_MIN_LEAD_MINUTES,
   };
@@ -50,6 +61,7 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
     { name: "beauty.reminders", everyMs: 1 * MIN, run: () => pollReminders(ctx) },
     { name: "beauty.outbox", everyMs: 30_000, run: () => pollOutbox(ctx) },
     { name: "beauty.reviews", everyMs: 10 * MIN, run: () => pollReviews(ctx) },
+    { name: "beauty.campaigns", everyMs: 1 * MIN, run: () => pollCampaigns(ctx) },
     { name: "beauty.winback", everyMs: 24 * 60 * MIN, run: () => pollWinback(ctx) },
   ], consoleLogger);
   return {

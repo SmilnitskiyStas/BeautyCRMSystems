@@ -1,10 +1,10 @@
 import type {
-  AppointmentInfo, BeautyDeps, CampaignInfo, ClientInfo, LapsedClient, NotificationLogEntry, StoredMessage,
+  AppointmentInfo, BeautyDeps, CampaignInfo, CampaignRecipientRef, ClientInfo, LapsedClient, NotificationLogEntry, StoredMessage,
 } from "../ports";
 
 export function makeDeps(init: {
   now?: Date; appointments?: AppointmentInfo[]; clients?: ClientInfo[]; campaign?: CampaignInfo;
-  audience?: ClientInfo[]; lapsed?: LapsedClient[]; sendFailures?: number; marketingDailyLimit?: number;
+  audience?: CampaignRecipientRef[]; guard?: "campaign_cancelled" | "consent_withdrawn" | null; lapsed?: LapsedClient[]; sendFailures?: number; marketingDailyLimit?: number;
 } = {}) {
   const messages = new Map<string, StoredMessage>();
   const claims = new Map<string, "held" | "done">();
@@ -25,6 +25,11 @@ export function makeDeps(init: {
       getClient: async (id) => init.clients?.find((c) => c.id === id) ?? null,
       getCampaign: async () => init.campaign ?? null,
       listCampaignAudience: async () => init.audience ?? [],
+      listDueCampaigns: async () => [],
+      startCampaign: async () => false,
+      finishCampaignIfDrained: async () => false,
+      enqueueCampaignMessage: async () => "not_pending",
+      campaignSendGuard: async () => init.guard ?? null,
       listLapsedClients: async () => init.lapsed ?? [],
       upsertMessage: async (m) => {
         const ex = [...messages.values()].find((x) => x.idempotencyKey === m.idempotencyKey);

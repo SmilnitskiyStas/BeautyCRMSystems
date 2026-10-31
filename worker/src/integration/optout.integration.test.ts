@@ -51,6 +51,8 @@ async function seed(o: Opts) {
   await q("INSERT INTO beauty_services (id, tenant_id, name, duration_minutes, is_active) VALUES ($1,$2,'Svc',60,true)", [svc, tenantId]);
   await q("INSERT INTO beauty_clients (id, tenant_id, full_name, phone, marketing_consent, unsubscribed) VALUES ($1,$2,$3,$4,$5,$6)",
     [client, tenantId, NAME, PHONE, o.consent ?? true, o.unsubscribed ?? false]);
+  // TASK-780: consent is read from beauty_marketing_consents, not from the old clients flag
+  if (o.consent ?? true) await q("INSERT INTO beauty_marketing_consents (tenant_id, client_id, channel, level, source, text_version) VALUES ($1,$2,'telegram','full','chat','mc-v1')", [tenantId, client]);
   const starts = o.completed === "old" ? new Date("2025-12-01T10:00:00Z") : new Date(NOW.getTime() - 3_600_000);
   await q(`INSERT INTO beauty_appointments (tenant_id, location_id, specialist_id, service_id, client_id, starts_at, duration_minutes,
              status, source, price_original, price_final, reminder_option)

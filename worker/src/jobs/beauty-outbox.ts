@@ -33,6 +33,16 @@ export async function processOutbox(deps: BeautyDeps, data: OutboxJobData, attem
       return "skipped";
     }
   }
+  if (msg.kind === "campaign") {
+    // §26.8: cancelled campaign / withdrawn consent (table, level vs campaign type) -> final failure with a code, recipient skipped.
+    const stop = await deps.data.campaignSendGuard(msg.id);
+    if (stop) {
+      await deps.idempotency.release(msg.idempotencyKey);
+      await deps.data.recordSendFailure(msg.id, attempt, stop, true);
+      await deps.log.append({ ...base, status: "skipped", reason: stop, at: deps.now() });
+      return "skipped";
+    }
+  }
   if (MARKETING_KINDS.has(msg.kind)) {
     // Last check right before delivery: the client may have unsubscribed after the audience was picked.
     const client = msg.clientId ? await deps.data.getClient(msg.clientId) : null;

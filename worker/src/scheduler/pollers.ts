@@ -6,6 +6,7 @@ import { processOutbox } from "../jobs/beauty-outbox";
 import { processReviewRequest } from "../jobs/beauty-review";
 import { processDueReminder } from "../jobs/beauty-reminder";
 import { processWinback } from "../jobs/beauty-winback";
+import { processCampaign } from "../jobs/beauty-campaign";
 import type { BeautyDeps } from "../ports";
 
 export interface PollContext {
@@ -26,6 +27,10 @@ export interface PollContext {
   reminderButtonsEnabled?: boolean;
   /** WORKER_REVIEWS_ENABLED (TASK-760, default false in main.ts). `false` => pollReviews does nothing; unset = enabled (hand-built contexts/tests). */
   reviewsEnabled?: boolean;
+  /** WORKER_CAMPAIGNS_ENABLED (§26.2, default false in main.ts). `false` => pollCampaigns does nothing; unset = enabled (hand-built contexts/tests). */
+  campaignsEnabled?: boolean;
+  /** WORKER_WINBACK_ENABLED (§26.2, default false in main.ts). `false` => pollWinback does nothing; unset = enabled (hand-built contexts/tests). */
+  winbackEnabled?: boolean;
 }
 
 export interface PollResult { processed: number; errors: number }
@@ -96,6 +101,7 @@ export function pollOutbox(ctx: PollContext): Promise<PollResult> {
 
 /** "Давно не були": daily; keys are per lapse, so extra runs never duplicate. */
 export function pollWinback(ctx: PollContext, inactiveDays?: number): Promise<PollResult> {
+  if (ctx.winbackEnabled === false) return Promise.resolve({ processed: 0, errors: 0 });
   return forEachTenant(ctx, async () => {
     const r = await processWinback(ctx.deps, inactiveDays);
     return { processed: r.sent, errors: 0 };
@@ -120,4 +126,24 @@ export function pollReviews(ctx: PollContext): Promise<PollResult> {
     }
     return res;
   }, "pollReviews");
+}
+
+/**
+ * Due campaigns (§26.8): `scheduled -> sending`, recipients of the frozen audience -> outbox messages, `done` when drained.
+ * Runs every minute, only with WORKER_CAMPAIGNS_ENABLED=true. Logs carry ids and result codes only.
+ */
+export function pollCampaigns(ctx: PollContext): Promise<PollResult> {
+  if (ctx.campaignsEnabled === false) return Promise.resolve({ processed: 0, errors: 0 });
+  return forEachTenant(ctx, async () => {
+    const res: PollResult = { processed: 0, errors: 0 };
+    for (const id of await ctx.deps.data.listDueCampaigns(ctx.deps.now())) {
+      try {
+        res.processed += (await processCampaign(ctx.deps, { campaignId: id })).queued;
+      } catch (err) {
+        res.errors++;
+        ctx.logger.error("campaign failed", { campaignId: id, errorCode: errorCode(err) });
+      }
+    }
+    return res;
+  }, "pollCampaigns");
 }
