@@ -149,3 +149,21 @@ cd frontend; npm.cmd test; npx tsc --noEmit; npm.cmd run lint
 - Помилки API: 409 (slug/пошта зайняті), 422 (валідація), 401/403 (ключ) показуються українською без ехо пароля.
 - Автотест: змінні `BEAUTY_NEW_OWNER_EMAIL` і `BEAUTY_NEW_OWNER_PASSWORD` вимикають запити `Read-Host`; після використання зніміть їх із сесії.
 - Видалення тестового tenant немає в API: лише через `psql` під `postgres` у контейнері `beautycrm-dev` (видалити рядки з `tenant_id` у всіх таблицях і запис `tenants`, з `session_replication_role=replica`).
+
+### 11.3 Маркетинг: GRANT/REVOKE, kill switch, legal guard (TASK-791)
+Після кожного `setup-db.ps1` (він ідемпотентний; запускати після міграції `beauty_marketing`):
+- **app** (`beautycrm_app`): `REVOKE UPDATE, DELETE ON beauty_marketing_consent_events` (журнал згод лише SELECT/INSERT; поряд уже є така сама схема для `beauty_ai_settings_audit`). Решта таблиць SELECT/INSERT/UPDATE/DELETE.
+- **worker** (`beautycrm_worker`, точкові права, без `ALL TABLES`): `SELECT` на `tenants` (лише свій рядок за RLS; потрібен для перевірки модуля `beauty_marketing`), `beauty_marketing_consents`, `beauty_promotions`, `beauty_promotion_services`; `SELECT, UPDATE` на `beauty_campaigns`, `beauty_campaign_recipients`; `SELECT, INSERT, UPDATE` на `beauty_coupons`; `SELECT, INSERT` на `beauty_chat_keyboards`; `SELECT, INSERT, UPDATE` на `beauty_messages` (вже було). Воркер НЕ має права писати згоди, акції та `beauty_marketing_consent_events`.
+- Перевірка: інтеграційний тест `worker/src/integration/marketing-security.integration.test.ts` бере GRANT-секцію прямо зі `setup-db.ps1`, створює роль лише з цими правами й проганяє кампанію, winback, outbox (без `42501`; заборонені записи дають `42501`).
+
+**Kill switch (від найшвидшого):**
+1. Зупинити воркер (`taskkill /PID <PID з scripts\dev\.state\worker.pid> /T /F`): жодна відправка не піде.
+2. `WORKER_CAMPAIGNS_ENABLED=false` / `WORKER_WINBACK_ENABLED=false` (за замовчуванням false; `start-worker.ps1` задає їх явно) і перезапуск: `pollCampaigns`/`pollWinback` нічого не роблять, а `pollOutbox` не бере повідомлення `campaign:*`/`winback:*` (лишаються `pending`, нічого не втрачається; після ввімкнення підуть далі).
+3. Прибрати модуль `beauty_marketing` у tenant: воркер для нього не ставить у чергу й не відправляє (повідомлення лишаються `pending`, одержувачі `pending`). Відновлення модуля продовжує роботу.
+4. Скасування кампанії (`cancel`) закриває `pending` одержувачів, а `queued` відсікає guard воркера перед відправкою.
+
+**Legal guard (§26.16 п. 1):** воркер не стартує, якщо `ASPNETCORE_ENVIRONMENT` не `Development` (або `NODE_ENV=production`) і `WORKER_CAMPAIGNS_ENABLED=true` чи `WORKER_WINBACK_ENABLED=true` без `WORKER_MARKETING_LEGAL_APPROVED=true`. Аналогічний guard в API: `Marketing:LegalGateApproved`.
+
+**Код купона.** Повний персональний код лежить у `beauty_messages.body` лише від постановки в чергу до `sent`/фінального `failed`; у тій самій транзакції, що ставить статус, воркер замінює його на `[код купона …XYZ]` (останні 3 символи). Обмеження: поки повідомлення `pending`/`sending` (зазвичай секунди, але до 3 спроб або до відновлення маркетингу), код у тілі є; історію ШІ й inbox у цей проміжок має маскувати backend (TASK-790). Збій між відправкою й записом статусу лишає код у тілі `sending` до реапера бекенду.
+
+**Winback:** лише Telegram, вікно 09:00-20:00 за зоною закладу, ліміт `WORKER_MARKETING_DAILY_LIMIT` і частота 1/7 днів перевіряються під одним advisory lock `marketing-daily:{tenant}`; поллер щогодини (раніше раз на добу), ключ на лапс гарантує відсутність дублів. Невалідна IANA-зона закладу: одержувач/клієнт `skipped:invalid_timezone` (без щохвилинних помилок у лозі).
