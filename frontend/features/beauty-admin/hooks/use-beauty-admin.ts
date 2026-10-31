@@ -14,6 +14,7 @@ import type {
   ChannelId,
   ChannelPatch,
   ClosureInput,
+  PatchableStatus,
   LocationId,
   Weekday,
   LocationInput,
@@ -152,27 +153,57 @@ export const useUpcomingAppointmentsCount = (specialistId: string, enabled = tru
     staleTime: 0,
   });
 
-export function useCancelAppointment(specialistId: string) {
+/**
+ * Префікс усіх запитів календаря. Ключ тижня містить id майстра, який у owner/admin за замовчуванням порожній («перший майстер»,
+ * `chosenId = ""`), тож інвалідація за `["beauty","calendar", <id з відповіді>]` не збігалась із ключем і календар після
+ * перенесення/скасування/зміни статусу НЕ перечитувався (TASK-775). Тому - лише спільний префікс.
+ */
+const CALENDAR_PREFIX = ["beauty", "calendar"] as const;
+
+export function useCancelAppointment() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, reason }: { id: string; reason?: string }) => beautyApi.cancelAppointment(id, reason),
     onSuccess: () => {
       // Префікс охоплює календар з/без скасованих; скасований запис потрапляє в історію клієнта.
-      void qc.invalidateQueries({ queryKey: ["beauty", "calendar", specialistId] });
+      void qc.invalidateQueries({ queryKey: CALENDAR_PREFIX });
       void qc.invalidateQueries({ queryKey: ["beauty", "client"] });
       void qc.invalidateQueries({ queryKey: ["beauty", "upcoming"] });
     },
   });
 }
 
-export function useMoveAppointment(specialistId: string) {
+export function useMoveAppointment() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, startsAt }: { id: string; startsAt: string }) => beautyApi.moveAppointment(id, startsAt),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["beauty", "calendar", specialistId] });
+      void qc.invalidateQueries({ queryKey: CALENDAR_PREFIX });
       void qc.invalidateQueries({ queryKey: ["beauty", "upcoming"] });
+      void qc.invalidateQueries({ queryKey: ["beauty", "overview"] });
     },
+  });
+}
+
+/**
+ * Зміна статусу запису (confirmed | completed | no_show). Статус впливає на календар, огляд (виручка/KPI), профіль і список клієнтів
+ * (візити, витрати) та аналітику (виручка, собівартість, виплати) - тож інвалідуємо всі ці префікси, а при помилці
+ * (напр. 409 appointment_closed після паралельної зміни) теж оновлюємо календар.
+ */
+export function useSetAppointmentStatus() {
+  const qc = useQueryClient();
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: CALENDAR_PREFIX });
+    void qc.invalidateQueries({ queryKey: ["beauty", "overview"] });
+    void qc.invalidateQueries({ queryKey: ["beauty", "client"] });
+    void qc.invalidateQueries({ queryKey: ["beauty", "clients"] });
+    void qc.invalidateQueries({ queryKey: ["beauty", "analytics"] });
+    void qc.invalidateQueries({ queryKey: ["beauty", "upcoming"] });
+  };
+  return useMutation({
+    mutationFn: ({ id, status }: { id: string; status: PatchableStatus }) => beautyApi.setAppointmentStatus(id, status),
+    onSuccess: refresh,
+    onError: refresh,
   });
 }
 

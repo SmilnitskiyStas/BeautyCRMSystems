@@ -3,14 +3,19 @@
 import { Fragment, useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import { BeautyApiError, humanizeError } from "@/features/beauty-auth/errors";
 import { dateTimeLabel } from "../format";
+import { maskCouponCodes } from "../marketing/logic";
+import { safeMask } from "../phone";
 import {
   aiStateView,
   buttonLabels,
   clockOf,
+  contactChip,
   dayHeading,
   failureLabel,
   handoffReasonLabel,
   hasControlChars,
+  marketingChip,
+  maskLabel,
   MAX_REPLY,
   pressedText,
   REPLY_BLOCKED_TEXT,
@@ -35,7 +40,9 @@ const isVisible = () => document.visibilityState !== "hidden";
 function Bubble({ m, timezone }: { m: ConversationMessage; timezone?: string }) {
   const inbound = m.direction === "inbound";
   const system = m.senderType === "system";
-  const pressed = pressedText(m);
+  const mk = marketingChip(m);
+  const pressed = mk ? null : pressedText(m);
+  const chip = contactChip(m) ?? mk;
   const labels = buttonLabels(m);
   const tone = system
     ? "bg-white text-(--muted)"
@@ -45,11 +52,11 @@ function Bubble({ m, timezone }: { m: ConversationMessage; timezone?: string }) 
         ? "bg-(--accent) text-white"
         : "bg-(--tint)";
   return (
-    <li data-testid="message" data-status={m.status} data-kind={pressed ? "callback" : undefined} className={`flex flex-col gap-1 ${inbound ? "items-start" : system ? "items-center" : "items-end"}`}>
+    <li data-testid="message" data-status={m.status} data-kind={pressed ? "callback" : chip ? "contact" : undefined} className={`flex flex-col gap-1 ${inbound ? "items-start" : system ? "items-center" : "items-end"}`}>
       <div
         className={`max-w-[92%] rounded-2xl px-3.5 py-2.5 text-sm leading-snug break-words whitespace-pre-wrap sm:max-w-[80%] ${tone} ${m.status === "draft" ? "border border-dashed border-(--accent)" : ""}`}
       >
-        {pressed ?? m.body}
+        {chip ?? pressed ?? maskCouponCodes(m.body)}
       </div>
       {labels.length > 0 ? (
         <ul
@@ -262,6 +269,17 @@ export function ConversationThread({ id, onBack }: { id: string; onBack: () => v
                 {conv.channel.name}
                 {conv.location ? ` · ${conv.location.name}` : ""}
               </p>
+              {safeMask(conv.client?.phoneMasked) ? (
+                <p data-testid="phone-masked" aria-label={maskLabel(safeMask(conv.client?.phoneMasked)!)} className="m-0 text-sm text-(--muted)">
+                  Телефон: <span aria-hidden="true">{safeMask(conv.client?.phoneMasked)}</span>
+                </p>
+              ) : null}
+              {conv.client?.phonePending ? (
+                <div data-testid="phone-pending-badge" className="flex flex-wrap items-center gap-2">
+                  <Badge tone="wait">Надано інший номер</Badge>
+                  <TextLink href={`/beauty/clients/${conv.client.id}`}>Вирішити в картці клієнта</TextLink>
+                </div>
+              ) : null}
               {conv.client ? <TextLink href={`/beauty/clients/${conv.client.id}`}>Профіль клієнта</TextLink> : null}
             </div>
 

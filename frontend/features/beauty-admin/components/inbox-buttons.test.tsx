@@ -78,7 +78,8 @@ describe.each(["owner", "admin"])("inbox: кнопки в чаті (%s)", (role)
     renderInbox();
     await openConversation(/Марія Пономаренко/);
     const groups = screen.getAllByTestId("client-buttons");
-    expect(groups).toHaveLength(2);
+    // Нагадування й підтвердження скасування + пропозиція згоди й кампанія (§26) = 4 групи кнопок.
+    expect(groups).toHaveLength(4);
     expect(groups[0]).toHaveAccessibleName("Кнопки, які бачить клієнт (неактивні)");
     const labels = within(groups[0]).getAllByTestId("client-button").map((c) => c.textContent);
     expect(labels).toEqual(["✅ Підтверджую візит", "❌ Скасувати візит", "🔕 Більше не нагадувати"]);

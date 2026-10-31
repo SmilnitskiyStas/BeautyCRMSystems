@@ -1,5 +1,6 @@
 import { instantToLocal } from "../beauty-shared/zone-time";
 import { dateTimeLabel, shortDate } from "./format";
+import { maskCouponCodes } from "./marketing/logic";
 import type { ConversationMessage, ConversationSummary, MessageSenderType } from "./types";
 import type { Tone } from "./components/ui";
 
@@ -128,9 +129,61 @@ export function buttonLabels(m: Pick<ConversationMessage, "buttons">): string[] 
     .map((b) => [...b.trim()].slice(0, MAX_LABEL).join(""));
 }
 
-export const isCallbackPreview = (preview: string): boolean => preview.startsWith(CALLBACK_PREFIX);
+/** Службові тіла §25.4/§25.5.2: номера в повідомленні немає ні в якому вигляді. */
+export const CONTACT_BODY = "[контакт]";
+export const NUMBER_BODY = "[номер телефону]";
 
-/** Превʼю в списку розмов: callback `[кнопка] X` -> «Клієнт натиснув: X». */
+/**
+ * Подія «клієнт поділився номером» (§25.8): чип замість тіла. Для `kind=contact` тіло НЕ показується ніколи; сам номер
+ * у повідомленні відсутній за контрактом (є лише в картці клієнта й «Дзвінках»).
+ */
+export function contactChip(m: Pick<ConversationMessage, "kind" | "body" | "contactVerdict">): string | null {
+  if (m.kind === "contact") {
+    if (m.contactVerdict === "own") return "Клієнт поділився своїм контактом";
+    if (m.contactVerdict === "foreign") return "Надіслано чужий контакт — відхилено";
+    if (m.contactVerdict === "invalid") return "Некоректний номер";
+    return "Клієнт поділився контактом";
+  }
+  return m.body === NUMBER_BODY ? "Клієнт написав номер" : null;
+}
+
+/** §26.9.3: тіло вхідного повідомлення з кодом купона замінюється сервером - самого коду в історії немає. */
+export const COUPON_BODY = "[код купона]";
+
+/** Шаблонні підписи подій згоди/купона за підписом натиснутої кнопки (без кодів і ПД); `null` - звичайна кнопка. */
+export function marketingChipForLabel(label: string): string | null {
+  const l = label.toLowerCase();
+  if (l.includes("записатися зі знижкою")) return "Клієнт натиснув «Записатися зі знижкою»";
+  if (l.includes("не надсилати")) return "Клієнт відписався від акцій";
+  if (l.includes("повна інформація")) return "Клієнт обрав розсилки: повна інформація";
+  if (l.includes("лише акції")) return "Клієнт обрав розсилки: лише акції на його послуги";
+  return null;
+}
+
+/** Подія згоди/купона (§26.12): чип замість тіла. */
+export function marketingChip(m: Pick<ConversationMessage, "kind" | "body" | "pressedLabel">): string | null {
+  if (m.body === COUPON_BODY) return "Клієнт ввів код";
+  const label = pressedLabelOf(m);
+  return label ? marketingChipForLabel(label) : null;
+}
+
+/** Превʼю - подія, а не репліка: без префікса відправника. */
+export const isCallbackPreview = (preview: string): boolean => preview.startsWith(CALLBACK_PREFIX) || preview === CONTACT_BODY || preview === NUMBER_BODY || preview === COUPON_BODY;
+
+/** Превʼю в списку розмов: callback `[кнопка] X` -> «Клієнт натиснув: X»; `[контакт]`/`[номер телефону]` -> подія. */
 export function previewText(preview: string): string {
-  return preview.startsWith(CALLBACK_PREFIX) ? pressedText({ kind: "callback", body: preview }) ?? preview : preview;
+  if (preview === CONTACT_BODY) return "Клієнт поділився контактом";
+  if (preview === NUMBER_BODY) return "Клієнт написав номер";
+  if (preview === COUPON_BODY) return "Клієнт ввів код";
+  if (preview.startsWith(CALLBACK_PREFIX)) {
+    const label = pressedLabelOf({ kind: "callback", body: preview });
+    return (label ? marketingChipForLabel(label) : null) ?? pressedText({ kind: "callback", body: preview }) ?? preview;
+  }
+  return maskCouponCodes(preview);
+}
+
+/** Маска для зчитувачів з екрана: «Телефон приховано, закінчується на 33». */
+export function maskLabel(masked: string): string {
+  const tail = masked.replace(/\D/g, "");
+  return tail ? `Телефон приховано, закінчується на ${tail}` : "Телефон приховано";
 }

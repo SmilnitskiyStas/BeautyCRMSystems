@@ -65,15 +65,16 @@ describe("файли експорту", () => {
     const plain = networkCsv(net, series, false);
     expect(plain.fileName).toBe("beauty-analytics-network-2026-10-01_2026-10-02.csv");
     const lines = plain.content.split("\r\n");
-    expect(lines[0]).toBe("﻿Від;До;Записів;Завершено;Скасовано;Не прийшли;Виручка, ₴");
-    expect(lines[1]).toBe("2026-10-01;2026-10-01;3;2;1;0;1500,00");
-    expect(lines[3]).toBe("Разом;2026-10-02;4;2;1;1;1500,00");
+    expect(lines[0]).toBe("﻿Від;До;Записів;Завершено;Скасовано;Не прийшли;Виручка, ₴;Собівартість, ₴;Виплата майстрам, ₴;Чистий дохід, ₴;Маржа, %;Без собівартості");
+    // Фінансових полів у фікстурі немає -> порожні комірки (не нулі).
+    expect(lines[1]).toBe("2026-10-01;2026-10-01;3;2;1;0;1500,00;;;;;");
+    expect(lines[3]).toBe("Разом;2026-10-02;4;2;1;1;1500,00;;;;;");
     expect(lines).toHaveLength(5); // + порожній хвіст після останнього CRLF
 
     const cmp = networkCsv(net, series, true).content.split("\r\n");
-    expect(cmp[4]).toBe("Попередній період;2026-09-30;2;0;2;0;0,00");
+    expect(cmp[4]).toBe("Попередній період;2026-09-30;2;0;2;0;0,00;;;;;");
     // appointments 4 vs 2 = +100; completed 2 vs 0 = порожньо (ділення на 0); cancelled 1 vs 2 = -50; noShow 1 vs 0; revenue 1500 vs 0
-    expect(cmp[5]).toBe("Зміна, %;;100,0;;-50,0;;");
+    expect(cmp[5]).toBe("Зміна, %;;100,0;;-50,0;;;;;;;");
   });
   it("заклад: спеціалісти + Разом, без персональних даних і GUID-ів", () => {
     const b: LocationBreakdown = {
@@ -108,5 +109,34 @@ describe("файли експорту", () => {
     expect(c[0]).toContain("Використань (попер.);Виручка, ₴ (попер.);Зміна виручки, %");
     expect(c[1]).toBe("Осінь;постійна;Центр;3;1200,00;300,00;1;600,00;100,0");
     expect(promotionsCsv([], "2026-10-01", "2026-10-31", false).content).toBe("﻿Акція;Період дії;Заклади;Використань;Виручка, ₴;Віддано знижками, ₴\r\n");
+  });
+});
+
+describe("§24.7: мережевий CSV з фінансами", () => {
+  const fin = { cost: 440, masterPayout: 720, netIncome: 840, marginPercent: 42, withoutCost: 1, revenueWithoutCost: 400 };
+  const finNet: NetworkAnalytics = {
+    ...net,
+    totals: { ...net.totals, revenue: 2000, ...fin },
+    previous: { ...net.previous!, revenue: 1000, cost: 400, masterPayout: 300, netIncome: 300, marginPercent: 30, withoutCost: 0, revenueWithoutCost: 0 },
+  };
+  const finSeries: NetworkSeries = {
+    ...series,
+    points: [
+      { ...series.points[0], revenue: 2000, cost: 440, masterPayout: 720, netIncome: 840, withoutCost: 1 },
+      { ...series.points[1], revenue: 0, cost: 0, masterPayout: 0, netIncome: 0, withoutCost: 0 },
+    ],
+  };
+  it("точки, «Разом» і «Попередній період» мають нові колонки; маржа точки рахується клієнтом; нульова виручка -> порожня маржа", () => {
+    const l = networkCsv(finNet, finSeries, true).content.split("\r\n");
+    expect(l[0]).toContain("Виручка, ₴;Собівартість, ₴;Виплата майстрам, ₴;Чистий дохід, ₴;Маржа, %;Без собівартості");
+    expect(l[1]).toBe("2026-10-01;2026-10-01;3;2;1;0;2000,00;440,00;720,00;840,00;42,0;1");
+    expect(l[2]).toBe("2026-10-02;2026-10-02;1;0;0;1;0,00;0,00;0,00;0,00;;0");
+    expect(l[3]).toBe("Разом;2026-10-02;4;2;1;1;2000,00;440,00;720,00;840,00;42,0;1");
+    expect(l[4]).toBe("Попередній період;2026-09-30;2;0;2;0;1000,00;400,00;300,00;300,00;30,0;0");
+  });
+  it("«Зміна, %»: гроші - відсотки, маржа - п.п., «Без собівартості» порожньо", () => {
+    const l = networkCsv(finNet, finSeries, true).content.split("\r\n");
+    // 440 vs 400 = +10%; 720 vs 300 = +140%; 840 vs 300 = +180%; маржа 42 - 30 = 12,0 п.п.
+    expect(l[5]).toBe("Зміна, %;;100,0;;-50,0;;100,0;10,0;140,0;180,0;12,0;");
   });
 });

@@ -12,6 +12,7 @@ import {
 } from "../content";
 import { useBookingFlow } from "../hooks/useBookingFlow";
 import type { ReminderOption } from "../types";
+import { CouponField } from "./CouponField";
 import { OptionCard, PriceTag, SummaryRow } from "./ui";
 
 export interface ClientErrors {
@@ -29,6 +30,7 @@ export function CheckoutStep({ errors, submitError }: { errors: ClientErrors; su
   const setClient = useBookingFlow((s) => s.setClient);
   const website = useBookingFlow((s) => s.website);
   const setWebsite = useBookingFlow((s) => s.setWebsite);
+  const coupon = useBookingFlow((s) => s.coupon);
   if (!service || !slot) return null;
 
   return (
@@ -48,6 +50,12 @@ export function CheckoutStep({ errors, submitError }: { errors: ClientErrors; su
         </div>
         {service.promoLabel && (
           <span className="text-xs font-semibold text-[#A2300A]">{service.promoLabel}</span>
+        )}
+        {coupon?.result.outcome === "applied" && (
+          <div className="flex items-center justify-between text-sm font-semibold text-[#145A32]">
+            <span>З промокодом</span>
+            <span>{formatPrice(coupon.result.priceFinal)}</span>
+          </div>
         )}
       </section>
 
@@ -90,6 +98,8 @@ export function CheckoutStep({ errors, submitError }: { errors: ClientErrors; su
           </span>
         )}
       </div>
+
+      <CouponField />
 
       {/* Honeypot: невидиме для людей й допоміжних технологій поле; боти його заповнюють - сервер відхиляє запис. */}
       <div aria-hidden="true" className="absolute -left-[9999px] h-0 w-0 overflow-hidden">
@@ -155,7 +165,7 @@ export function CheckoutStep({ errors, submitError }: { errors: ClientErrors; su
           {submitError}
         </p>
       )}
-      <span className="sr-only">Разом до сплати {formatPrice(service.priceFinal)}</span>
+      <span className="sr-only">Разом до сплати {formatPrice(coupon?.result.outcome === "applied" ? coupon.result.priceFinal : service.priceFinal)}</span>
     </>
   );
 }

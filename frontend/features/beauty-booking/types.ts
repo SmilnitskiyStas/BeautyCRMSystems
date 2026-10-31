@@ -86,6 +86,8 @@ export const createAppointmentSchema = z.object({
   paymentMethod: paymentMethodSchema,
   /** Honeypot: люди його не бачать і не заповнюють; непорожнє значення сервер відхиляє (422). */
   website: z.string().optional(),
+  /** §26.11.4: загальний промокод закладу (персональні коди в публічній формі не діють). */
+  couponCode: z.string().trim().max(24).optional(),
 });
 export type CreateAppointmentRequest = z.infer<typeof createAppointmentSchema>;
 
@@ -107,6 +109,15 @@ export interface Appointment {
   paymentMethod?: PaymentMethod;
   paymentStatus?: string;
   cancellation?: CancellationTerms;
+  /** §26.11.4: до запису застосовано промокод. */
+  couponApplied?: boolean;
+}
+
+/** Результат перевірки промокоду (`GET /coupons/check`): ціни без жодних подробиць про код. */
+export interface CouponCheckResult {
+  outcome: "applied" | "not_applicable" | "not_better";
+  priceOriginal: number;
+  priceFinal: number;
 }
 
 /** Результат створення: `publicToken` — єдиний ключ доступу до запису (у шляху `/book/appointment/{token}`). */

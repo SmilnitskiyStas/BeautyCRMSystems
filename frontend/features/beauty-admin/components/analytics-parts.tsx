@@ -5,7 +5,8 @@ import { thousands, pointFullLabel, pointLabel } from "../analytics/series";
 import { PRESETS, validateRange, type DateRange, type RangePreset, type RangeState } from "../analytics/ranges";
 import type { DeltaView } from "../analytics/delta";
 import type { AnalyticsKpi } from "../analytics/kpis";
-import type { NetworkSeries } from "../types";
+import { moneyExact } from "../format";
+import type { NetworkSeries, SeriesPoint } from "../types";
 import { FIELD_INPUT, FIELD_LABEL, PrimaryButton, SecondaryButton } from "./ui";
 
 /** Текст дельти: напрямок передає і стрілка, і знак числа, і текст для зчитувачів (не лише колір, §19.3). */
@@ -140,33 +141,80 @@ function CustomRange({ initial, onApply }: { initial: DateRange | null; onApply:
 
 const POINT_MIN_WIDTH: Record<NetworkSeries["granularity"], number> = { day: 36, week: 70, month: 76 };
 
-export function RevenueChart({ series }: { series: NetworkSeries }) {
+export type ChartMetric = "revenue" | "net";
+
+/** Чи віддав backend чистий дохід по точках (§24.6.2): інакше перемикача «Чистий дохід» немає. */
+export const hasNetIncome = (series: NetworkSeries): boolean => series.points.some((p) => p.netIncome !== undefined);
+
+const valueOf = (p: SeriesPoint, metric: ChartMetric): number => (metric === "net" ? (p.netIncome ?? 0) : p.revenue);
+
+/** «Виручка / Чистий дохід» (§24.8.1): `radiogroup` без впливу на режим порівняння. */
+export function MetricSwitch({ value, onChange }: { value: ChartMetric; onChange: (m: ChartMetric) => void }) {
+  const options: { id: ChartMetric; label: string }[] = [
+    { id: "revenue", label: "Виручка" },
+    { id: "net", label: "Чистий дохід" },
+  ];
+  return (
+    <div role="radiogroup" aria-label="Показник графіка" className="flex flex-wrap gap-2">
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          role="radio"
+          aria-checked={value === o.id}
+          onClick={() => onChange(o.id)}
+          className={`min-h-11 cursor-pointer rounded-[22px] border-2 px-4 text-sm font-semibold ${value === o.id ? "border-(--accent) bg-(--accent) text-white" : "border-(--line-strong) bg-white text-(--ink)"}`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Графік динаміки (§19.2, §24.8.1). Кожен стовпець - `<button type="button">` на всю висоту колонки (Enter/Space нативно, видимий
+ * фокус), `aria-label` «{період}: виручка {x}, чистий дохід {y}. Відкрити деталі». Від'ємний чистий дохід - червоний підпис і
+ * мінімальний червоний стовпчик (висота не може бути від'ємною).
+ */
+export function RevenueChart({ series, metric = "revenue", onOpen }: { series: NetworkSeries; metric?: ChartMetric; onOpen?: (p: SeriesPoint, button: HTMLButtonElement) => void }) {
   const { points, granularity } = series;
-  const max = Math.max(1, ...points.map((p) => p.revenue));
+  const max = Math.max(1, ...points.map((p) => Math.abs(valueOf(p, metric))));
   const w = POINT_MIN_WIDTH[granularity];
   return (
-    <div tabIndex={0} role="region" aria-label="Виручка мережі, графік" className="overflow-x-auto">
-      <ul className="m-0 flex h-[200px] list-none items-end gap-1.5 p-0" style={{ minWidth: points.length * (w + 6) }} aria-label="Виручка за періодами">
-        {points.map((p, i) => (
-          <li
-            key={p.from}
-            className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1.5"
-            style={{ minWidth: w }}
-            aria-label={`${pointFullLabel(p, granularity)}: ${thousands(p.revenue)} тис. ₴`}
-          >
-            <span className="text-[11px] font-semibold" aria-hidden="true">
-              {thousands(p.revenue)}
-            </span>
-            <span
-              aria-hidden="true"
-              className={`w-full rounded-t-md ${i === points.length - 1 ? "bg-(--accent)" : "bg-[#B9A1C8]"}`}
-              style={{ height: Math.max(p.revenue > 0 ? 2 : 0, Math.round((p.revenue / max) * 150)) }}
-            />
-            <span className="text-[11px] whitespace-nowrap text-(--muted)" aria-hidden="true">
-              {pointLabel(p, granularity)}
-            </span>
-          </li>
-        ))}
+    <div role="region" aria-label="Виручка мережі, графік" className="overflow-x-auto">
+      <ul className="m-0 flex h-[200px] list-none items-end gap-1.5 p-0" style={{ minWidth: points.length * (w + 6) }} aria-label={metric === "net" ? "Чистий дохід за періодами" : "Виручка за періодами"}>
+        {points.map((p, i) => {
+          const v = valueOf(p, metric);
+          const negative = v < 0;
+          const full = pointFullLabel(p, granularity);
+          const label = `${full}: виручка ${moneyExact(p.revenue)}${p.netIncome !== undefined ? `, чистий дохід ${moneyExact(p.netIncome)}` : ""}. Відкрити деталі`;
+          return (
+            <li key={p.from} className="flex h-full min-w-0 flex-1" style={{ minWidth: w }}>
+              <button
+                type="button"
+                aria-label={label}
+                title={label}
+                data-point={p.from}
+                onClick={(e) => onOpen?.(p, e.currentTarget)}
+                className="flex h-full min-h-6 w-full min-w-0 cursor-pointer flex-col items-center justify-end gap-1.5 rounded-md border-0 bg-transparent p-0 hover:bg-(--tint) focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--accent)"
+              >
+                <span className={`text-[11px] font-semibold ${negative ? "text-[#9B1C1C]" : ""}`} aria-hidden="true">
+                  {negative ? "−" : ""}
+                  {thousands(Math.abs(v))}
+                </span>
+                <span
+                  aria-hidden="true"
+                  className={`w-full rounded-t-md ${negative ? "bg-[#C0392B]" : i === points.length - 1 ? "bg-(--accent)" : "bg-[#B9A1C8]"}`}
+                  style={{ height: negative ? 4 : Math.max(v > 0 ? 2 : 0, Math.round((v / max) * 150)) }}
+                />
+                <span className="text-[11px] whitespace-nowrap text-(--muted)" aria-hidden="true">
+                  {pointLabel(p, granularity)}
+                </span>
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

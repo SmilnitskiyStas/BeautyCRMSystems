@@ -127,7 +127,17 @@ describe("/beauty/calls", () => {
   it("порожній день: пояснення й посилання на клієнтів", async () => {
     renderCalls();
     await screen.findAllByTestId("call-task");
-    await userEvent.selectOptions(screen.getByLabelText("Заклад"), "k");
+    // Демо-записи відносні до «сьогодні» (залежать від дня тижня): шукаємо день і заклад без задач, а не фіксуємо.
+    const call = spies.getCallTasks as unknown as (q: unknown) => Promise<{ items: unknown[] }>;
+    let found: { day: "today" | "tomorrow"; id: string } | null = null;
+    for (const day of ["today", "tomorrow"] as const) {
+      for (const id of ["c", "p", "k"]) {
+        if (!found && (await call({ day, status: "open", locationId: id })).items.length === 0) found = { day, id };
+      }
+    }
+    expect(found).not.toBeNull();
+    if (found!.day === "tomorrow") await userEvent.click(screen.getByRole("button", { name: "Завтра" }));
+    await userEvent.selectOptions(screen.getByLabelText("Заклад"), found!.id);
     expect(await screen.findByText(/На цей день немає дзвінків, що очікують/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "До клієнтів" })).toHaveAttribute("href", "/beauty/clients");
   });

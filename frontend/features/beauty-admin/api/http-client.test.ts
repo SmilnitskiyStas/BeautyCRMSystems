@@ -122,6 +122,24 @@ describe("F2: реальний режим - час у зоні закладу", 
     expect(JSON.parse(last.init!.body!)).toEqual({ startsAt: "2026-07-15T11:00:00Z" });
   });
 
+  it("перенос: зона береться із закладу запису, а не з браузера (Нью-Йорк: 14:00 локальні = 18:00Z)", async () => {
+    appointments = [appt("ny", "2026-10-26T15:00:00+00:00", { timezone: "America/New_York" })];
+    const w = await httpBeautyApi.getCalendarWeek("s1");
+    expect(w.appointments[0].startsAt).toBe("2026-10-26T11:00");
+    await httpBeautyApi.moveAppointment("ny", "2026-10-26T14:00");
+    const patch = calls.filter((c) => c.init?.method === "PATCH").at(-1)!;
+    expect(JSON.parse(patch.init!.body!)).toEqual({ startsAt: "2026-10-26T18:00:00Z" });
+  });
+
+  it("зміна статусу: PATCH /appointments/{id} лише з {status}", async () => {
+    for (const status of ["confirmed", "completed", "no_show"] as const) {
+      await httpBeautyApi.setAppointmentStatus("a1", status);
+      const patch = calls.filter((c) => c.init?.method === "PATCH").at(-1)!;
+      expect(patch.path).toBe("/api/beauty/appointments/a1");
+      expect(JSON.parse(patch.init!.body!)).toEqual({ status });
+    }
+  });
+
   it("огляд: GET /overview, час рядків у зоні закладу, KPI із відповіді (включно з вільними слотами)", async () => {
     overview = {
       date: "2026-10-28",

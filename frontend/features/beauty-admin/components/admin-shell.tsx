@@ -5,10 +5,11 @@ import { usePathname } from "next/navigation";
 import { useEffect, Suspense, useId, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthGate, useAuth } from "@/features/beauty-auth/components/auth-provider";
-import { canUseInbox, navFor } from "@/features/beauty-auth/permissions";
+import { canUseInbox, canUseMarketing, navFor } from "@/features/beauty-auth/permissions";
 import { ROLE_LABEL } from "@/features/beauty-auth/types";
 import { useAiPanel } from "../hooks/use-ai-panel";
 import { useNeedsReplyCount } from "../hooks/use-inbox";
+import { useMarketingAvailability } from "../hooks/use-marketing";
 import { aiContextFor } from "./ai-contexts";
 
 function isActive(pathname: string, href: string) {
@@ -33,7 +34,9 @@ export function SideNav() {
   const pathname = usePathname();
   const { user, logout } = useAuth();
   const [leaving, setLeaving] = useState(false);
-  const nav = navFor(user.role);
+  // §26.11.1: розсилки вимкнено (`marketing_disabled` / `module_disabled`) - пункт меню не показуємо.
+  const marketing = useMarketingAvailability(canUseMarketing(user.role));
+  const nav = navFor(user.role).filter((n) => !(n.href === "/beauty/campaigns" && marketing.disabled));
   return (
     <nav
       aria-label="Головне меню"

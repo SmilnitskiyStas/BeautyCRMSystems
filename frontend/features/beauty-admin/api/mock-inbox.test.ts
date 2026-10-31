@@ -131,7 +131,7 @@ describe("mock inbox: список і сценарій передачі від �
   it("read: unreadCount обнуляється", async () => {
     const { api } = make();
     expect((await api.getConversation("cv3")).conversation.unreadCount).toBe(3);
-    await api.markConversationRead("cv3", "cv3-m5");
+    await api.markConversationRead("cv3", "cv3-m7");
     expect((await api.getConversation("cv3")).conversation.unreadCount).toBe(0);
   });
 });
@@ -301,5 +301,41 @@ describe("mock: налаштування нагадувань (§22.6.4)", () =>
       expect(await code(api.saveReminderSettings({ ...s, ...bad }))).toEqual({ status: 422, code: "invalid_quiet_hours" });
     }
     await expect(api.saveReminderSettings({ ...s, quietHoursStart: "23:30", quietHoursEnd: "07:30" })).resolves.toMatchObject({ quietHoursStart: "23:30" });
+  });
+});
+
+describe("mock inbox §25.7: телефон у розмовах і задачах", () => {
+  it("розмова: у inbox лише маска й прапорець pending; повного номера в JSON немає", async () => {
+    const { api } = make();
+    const d = await api.getConversation("cv3");
+    expect(d.conversation.client).toEqual({ id: "kl", name: "Катерина Ляшко", phoneMasked: "+••••••••••03", phonePending: true });
+    const list = await api.getConversations({ filter: "all" });
+    const json = JSON.stringify([d, list]);
+    expect(json).not.toMatch(/380 ?50 ?000 ?00 ?0\d/);
+    expect(json).not.toContain("111 22 33");
+    expect(list.items.find((c) => c.id === "cv1")!.client).toMatchObject({ phonePending: false });
+  });
+
+  it("повідомлення-контакти: kind=contact з вердиктом, тіло «[контакт]»; номер текстом - «[номер телефону]»", async () => {
+    const { api } = make();
+    const cv3 = await api.getConversation("cv3");
+    expect(cv3.messages[0]).toMatchObject({ kind: "contact", body: "[контакт]", contactVerdict: "own", direction: "inbound" });
+    const cv2 = await api.getConversation("cv2");
+    expect(cv2.messages[0]).toMatchObject({ kind: "contact", contactVerdict: "foreign" });
+    const cv1 = await api.getConversation("cv1");
+    expect(cv1.messages[0]).toMatchObject({ kind: "text", body: "[номер телефону]" });
+  });
+
+  it("«Дзвінки»: повний phonePending лише в call-tasks (owner/admin)", async () => {
+    const { api } = make();
+    const found = [];
+    for (let i = 0; i < 12; i++) {
+      const day = new Date(NOW + i * 86_400_000).toISOString().slice(0, 10);
+      found.push(...(await api.getCallTasks({ day, status: "all" })).items);
+    }
+    const kl = found.find((t) => t.client.id === "kl");
+    expect(kl, "задача дзвінка для kl").toBeDefined();
+    expect(kl!.client).toMatchObject({ phone: "+380 50 000 00 03", phonePending: "+380 67 111 22 33" });
+    expect(found.filter((t) => t.client.id !== "kl").every((t) => t.client.phonePending === undefined)).toBe(true);
   });
 });

@@ -13,7 +13,9 @@ const ALL_NAV: NavItem[] = [
   { label: "Клієнти", href: "/beauty/clients" },
   { label: "Спеціалісти", href: "/beauty/staff" },
   { label: "Заклади", href: "/beauty/locations" },
+  { label: "Послуги", href: "/beauty/services" },
   { label: "Ціни та акції", href: "/beauty/promos" },
+  { label: "Розсилки", href: "/beauty/campaigns" },
   { label: "Аналітика", href: "/beauty/analytics" },
   { label: "AI-асистент", href: "/beauty/ai" },
   { label: "Канали", href: "/beauty/channels" },
@@ -86,3 +88,20 @@ export function safeNext(next: string | null | undefined, fallback = "/beauty"):
   // "/..//evil" нормалізується до "//evil" — це вже protocol-relative URL.
   return path.startsWith("//") ? fallback : path;
 }
+
+/**
+ * §24.9: аналітика, фінансові поля (собівартість, виплата, чистий дохід), деталі періоду й редактор собівартості -
+ * лише owner/admin; specialist отримує 403 до читання тіла. Повний телефон клієнта (§25.9) - теж лише вони.
+ */
+export const canSeeFinance = (role: Role) => role === "owner" || role === "admin";
+export const canEditCosts = canSeeFinance;
+export const canSeeFullPhone = canSeeFinance;
+
+/**
+ * §26.11.1: розсилки (кампанії, аудиторії, купони) і згода в картці клієнта - лише owner/admin; specialist отримує 403 до читання,
+ * тому розділ для нього не показується й не відкривається, а персональних даних і кодів купонів у його DOM немає.
+ */
+export const canUseMarketing = (role: Role) => role === "owner" || role === "admin";
+export const canManageConsent = canUseMarketing;
+/** Код купона (`codeHint`) на записі бачать лише керівники. */
+export const canSeeCouponHint = canUseMarketing;

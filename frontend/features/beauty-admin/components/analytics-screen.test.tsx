@@ -21,6 +21,7 @@ vi.mock("../api", () => ({
   },
 }));
 
+vi.mock("@/features/beauty-auth/components/auth-provider", () => ({ useAuth: () => ({ user: { id: "u", email: "e", fullName: "n", role: "owner" } }) }));
 vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams(window.location.search) }));
 
 import { AnalyticsScreen } from "./analytics-screen";
@@ -186,7 +187,7 @@ describe("вкладка «Мережа»", () => {
     renderScreen();
     expect(await screen.findByRole("heading", { name: /Виручка мережі по тижнях/ })).toBeInTheDocument();
     expect(getNetworkSeries).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("listitem", { name: /23 жовт\.?: 4,2 тис\. ₴/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /23 жовт\.?: виручка 4 200 ₴\. Відкрити деталі/ })).toBeInTheDocument();
     expect(screen.getByText("23.10")).toBeInTheDocument();
   });
 
@@ -194,7 +195,7 @@ describe("вкладка «Мережа»", () => {
     getNetworkSeries.mockImplementation(async () => ({ ...series("month"), points: [{ from: "2026-09-01", to: "2026-09-30", appointments: 1, completed: 1, cancelled: 0, noShow: 0, revenue: 1000 }] }));
     renderScreen();
     expect(await screen.findByRole("heading", { name: /по місяцях/ })).toBeInTheDocument();
-    expect(screen.getByRole("listitem", { name: "вересень 2026: 1 тис. ₴" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "вересень 2026: виручка 1 000 ₴. Відкрити деталі" })).toBeInTheDocument();
   });
 
   it("порівняння: дельти біля KPI, null/ділення на 0 -> «—», зростання скасувань - погано", async () => {

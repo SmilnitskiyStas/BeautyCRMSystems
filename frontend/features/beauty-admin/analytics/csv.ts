@@ -1,5 +1,6 @@
 import { computeDelta } from "./delta";
-import type { LocationBreakdown, LocationStat, NetworkAnalytics, NetworkSeries, PromotionStat } from "../types";
+import { marginOf } from "./finance";
+import type { AnalyticsDetails, DetailsItem, LocationBreakdown, LocationStat, NetworkAnalytics, NetworkSeries, PromotionStat } from "../types";
 
 /**
  * Експорт CSV лише на клієнті (§19.5): UTF-8 з BOM, роздільник `;`, рядки CRLF, екранування RFC 4180,
@@ -48,7 +49,7 @@ export function serializeCsv(headers: string[], rows: CsvCell[][]): string {
   return `${BOM}${lines.join("\r\n")}\r\n`;
 }
 
-export type ExportKind = "network" | "locations" | "promotions";
+export type ExportKind = "network" | "locations" | "promotions" | "details";
 
 export const csvFileName = (kind: ExportKind, from: string, to: string) => `beauty-analytics-${kind}-${from}_${to}.csv`;
 
@@ -62,14 +63,33 @@ const deltaPct = (cur: number, prev: number) => computeDelta(cur, prev)?.pct ?? 
 
 // ---------- Мережа ----------
 
+const FINANCE_HEADERS = ["Собівартість, ₴", "Виплата майстрам, ₴", "Чистий дохід, ₴", "Маржа, %", "Без собівартості"];
+
+interface FinanceCols {
+  cost?: number;
+  masterPayout?: number;
+  netIncome?: number;
+  marginPercent?: number | null;
+  withoutCost?: number;
+}
+const financeCells = (f: FinanceCols): CsvCell[] => [money(f.cost), money(f.masterPayout), money(f.netIncome), pct(f.marginPercent), int(f.withoutCost)];
+/** Маржа точки series: у відповіді її немає, клієнт рахує за формулою §24.5. */
+const pointMargin = (net: number | undefined, revenue: number) => (net === undefined ? null : marginOf(net, revenue));
+
 export function networkCsv(net: NetworkAnalytics, series: NetworkSeries, compare: boolean): CsvFile {
-  const headers = ["Від", "До", "Записів", "Завершено", "Скасовано", "Не прийшли", "Виручка, ₴"];
-  const rows: CsvCell[][] = series.points.map((p) => [date(p.from), date(p.to), int(p.appointments), int(p.completed), int(p.cancelled), int(p.noShow), money(p.revenue)]);
+  const headers = ["Від", "До", "Записів", "Завершено", "Скасовано", "Не прийшли", "Виручка, ₴", ...FINANCE_HEADERS];
+  const rows: CsvCell[][] = series.points.map((p) => [
+    date(p.from), date(p.to), int(p.appointments), int(p.completed), int(p.cancelled), int(p.noShow), money(p.revenue),
+    ...financeCells({ ...p, marginPercent: pointMargin(p.netIncome, p.revenue) }),
+  ]);
   const t = net.totals;
-  rows.push([text("Разом"), date(net.toDate), int(t.appointments), int(t.completed), int(t.cancelled), int(t.noShow), money(t.revenue)]);
+  rows.push([text("Разом"), date(net.toDate), int(t.appointments), int(t.completed), int(t.cancelled), int(t.noShow), money(t.revenue), ...financeCells(t)]);
   if (compare && net.previous) {
     const p = net.previous;
-    rows.push([text("Попередній період"), date(p.toDate), int(p.appointments), int(p.completed), int(p.cancelled), int(p.noShow), money(p.revenue)]);
+    rows.push([text("Попередній період"), date(p.toDate), int(p.appointments), int(p.completed), int(p.cancelled), int(p.noShow), money(p.revenue), ...financeCells(p)]);
+    // Гроші - Δ%; маржа - різниця в п.п. (число, не відсоток від відсотка); «Без собівартості» не порівнюється.
+    const moneyDelta = (cur: number | undefined, prev: number | undefined) => (cur === undefined || prev === undefined ? pct(null) : pct(deltaPct(cur, prev)));
+    const marginDelta = t.marginPercent == null || p.marginPercent == null ? pct(null) : pct(Math.round((t.marginPercent - p.marginPercent) * 10) / 10);
     rows.push([
       text("Зміна, %"),
       text(""),
@@ -78,9 +98,46 @@ export function networkCsv(net: NetworkAnalytics, series: NetworkSeries, compare
       pct(deltaPct(t.cancelled, p.cancelled)),
       pct(deltaPct(t.noShow, p.noShow)),
       pct(deltaPct(t.revenue, p.revenue)),
+      moneyDelta(t.cost, p.cost),
+      moneyDelta(t.masterPayout, p.masterPayout),
+      moneyDelta(t.netIncome, p.netIncome),
+      marginDelta,
+      int(null),
     ]);
   }
   return { fileName: csvFileName("network", net.fromDate, net.toDate), content: serializeCsv(headers, rows) };
+}
+
+// ---------- Деталі періоду (§24.7) ----------
+
+/** Максимум рядків CSV деталей: 10 сторінок × 200. */
+export const DETAILS_CSV_MAX_ROWS = 2000;
+const DETAILS_HEADERS = [
+  "Дата", "Час", "Заклад", "Послуга", "Майстер", "Ціна до знижки, ₴", "Знижка, ₴", "Акція", "Ціна продажу, ₴",
+  "Собівартість, ₴", "Виплата майстру, ₴", "Чистий внесок, ₴", "Без собівартості",
+];
+
+const itemRow = (i: DetailsItem): CsvCell[] => [
+  date(i.localDate), text(i.localTime), text(i.location.name), text(i.service.name), text(i.specialist.name),
+  money(i.priceOriginal), money(i.discount), text(i.promotion?.name ?? ""), money(i.priceFinal),
+  // costMissing: порожні комірки собівартості й виплати (не 0), «так» у останній.
+  i.costMissing ? text("") : money(i.cost), i.costMissing ? text("") : money(i.masterPayout), money(i.net), text(i.costMissing ? "так" : ""),
+];
+
+/**
+ * CSV деталей: лише назви закладів/послуг/майстрів/акцій - без імен, телефонів, `clientId` і GUID-ів (`appointmentId` не експортується).
+ * `truncated` - вивантажено лише перші {DETAILS_CSV_MAX_ROWS} записів: додається рядок «Неповний список: n з m».
+ */
+export function detailsCsv(summary: AnalyticsDetails["summary"], items: DetailsItem[], range: { fromDate: string; toDate: string }, truncated = false): CsvFile {
+  const rows: CsvCell[][] = items.map(itemRow);
+  const blank = (n: number): CsvCell[] => Array.from({ length: n }, () => text(""));
+  rows.push([
+    text("Разом"), text(""), text(""), text(""), text(""),
+    money(summary.revenue + summary.discountTotal), money(summary.discountTotal), text(""), money(summary.revenue),
+    money(summary.cost), money(summary.masterPayout), money(summary.netIncome), int(summary.withoutCost),
+  ]);
+  if (truncated) rows.push([text(`Неповний список: ${items.length} з ${summary.completed}`), ...blank(DETAILS_HEADERS.length - 1)]);
+  return { fileName: csvFileName("details", range.fromDate, range.toDate), content: serializeCsv(DETAILS_HEADERS, rows) };
 }
 
 // ---------- Заклади ----------

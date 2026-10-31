@@ -3,6 +3,7 @@ import { apiJson, getUser } from "@/features/beauty-auth/session";
 import { mastersForCalendar } from "../calendar-masters";
 import { dateTimeLabel, money, weekDayLabels, weekRangeLabel } from "../format";
 import { isLinkActive } from "../staff-links";
+import { safeMask } from "../phone";
 import { normalizeHours } from "../working-hours";
 import { buildWeekAvailability } from "../../beauty-shared/availability";
 import { instantToLocal, localToUtcIso, weekInZone } from "../../beauty-shared/zone-time";
@@ -26,7 +27,24 @@ import type {
   LocationClosure,
   Weekday,
   ChannelId,
+  AnalyticsDetails,
+  AnalyticsDetailsQuery,
+  CallTask,
+  CallTaskList,
+  ClientPhoneInfo,
   ConversationDetail,
+  ConversationList,
+  ConversationSummary,
+  DetailsItem,
+  DetailsLocationRow,
+  DetailsSummary,
+  FinanceFields,
+  PhonePendingResult,
+  PhoneSource,
+  PhonePendingSource,
+  ServiceCost,
+  ServiceCostDetail,
+  ServiceCostRow,
   ClientProfile,
   ClientSummary,
   ClientTag,
@@ -51,6 +69,8 @@ import type {
 } from "../types";
 import type { BeautyAdminApi } from "./client";
 import { DEFAULT_GREETING, INITIAL_CHANNELS } from "./mock-data";
+import { httpMarketingApi, toAppointmentCoupon } from "./http-marketing";
+import { maskCouponCodes } from "../marketing/logic";
 
 /**
  * Реальний HTTP-клієнт за `.claude/docs/beauty-contracts.md` §9–§13; форми DTO звірені з контролерами/моделями backend (TASK-693).
@@ -98,6 +118,9 @@ interface AppointmentDto {
   clientConfirmedAt?: string | null;
   /** §22.6.1: нагадування запису (staff). */
   reminders?: { method?: string; offsetsMinutes?: number[]; points?: ReminderPointDto[] } | null;
+  /** §26.11.4: запис за купоном (без повного коду) і розсилка-джерело. */
+  coupon?: unknown;
+  campaignId?: string | null;
 }
 interface ReminderPointDto {
   kind?: string;
@@ -144,8 +167,14 @@ interface ClientDto {
   cancelledCount?: number;
   cancelledByClientCount?: number;
 }
-interface ClientDetailDto {
-  client: ClientDto;
+interface ClientPhoneDto {
+  phoneSource?: string | null;
+  callConsentAt?: string | null;
+  phonePending?: { phone?: string; source?: string; at?: string } | null;
+  possibleDuplicate?: { id?: string; name?: string } | null;
+}
+interface ClientDetailDto extends ClientPhoneDto {
+  client: ClientDto & ClientPhoneDto;
   notes: { id: string; body: string; createdAt: string }[];
   history: AppointmentDto[];
 }
@@ -165,7 +194,7 @@ interface PromotionDto {
   endsAt: string | null;
   locationIds: string[];
 }
-interface NetworkTotalsDto {
+interface NetworkTotalsDto extends FinanceFields {
   appointments: number;
   completed: number;
   cancelled: number;
@@ -181,7 +210,7 @@ interface NetworkDto extends NetworkTotalsDto {
   timezone?: string;
   previous?: (NetworkTotalsDto & { fromDate?: string; toDate?: string }) | null;
 }
-interface LocationMetricsDto {
+interface LocationMetricsDto extends Omit<FinanceFields, "revenueWithoutCost"> {
   appointments: number;
   completed: number;
   cancelled: number;
@@ -255,6 +284,92 @@ function toAiSettings(d: AiSettings): AiSettings {
   };
 }
 const NO_STORE = { cache: "no-store" } as const;
+
+// ---------- §24: фінанси, §25: телефон (явна вибірка полів: зайве, зокрема ПД клієнта, відкидається) ----------
+
+const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+/** Лише відомі числові фінансові поля; відсутні лишаються відсутніми (UI тоді не показує фінанси). */
+function pickFinance(d: FinanceFields, withRevenueWithoutCost = true): FinanceFields {
+  const out: FinanceFields = {};
+  for (const k of ["cost", "masterPayout", "netIncome", "withoutCost"] as const) {
+    const v = num(d[k]);
+    if (v !== undefined) out[k] = v;
+  }
+  if (d.marginPercent === null || num(d.marginPercent) !== undefined) out.marginPercent = d.marginPercent;
+  const r = num(d.revenueWithoutCost);
+  if (withRevenueWithoutCost && r !== undefined) out.revenueWithoutCost = r;
+  return out;
+}
+
+const SOURCES: PhoneSource[] = ["telegram_contact", "manual_chat", "web_form", "staff"];
+const PENDING_SOURCES: PhonePendingSource[] = ["telegram_contact", "manual_chat"];
+
+function toPhoneInfo(phone: string | null, d: ClientPhoneDto): ClientPhoneInfo {
+  const src = SOURCES.find((x) => x === d.phoneSource);
+  const p = d.phonePending;
+  const pendingSource = PENDING_SOURCES.find((x) => x === p?.source);
+  return {
+    phone: phone || null,
+    ...(src ? { phoneSource: src } : {}),
+    ...(d.callConsentAt ? { callConsentAt: d.callConsentAt } : {}),
+    ...(p && typeof p.phone === "string" && p.phone ? { phonePending: { phone: p.phone, source: pendingSource ?? "manual_chat", at: p.at ?? "" } } : {}),
+    ...(d.possibleDuplicate?.id ? { possibleDuplicate: { id: d.possibleDuplicate.id, name: d.possibleDuplicate.name ?? "" } } : {}),
+  };
+}
+
+function toDetails(d: AnalyticsDetails): AnalyticsDetails {
+  const s = d.summary;
+  const summary: DetailsSummary = {
+    appointments: s.appointments, completed: s.completed, cancelled: s.cancelled, noShow: s.noShow, revenue: s.revenue, discountTotal: s.discountTotal,
+    cost: s.cost, masterPayout: s.masterPayout, netIncome: s.netIncome, marginPercent: s.marginPercent ?? null, withoutCost: s.withoutCost, revenueWithoutCost: s.revenueWithoutCost,
+  };
+  const locations = (d.locations ?? []).map<DetailsLocationRow>((l) => ({
+    locationId: l.locationId, name: l.name, timezone: l.timezone, completed: l.completed, revenue: l.revenue, cost: l.cost, masterPayout: l.masterPayout,
+    netIncome: l.netIncome, marginPercent: l.marginPercent ?? null, withoutCost: l.withoutCost,
+  }));
+  // Записи: лише поля контракту §24.6.3. Імені, телефону, clientId клієнта тут не буде, навіть якщо сервер їх помилково віддасть.
+  const items = (d.items ?? []).map<DetailsItem>((i) => ({
+    appointmentId: i.appointmentId, localDate: i.localDate, localTime: i.localTime,
+    location: { id: i.location.id, name: i.location.name }, service: { id: i.service.id, name: i.service.name }, specialist: { id: i.specialist.id, name: i.specialist.name },
+    priceOriginal: i.priceOriginal, discount: i.discount, ...(i.promotion ? { promotion: { id: i.promotion.id, name: i.promotion.name } } : {}),
+    priceFinal: i.priceFinal, cost: i.costMissing ? null : (i.cost ?? null), masterPercent: i.costMissing ? null : (i.masterPercent ?? null),
+    masterPayout: i.costMissing ? null : (i.masterPayout ?? null), net: i.net, costMissing: !!i.costMissing,
+  }));
+  return {
+    fromDate: d.fromDate, toDate: d.toDate, timezone: d.timezone,
+    ...(d.location ? { location: { id: d.location.id, name: d.location.name, timezone: d.location.timezone } } : {}),
+    summary, locations, items, hasMore: !!d.hasMore, ...(d.hasMore && d.nextCursor ? { nextCursor: d.nextCursor } : {}),
+  };
+}
+
+const toCost = (c: ServiceCost): ServiceCost => ({
+  costAmount: c.costAmount, masterPercent: c.masterPercent ?? null, updatedAt: c.updatedAt, ...(c.updatedBy ? { updatedBy: { id: c.updatedBy.id, name: c.updatedBy.name } } : {}),
+});
+const toCostDetail = (d: ServiceCostDetail): ServiceCostDetail => ({
+  serviceId: d.serviceId,
+  ...(d.network ? { network: toCost(d.network) } : {}),
+  locations: (d.locations ?? []).map((l) => ({ ...toCost(l), locationId: l.locationId, locationName: l.locationName })),
+});
+
+/** `client.phonePending` задачі дзвінка: рядок (повний номер) або `{phone}`; усе інше відкидається. */
+function toCallTasks(d: CallTaskList): CallTaskList {
+  if (!d || !Array.isArray(d.items)) return d;
+  return {
+    ...d,
+    items: (d.items ?? []).map<CallTask>((t) => {
+      const raw = t.client as CallTask["client"] & { phonePending?: unknown };
+      const pending = typeof raw.phonePending === "string" ? raw.phonePending : (raw.phonePending as { phone?: string } | null | undefined)?.phone;
+      return { ...t, client: { id: raw.id, name: raw.name, ...(raw.phone ? { phone: raw.phone } : {}), ...(pending ? { phonePending: pending } : {}) } };
+    }),
+  };
+}
+
+/** Клієнт розмови: лише маска телефону (перемаскована, якщо сервер помилково віддав більше) і прапорець pending. */
+function toSummary(c: ConversationSummary): ConversationSummary {
+  if (!c?.client) return c;
+  const mask = safeMask(c.client.phoneMasked);
+  return { ...c, client: { id: c.client.id, name: c.client.name, ...(mask ? { phoneMasked: mask } : {}), ...(c.client.phonePending ? { phonePending: true } : {}) } };
+}
 const aiKeyPath = (provider: string) => `/ai/settings/keys/${encodeURIComponent(provider)}`;
 
 // ---------- дати ----------
@@ -277,6 +392,7 @@ function toLocationMetrics(l: LocationMetricsDto): LocationMetrics {
     busyMinutes: l.busyMinutes ?? 0,
     availableMinutes: l.availableMinutes ?? 0,
     load: l.load ?? null, // §19.6: відсутній `load` = null
+    ...pickFinance(l, false),
   };
 }
 const toLocationStat = (l: LocationStatDto, compare: boolean): LocationStat => ({
@@ -317,6 +433,7 @@ function toConversationDetail(d: ConversationDetail): ConversationDetail {
   if (!d || typeof d !== "object") return d;
   return {
     ...d,
+    conversation: toSummary(d.conversation) as ConversationDetail["conversation"],
     messages: (d.messages ?? []).map((m) => {
       const x = m as ConversationDetail["messages"][number];
       const labels = Array.isArray(x.buttons) ? x.buttons.filter((b): b is string => typeof b === "string" && b.trim() !== "").slice(0, 10) : [];
@@ -326,13 +443,15 @@ function toConversationDetail(d: ConversationDetail): ConversationDetail {
         senderType: x.senderType,
         ...(x.senderUser ? { senderUser: x.senderUser } : {}),
         kind: x.kind,
-        body: x.body,
+        // §26.9.3: код купона в тілі повідомлення не показуємо (лише останні 3 символи).
+        body: typeof x.body === "string" ? maskCouponCodes(x.body) : x.body,
         status: x.status,
         ...(x.failureCode ? { failureCode: x.failureCode } : {}),
         ...(x.sentAt ? { sentAt: x.sentAt } : {}),
         createdAt: x.createdAt,
         ...(labels.length > 0 ? { buttons: labels } : {}),
         ...(typeof x.pressedLabel === "string" && x.pressedLabel ? { pressedLabel: x.pressedLabel } : {}),
+        ...(x.kind === "contact" && ["own", "foreign", "invalid"].includes(x.contactVerdict as string) ? { contactVerdict: x.contactVerdict } : {}),
       };
     }),
     upcomingAppointments: (d.upcomingAppointments ?? []).map((a) => {
@@ -405,6 +524,8 @@ function toAppointment(a: AppointmentDto, fallbackZone?: string): Appointment {
     ...(a.cancelReason?.trim() ? { cancelReason: a.cancelReason.trim() } : {}),
     ...(a.reminders ? { reminders: toReminders(a.reminders) } : {}),
     ...(typeof a.clientConfirmedAt === "string" && a.clientConfirmedAt ? { clientConfirmedAt: a.clientConfirmedAt } : {}),
+    ...(toAppointmentCoupon(a.coupon) ? { coupon: toAppointmentCoupon(a.coupon) } : {}),
+    ...(typeof a.campaignId === "string" && a.campaignId ? { campaignId: a.campaignId } : {}),
   };
 }
 
@@ -621,6 +742,7 @@ async function loadClosures(locationId: string, weekStart: string, weekEnd: stri
 }
 
 export const httpBeautyApi: BeautyAdminApi = {
+  ...httpMarketingApi,
   // `GET /locations` (§14.5/§16) доступний усім ролям; без `includeInactive` віддає лише активні.
   getLocations: async () => (await get<LocationDto[]>("/locations")).map(toLocation),
 
@@ -795,6 +917,10 @@ export const httpBeautyApi: BeautyAdminApi = {
     await send("PATCH", `/appointments/${id}`, { startsAt: localToUtcIso(local, zones.get(id)) });
   },
 
+  setAppointmentStatus: async (id, status) => {
+    await send("PATCH", `/appointments/${id}`, { status });
+  },
+
   getCancellationSettings: () => get<CancellationSettings>("/settings/cancellation"),
   updateCancellationSettings: (s) => send<CancellationSettings>("PUT", "/settings/cancellation", s),
 
@@ -838,6 +964,9 @@ export const httpBeautyApi: BeautyAdminApi = {
         sum: money(a.priceFinal),
         status: a.status === "completed" ? "completed" : a.status === "cancelled" ? "cancelled" : a.status === "no_show" ? "no_show" : "planned",
         viaPromo: !!a.promotionId,
+        ...(toAppointmentCoupon(a.coupon)
+          ? { viaCoupon: true, couponName: toAppointmentCoupon(a.coupon)!.promotionName, couponDiscount: `−${money(Math.max(0, a.priceOriginal - a.priceFinal))}` }
+          : {}),
         ...(a.status === "cancelled"
           ? {
               ...(a.cancelledAt ? { cancelledAtLabel: dateTimeLabel(a.cancelledAt, a.timezone) } : {}),
@@ -853,6 +982,8 @@ export const httpBeautyApi: BeautyAdminApi = {
       preferences: [],
       warning: null,
       loyalty: { balance: "—", nextLevel: "Програма лояльності ще не підключена", progressPct: 0 },
+      // §25.7: поля можуть бути у `client` або на верхньому рівні відповіді (контракт не уточнює) - беремо обидва.
+      phoneInfo: toPhoneInfo(d.client.phone, { ...d, ...d.client } as ClientPhoneDto),
     };
     return profile;
   },
@@ -975,6 +1106,7 @@ export const httpBeautyApi: BeautyAdminApi = {
       description: null,
       discountType: "percent",
       discountValue: draft.percent,
+      access: draft.access ?? "public",
       startsAt: parseDraftDate(draft.from, false),
       endsAt: parseDraftDate(draft.to, true),
       isActive: true,
@@ -995,6 +1127,7 @@ export const httpBeautyApi: BeautyAdminApi = {
       averageCheck: t.averageCheck,
       cancellationRate: t.cancellationRate,
       newClients: t.newClients,
+      ...pickFinance(t),
     });
     return {
       fromDate: d.fromDate ?? q.from,
@@ -1007,7 +1140,48 @@ export const httpBeautyApi: BeautyAdminApi = {
 
   getNetworkSeries: async (q) => {
     const d = await get<NetworkSeries>(`/analytics/network/series?${rangeQuery(q)}`);
-    return { fromDate: d.fromDate, toDate: d.toDate, timezone: d.timezone, granularity: d.granularity, points: d.points };
+    return {
+      fromDate: d.fromDate,
+      toDate: d.toDate,
+      timezone: d.timezone,
+      granularity: d.granularity,
+      points: d.points.map((p) => ({ from: p.from, to: p.to, appointments: p.appointments, completed: p.completed, cancelled: p.cancelled, noShow: p.noShow, revenue: p.revenue, ...pickFinance(p, false) })),
+    };
+  },
+
+  getNetworkDetails: async (q: AnalyticsDetailsQuery) => {
+    const p = new URLSearchParams();
+    if (q.date) p.set("date", q.date);
+    if (q.from) p.set("from", q.from);
+    if (q.to) p.set("to", q.to);
+    if (q.locationId) p.set("locationId", q.locationId);
+    if (q.cursor) p.set("cursor", q.cursor);
+    if (q.take) p.set("take", String(Math.min(200, Math.max(1, Math.trunc(q.take)))));
+    return toDetails(await apiJson<AnalyticsDetails>(`${B}/analytics/network/details?${p}`, NO_STORE));
+  },
+
+  getServiceCosts: async (includeInactive = false) => {
+    const d = await apiJson<{ items: (ServiceCostRow)[] }>(`${B}/service-costs?includeInactive=${includeInactive ? "true" : "false"}`, NO_STORE);
+    return (d.items ?? []).map<ServiceCostRow>((r) => ({ ...toCostDetail(r), serviceName: r.serviceName, isActive: r.isActive !== false }));
+  },
+  getServiceCostDetail: async (serviceId) => toCostDetail(await apiJson<ServiceCostDetail>(`${B}/services/${encodeURIComponent(serviceId)}/costs`, NO_STORE)),
+  setServiceCost: async (serviceId, input) => {
+    const r = await send<ServiceCost & { locationId: string | null }>("PUT", `/services/${encodeURIComponent(serviceId)}/costs`, {
+      locationId: input.locationId,
+      costAmount: input.costAmount,
+      masterPercent: input.masterPercent ?? null,
+    });
+    return { ...toCost(r), locationId: r.locationId ?? null };
+  },
+  deleteServiceCost: async (serviceId, locationId) => {
+    const q = locationId ? `?locationId=${encodeURIComponent(locationId)}` : "";
+    await apiJson<void>(`${B}/services/${encodeURIComponent(serviceId)}/costs${q}`, { method: "DELETE" });
+  },
+
+  resolvePhonePending: async (clientId, action) => {
+    const r = await send<PhonePendingResult>("POST", `/clients/${encodeURIComponent(clientId)}/phone-pending`, { action });
+    const src = SOURCES.find((x) => x === r.phoneSource);
+    return { phone: r.phone, ...(src ? { phoneSource: src } : {}), ...(r.callConsentAt ? { callConsentAt: r.callConsentAt } : {}), phonePending: null };
   },
 
   getLocationsAnalytics: async (q) => (await get<LocationStatDto[]>(`/analytics/locations?${rangeQuery(q)}`)).map((l) => toLocationStat(l, q.compare)),
@@ -1142,7 +1316,7 @@ export const httpBeautyApi: BeautyAdminApi = {
     const p = new URLSearchParams({ day: q.day, status: q.status });
     if (q.locationId) p.set("locationId", q.locationId);
     if (q.take) p.set("take", String(Math.min(200, q.take)));
-    return apiJson(`${B}/call-tasks?${p}`, NO_STORE);
+    return apiJson<CallTaskList>(`${B}/call-tasks?${p}`, NO_STORE).then(toCallTasks);
   },
   updateCallTask: (id, patch) => send("PATCH", `/call-tasks/${encodeURIComponent(id)}`, patch),
 
@@ -1155,7 +1329,7 @@ export const httpBeautyApi: BeautyAdminApi = {
     if (q.channelType) p.set("channelType", q.channelType);
     if (q.cursor) p.set("cursor", q.cursor);
     if (q.take) p.set("take", String(Math.min(100, q.take)));
-    return apiJson(`${B}/conversations?${p}`, NO_STORE);
+    return apiJson<ConversationList>(`${B}/conversations?${p}`, NO_STORE).then((d) => (d && Array.isArray(d.items) ? { ...d, items: d.items.map(toSummary) } : d));
   },
   getConversation: (id, q) => {
     const p = new URLSearchParams();

@@ -1,19 +1,21 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useAuth } from "@/features/beauty-auth/components/auth-provider";
-import { humanizeError } from "@/features/beauty-auth/errors";
-import { useAbsences, useCalendarWeek, useCancelAppointment, useLocations, useMoveAppointment } from "../hooks/use-beauty-admin";
+import { BeautyApiError, humanizeError } from "@/features/beauty-auth/errors";
+import { useAbsences, useCalendarWeek, useCancelAppointment, useLocations, useMoveAppointment, useSetAppointmentStatus } from "../hooks/use-beauty-admin";
 import { canSeeClosureReason, closedDayLabel } from "../closed-days";
 import { CLIENT_TG_CANCEL_EVENT, MAX_CANCEL_REASON, cancelledByLabel, cancelledByShort, isClientTelegramCancel } from "../cancellation";
 import { ConfirmedBadge } from "./client-confirmed-badge";
+import { CouponBadge } from "./coupon-badge";
 import { addDaysIso, clock, dateTimeLabel, dayIndex, durationLabel, minutesOfDay, money } from "../format";
 import { bookableAt } from "../../beauty-shared/availability";
-import type { Absence, Appointment, CalendarKind, DayAvailability, MinuteInterval } from "../types";
+import { instantToLocal } from "../../beauty-shared/zone-time";
+import type { Absence, Appointment, CalendarKind, DayAvailability, MinuteInterval, PatchableStatus } from "../types";
 import { ReminderPoints } from "./reminder-points";
 import { ABSENCE_TYPE_LABEL, CheckRow } from "./staff-parts";
-import { Badge, Card, Chip, FIELD_INPUT, FIELD_LABEL, PageHeader, PrimaryButton, QueryState, SecondaryButton, TextLink } from "./ui";
+import { Badge, Card, Chip, FIELD_INPUT, FIELD_LABEL, PageHeader, PrimaryButton, QueryState, SecondaryButton, STATUS_VIEW, TextLink } from "./ui";
 
 /** Діапазон сітки за замовчуванням (години доби [start, end)); реальний приходить із `gridStartHour/gridEndHour` (F1). */
 const DEFAULT_START_HOUR = 9;
@@ -114,20 +116,43 @@ function AvailabilityShade({ day, startHour, endHour }: { day: DayAvailability; 
   );
 }
 
+/** Тексти результатів зміни статусу запису (§9, §24.4). */
+const STATUS_NOTICE: Record<PatchableStatus, string> = {
+  confirmed: "Запис підтверджено.",
+  completed: "Візит завершено. Ціну й собівартість зафіксовано у звіті.",
+  no_show: "Запис позначено як «Не прийшов».",
+};
+const ASK_TITLE: Record<"completed" | "no_show", string> = {
+  completed: "Завершити візит?",
+  no_show: "Позначити «Не прийшов»?",
+};
+
+/** Помилка зміни статусу: закритий запис (409 appointment_closed) - дружній текст; решта - за кодом без серверних текстів. */
+export function statusErrorText(e: unknown): string {
+  if (e instanceof BeautyApiError && e.code === "appointment_closed") {
+    return "Запис уже закрито (завершено, скасовано або позначено як «Не прийшов»), тому змінити його не можна. Дані оновлено.";
+  }
+  return humanizeError(e, "Не вдалося змінити статус запису. Спробуйте ще раз.");
+}
+
 function AppointmentPanel({
   appt,
   dayLabel,
-  specialistId,
   onCancelled,
   onMoved,
+  onStatusChanged,
+  canChangeStatus,
   moveProblem,
   outOfHours,
 }: {
   appt: Appointment;
   dayLabel: string;
-  specialistId: string;
   onCancelled: (refund: number) => void;
-  onMoved: () => void;
+  onMoved: (newStart: string) => void;
+  /** Результат зміни статусу (підтвердження/завершення/«не прийшов») для повідомлення над панеллю. */
+  onStatusChanged: (message: string) => void;
+  /** owner/admin - будь-який запис, specialist - лише власний (інакше backend віддасть 404). */
+  canChangeStatus: boolean;
   /** Чому новий час недоступний (F1: у недоступні клітинки записи не переносяться) або `null`. */
   moveProblem?: (startsAt: string, durationMinutes: number) => string | null;
   /** Поточний запис припадає на недоступний час (залишається видимим із попередженням). */
@@ -136,8 +161,12 @@ function AppointmentPanel({
   const [confirming, setConfirming] = useState(false);
   const [moving, setMoving] = useState(false);
   const [newStart, setNewStart] = useState(appt.startsAt);
-  const cancel = useCancelAppointment(specialistId);
-  const move = useMoveAppointment(specialistId);
+  const cancel = useCancelAppointment();
+  const move = useMoveAppointment();
+  const statusMutation = useSetAppointmentStatus();
+  const [ask, setAsk] = useState<"completed" | "no_show" | null>(null);
+  const askRef = useRef<HTMLDivElement>(null);
+  const askTitleId = useId();
   const moveInputId = useId();
   const reasonId = useId();
   const zone = useLocations().data?.find((l) => l.id === appt.locationId)?.timezone;
@@ -145,6 +174,26 @@ function AppointmentPanel({
   const cancelledByTelegram = isClientTelegramCancel(appt);
   const closed = appt.status === "completed" || appt.status === "cancelled" || appt.status === "no_show";
   const terms = appt.cancellation;
+  // Візит у майбутньому (за часом закладу) завершити можна (backend не забороняє), але з попередженням.
+  const notStarted = appt.startsAt > instantToLocal(new Date().toISOString(), zone);
+  const canAct = canChangeStatus && !closed && appt.kind !== "break";
+  const showStatusActions = canAct && !moving && !confirming && ask === null;
+  useEffect(() => {
+    if (ask) askRef.current?.focus();
+  }, [ask]);
+  const change = (status: PatchableStatus) => {
+    statusMutation.reset();
+    statusMutation.mutate(
+      { id: appt.id, status },
+      {
+        onSuccess: () => {
+          setAsk(null);
+          onStatusChanged(STATUS_NOTICE[status]);
+        },
+        onError: () => setAsk(null),
+      },
+    );
+  };
   const problem = moving && newStart && newStart !== appt.startsAt ? (moveProblem?.(newStart, appt.durationMinutes) ?? null) : null;
 
   return (
@@ -155,6 +204,9 @@ function AppointmentPanel({
         {dayLabel}, {timeRange(appt)} ({durationLabel(appt.durationMinutes)})
       </div>
       <div className="text-sm font-semibold">{money(appt.priceFinal)}</div>
+      <Badge tone={STATUS_VIEW[appt.status].tone} className="self-start">
+        <span data-testid="appt-status">{STATUS_VIEW[appt.status].label}</span>
+      </Badge>
       {appt.status === "cancelled" ? (
         <div className="flex flex-col gap-0.5 rounded-xl bg-(--page) p-3 text-sm" data-testid="cancel-info">
           <span className="font-semibold">{cancelledByTelegram ? CLIENT_TG_CANCEL_EVENT : cancelledByLabel(appt.cancelledBy)}</span>
@@ -171,10 +223,16 @@ function AppointmentPanel({
       {appt.reminders && appt.status !== "cancelled" ? <ReminderPoints reminders={appt.reminders} timezone={zone} /> : null}
       {appt.clientId ? <TextLink href={`/beauty/clients/${appt.clientId}`}>Профіль клієнта</TextLink> : null}
       {appt.kind === "promo" ? <Badge tone="promo" className="self-start">Акція: {appt.promotionName}</Badge> : null}
+      <CouponBadge appt={appt} />
       {appt.kind === "online" ? <Badge tone="now" className="self-start">Створено клієнтом онлайн</Badge> : null}
       {cancel.isError ? (
         <p role="alert" className="text-sm text-[#8A1F1F]">
           {humanizeError(cancel.error, "Не вдалося скасувати запис. Спробуйте ще раз.")}
+        </p>
+      ) : null}
+      {statusMutation.isError ? (
+        <p role="alert" data-testid="status-error" className="text-sm text-[#8A1F1F]">
+          {statusErrorText(statusMutation.error)}
         </p>
       ) : null}
       {moving ? (
@@ -183,7 +241,7 @@ function AppointmentPanel({
           onSubmit={(e) => {
             e.preventDefault();
             if (!newStart || newStart === appt.startsAt || problem) return;
-            move.mutate({ id: appt.id, startsAt: newStart }, { onSuccess: onMoved });
+            move.mutate({ id: appt.id, startsAt: newStart }, { onSuccess: () => onMoved(newStart) });
           }}
         >
           <label htmlFor={moveInputId} className={FIELD_LABEL}>
@@ -216,8 +274,70 @@ function AppointmentPanel({
           </div>
         </form>
       ) : null}
+      {ask ? (
+        <div
+          ref={askRef}
+          tabIndex={-1}
+          role="group"
+          aria-labelledby={askTitleId}
+          data-testid="status-confirm"
+          className="flex flex-col gap-2 rounded-xl bg-(--page) p-3 outline-none focus-visible:ring-2 focus-visible:ring-(--accent)"
+        >
+          <p id={askTitleId} className="text-sm font-semibold">
+            {ASK_TITLE[ask]}
+          </p>
+          {ask === "completed" ? (
+            <>
+              <p className="text-sm">
+                Цим фіксується ціна візиту ({money(appt.priceFinal)}) і собівартість послуги на сьогодні: вони потраплять у звіт і більше не
+                зміняться. Після завершення запис не можна перенести чи скасувати.
+              </p>
+              {notStarted ? (
+                <p role="status" data-testid="complete-future-warning" className="rounded-xl bg-[#FFF1CC] px-3 py-2 text-[13px] text-[#5C3900]">
+                  Візит призначено на {dateTimeLabel(appt.startsAt)} і він ще не настав. Завершуйте його наперед, лише якщо послугу вже надано.
+                </p>
+              ) : null}
+            </>
+          ) : (
+            <p className="text-sm">Клієнт не з’явився на візит. Запис буде закрито, і змінити, перенести чи скасувати його вже не можна.</p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <PrimaryButton disabled={statusMutation.isPending} onClick={() => change(ask)}>
+              {statusMutation.isPending ? "Зберігаємо…" : ask === "completed" ? "Так, завершити" : "Так, не прийшов"}
+            </PrimaryButton>
+            <SecondaryButton disabled={statusMutation.isPending} onClick={() => setAsk(null)}>
+              Назад
+            </SecondaryButton>
+          </div>
+        </div>
+      ) : null}
       <div className="mt-1.5 flex flex-wrap gap-2">
-        {!moving && !confirming && !closed ? (
+        {showStatusActions && appt.status === "pending" ? (
+          <PrimaryButton disabled={statusMutation.isPending} onClick={() => change("confirmed")}>
+            {statusMutation.isPending ? "Підтверджуємо…" : "Підтвердити запис"}
+          </PrimaryButton>
+        ) : null}
+        {showStatusActions ? (
+          <>
+            <PrimaryButton
+              onClick={() => {
+                statusMutation.reset();
+                setAsk("completed");
+              }}
+            >
+              Завершити візит
+            </PrimaryButton>
+            <SecondaryButton
+              onClick={() => {
+                statusMutation.reset();
+                setAsk("no_show");
+              }}
+            >
+              Не прийшов
+            </SecondaryButton>
+          </>
+        ) : null}
+        {!moving && !confirming && ask === null && !closed ? (
           <SecondaryButton
             onClick={() => {
               setNewStart(appt.startsAt);
@@ -255,7 +375,7 @@ function AppointmentPanel({
             </PrimaryButton>
             <SecondaryButton onClick={() => setConfirming(false)}>Залишити</SecondaryButton>
           </>
-        ) : !moving && !closed ? (
+        ) : !moving && ask === null && !closed ? (
           <SecondaryButton onClick={() => setConfirming(true)}>Скасувати запис</SecondaryButton>
         ) : null}
       </div>
@@ -603,12 +723,13 @@ export function CalendarScreen() {
                     key={selected.id}
                     appt={selected}
                     dayLabel={data.days[dayIndex(selected.startsAt, data.weekStart)] ?? ""}
-                    specialistId={masterId}
                     moveProblem={moveProblem}
                     outOfHours={outOfHours(selected)}
-                    onMoved={() => {
+                    canChangeStatus={!isSpecialist || selected.specialistId === user.specialistId}
+                    onStatusChanged={(message) => setNotice(message)}
+                    onMoved={(newStart) => {
                       setSelectedId(null);
-                      setNotice("Запис перенесено.");
+                      setNotice(`Запис перенесено на ${dateTimeLabel(newStart)}.`);
                     }}
                     onCancelled={(refund) => {
                       setSelectedId(null);

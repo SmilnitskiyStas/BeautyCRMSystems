@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canEditAiSettings, canEditReminderSettings, canManageAiKey, canManageReminderPrefs, canOpen, canUseCalls, canUseInbox, navFor, safeNext } from "./permissions";
+import { canEditAiSettings, canEditCosts, canSeeFinance, canSeeFullPhone, canEditReminderSettings, canManageAiKey, canManageReminderPrefs, canOpen, canUseCalls, canUseInbox, navFor, safeNext } from "./permissions";
 
 describe("safeNext", () => {
   it("пропускає відносні шляхи сайту з query і hash", () => {
@@ -88,5 +88,22 @@ describe("розмови, дзвінки, нагадування (§22.10)", () 
     expect(roles.map(canUseCalls)).toEqual([true, true, false]);
     expect(roles.map(canManageReminderPrefs)).toEqual([true, true, false]);
     expect(roles.map(canEditReminderSettings)).toEqual([true, false, false]);
+  });
+});
+
+describe("§24.9/§25.9: фінанси, собівартість і повний телефон - лише owner/admin", () => {
+  it("ролі", () => {
+    for (const fn of [canSeeFinance, canEditCosts, canSeeFullPhone]) {
+      expect(fn("owner")).toBe(true);
+      expect(fn("admin")).toBe(true);
+      expect(fn("specialist")).toBe(false);
+    }
+  });
+  it("розділ «Послуги» у меню owner/admin, не в меню specialist; маршрут specialist закритий", () => {
+    expect(navFor("owner").find((n) => n.href === "/beauty/services")?.label).toBe("Послуги");
+    expect(navFor("admin").some((n) => n.href === "/beauty/services")).toBe(true);
+    expect(navFor("specialist").some((n) => n.href === "/beauty/services")).toBe(false);
+    expect(canOpen("specialist", "/beauty/services")).toBe(false);
+    expect(canOpen("owner", "/beauty/services")).toBe(true);
   });
 });

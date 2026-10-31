@@ -1,5 +1,5 @@
-import { durationLabel, money } from "../format";
-import type { LocationMetrics, LocationStat, NetworkAnalytics, PromotionStat } from "../types";
+import { durationLabel, money, moneyExact, percentValue } from "../format";
+import type { FinanceFields, LocationMetrics, LocationStat, NetworkAnalytics, PromotionStat } from "../types";
 import { computeDelta, computeShareDelta, describeDelta, type DeltaKind, type DeltaValue, type DeltaView, type Polarity } from "./delta";
 
 export interface AnalyticsKpi {
@@ -32,12 +32,36 @@ const diff = (cur: number, prev: Prev<number>, on: boolean, kind: DeltaKind, pol
 const diffShare = (cur: number | null, prev: Prev<number | null>, on: boolean, polarity: Polarity) =>
   withDelta(on, computeShareDelta(cur, prev ?? null), "share", polarity);
 
+/** Маржа в п.п. між періодами: `marginPercent` - відсотки (42,5), а `computeShareDelta` чекає частку. */
+const marginDelta = (cur: number | null | undefined, prev: Prev<number | null>, on: boolean) =>
+  diffShare(cur == null ? null : cur / 100, prev == null ? null : prev / 100, on, "up-good");
+
+/**
+ * Фінансові KPI §24.8.1 (лише коли backend віддав фінанси): собівартість, виплата майстрам, чистий дохід (+ маржа в примітці).
+ * Delta для нових полів рахує клієнт за §19.3.
+ */
+export function financeKpis(t: FinanceFields, p: FinanceFields | null | undefined, on: boolean): AnalyticsKpi[] {
+  if (t.netIncome === undefined) return [];
+  return [
+    { label: "Собівартість", value: moneyExact(t.cost ?? 0), delta: diff(t.cost ?? 0, p?.cost, on, "money", "down-good") },
+    { label: "Виплата майстрам", value: moneyExact(t.masterPayout ?? 0), delta: diff(t.masterPayout ?? 0, p?.masterPayout, on, "money", "neutral") },
+    {
+      label: "Чистий дохід",
+      value: moneyExact(t.netIncome),
+      note: `маржа ${percentValue(t.marginPercent)}`,
+      delta: diff(t.netIncome, p?.netIncome, on, "money"),
+    },
+    ...(on ? [{ label: "Маржа", value: percentValue(t.marginPercent), note: "чистий дохід / виручка", delta: marginDelta(t.marginPercent, p?.marginPercent, on) }] : []),
+  ];
+}
+
 export function networkKpis(net: NetworkAnalytics, compare: boolean): AnalyticsKpi[] {
   const t = net.totals;
   const p = compare ? net.previous : null;
   const on = compare;
   return [
     { label: "Виручка мережі", value: money(t.revenue), note: `завершено: ${t.completed}`, delta: diff(t.revenue, p?.revenue, on, "money") },
+    ...financeKpis(t, p, on),
     { label: "Записів", value: nf(t.appointments), note: "усі статуси", delta: diff(t.appointments, p?.appointments, on, "count") },
     { label: "Середній чек", value: money(Math.round(t.averageCheck)), note: "по мережі", delta: diff(t.averageCheck, p?.averageCheck, on, "money") },
     { label: "Частка скасувань", value: percentLabel(t.cancellationRate, 1), note: `скасовано: ${t.cancelled}`, delta: diffShare(t.cancellationRate, p?.cancellationRate, on, "down-good") },
@@ -52,6 +76,12 @@ export function locationKpis(s: LocationStat, compare: boolean): AnalyticsKpi[] 
   const on = compare;
   return [
     { label: "Виручка закладу", value: money(s.revenue), note: `завершено: ${s.completed}`, delta: diff(s.revenue, p?.revenue, on, "money") },
+    ...(s.netIncome === undefined
+      ? []
+      : [
+          { label: "Чистий дохід", value: moneyExact(s.netIncome), note: `маржа ${percentValue(s.marginPercent)}`, delta: diff(s.netIncome, p?.netIncome, on, "money") },
+          { label: "Маржа", value: percentValue(s.marginPercent), delta: marginDelta(s.marginPercent, p?.marginPercent, on) },
+        ]),
     { label: "Записів", value: nf(s.appointments), delta: diff(s.appointments, p?.appointments, on, "count") },
     { label: "Скасовано", value: nf(s.cancelled), delta: diff(s.cancelled, p?.cancelled, on, "count", "down-good") },
     { label: "Не прийшли", value: nf(s.noShow), delta: diff(s.noShow, p?.noShow, on, "count", "down-good") },

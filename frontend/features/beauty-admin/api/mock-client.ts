@@ -7,13 +7,16 @@ import { isValidTimeZone } from "../locations-logic";
 import { outsideHours } from "../location-hours";
 import { activeLinks } from "../staff-links";
 import { normalizeHours, validateHours } from "../working-hours";
-import { DEMO_TZ, blocksOn, demoToday, historySeed } from "../../beauty-shared/demo-seed";
+import { DEMO_TZ, blocksOn, costSnapshotFor, demoToday, historySeed } from "../../beauty-shared/demo-seed";
 import { buildWeekAvailability, countFreeSlots, dayAvailability, slotStarts, toMinutes, type PlaceRules } from "../../beauty-shared/availability";
 import { instantToLocal, mondayOfYmd } from "../../beauty-shared/zone-time";
 import type { BeautyAdminApi } from "./client";
 import { createMockAi } from "./mock-ai";
 import { createMockAnalytics } from "./mock-analytics";
+import { createMockCosts } from "./mock-costs";
 import { createMockInbox } from "./mock-inbox";
+import { createMockMarketing } from "./mock-marketing";
+import { createMockPhones } from "./mock-phone";
 import {
   AI_GOALS,
   AI_REQUESTS,
@@ -69,8 +72,13 @@ function analytics() {
     absences,
     closures,
     today,
+    snapshotOf: (a) => costSnapshotFor(a, today),
   });
 }
+
+/** Ліміт `Analytics:DetailsPerUserPerMinute` (§24.2): у mock - стандартні 60 запитів на хвилину. */
+const DETAILS_PER_MINUTE = 60;
+const detailsCalls: number[] = [];
 
 /** Змінний стан «сервера» в межах сесії браузера. */
 const channels: ChannelConfig[] = INITIAL_CHANNELS.map((c) => ({ ...c, greeting: DEFAULT_GREETING }));
@@ -83,6 +91,8 @@ const chatMessages: AiChatMessage[] = [
 /** Скасовані записи: хто, коли й чому (§16) - дані не видаляються. */
 const cancelled = new Map<string, { at: string; by: CancelledBy; reason?: string }>();
 const moved = new Map<string, string>();
+/** Статуси, виставлені персоналом (PATCH status): id запису -> статус (§9, §24.4). */
+const statusOverride = new Map<string, "confirmed" | "completed" | "no_show">();
 /** Візити, підтверджені клієнтом кнопкою в чаті (§23.10): id запису -> UTC-момент. */
 const clientConfirmed = new Map<string, string>();
 const locations: BeautyLocation[] = structuredClone(LOCATIONS);
@@ -99,7 +109,15 @@ const MOCK_SPECIALIST_ID = "m";
 
 /** Запис із урахуванням перенесень і скасувань; `cancelReason` лише керівникам (§16). */
 function viewOf(a: Appointment): Appointment {
-  const base = { ...a, startsAt: moved.get(a.id) ?? a.startsAt };
+  // §26: запис за купоном - позначка й знижка (ціна до/після); повного коду немає, `codeHint` лише керівникам.
+  const cp = mockMarketing.couponFor(a);
+  const priced = cp
+    ? (() => {
+        const original = a.priceOriginal ?? PRICE_LIST.find((s) => s.serviceId === a.serviceId)?.price ?? a.priceFinal;
+        return { coupon: cp.coupon, priceOriginal: original, priceFinal: Math.round((original * (100 - cp.discountPercent)) / 100) };
+      })()
+    : {};
+  const base = { ...a, ...priced, startsAt: moved.get(a.id) ?? a.startsAt, ...(statusOverride.has(a.id) ? { status: statusOverride.get(a.id)! } : {}) };
   const c = cancelled.get(a.id);
   if (c) return { ...base, status: "cancelled" as const, cancelledAt: c.at, cancelledBy: c.by, ...(c.reason && isManager() ? { cancelReason: c.reason } : {}) };
   // §22.6.1: нагадування запису (точки плану) - лише керівникам.
@@ -199,6 +217,13 @@ function locationName(id: string): string {
 
 const activeLocations = () => locations.filter((l) => l.isActive !== false);
 
+/** Закритий запис (completed/cancelled/no_show) не змінюється: 409 appointment_closed, як на backend. */
+function assertOpen(a: Appointment): void {
+  if (a.status === "completed" || a.status === "cancelled" || a.status === "no_show") {
+    throw new BeautyApiError(409, "appointment_closed", "closed");
+  }
+}
+
 /** Перевірки переносу в порядку backend (§17-§18): slot_in_past, location_closed, specialist_unavailable, outside_location_hours, outside_working_hours, slot_unavailable. */
 function checkMove(a: Appointment, startsAt: string): void {
   if (startsAt <= nowLocal()) throw new BeautyApiError(409, "slot_in_past", "past");
@@ -242,7 +267,20 @@ function freeSlotsToday(locationId: LocationId | null): number {
   return total;
 }
 
+/** §26: згода, розсилки, купони. Прапорці mock: `NEXT_PUBLIC_MOCK_MARKETING=off` (marketing_disabled), `NEXT_PUBLIC_MOCK_ADMIN_GRANT=0`. */
+const mockMarketing = createMockMarketing({
+  role: mockRole,
+  services: () => SERVICES,
+  locations: () => locations,
+  appointments: () => demoAppointments(),
+  priceOf: (id) => PRICE_LIST.find((s) => s.serviceId === id)?.price ?? 1000,
+});
+
 const mockAi = createMockAi({ role: mockRole });
+/** §25: телефони клієнтів; один екземпляр для картки клієнта, «Дзвінків» і inbox. */
+const mockPhones = createMockPhones({ role: mockRole });
+/** §24: собівартість послуг (мережа + override закладів). */
+const mockCosts = createMockCosts({ role: mockRole, services: () => SERVICES, locations: () => locations });
 /** §22: inbox, задачі дзвінків, вподобання й налаштування нагадувань. Клієнт-симуляція відповідей лише в браузері (не в тестах). */
 const mockInbox = createMockInbox({
   role: mockRole,
@@ -251,6 +289,7 @@ const mockInbox = createMockInbox({
   channels: () => channels,
   staffName: (id) => staff.find((m) => m.id === id)?.name ?? "",
   simulateClient: typeof window !== "undefined" && process.env.NODE_ENV !== "test",
+  phones: mockPhones,
 });
 
 /**
@@ -274,6 +313,32 @@ export const mockBeautyApi: BeautyAdminApi = {
   deleteAiKey: mockAi.deleteAiKey,
   testAiKey: mockAi.testAiKey,
   getAiUsage: mockAi.getAiUsage,
+
+  getServiceCosts: mockCosts.getServiceCosts,
+  getServiceCostDetail: mockCosts.getServiceCostDetail,
+  setServiceCost: mockCosts.setServiceCost,
+  deleteServiceCost: mockCosts.deleteServiceCost,
+  resolvePhonePending: mockPhones.resolvePhonePending,
+
+  getPromotions: mockMarketing.getPromotions,
+  getCoupons: mockMarketing.getCoupons,
+  createCoupon: mockMarketing.createCoupon,
+  revokeCoupon: mockMarketing.revokeCoupon,
+  getClientCoupons: mockMarketing.getClientCoupons,
+  checkCoupon: mockMarketing.checkCoupon,
+  previewAudience: mockMarketing.previewAudience,
+  getCampaigns: mockMarketing.getCampaigns,
+  getCampaign: mockMarketing.getCampaign,
+  createCampaign: mockMarketing.createCampaign,
+  updateCampaign: mockMarketing.updateCampaign,
+  deleteCampaign: mockMarketing.deleteCampaign,
+  getCampaignPreview: mockMarketing.getCampaignPreview,
+  confirmCampaign: mockMarketing.confirmCampaign,
+  cancelCampaign: mockMarketing.cancelCampaign,
+  getCampaignStats: mockMarketing.getCampaignStats,
+  getCampaignCouponSummary: mockMarketing.getCampaignCouponSummary,
+  getMarketingConsent: mockMarketing.getMarketingConsent,
+  setMarketingConsent: mockMarketing.setMarketingConsent,
 
   getContactPreferences: mockInbox.getContactPreferences,
   setContactPreferences: mockInbox.setContactPreferences,
@@ -490,8 +555,20 @@ export const mockBeautyApi: BeautyAdminApi = {
   moveAppointment: async (id, startsAt) => {
     const appt = allMockAppointments().find((a) => a.id === id);
     if (!appt) throw notFound();
+    assertOpen(appt);
     checkMove(appt, startsAt);
     moved.set(id, startsAt);
+    await wait(null);
+  },
+
+  setAppointmentStatus: async (id, status) => {
+    const appt = allMockAppointments().find((a) => a.id === id);
+    if (!appt) throw notFound();
+    // specialist бачить і змінює лише власні записи (чужий = 404, як на backend).
+    if (!isManager() && appt.specialistId !== MOCK_SPECIALIST_ID) throw notFound();
+    assertOpen(appt);
+    // Знімок собівартості для `completed` у mock-аналітиці береться з статусу запису (`costSnapshotFor`), тож окремого сховища не треба.
+    statusOverride.set(id, status);
     await wait(null);
   },
 
@@ -527,6 +604,8 @@ export const mockBeautyApi: BeautyAdminApi = {
       tag: seed.tag,
       ...profile,
       notes: [...(addedNotes[id] ?? []), ...profile.notes],
+      // §25.7: повний номер у картці - лише керівникам (specialist до клієнтів доступу не має).
+      ...(isManager() ? { phoneInfo: mockPhones.info(id) } : {}),
     });
   },
 
@@ -687,10 +766,18 @@ export const mockBeautyApi: BeautyAdminApi = {
     });
   },
 
-  createPromotion: async () => wait({ id: `promo-${Date.now()}` }),
+  createPromotion: async (draft) => wait(mockMarketing.registerPromotion(draft)),
 
   getNetworkAnalytics: async (q) => wait(analytics().network(q)),
   getNetworkSeries: async (q) => wait(analytics().series(q)),
+  getNetworkDetails: async (q) => {
+    if (!isManager()) throw forbid();
+    const t = Date.now();
+    while (detailsCalls.length > 0 && t - detailsCalls[0] >= 60_000) detailsCalls.shift();
+    if (detailsCalls.length >= DETAILS_PER_MINUTE) throw new BeautyApiError(429, "rate_limited", "rate_limited", 30);
+    detailsCalls.push(t);
+    return wait(analytics().details(q));
+  },
   getLocationsAnalytics: async (q) => wait(analytics().locations(q)),
   getLocationBreakdown: async (locationId, q) => wait(analytics().breakdown(locationId, q)),
   getPromotionAnalytics: async (q) => wait({ rows: analytics().promotions(q) }),

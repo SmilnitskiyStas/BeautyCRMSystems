@@ -10,6 +10,7 @@ import type {
   AiSettingsInput,
   AiSettingsSaved,
   AiUsage,
+  PatchableStatus,
   AiPromoPlan,
   AiRequest,
   BeautyLocation,
@@ -36,7 +37,15 @@ import type {
   ClientProfile,
   ClientSummary,
   ConnectChannelInput,
+  AnalyticsDetails,
+  AnalyticsDetailsQuery,
   AnalyticsQuery,
+  PhonePendingAction,
+  PhonePendingResult,
+  ServiceCost,
+  ServiceCostDetail,
+  ServiceCostInput,
+  ServiceCostRow,
   LocationBreakdown,
   LocationStat,
   NetworkSeries,
@@ -59,6 +68,24 @@ import type {
   StaffMember,
   StaffUpdateInput,
   WorkingHours,
+  AudiencePreview,
+  AudienceQueryInput,
+  CampaignDto,
+  CampaignList,
+  CampaignListQuery,
+  CampaignPreview,
+  CampaignRequest,
+  CampaignStats,
+  ClientCoupon,
+  ConfirmCampaignInput,
+  ConsentInput,
+  CouponCheck,
+  CouponCheckInput,
+  CouponInput,
+  CouponSummary,
+  MarketingConsent,
+  PromotionItem,
+  SharedCoupon,
 } from "../types";
 
 /**
@@ -106,6 +133,11 @@ export interface BeautyAdminApi {
   getUpcomingAppointmentsCount(specialistId: string): Promise<number>;
   /** PATCH /appointments/{id} { startsAt } — перенос. `startsAt` = локальний час закладу `YYYY-MM-DDTHH:mm` */
   moveAppointment(id: string, startsAt: string): Promise<void>;
+  /**
+   * PATCH /appointments/{id} { status } (§9, §24.4): confirmed | completed | no_show. `completed` фіксує знімок собівартості;
+   * закритий запис (completed/cancelled/no_show) -> 409 `appointment_closed`. Скасування - лише `cancelAppointment`.
+   */
+  setAppointmentStatus(id: string, status: PatchableStatus): Promise<void>;
   /** GET /settings/cancellation (§11) */
   getCancellationSettings(): Promise<CancellationSettings>;
   /** PUT /settings/cancellation (§11, лише owner) */
@@ -161,6 +193,11 @@ export interface BeautyAdminApi {
   getNetworkAnalytics(q: AnalyticsQuery): Promise<NetworkAnalytics>;
   /** GET /analytics/network/series?from&to (§19.2): динаміка одним запитом, гранулярність обирає сервер. */
   getNetworkSeries(q: Pick<AnalyticsQuery, "from" | "to">): Promise<NetworkSeries>;
+  /**
+   * GET /analytics/network/details?date | from&to[&locationId][&cursor][&take] (§24.6.3, owner/admin; `no-store`): підсумок, заклади
+   * й сторінка записів `completed` БЕЗ даних клієнта. 422 invalid_range|invalid_date|invalid_cursor, 404 location_not_found, 429 rate_limited.
+   */
+  getNetworkDetails(q: AnalyticsDetailsQuery): Promise<AnalyticsDetails>;
   /** GET /analytics/locations?from&to[&compare=true] (§19.4): усі активні + неактивні із записами; `load` зі §19.4. */
   getLocationsAnalytics(q: AnalyticsQuery): Promise<LocationStat[]>;
   /** GET /analytics/locations/{id}/breakdown?from&to (§19.4): спеціалісти й топ послуг; 404 location_not_found. */
@@ -209,6 +246,23 @@ export interface BeautyAdminApi {
   /** POST /ai/actions (build_audience + campaign) */
   launchAiCampaign(input: { goalId: PromoGoalId; segmentIds: string[]; text: string }): Promise<{ reach: number }>;
 
+  // ---------- §24: собівартість послуг (owner/admin; specialist -> 403 forbidden_role) ----------
+  /** GET /service-costs?includeInactive=false (§24.6.1): рядок на послугу з мережевим значенням і override закладів. */
+  getServiceCosts(includeInactive?: boolean): Promise<ServiceCostRow[]>;
+  /** GET /services/{id}/costs: 404 service_not_found. */
+  getServiceCostDetail(serviceId: string): Promise<ServiceCostDetail>;
+  /**
+   * PUT /services/{id}/costs (§24.6.1): upsert мережевого (`locationId: null`) чи override закладу. 404 service_not_found|location_not_found,
+   * 422 invalid_cost|invalid_master_percent, 429 rate_limited. Минулі завершені записи не перераховуються.
+   */
+  setServiceCost(serviceId: string, input: ServiceCostInput): Promise<ServiceCost & { locationId: string | null }>;
+  /** DELETE /services/{id}/costs?locationId= (§24.6.1): без `locationId` - мережевий рядок. 404 cost_not_found. */
+  deleteServiceCost(serviceId: string, locationId: string | null): Promise<void>;
+
+  // ---------- §25: телефон клієнта ----------
+  /** POST /clients/{id}/phone-pending {action} (§25.7, owner/admin): 404 client_not_found, 409 no_pending_phone, 422 invalid_action. */
+  resolvePhonePending(clientId: string, action: PhonePendingAction): Promise<PhonePendingResult>;
+
   // ---------- §22: нагадування, зв'язок, дзвінки, inbox (owner/admin; specialist -> 403 forbidden_role) ----------
   /** GET /clients/{id}/contact-preferences (§22.6.2): 404 client_not_found. */
   getContactPreferences(clientId: string): Promise<ContactPreferences>;
@@ -238,4 +292,52 @@ export interface BeautyAdminApi {
   resumeConversationAi(id: string): Promise<void>;
   /** POST /conversations/{id}/read (§22.6.5): 204. */
   markConversationRead(id: string, upToMessageId?: string): Promise<void>;
+
+  // ---------- §26: згода, розсилки, аудиторії, купони (ADR-015) ----------
+  // Кампанії й купони: owner/admin, модуль `beauty_marketing` + `Marketing:Enabled` (інакше 403 module_disabled | marketing_disabled);
+  // specialist -> 403 forbidden_role. Згода в картці працює й за `Marketing:Enabled=false`. Усі відповіді `no-store`.
+  /** GET /promotions (§26.11.3): `access`, `activeCampaigns`. */
+  getPromotions(): Promise<PromotionItem[]>;
+  /** GET /coupons?promotionId&kind=shared (§26.11.4): загальні коди (код публічний за природою). */
+  getCoupons(q?: { promotionId?: string }): Promise<SharedCoupon[]>;
+  /** POST /coupons: 422 invalid_code|invalid_period|invalid_max_uses|promotion_not_code_only, 409 coupon_code_taken. */
+  createCoupon(input: CouponInput): Promise<SharedCoupon>;
+  /** PATCH /coupons/{id} {status:"revoked"}: ідемпотентно. */
+  revokeCoupon(id: string): Promise<SharedCoupon>;
+  /** GET /clients/{id}/coupons (§26.11.4): персональні купони клієнта лише з `codeHint` (повного коду немає). */
+  getClientCoupons(clientId: string): Promise<ClientCoupon[]>;
+  /** POST /coupons/check (усі ролі персоналу): 409 coupon_not_found|expired|not_started|exhausted|revoked|foreign_client|already_used, promotion_inactive; 429. */
+  checkCoupon(input: CouponCheckInput): Promise<CouponCheck>;
+  /** POST /marketing/audience/preview (§26.11.3): лише кількості й розбивка виключень, без ПД. 429 (20/хв). */
+  previewAudience(q: AudienceQueryInput): Promise<AudiencePreview>;
+  /** GET /campaigns?status&cursor&take=50 */
+  getCampaigns(q?: CampaignListQuery): Promise<CampaignList>;
+  /** GET /campaigns/{id}: 404 campaign_not_found. */
+  getCampaign(id: string): Promise<CampaignDto>;
+  /** POST /campaigns -> 201 draft; 422 коди §26.7. */
+  createCampaign(r: CampaignRequest): Promise<CampaignDto>;
+  /** PUT /campaigns/{id}: повна заміна draft (`revision+1`); інакше 409 campaign_not_draft. */
+  updateCampaign(id: string, r: CampaignRequest): Promise<CampaignDto>;
+  /** DELETE /campaigns/{id}: лише draft -> 204. */
+  deleteCampaign(id: string): Promise<void>;
+  /** GET /campaigns/{id}/preview: приклад тексту, кнопки, кількості, ліміти, вікно, попередження. */
+  getCampaignPreview(id: string): Promise<CampaignPreview>;
+  /**
+   * POST /campaigns/{id}/confirm (§26.7) з `Idempotency-Key` (8..128): обов'язкове підтвердження людиною. Помилки: 409 campaign_changed|
+   * campaign_not_draft|audience_empty|audience_too_large|promotion_inactive|idempotency_conflict, 422 invalid_schedule, 400 idempotency_key_required.
+   */
+  confirmCampaign(id: string, input: ConfirmCampaignInput, idempotencyKey: string): Promise<CampaignDto>;
+  /** POST /campaigns/{id}/cancel: ідемпотентно; 409 campaign_finished. */
+  cancelCampaign(id: string): Promise<CampaignDto>;
+  /** GET /campaigns/{id}/stats (§26.11.5): лише кількості; `viewed` завжди null. */
+  getCampaignStats(id: string): Promise<CampaignStats>;
+  /** GET /campaigns/{id}/coupons/summary: без кодів. */
+  getCampaignCouponSummary(id: string): Promise<CouponSummary>;
+  /** GET /clients/{id}/marketing-consent (§26.11.2, owner/admin): стан, журнал (≤50). */
+  getMarketingConsent(clientId: string): Promise<MarketingConsent>;
+  /**
+   * PUT /clients/{id}/marketing-consent: адмін знижує завжди, підвищує лише з `basis`+`basisNote` і за `Marketing:AdminGrantEnabled`.
+   * 404 client_not_found; 422 invalid_level|channel_unsupported|basis_required|invalid_basis|invalid_basis_note; 409 admin_grant_disabled.
+   */
+  setMarketingConsent(clientId: string, input: ConsentInput): Promise<MarketingConsent>;
 }

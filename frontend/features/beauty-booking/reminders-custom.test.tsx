@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { toAppointment, type PublicAppointmentDto } from "./api/http-client";
@@ -13,6 +14,10 @@ const flow = {
   paymentMethod: "cash",
   client: { name: "", phone: "" },
   website: "",
+  couponCode: "",
+  coupon: null,
+  setCouponCode: vi.fn(),
+  setCoupon: vi.fn(),
   setReminder: vi.fn(),
   setPaymentMethod: vi.fn(),
   setClient: vi.fn(),
@@ -23,6 +28,7 @@ vi.mock("./hooks/useBookingFlow", () => ({
 }));
 
 import { CheckoutStep } from "./components/CheckoutStep";
+import { TenantContext } from "./components/tenant-context";
 
 const dto = (reminderOption: string): PublicAppointmentDto => ({
   locationId: "c",
@@ -68,7 +74,13 @@ describe("reminder_option=custom (§22.6.1)", () => {
 
 describe("підказка біля вибору нагадування в публічній формі", () => {
   it("пояснює, що нагадування надсилає Telegram-бот, і прив'язана до поля", () => {
-    render(<CheckoutStep errors={{}} />);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <TenantContext.Provider value="demo">
+          <CheckoutStep errors={{}} />
+        </TenantContext.Provider>
+      </QueryClientProvider>,
+    );
     const select = screen.getByLabelText("Нагадати про запис");
     expect(select).toHaveAttribute("aria-describedby", "remind-hint");
     expect(document.getElementById("remind-hint")).toHaveTextContent(reminderHint);

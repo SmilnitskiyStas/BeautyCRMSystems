@@ -1,6 +1,7 @@
-import type { Absence, Appointment, BeautyLocation, CalendarKind, ContactSource, LocationClosure, MessageSenderType, MessageStatus, ReminderMethod, StaffMember, WorkingHours } from "@/features/beauty-admin/types";
+import type { Absence, Appointment, BeautyLocation, CalendarKind, ContactSource, ContactVerdict, PhonePendingSource, PhoneSource, LocationClosure, MessageSenderType, MessageStatus, ReminderMethod, StaffMember, WorkingHours } from "@/features/beauty-admin/types";
 import { weekdayOf } from "@/features/beauty-admin/closed-days";
 import { bookableAt, dayAvailability, hhmm } from "./availability";
+import { payoutOf } from "@/features/beauty-admin/analytics/finance";
 import { addDaysYmd, localToInstant, mondayOfYmd, todayInZone } from "./zone-time";
 
 /**
@@ -309,6 +310,10 @@ export const CONTACT_PREFS_SEED: ContactPrefSeed[] = [
 ];
 
 export interface ConversationSeedMessage {
+  /** §25.4: клієнт поділився контактом (`kind=contact`, body `[контакт]`, номера в повідомленні немає). */
+  contact?: ContactVerdict;
+  /** §25.5.2: клієнт написав номер текстом - тіло замінюється на `[номер телефону]`. */
+  numberText?: boolean;
   from: MessageSenderType;
   text: string;
   /** Скільки хвилин тому. */
@@ -320,6 +325,8 @@ export interface ConversationSeedMessage {
   buttons?: string[];
   /** Клієнт натиснув кнопку з таким підписом (`kind=callback`, `body="[кнопка] …"`). */
   pressed?: string;
+  /** §26.9.3: клієнт ввів код купона текстом - тіло замінюється на `[код купона]`. */
+  couponText?: boolean;
 }
 
 export interface ConversationSeed {
@@ -351,6 +358,8 @@ export const CONVERSATIONS_SEED: ConversationSeed[] = [
     aiState: "active",
     readMinutesAgo: 60,
     messages: [
+      { from: "client", text: "", numberText: true, minutesAgo: 400, status: "processed" },
+      { from: "system", text: "Дякуємо, номер збережено. Адміністратор зателефонує вам напередодні візиту.", minutesAgo: 400, status: "sent" },
       { from: "client", text: "Добрий день! Чи є вільне вікно на манікюр у п'ятницю?", minutesAgo: 95, status: "processed" },
       { from: "ai", text: "Добрий день, Олено! У п'ятницю є 11:00 та 15:00 у закладі Центр. Який час підійде?", minutesAgo: 94, status: "sent" },
       { from: "client", text: "11:00, будь ласка", minutesAgo: 90, status: "processed" },
@@ -371,6 +380,8 @@ export const CONVERSATIONS_SEED: ConversationSeed[] = [
     awaitingMinutes: 25,
     readMinutesAgo: 120,
     messages: [
+      { from: "client", text: "", contact: "foreign", minutesAgo: 130, status: "processed" },
+      { from: "system", text: "Це контакт іншої людини. Надішліть, будь ласка, свій або напишіть свій номер.", minutesAgo: 129, status: "sent" },
       { from: "client", text: "Добрий вечір! Підкажіть, чи нагадаєте ви мені про запис? І чи зателефонує адміністратор?", minutesAgo: 26, status: "processed" },
       { from: "system", text: "Щодо цього я уточню в адміністратора — він відповість вам тут.", minutesAgo: 25, status: "sent" },
     ],
@@ -387,6 +398,8 @@ export const CONVERSATIONS_SEED: ConversationSeed[] = [
     awaitingMinutes: 140,
     readMinutesAgo: 145,
     messages: [
+      { from: "client", text: "", contact: "own", minutesAgo: 300, status: "processed" },
+      { from: "system", text: "Дякуємо! У нас уже є інший ваш номер, тож адміністратор перевірить новий і зателефонує щодо запису.", minutesAgo: 300, status: "sent" },
       { from: "client", text: "Хочу перенести запис на наступний тиждень, можна?", minutesAgo: 150, status: "processed" },
       { from: "system", text: "Передаю розмову адміністратору, він відповість найближчим часом.", minutesAgo: 149, status: "sent" },
       { from: "client", text: "Алло? Є хтось на зв'язку?", minutesAgo: 140, status: "held" },
@@ -434,6 +447,90 @@ export const CONVERSATIONS_SEED: ConversationSeed[] = [
       { from: "ai", text: "Скасувати наступний запис? Оплата в закладі, тож нічого повертати не потрібно.", minutesAgo: 189, status: "sent", buttons: ["Так, скасувати", "Ні, залишити"] },
       { from: "client", text: "", pressed: "Так, скасувати", minutesAgo: 185, status: "processed" },
       { from: "system", text: "Запис скасовано. Щоб записатися знову, напишіть нам.", minutesAgo: 185, status: "sent" },
+      // §26: згода на розсилки, кампанія з купоном, код текстом, відписка (тексти шаблонні; коди в UI маскуються).
+      { from: "system", text: "Хочете отримувати від нас акції та знижки в цьому чаті? Оберіть варіант - змінити можна будь-коли командою /marketing.", minutesAgo: 150, status: "sent", buttons: ["📰 Повна інформація", "🏷 Лише акції на мої послуги", "🔕 Не надсилати"] },
+      { from: "client", text: "", pressed: "🏷 Лише акції на мої послуги", minutesAgo: 148, status: "processed" },
+      { from: "system", text: "Готово: надсилатимемо лише акції та знижки на послуги, якими ви користуєтесь.", minutesAgo: 147, status: "sent" },
+      { from: "system", text: "Знижка 15% на манікюр - для своїх!\n\nУмови: знижка 15% на всі послуги, діє по 30.11.2026. Одна знижка на запис, не сумується з іншими акціями.\n\nВаш код: Q7W2K-9XM3D\n\nЩоб не отримувати акції, напишіть «Стоп» або натисніть кнопку «Не надсилати акції».", minutesAgo: 130, status: "sent", buttons: ["🎟 Записатися зі знижкою", "🔕 Не надсилати акції"] },
+      { from: "client", text: "", pressed: "🎟 Записатися зі знижкою", minutesAgo: 128, status: "processed" },
+      { from: "system", text: "Знижку 15% закріплено за вами. Напишіть, на коли бажаєте записатися.", minutesAgo: 127, status: "sent" },
+      { from: "client", text: "", couponText: true, minutesAgo: 120, status: "processed" },
+      { from: "system", text: "Код прийнято: 15% на всі послуги. Напишіть, на яку послугу й коли бажаєте записатися.", minutesAgo: 119, status: "sent" },
+      { from: "client", text: "", pressed: "🔕 Не надсилати акції", minutesAgo: 110, status: "processed" },
+      { from: "system", text: "Добре, акцій і новин не надсилатимемо. Нагадування про візити працюють як раніше.", minutesAgo: 109, status: "sent" },
     ],
   },
+];
+
+
+// ---------- собівартість послуг і знімки записів (§24) ----------
+
+export interface CostSeed {
+  serviceId: string;
+  /** `null` = мережевий рядок; інакше override закладу (діє на весь рядок: відсоток мережі не успадковується, §24.4). */
+  locationId: string | null;
+  costAmount: number;
+  masterPercent: number | null;
+}
+
+/**
+ * Початкова собівартість. Без неї навмисно лишені «Чоловіча стрижка» (br) і «Тонування» (ton) - демо попередження «без собівартості».
+ * Печерськ (k) має override для «Манікюр + гель-лак»: інша собівартість і БЕЗ виплати майстру (відсоток мережі 40% не успадковується).
+ */
+export const SERVICE_COSTS_SEED: CostSeed[] = [
+  { serviceId: "mn", locationId: null, costAmount: 220, masterPercent: 40 },
+  { serviceId: "mn", locationId: "k", costAmount: 260, masterPercent: null },
+  { serviceId: "mn2", locationId: null, costAmount: 150, masterPercent: 40 },
+  { serviceId: "pd", locationId: null, costAmount: 300, masterPercent: 35 },
+  { serviceId: "hc", locationId: null, costAmount: 120, masterPercent: 45 },
+  { serviceId: "col", locationId: null, costAmount: 700, masterPercent: 30 },
+  { serviceId: "cl", locationId: null, costAmount: 400, masterPercent: 30 },
+];
+
+/** Записи, завершені раніше, ніж за стільки днів до «сьогодні», - до розгортання функції: знімка немає («без собівартості», §24.4). */
+export const COST_DEPLOY_DAYS_AGO = 45;
+
+export interface CostSnapshot {
+  cost: number;
+  masterPercent: number | null;
+  masterPayout: number;
+}
+
+/**
+ * Знімок собівартості завершеного запису (§24.4): початкові значення сіду, недоторкані подальшими змінами в редакторі
+ * (знімок незмінний). Заклад запису має пріоритет над мережею; немає ні того, ні іншого - `null` (costMissing).
+ */
+export function costSnapshotFor(a: Pick<Appointment, "status" | "serviceId" | "locationId" | "startsAt" | "priceFinal">, today: string): CostSnapshot | null {
+  if (a.status !== "completed" || a.startsAt.slice(0, 10) < addDaysYmd(today, -COST_DEPLOY_DAYS_AGO)) return null;
+  const eff =
+    SERVICE_COSTS_SEED.find((c) => c.serviceId === a.serviceId && c.locationId === a.locationId) ??
+    SERVICE_COSTS_SEED.find((c) => c.serviceId === a.serviceId && c.locationId === null);
+  if (!eff) return null;
+  return { cost: eff.costAmount, masterPercent: eff.masterPercent, masterPayout: payoutOf(a.priceFinal, eff.masterPercent) };
+}
+
+
+// ---------- телефони клієнтів (§25) ----------
+
+export interface PhoneSeed {
+  clientId: string;
+  source?: PhoneSource;
+  /** Згода на дзвінок: скільки діб тому. */
+  consentDaysAgo?: number;
+  /** Інший номер від клієнта в чаті - чекає рішення адміністратора. */
+  pending?: { phone: string; source: PhonePendingSource; minutesAgo: number };
+  /** М'який зв'язок «можливий дубль». */
+  duplicateOf?: string;
+}
+
+/**
+ * oc - номер із Telegram-контакту, згода 3 доби тому; kl - номер від адміністратора і НОВИЙ номер із чату, що чекає рішення
+ * (див. розмову cv3 і «Дзвінки»); mp - з Telegram-контакту, можливий дубль клієнта sm (онлайн-запис).
+ */
+export const PHONE_SEED: PhoneSeed[] = [
+  { clientId: "oc", source: "telegram_contact", consentDaysAgo: 3 },
+  { clientId: "sm", source: "web_form" },
+  { clientId: "kl", source: "staff", pending: { phone: "+380 67 111 22 33", source: "telegram_contact", minutesAgo: 300 } },
+  { clientId: "tg", source: "staff" },
+  { clientId: "mp", source: "telegram_contact", consentDaysAgo: 1, duplicateOf: "sm" },
 ];

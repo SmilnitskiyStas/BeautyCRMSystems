@@ -2,6 +2,9 @@
 
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
+import { useAuth } from "@/features/beauty-auth/components/auth-provider";
+import { canSeeFinance } from "@/features/beauty-auth/permissions";
+import { targetOf, type DetailsTarget } from "../analytics/details";
 import { downloadCsv, locationCsv, networkCsv, promotionsCsv } from "../analytics/csv";
 import { computeDelta, describeDelta } from "../analytics/delta";
 import { locationKpis, networkKpis, percentLabel, promotionKpis } from "../analytics/kpis";
@@ -17,7 +20,7 @@ import {
 } from "../analytics/ranges";
 import { GRANULARITY_TITLE } from "../analytics/series";
 import { todayInZone } from "../../beauty-shared/zone-time";
-import { money } from "../format";
+import { completedWord, money, moneyExact } from "../format";
 import {
   useLocationBreakdown,
   useLocations,
@@ -27,8 +30,9 @@ import {
   usePromotionAnalytics,
 } from "../hooks/use-beauty-admin";
 import type { AnalyticsQuery } from "../types";
-import { AnalyticsKpiGrid, DeltaText, ExportButton, RangeSwitcher, RevenueChart } from "./analytics-parts";
-import { BarRow, Card, Chip, PageHeader, ProgressBar, QueryState, RowLink, Switch, Table, TD, Tabs } from "./ui";
+import { AnalyticsDetailsPanel } from "./analytics-details-panel";
+import { AnalyticsKpiGrid, DeltaText, ExportButton, MetricSwitch, RangeSwitcher, RevenueChart, hasNetIncome, type ChartMetric } from "./analytics-parts";
+import { BarRow, Card, Chip, PageHeader, ProgressBar, QueryState, RowLink, Switch, Table, TD, TextLink, Tabs } from "./ui";
 
 type Tab = "net" | "loc" | "promo";
 
@@ -48,8 +52,12 @@ function NetworkTab({ q, zone, onZone }: { q: AnalyticsQuery; zone: string; onZo
     if (tz && tz !== zone) onZone(tz);
   }, [tz, zone, onZone]);
 
+  const [metric, setMetric] = useState<ChartMetric>("revenue");
+  const [open, setOpen] = useState<{ target: DetailsTarget; opener: HTMLElement | null } | null>(null);
   const rows = locs.data ?? [];
   const maxRev = Math.max(0, ...rows.map((l) => l.revenue));
+  const totals = net.data?.totals;
+  const netShown = series.data ? hasNetIncome(series.data) : false;
   return (
     <>
       <Toolbar>
@@ -60,13 +68,34 @@ function NetworkTab({ q, zone, onZone }: { q: AnalyticsQuery; zone: string; onZo
       </Toolbar>
       <QueryState isPending={net.isPending} isError={net.isError} onRetry={() => net.refetch()}>
         {net.data ? <AnalyticsKpiGrid items={networkKpis(net.data, q.compare)} /> : null}
+        {totals && (totals.withoutCost ?? 0) > 0 ? (
+          <div role="status" data-testid="without-cost-banner" className="flex flex-wrap items-center gap-x-3 rounded-2xl bg-[#FFF1CC] px-4 py-2 text-sm text-[#5C3900]">
+            <span>
+              {totals.withoutCost} {completedWord(totals.withoutCost ?? 0)} без собівартості ({moneyExact(totals.revenueWithoutCost ?? 0)} виручки) — чистий дохід завищено.
+            </span>
+            <TextLink href="/beauty/services">Задати собівартість →</TextLink>
+          </div>
+        ) : null}
       </QueryState>
       <div className="flex flex-wrap items-start gap-6">
         <Card className="flex-[1_1_480px]">
-          <h2 className="mb-1 text-lg font-semibold">Виручка мережі {series.data ? GRANULARITY_TITLE[series.data.granularity] : ""}, тис. ₴</h2>
-          <div className="mb-4 text-[13px] text-(--muted)">{rangeLabelShort(q)}</div>
+          <h2 className="mb-1 text-lg font-semibold">
+            {metric === "net" ? "Чистий дохід мережі" : "Виручка мережі"} {series.data ? GRANULARITY_TITLE[series.data.granularity] : ""}, тис. ₴
+          </h2>
+          <div className="mb-3 text-[13px] text-(--muted)">{rangeLabelShort(q)}. Натисніть на стовпець, щоб побачити деталі.</div>
+          {netShown ? (
+            <div className="mb-3">
+              <MetricSwitch value={metric} onChange={setMetric} />
+            </div>
+          ) : null}
           <QueryState isPending={series.isPending} isError={series.isError} onRetry={() => series.refetch()}>
-            {series.data ? <RevenueChart series={series.data} /> : null}
+            {series.data ? (
+              <RevenueChart
+                series={series.data}
+                metric={netShown ? metric : "revenue"}
+                onOpen={(p, el) => setOpen({ target: targetOf(p, series.data.granularity), opener: el })}
+              />
+            ) : null}
           </QueryState>
         </Card>
         <Card className="flex flex-[1_1_420px] flex-col gap-3.5">
@@ -79,7 +108,7 @@ function NetworkTab({ q, zone, onZone }: { q: AnalyticsQuery; zone: string; onZo
                   label={l.isActive ? l.name : `${l.name} (неактивний)`}
                   value={money(l.revenue)}
                   pct={pctOf(l.revenue, maxRev)}
-                  note={`${l.appointments} записів · скасовано ${l.cancelled}`}
+                  note={`${l.appointments} записів · скасовано ${l.cancelled}${l.netIncome !== undefined ? ` · чистий дохід ${moneyExact(l.netIncome)}` : ""}`}
                 />
                 {q.compare && l.previous ? <DeltaText view={describeDelta(computeDelta(l.revenue, l.previous.revenue), "money")} /> : null}
               </div>
@@ -87,6 +116,7 @@ function NetworkTab({ q, zone, onZone }: { q: AnalyticsQuery; zone: string; onZo
           </QueryState>
         </Card>
       </div>
+      {open ? <AnalyticsDetailsPanel key={`${open.target.from}|${open.target.to}`} target={open.target} returnFocus={open.opener} onClose={() => setOpen(null)} /> : null}
     </>
   );
 }
@@ -218,6 +248,24 @@ function writeUrl(state: RangeState) {
 }
 
 export function AnalyticsScreen() {
+  const { user } = useAuth();
+  // Фінансові поля й деталі періоду - лише owner/admin (§24.9); specialist отримує 403 від API, тож розділ йому не показується.
+  if (!canSeeFinance(user.role)) {
+    return (
+      <>
+        <PageHeader title="Аналітика" />
+        <Card>
+          <p role="note" className="text-sm">
+            Аналітика доступна лише власнику й адміністратору.
+          </p>
+        </Card>
+      </>
+    );
+  }
+  return <AnalyticsView />;
+}
+
+function AnalyticsView() {
   const sp = useSearchParams();
   const [tab, setTab] = useState<Tab>("net");
   const [state, setState] = useState<RangeState>(() => parseRangeParams(sp ?? new URLSearchParams()));

@@ -107,3 +107,26 @@ export function weekRangeLabel(weekStart: string): string {
   const f = (ymd: string) => new Date(UTC(ymd)).toLocaleDateString("uk-UA", { day: "numeric", month: "long", timeZone: "UTC" });
   return `Тиждень ${f(weekStart)} – ${f(addDaysIso(weekStart, 6))}`;
 }
+
+/**
+ * Гроші з копійками лише коли вони є (§24.5: суми `decimal(12,2)`): 900 -> «900 ₴», 111.1 -> «111,10 ₴».
+ * Мінус - U+2212, щоб вигляд не залежав від версії ICU.
+ */
+export function moneyExact(n: number): string {
+  const cents = Math.round(Math.abs(n) * 100);
+  const body = cents % 100 === 0 ? money(cents / 100) : `${(cents / 100).toLocaleString("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).replace(/[  ]/g, " ")} ₴`;
+  return n < 0 && cents > 0 ? `−${body}` : body;
+}
+
+/** Відсоток із контракту (число 42.5) -> «42,5%»; `null` -> «—». */
+export function percentValue(v: number | null | undefined): string {
+  return v == null ? "—" : `${v.toLocaleString("uk-UA", { maximumFractionDigits: 1 }).replace("-", "−")}%`;
+}
+
+const COMPLETED_FORMS = ["завершений запис", "завершені записи", "завершених записів"] as const;
+/** «1 завершений запис» / «2 завершені записи» / «5 завершених записів» (лише слово, без числа). */
+export function completedWord(n: number): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? COMPLETED_FORMS[0] : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? COMPLETED_FORMS[1] : COMPLETED_FORMS[2];
+}

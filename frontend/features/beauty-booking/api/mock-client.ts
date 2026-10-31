@@ -11,6 +11,7 @@ import {
 import { isClosedDate } from "../dates";
 import type { BookingApi } from "./client";
 import { CATALOG, DEMO_LOCATIONS, PROMO_PERCENT, STAFF, absencesSeed, appointmentsSeed, blocksOn, closuresSeed, demoToday, promoPrice } from "@/features/beauty-shared/demo-seed";
+import { PUBLIC_DEMO_COUPON } from "@/features/beauty-shared/marketing-seed";
 import { dayAvailability, hhmm, slotStarts, toMinutes } from "@/features/beauty-shared/availability";
 import { instantToLocal, localToUtcIso } from "@/features/beauty-shared/zone-time";
 import type { Weekday } from "@/features/beauty-admin/types";
@@ -142,6 +143,17 @@ const publicView = (s: Stored): Appointment => {
   return a as Appointment;
 };
 
+/** Демо-промокод (§26): загальний код `PUBLIC_DEMO_COUPON`; усе інше (зокрема персональні коди) - однакове `coupon_invalid`. */
+const normCode = (c: string) => c.toUpperCase().replace(/[\s-]/g, "").replace(/O/g, "0").replace(/[IL]/g, "1");
+const checkTimes: number[] = [];
+function couponPrice(code: string, serviceId: string) {
+  const service = serviceView(serviceId);
+  if (!service || normCode(code) !== normCode(PUBLIC_DEMO_COUPON.code)) throw new BookingApiError(404, "coupon_invalid");
+  const withCoupon = Math.round((service.priceOriginal * (100 - PUBLIC_DEMO_COUPON.percent)) / 100);
+  const outcome = withCoupon < service.priceFinal ? "applied" : "not_better";
+  return { outcome, priceOriginal: service.priceOriginal, priceFinal: outcome === "applied" ? withCoupon : service.priceFinal } as const;
+}
+
 export const mockBookingApi: BookingApi = {
   getLocations: () => delay(locations()),
 
@@ -160,6 +172,14 @@ export const mockBookingApi: BookingApi = {
     const masters = suitableMasters(locationId).filter((m) => specialistId === ANY_SPECIALIST_ID || m.id === specialistId);
     const ids = [...new Set(masters.flatMap((m) => m.services.map((s) => s.id)))];
     return delay(ids.map(serviceView).filter((s): s is Service => s !== null));
+  },
+
+  async checkCoupon(_t, q) {
+    const t = Date.now();
+    while (checkTimes.length > 0 && t - checkTimes[0] > 600_000) checkTimes.shift();
+    if (checkTimes.length >= 10) throw new BookingApiError(429, "rate_limited", "rate_limited", 60);
+    checkTimes.push(t);
+    return delay(couponPrice(q.code, q.serviceId));
   },
 
   async getSlots(_t, q) {
@@ -184,6 +204,7 @@ export const mockBookingApi: BookingApi = {
     const specialist = match ? STAFF.find((m) => m.id === match.specialistId) : undefined;
     if (!specialist) throw new BookingApiError(409, "slot_unavailable");
 
+    const coupon = r.couponCode ? couponPrice(r.couponCode, r.serviceId) : null;
     const store = loadStore();
     const token = `mock${crypto.randomUUID().replace(/-/g, "")}`;
     const durationMs = service.durationMinutes * 60_000;
@@ -198,7 +219,8 @@ export const mockBookingApi: BookingApi = {
       durationMinutes: service.durationMinutes,
       status: "confirmed",
       priceOriginal: service.priceOriginal,
-      priceFinal: service.priceFinal,
+      priceFinal: coupon?.outcome === "applied" ? coupon.priceFinal : service.priceFinal,
+      ...(coupon?.outcome === "applied" ? { couponApplied: true } : {}),
       promotionId: service.promotionId,
       reminderOption: r.reminder,
       paymentMethod: r.paymentMethod,

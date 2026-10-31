@@ -2,9 +2,13 @@
 
 import { useState } from "react";
 import { useCreatePromotion, useLocations, usePriceList, usePromoPreview } from "../hooks/use-beauty-admin";
+import { useCreateCoupon, useMarketingAvailability } from "../hooks/use-marketing";
 import { durationLabel, money } from "../format";
+import { couponFormErrors, humanizeMarketingError, parseDmy } from "../marketing/logic";
+import { dateToIso } from "../marketing/wizard";
 import type { PromoDraft } from "../types";
-import { Card, Chip, FIELD_INPUT, FIELD_LABEL, PageHeader, QueryState, Table, TD } from "./ui";
+import { AccessFields, CodesCard, PromotionsCard, type AccessValue } from "./promo-access";
+import { Card, Chip, FIELD_INPUT, FIELD_LABEL, LinkButton, PageHeader, QueryState, SecondaryButton, Table, TD } from "./ui";
 
 const PERCENTS = [10, 15, 20, 30];
 
@@ -19,6 +23,11 @@ export function PromosScreen() {
   const [serviceIds, setServiceIds] = useState<string[]>(["mn", "pd"]);
   const [from, setFrom] = useState("07.10.2026");
   const [to, setTo] = useState("14.10.2026");
+  const [access, setAccess] = useState<AccessValue>({ access: "public", code: "", maxUses: "", from: "", to: "" });
+  const [created, setCreated] = useState<{ id: string; name: string; couponError?: string } | null>(null);
+  const marketing = useMarketingAvailability();
+  const marketingOn = !marketing.disabled;
+  const createCoupon = useCreateCoupon();
 
   const locations = useLocations();
   const priceList = usePriceList();
@@ -26,8 +35,38 @@ export function PromosScreen() {
   const preview = usePromoPreview({ name: "", from: "", to: "", percent, locationIds, serviceIds });
   const create = useCreatePromotion();
 
-  const canLaunch = name.trim().length > 0 && locationIds.length > 0 && serviceIds.length > 0;
-  const draft: PromoDraft = { name: name.trim(), percent, locationIds, serviceIds, from, to };
+  const codeOnly = marketingOn && access.access === "code_only";
+  // Строк коду за замовчуванням збігається з періодом акції.
+  const couponPeriod = { from: access.from || parseDmy(from), to: access.to || parseDmy(to) };
+  const couponErrors = codeOnly ? couponFormErrors({ code: access.code, maxUses: access.maxUses, ...couponPeriod }) : {};
+  const canLaunch = name.trim().length > 0 && locationIds.length > 0 && serviceIds.length > 0 && Object.keys(couponErrors).length === 0;
+  const draft: PromoDraft = { name: name.trim(), percent, locationIds, serviceIds, from, to, access: codeOnly ? "code_only" : "public" };
+
+  async function saveCoupon(promotionId: string, promoName: string) {
+    try {
+      await createCoupon.mutateAsync({
+        promotionId,
+        code: access.code.trim(),
+        validFrom: dateToIso(couponPeriod.from, false),
+        validTo: dateToIso(couponPeriod.to, true),
+        ...(access.maxUses.trim() ? { maxUses: Number(access.maxUses) } : {}),
+      });
+      setCreated({ id: promotionId, name: promoName });
+    } catch (e) {
+      setCreated({ id: promotionId, name: promoName, couponError: humanizeMarketingError(e, "Не вдалося створити код.") });
+    }
+  }
+
+  async function launch() {
+    setCreated(null);
+    try {
+      const r = await create.mutateAsync(draft);
+      if (codeOnly) await saveCoupon(r.id, draft.name);
+      else setCreated({ id: r.id, name: draft.name });
+    } catch {
+      /* стан помилки показує create.isError */
+    }
+  }
 
   return (
     <>
@@ -57,7 +96,7 @@ export function PromosScreen() {
             className="flex min-w-0 flex-col gap-[18px] rounded-2xl bg-white p-5"
             onSubmit={(e) => {
               e.preventDefault();
-              if (canLaunch) create.mutate(draft);
+              if (canLaunch) void launch();
             }}
           >
             <h2 className="text-lg font-semibold">Нова акція</h2>
@@ -99,6 +138,8 @@ export function PromosScreen() {
               </div>
             </fieldset>
 
+            <AccessFields value={access} onChange={setAccess} errors={couponErrors} marketingOn={marketingOn} />
+
             <div className="flex flex-wrap gap-3">
               <div className="flex min-w-[140px] flex-1 flex-col gap-1.5">
                 <label htmlFor="d-from" className={FIELD_LABEL}>Початок</label>
@@ -120,10 +161,27 @@ export function PromosScreen() {
             {!canLaunch ? (
               <p className="text-[13px] text-(--muted)">Вкажіть назву, хоча б один заклад і одну послугу.</p>
             ) : null}
-            {create.isSuccess ? (
-              <p role="status" className="rounded-xl bg-[#DDF3E6] px-3 py-2 text-sm text-[#145A32]">
-                Акцію «{draft.name}» запущено.
-              </p>
+            {created ? (
+              <div role="status" data-testid="promo-created" className="flex flex-col gap-2 rounded-xl bg-[#DDF3E6] px-3 py-2 text-sm text-[#145A32]">
+                <span>Акцію «{created.name}» запущено.</span>
+                {marketingOn ? (
+                  <span>
+                    <LinkButton href={`/beauty/campaigns/new?promotionId=${encodeURIComponent(created.id)}`} ariaLabel={`Розіслати клієнтам: ${created.name}`}>
+                      Розіслати клієнтам
+                    </LinkButton>
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+            {created?.couponError ? (
+              <div role="alert" className="flex flex-col gap-2 rounded-xl bg-[#FBE4E4] px-3 py-2 text-sm text-[#8A1F1F]">
+                <span>Акцію створено, але код не збережено: {created.couponError}</span>
+                <span>
+                  <SecondaryButton disabled={createCoupon.isPending} onClick={() => void saveCoupon(created.id, created.name)}>
+                    Створити код ще раз
+                  </SecondaryButton>
+                </span>
+              </div>
             ) : null}
             {create.isError ? (
               <p role="alert" className="text-sm text-[#8A1F1F]">
@@ -131,6 +189,9 @@ export function PromosScreen() {
               </p>
             ) : null}
           </form>
+
+          <PromotionsCard marketingOn={marketingOn} />
+          <CodesCard />
 
           <Card as="div" className="flex flex-col gap-3">
             <div className="text-[13px] font-semibold text-(--muted)">Так акцію побачить клієнт</div>

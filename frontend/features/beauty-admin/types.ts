@@ -5,6 +5,9 @@
  */
 
 import type { ApiConflict } from "@/features/beauty-auth/errors";
+import type { AppointmentCoupon, PromoAccess } from "./marketing/types";
+
+export type * from "./marketing/types";
 
 export type LocationId = string;
 
@@ -79,6 +82,9 @@ export type AppointmentStatus =
   | "cancelled"
   | "no_show";
 
+/** Статуси, які ставить `PATCH /appointments/{id}` (скасування - окремий POST /cancel). */
+export type PatchableStatus = "confirmed" | "completed" | "no_show";
+
 export type AppointmentSource = "admin" | "online" | "telegram" | "instagram";
 
 /** Тип блоку в календарі (легенда). */
@@ -100,6 +106,8 @@ export interface Appointment {
   source: AppointmentSource;
   kind: CalendarKind;
   priceFinal: number;
+  /** Ціна до знижки/акції (§24): якщо відсутня, вважається рівною `priceFinal`. */
+  priceOriginal?: number;
   promotionId: string | null;
   promotionName?: string;
   /** Умови скасування запису (§11), якщо їх повернув backend. */
@@ -113,6 +121,10 @@ export interface Appointment {
   reminders?: AppointmentReminders;
   /** UTC-момент (ISO), коли клієнт підтвердив візит кнопкою в чаті (§23.10); відсутнє = не підтверджував. */
   clientConfirmedAt?: string;
+  /** §26.11.4: запис за купоном (`outcome=applied`); повного коду немає, `codeHint` лише керівникам. */
+  coupon?: AppointmentCoupon;
+  /** §26.11.4: запис походить із розсилки. */
+  campaignId?: string;
 }
 
 /** Політика повернення коштів (§11). */
@@ -169,6 +181,10 @@ export interface ClientVisit {
   sum: string;
   status: "completed" | "planned" | "cancelled" | "no_show";
   viaPromo: boolean;
+  /** §26: запис створено за купоном; `couponDiscount` - підпис знижки («−135 ₴»), `couponName` - назва акції купона. */
+  viaCoupon?: boolean;
+  couponDiscount?: string;
+  couponName?: string;
   /** Підпис «5 жовт., 12:40»; лише для скасованих. */
   cancelledAtLabel?: string;
   cancelledBy?: CancelledBy;
@@ -203,6 +219,34 @@ export interface ClientProfile {
   /** Зведення скасувань (§16). */
   cancelledCount: number;
   cancelledByClientCount: number;
+  /** Телефон клієнта для дзвінка (§25.7); відсутнє = backend ще не віддає. */
+  phoneInfo?: ClientPhoneInfo;
+}
+
+/** Джерело номера (§25.3): NULL/відсутнє = спадкове чи невідоме. */
+export type PhoneSource = "telegram_contact" | "manual_chat" | "web_form" | "staff";
+export type PhonePendingSource = "telegram_contact" | "manual_chat";
+
+/** Телефон у картці клієнта (§25.7). Повний номер бачать лише owner/admin. */
+export interface ClientPhoneInfo {
+  phone: string | null;
+  phoneSource?: PhoneSource;
+  /** UTC-момент (ISO) згоди на дзвінок. */
+  callConsentAt?: string;
+  /** Інший номер, наданий клієнтом у чаті, - чекає рішення адміністратора. */
+  phonePending?: { phone: string; source: PhonePendingSource; at: string };
+  /** М'який зв'язок «можливий дубль» (не злиття). */
+  possibleDuplicate?: { id: string; name: string };
+}
+
+export type PhonePendingAction = "accept" | "reject";
+
+/** Відповідь `POST /clients/{id}/phone-pending` (§25.7). */
+export interface PhonePendingResult {
+  phone: string;
+  phoneSource?: PhoneSource;
+  callConsentAt?: string;
+  phonePending: null;
 }
 
 /** Ключі днів тижня у `working_hours` (§9): mon..sun. */
@@ -388,6 +432,8 @@ export interface PromoDraft {
   serviceIds: string[];
   from: string;
   to: string;
+  /** §26.11.3: за замовчуванням `public`. */
+  access?: PromoAccess;
 }
 
 export interface PromoPreview {
@@ -405,7 +451,7 @@ export interface AnalyticsQuery {
   compare: boolean;
 }
 
-export interface NetworkTotals {
+export interface NetworkTotals extends FinanceFields {
   appointments: number;
   completed: number;
   cancelled: number;
@@ -415,6 +461,21 @@ export interface NetworkTotals {
   /** Частка 0..1. */
   cancellationRate: number;
   newClients: number;
+}
+
+/**
+ * Фінанси (§24.5, лише owner/admin). Усі поля необов'язкові: відповідь без них (старий backend) дає UI без фінансових KPI.
+ * `marginPercent` - число у відсотках з 1 знаком (42,5), `null` при нульовій виручці.
+ */
+export interface FinanceFields {
+  cost?: number;
+  masterPayout?: number;
+  netIncome?: number;
+  marginPercent?: number | null;
+  /** Завершених записів без собівартості. */
+  withoutCost?: number;
+  /** Виручка таких записів. */
+  revenueWithoutCost?: number;
 }
 
 export interface NetworkAnalytics {
@@ -436,6 +497,11 @@ export interface SeriesPoint {
   cancelled: number;
   noShow: number;
   revenue: number;
+  /** §24.6.2: фінансові поля точки (без `marginPercent`: клієнт рахує за формулою §24.5). */
+  cost?: number;
+  masterPayout?: number;
+  netIncome?: number;
+  withoutCost?: number;
 }
 
 export interface NetworkSeries {
@@ -446,7 +512,7 @@ export interface NetworkSeries {
   points: SeriesPoint[];
 }
 
-export interface LocationMetrics {
+export interface LocationMetrics extends Omit<FinanceFields, "revenueWithoutCost"> {
   appointments: number;
   completed: number;
   cancelled: number;
@@ -513,6 +579,110 @@ export interface PromotionStat {
 
 export interface PromotionAnalytics {
   rows: PromotionStat[];
+}
+
+// ---------- §24: деталі періоду та собівартість ----------
+
+/** Параметри `GET /analytics/network/details` (§24.6.3): `date` (день) АБО `from`+`to` (кошик тижня/місяця, ≤ 31 день). */
+export interface AnalyticsDetailsQuery {
+  date?: string;
+  from?: string;
+  to?: string;
+  locationId?: LocationId;
+  cursor?: string;
+  take?: number;
+}
+
+export interface DetailsSummary {
+  appointments: number;
+  completed: number;
+  cancelled: number;
+  noShow: number;
+  revenue: number;
+  discountTotal: number;
+  cost: number;
+  masterPayout: number;
+  netIncome: number;
+  marginPercent: number | null;
+  withoutCost: number;
+  revenueWithoutCost: number;
+}
+
+export interface DetailsLocationRow {
+  locationId: LocationId;
+  name: string;
+  timezone: string;
+  completed: number;
+  revenue: number;
+  cost: number;
+  masterPayout: number;
+  netIncome: number;
+  marginPercent: number | null;
+  withoutCost: number;
+}
+
+/** Запис `completed` у деталях. Імені, телефону, email і `clientId` клієнта тут немає за контрактом (§24.6.3). */
+export interface DetailsItem {
+  appointmentId: string;
+  /** `yyyy-MM-dd` у зоні закладу. */
+  localDate: string;
+  /** `HH:mm` у зоні закладу. */
+  localTime: string;
+  location: { id: LocationId; name: string };
+  service: { id: string; name: string };
+  specialist: { id: string; name: string };
+  priceOriginal: number;
+  discount: number;
+  promotion?: { id: string; name: string };
+  priceFinal: number;
+  /** `null`, якщо `costMissing`. */
+  cost: number | null;
+  masterPercent: number | null;
+  masterPayout: number | null;
+  net: number;
+  costMissing: boolean;
+}
+
+export interface AnalyticsDetails {
+  fromDate: string;
+  toDate: string;
+  timezone: string;
+  location?: { id: LocationId; name: string; timezone: string };
+  summary: DetailsSummary;
+  locations: DetailsLocationRow[];
+  items: DetailsItem[];
+  hasMore: boolean;
+  nextCursor?: string;
+}
+
+/** Собівартість послуги (§24.6.1). */
+export interface ServiceCost {
+  costAmount: number;
+  masterPercent: number | null;
+  updatedAt: string;
+  updatedBy?: { id: string; name: string };
+}
+
+export type ServiceCostOverride = ServiceCost & { locationId: LocationId; locationName: string };
+
+/** `GET /services/{id}/costs`. */
+export interface ServiceCostDetail {
+  serviceId: string;
+  network?: ServiceCost;
+  locations: ServiceCostOverride[];
+}
+
+/** Рядок `GET /service-costs`. */
+export interface ServiceCostRow extends ServiceCostDetail {
+  serviceName: string;
+  isActive: boolean;
+}
+
+/** Тіло `PUT /services/{id}/costs`; `locationId: null` = мережевий рядок. */
+export interface ServiceCostInput {
+  locationId: LocationId | null;
+  costAmount: number;
+  masterPercent?: number | null;
 }
 
 export type ChannelId = "tg" | "ig" | "fb" | "wa" | "vb" | "web";
@@ -837,7 +1007,7 @@ export interface CallTask {
   reason: CallTaskReason;
   offsetMinutes?: number;
   /** `phone` віддається лише керівникам. */
-  client: { id: string; name: string; phone?: string };
+  client: { id: string; name: string; phone?: string; /** §25.7: інший номер від клієнта в чаті (повний, лише тут і в картці). */ phonePending?: string };
   appointment: { id: string; startsAt: string; localStartsAt: string; serviceName: string; specialistName: string; status: string };
   location: { id: string; name: string; timezone: string };
   completedAt?: string;
@@ -864,7 +1034,7 @@ export interface ConversationSummary {
   id: string;
   channel: { id: string; type: string; name: string };
   location?: { id: string; name: string };
-  client?: { id: string; name: string };
+  client?: { id: string; name: string; /** §25.7: `+` і останні 2 цифри, решта `•`. Повного номера в inbox немає. */ phoneMasked?: string; /** Клієнт надав інший номер - чекає рішення в картці. */ phonePending?: boolean };
   /** Ім'я клієнта або «Клієнт Telegram». */
   title: string;
   /** `active` | `handoff`. */
@@ -909,7 +1079,11 @@ export interface ConversationMessage {
   buttons?: string[];
   /** Підпис кнопки, яку натиснув клієнт (`kind === "callback"`). UI показує «Клієнт натиснув: {підпис}», не сирий `body`. */
   pressedLabel?: string;
+  /** §25.4: результат перевірки контакту (`kind === "contact"`); номера в повідомленні немає. */
+  contactVerdict?: ContactVerdict;
 }
+
+export type ContactVerdict = "own" | "foreign" | "invalid";
 
 export interface ConversationDetail {
   conversation: ConversationSummary & { canReply: boolean; replyBlockedReason?: "channel_inactive" | "channel_unsupported" };

@@ -103,6 +103,7 @@ export function clientProfileFor(id: string, appts: Appointment[]): Omit<ClientP
       sum: money(a.priceFinal),
       status: (a.status === "completed" ? "completed" : a.status === "cancelled" ? "cancelled" : a.status === "no_show" ? "no_show" : "planned") as ClientProfile["visits"][number]["status"],
       viaPromo: !!a.promotionId,
+      ...(a.coupon ? { viaCoupon: true, couponName: a.coupon.promotionName, couponDiscount: `−${money((a.priceOriginal ?? a.priceFinal) - a.priceFinal)}` } : {}),
       ...(a.status === "cancelled"
         ? { ...(a.cancelledAt ? { cancelledAtLabel: dateTimeLabel(a.cancelledAt) } : {}), ...(a.cancelledBy ? { cancelledBy: a.cancelledBy } : {}), ...(a.cancelReason ? { cancelReason: a.cancelReason } : {}) }
         : {}),

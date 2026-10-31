@@ -4,7 +4,9 @@ import { useState } from "react";
 import { useAddClientNote, useClient, useClients } from "../hooks/use-beauty-admin";
 import { CLIENT_TG_CANCEL_EVENT, cancelledByLabel, isClientTelegramCancel } from "../cancellation";
 import { initials } from "../format";
+import { ClientPhoneCard } from "./client-phone-card";
 import { ContactPreferencesCard } from "./contact-preferences-card";
+import { ClientCouponsCard, MarketingConsentCard } from "./marketing-consent-card";
 import type { ClientProfile } from "../types";
 import {
   Avatar,
@@ -166,6 +168,11 @@ export function ClientProfileScreen({ id }: { id: string }) {
                         <td className={TD}>
                           {v.serviceName}
                           {v.viaPromo ? <Badge tone="promo" className="ml-2 !px-1.5 !py-0.5 !text-xs">акція</Badge> : null}
+                          {v.viaCoupon ? (
+                            <Badge tone="vip" className="ml-2 !px-1.5 !py-0.5 !text-xs">
+                              <span data-testid="visit-coupon">Записано за купоном{v.couponDiscount ? `: ${v.couponDiscount}` : ""}</span>
+                            </Badge>
+                          ) : null}
                         </td>
                         <td className={TD}>
                           <RowLink href={`/beauty/staff/${v.specialistId}`}>{v.specialistName}</RowLink>
@@ -219,7 +226,10 @@ export function ClientProfileScreen({ id }: { id: string }) {
                     <KeyValue key={p.label} label={p.label} value={p.value} />
                   ))}
                 </Card>
+                {c.phoneInfo ? <ClientPhoneCard clientId={c.id} info={c.phoneInfo} /> : null}
                 <ContactPreferencesCard clientId={c.id} />
+                <MarketingConsentCard clientId={c.id} />
+                <ClientCouponsCard clientId={c.id} />
                 {c.warning ? (
                   <div role="note" className="rounded-2xl bg-[#FFF1CC] p-4 text-sm leading-snug text-[#5C3900]">
                     <strong>Увага:</strong> {c.warning}

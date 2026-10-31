@@ -5,6 +5,7 @@ import { useAuth } from "@/features/beauty-auth/components/auth-provider";
 import { BeautyApiError, humanizeError } from "@/features/beauty-auth/errors";
 import { canUseCalls } from "@/features/beauty-auth/permissions";
 import { dateTimeLabel } from "../format";
+import { telHref } from "../phone";
 import { offsetLabel } from "../reminders";
 import { useLocations } from "../hooks/use-beauty-admin";
 import { useCallTasks, useUpdateCallTask } from "../hooks/use-reminders";
@@ -60,9 +61,18 @@ function TaskRow({ task }: { task: CallTask }) {
             <span className="text-base font-semibold break-words">{task.client.name}</span>
           </RowLink>
           {task.client.phone ? (
-            <a href={`tel:${task.client.phone.replace(/[^+\d]/g, "")}`} className="inline-flex min-h-11 items-center text-[15px] font-semibold text-(--accent) underline">
+            <a href={telHref(task.client.phone)} className="inline-flex min-h-11 items-center text-[15px] font-semibold text-(--accent) underline">
               {task.client.phone}
             </a>
+          ) : null}
+          {task.client.phonePending ? (
+            <p data-testid="phone-pending-row" className="m-0 flex flex-wrap items-center gap-x-2 text-sm">
+              <span className="text-(--muted)">Новий номер (не підтверджено):</span>
+              <a href={telHref(task.client.phonePending)} className="inline-flex min-h-11 items-center font-semibold text-(--accent) underline">
+                {task.client.phonePending}
+              </a>
+              <TextLink href={`/beauty/clients/${task.client.id}`}>Вирішити в картці клієнта</TextLink>
+            </p>
           ) : null}
         </div>
         <div className="flex min-w-0 flex-col gap-0.5 text-sm sm:text-right">

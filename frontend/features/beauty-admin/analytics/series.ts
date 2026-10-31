@@ -30,3 +30,13 @@ export function thousands(revenue: number): string {
   const k = revenue / 1000;
   return new Intl.NumberFormat("uk-UA", { maximumFractionDigits: k < 100 ? 1 : 0 }).format(k);
 }
+
+/** Заголовок панелі деталей (§24.8.1): «Деталі дня пт, 24.10» / «Деталі тижня 27.10–02.11» / «Деталі місяця жовтень». */
+export function detailsTitle(p: Pick<SeriesPoint, "from" | "to">, g: SeriesGranularity): string {
+  if (g === "month") {
+    return `Деталі місяця ${new Date(utc(p.from)).toLocaleDateString("uk-UA", { month: "long", timeZone: "UTC" })}`;
+  }
+  if (g === "week") return p.from === p.to ? `Деталі тижня ${dm(p.from)}` : `Деталі тижня ${dm(p.from)}–${dm(p.to)}`;
+  const wd = new Date(utc(p.from)).toLocaleDateString("uk-UA", { weekday: "short", timeZone: "UTC" });
+  return `Деталі дня ${wd}, ${dm(p.from)}`;
+}

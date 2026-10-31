@@ -100,7 +100,7 @@ describe("передача від ШІ адміністратору: повни�
     expect(state).toHaveTextContent("Передано адміністратору");
     expect(state).toHaveTextContent("клієнт попросив людину");
     expect(state).toHaveTextContent("Пауза до");
-    await waitFor(() => expect(spies.markConversationRead).toHaveBeenCalledWith("cv3", "cv3-m5"));
+    await waitFor(() => expect(spies.markConversationRead).toHaveBeenCalledWith("cv3", "cv3-m7"));
 
     await userEvent.type(screen.getByLabelText("Відповідь клієнту в Telegram"), "Добрий день! Вівторок о 15:00 підійде.");
     await userEvent.click(screen.getByRole("button", { name: "Надіслати" }));

@@ -2,6 +2,7 @@ import { BeautyApiError } from "@/features/beauty-auth/errors";
 import { CLIENT_SEED, CONTACT_PREFS_SEED, CONVERSATIONS_SEED, DEMO_TZ } from "../../beauty-shared/demo-seed";
 import { addDaysYmd, instantToLocal, localToInstant, todayInZone } from "../../beauty-shared/zone-time";
 import { normalizeOffsets, validateOffsets, validateQuietHours } from "../reminders";
+import { createMockPhones, type MockPhones } from "./mock-phone";
 import type {
   Appointment,
   AppointmentReminders,
@@ -15,6 +16,7 @@ import type {
   ContactPreferencesInput,
   ContactPreferencesSaved,
   ContactSource,
+  ContactVerdict,
   ConversationDetail,
   ConversationList,
   ConversationListQuery,
@@ -56,6 +58,8 @@ interface Deps {
   /** Через ~25 с після відповіді менеджера «клієнт» дописує повідомлення (демо polling і `held`). */
   simulateClient?: boolean;
   userName?: string;
+  /** Телефони клієнтів (§25); за замовчуванням створюються зі сіду. Спільний екземпляр з mock-клієнтом - щоб «Прийняти» одразу бачили «Дзвінки». */
+  phones?: MockPhones;
 }
 
 interface Conv {
@@ -83,6 +87,12 @@ interface Msg {
   buttons?: string[];
   /** Натиснута клієнтом кнопка (`kind=callback`). */
   pressed?: string;
+  /** §25.4: контакт (`kind=contact`, body `[контакт]`). */
+  contact?: ContactVerdict;
+  /** §25.5.2: номер написано текстом - тіло `[номер телефону]`. */
+  numberText?: boolean;
+  /** §26.9.3: код купона текстом - тіло `[код купона]`. */
+  couponText?: boolean;
 }
 interface Pref {
   method: ReminderMethod;
@@ -116,6 +126,7 @@ export function createMockInbox(deps: Deps) {
     if (!isManager()) throw err(403, "forbidden_role");
   };
   const me = { id: "mock-user", name: deps.userName ?? "Світлана Коваленко" };
+  const phones = deps.phones ?? createMockPhones({ role: deps.role, now, wait: deps.wait });
 
   // ---------- налаштування нагадувань ----------
   let settings: ReminderSettings = { telegramEnabled: true, callEnabled: true, quietHoursStart: "22:00", quietHoursEnd: "08:00" };
@@ -142,7 +153,7 @@ export function createMockInbox(deps: Deps) {
       ...(p ? { method: p.method, source: p.source, updatedAt: new Date(p.updatedAt).toISOString(), ...(p.updatedBy ? { updatedBy: p.updatedBy } : {}) } : {}),
       offsetsMinutes: p ? p.offsets : [],
       telegramAvailable: telegramClients.has(clientId),
-      phoneAvailable: !!clientOf(clientId)?.phone,
+      phoneAvailable: !!phones.phoneOf(clientId),
       telegramEnabled: settings.telegramEnabled,
       callEnabled: settings.callEnabled,
     };
@@ -235,7 +246,13 @@ export function createMockInbox(deps: Deps) {
         status: st ? st.status : "open",
         reason,
         ...(offset !== undefined ? { offsetMinutes: offset } : {}),
-        client: { id: client.id, name: client.name, phone: client.phone },
+        client: {
+          id: client.id,
+          name: client.name,
+          ...(phones.phoneOf(client.id) ? { phone: phones.phoneOf(client.id)! } : {}),
+          // §25.7: інший номер від клієнта в чаті (повний) - лише в «Дзвінках» і картці клієнта.
+          ...(phones.pendingOf(client.id) ? { phonePending: phones.pendingOf(client.id)! } : {}),
+        },
         appointment: {
           id: a.id,
           startsAt: localToInstant(a.startsAt, tz).toISOString(),
@@ -286,7 +303,7 @@ export function createMockInbox(deps: Deps) {
     aiPausedUntil: s.aiState === "handoff" && s.pausedForMinutes ? t0 + s.pausedForMinutes * MIN : undefined,
     awaitingSince: s.awaitingMinutes ? t0 - s.awaitingMinutes * MIN : undefined,
     readAt: t0 - s.readMinutesAgo * MIN,
-    messages: s.messages.map((m, i) => ({ id: `${s.id}-m${i + 1}`, from: m.from, text: m.text, at: t0 - m.minutesAgo * MIN, status: m.status, staffName: m.staffName, failureCode: m.failureCode, buttons: m.buttons, pressed: m.pressed })),
+    messages: s.messages.map((m, i) => ({ id: `${s.id}-m${i + 1}`, from: m.from, text: m.text, at: t0 - m.minutesAgo * MIN, status: m.status, staffName: m.staffName, failureCode: m.failureCode, buttons: m.buttons, pressed: m.pressed, contact: m.contact, numberText: m.numberText, couponText: m.couponText })),
   }));
   let seq = 1;
   const nextId = (c: Conv) => `${c.id}-m${c.messages.length + 1}-${++seq}`;
@@ -317,7 +334,17 @@ export function createMockInbox(deps: Deps) {
       id: c.id,
       channel: { id: c.channelId, type: CHANNEL_TYPE[c.channelId] ?? c.channelId, name: ch?.name ?? c.channelId },
       ...(loc ? { location: { id: loc.id, name: loc.name } } : {}),
-      ...(c.clientId && clientOf(c.clientId) ? { client: { id: c.clientId, name: clientOf(c.clientId)!.name } } : {}),
+      // §25.7: у inbox лише маска телефону й прапорець pending; повний номер - тільки в картці клієнта й «Дзвінках».
+      ...(c.clientId && clientOf(c.clientId)
+        ? {
+            client: {
+              id: c.clientId,
+              name: clientOf(c.clientId)!.name,
+              ...(phones.maskedOf(c.clientId) ? { phoneMasked: phones.maskedOf(c.clientId)! } : {}),
+              phonePending: !!phones.pendingOf(c.clientId),
+            },
+          }
+        : {}),
       title: c.title,
       aiState: c.aiState,
       ...(c.handoffReason ? { handoffReason: c.handoffReason } : {}),
@@ -336,7 +363,7 @@ export function createMockInbox(deps: Deps) {
   };
 
   /** `body` за контрактом §23.10: для натискання - `"[кнопка] {підпис}"`. */
-  const bodyOf = (m: Msg) => (m.pressed !== undefined ? `[кнопка] ${m.pressed}` : m.text);
+  const bodyOf = (m: Msg) => (m.pressed !== undefined ? `[кнопка] ${m.pressed}` : m.contact ? "[контакт]" : m.numberText ? "[номер телефону]" : m.couponText ? "[код купона]" : m.text);
 
   function toMessage(m: Msg, direction: "inbound" | "outbound"): ConversationMessage {
     return {
@@ -344,8 +371,9 @@ export function createMockInbox(deps: Deps) {
       direction,
       senderType: m.from,
       ...(m.from === "staff" && m.staffName ? { senderUser: { id: me.id, name: m.staffName } } : {}),
-      kind: m.pressed !== undefined ? "callback" : "text",
+      kind: m.pressed !== undefined ? "callback" : m.contact ? "contact" : "text",
       body: bodyOf(m),
+      ...(m.contact ? { contactVerdict: m.contact } : {}),
       ...(m.pressed !== undefined ? { pressedLabel: m.pressed } : {}),
       ...(m.buttons && m.buttons.length > 0 ? { buttons: [...m.buttons] } : {}),
       status: m.status,
@@ -393,7 +421,7 @@ export function createMockInbox(deps: Deps) {
       if (input.method === "telegram" && !settings.telegramEnabled) throw err(409, "telegram_reminders_disabled");
       if (input.method === "call" && !settings.callEnabled) throw err(409, "call_reminders_disabled");
       if (input.method === "telegram" && !telegramClients.has(clientId)) throw err(409, "telegram_unavailable");
-      if (input.method === "call" && !clientOf(clientId)?.phone) throw err(409, "phone_required");
+      if (input.method === "call" && !phones.phoneOf(clientId)) throw err(409, "phone_required");
       const old = prefs.get(clientId);
       const upcoming = deps.appointments().filter((a) => a.clientId === clientId && isUpcoming(a)).slice(0, MAX_UPCOMING_REPLAN);
       const apply = input.applyToUpcoming !== false;
