@@ -24,8 +24,12 @@ public static class BeautyServiceExtensions
         services.AddScoped<CancellationService>();
         services.AddScoped<CatalogService>();
         services.AddScoped<PromotionService>();
+        services.TryAddSingleton(new BeautyCrm.Application.Features.BeautyCoupons.CouponOptions());
+        services.AddSingleton<BeautyCrm.Application.Features.BeautyCoupons.CouponAttemptLimiter>(); // TASK-778: лічильники спроб (in-memory)
+        services.AddScoped<BeautyCrm.Application.Features.BeautyCoupons.CouponService>();
         services.AddScoped<ClientService>();
         services.AddScoped<AnalyticsService>();
+        services.AddScoped<AnalyticsDetailsService>();
         services.AddScoped<ChannelSettingsService>();
         services.AddScoped<StaffService>();
         services.AddScoped<AbsenceService>();

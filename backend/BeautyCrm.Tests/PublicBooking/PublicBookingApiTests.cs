@@ -610,7 +610,9 @@ public sealed class PublicBookingApiTests : IClassFixture<AuthApiFixture>, IDisp
             Assert.NotEqual(AppointmentStatus.Completed, a.Status);
         });
         Assert.False((await ctx.Clients.SingleAsync(c => c.Phone == "+380501110001")).MarketingConsent); // без поля = немає згоди
-        Assert.True((await ctx.Clients.SingleAsync(c => c.Phone == "+380501110002")).MarketingConsent);
+        Assert.False((await ctx.Clients.SingleAsync(c => c.Phone == "+380501110002")).MarketingConsent); // §26 (TASK-777): поле форми ігнорується
+        Assert.Empty(await ctx.MarketingConsents.ToListAsync());
+        Assert.Empty(await ctx.MarketingConsentEvents.ToListAsync());
 
         // наявний клієнт: згода й профіль не змінюються анонімним запитом
         Assert.Equal(HttpStatusCode.Created, (await PostAsync(s.Slug, Make(starts[8], "+380501110001", consent: true))).StatusCode);

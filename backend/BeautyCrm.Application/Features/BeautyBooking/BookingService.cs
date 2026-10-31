@@ -1,9 +1,16 @@
 using BeautyCrm.Application.Features.BeautyCommon;
+using BeautyCrm.Application.Features.BeautyCoupons;
+using BeautyCrm.Application.Features.BeautyReminders;
 
 namespace BeautyCrm.Application.Features.BeautyBooking;
 
-public sealed class BookingService(IBookingStore store, IPaymentService payments, CancellationSettingsService cancellation, TimeProvider clock)
+/// <param name="reminderContext">Порт вхідних планувальника нагадувань (налаштування tenant, вподобання клієнта). null = значення за замовчуванням.</param>
+public sealed class BookingService(
+    IBookingStore store, IPaymentService payments, CancellationSettingsService cancellation, TimeProvider clock,
+    IReminderContextStore? reminderContext = null, CouponService? coupons = null)
 {
+    private readonly ReminderPlanning reminders = new(reminderContext, clock);
+
     private const string ClosedMessage = "The location is closed on this day.";
     private const string OutsideLocationHoursMessage = "Outside the working hours of the location.";
 
@@ -40,15 +47,23 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
 
     // ---------- створення ----------
 
-    public async Task<Result<AppointmentDto>> CreateAsync(CreateAppointmentRequest req, CancellationToken ct, PublicCreateOptions? publicOptions = null)
+    public async Task<Result<AppointmentDto>> CreateAsync(
+        CreateAppointmentRequest req, CancellationToken ct, PublicCreateOptions? publicOptions = null, CouponUse? couponUse = null)
     {
         var source = req.Source ?? "online";
         if (!BookingValues.Sources.Contains(source)) return Error.Validation("invalid_source", "Unknown source.");
-        if (!BookingValues.Reminders.Contains(req.Reminder)) return Error.Validation("invalid_reminder", "Reminder must be none, 1h or 2h.");
+        if (req.Reminder is not null && !BookingValues.Reminders.Contains(req.Reminder))
+            return Error.Validation("invalid_reminder", "Reminder must be none, 1h or 2h.");
         if (!BookingValues.PaymentMethods.Contains(req.PaymentMethod)) return Error.Validation("invalid_payment_method", "Payment method must be card or cash.");
         var c = req.Client;
         if (c.Id is null && (string.IsNullOrWhiteSpace(c.Name) || string.IsNullOrWhiteSpace(c.Phone)))
             return Error.Validation("client_required", "Client id or name and phone are required.");
+
+        // §22.6.1: після client_required, до перевірок слоту. reminders разом із reminder -> 422; 409 telegram_unavailable / phone_required / ...
+        if (req.Reminders is not null && req.Reminder is not null)
+            return Error.Validation("reminder_conflict", "Provide either reminder or reminders, not both.");
+        var intent = await reminders.PrepareForCreateAsync(req, ct);
+        if (!intent.IsOk) return intent.Error!;
 
         var service = await store.GetServiceAsync(req.ServiceId, ct);
         if (service is not { IsActive: true }) return Error.NotFound("service_not_found", "Service not found.");
@@ -75,19 +90,47 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
 
         var original = await store.GetPriceAsync(req.ServiceId, req.LocationId, ct);
         if (original is null) return Error.Validation("price_not_set", "Service has no price for this location.");
-        var quote = PromotionPricing.Quote(original.Value, req.LocationId, req.ServiceId, now, await store.GetPromotionRulesAsync(ct));
 
-        var clientId = await store.ResolveClientAsync(c, ct);
-        if (clientId is null) return Error.NotFound("client_not_found", "Client not found.");
+        // §26.6: staff передає код у тілі; публічний шлях і чат - окремим CouponUse (код тіла ігнорується поза staff)
+        if (couponUse is null && publicOptions is null && !string.IsNullOrWhiteSpace(req.CouponCode))
+            couponUse = new CouponUse(CouponScope.Staff, req.CouponCode);
 
-        var offset = req.Reminder switch { "1h" => TimeSpan.FromHours(1), "2h" => TimeSpan.FromHours(2), _ => (TimeSpan?)null };
-        var reminderAt = offset is null ? (DateTimeOffset?)null : req.StartsAt - offset.Value;
-        if (reminderAt is not null && reminderAt <= now) reminderAt = null; // нагадувати вже запізно
+        Guid? clientId = null;
+        CouponCandidate? candidate = null;
+        if (couponUse is not null)
+        {
+            clientId = await store.ResolveClientAsync(c with { PhoneSource = publicOptions is null ? "staff" : "web_form" }, ct);
+            if (clientId is null) return Error.NotFound("client_not_found", "Client not found.");
+            if (coupons is null) return Error.Conflict("coupon_unavailable", "Coupons are not available.");
+            var resolved = await coupons.ResolveAsync(couponUse, clientId, now, ct);
+            if (!resolved.IsOk) return resolved.Error!;
+            candidate = resolved.Value;
+        }
+        var priced = PromotionPricing.QuoteWithCoupon(original.Value, req.LocationId, req.ServiceId, now, await store.GetPromotionRulesAsync(ct), candidate);
+        var quote = priced.Quote;
+
+        if (req.ExpectedPriceFinal is { } expected && expected != quote.Final)
+            return Error.Conflict("price_changed", "The price has changed since it was shown.");
+
+        if (clientId is null)
+        {
+            clientId = await store.ResolveClientAsync(c with { PhoneSource = publicOptions is null ? "staff" : "web_form" }, ct);
+            if (clientId is null) return Error.NotFound("client_not_found", "Client not found.");
+        }
+        var redemption = priced.Outcome == CouponOutcomes.Applied
+            ? new NewCouponRedemption(priced.CouponId!.Value, candidate!.CampaignId, quote.Original - quote.Final, now) : null;
+        var couponDto = candidate is null ? null
+            : new AppointmentCouponDto(candidate.CouponId, candidate.Kind, candidate.CodeHint, candidate.PromotionName, priced.Outcome);
+
+        // §22.4: точки нагадувань (тиша за зоною закладу, злиття, дзвінок) пише store в тій самій транзакції, що й запис.
+        var plan = reminders.Build(intent.Value!, req.StartsAt, location.Timezone, now);
 
         var added = await store.AddAppointmentAsync(new NewAppointment(
             req.LocationId, req.SpecialistId, req.ServiceId, clientId.Value, req.StartsAt, duration, source,
-            quote.Original, quote.Final, quote.PromotionId, req.Reminder, req.PaymentMethod, reminderAt,
-            quote.Final > 0 ? new NewPayment(req.PaymentMethod, quote.Final) : null, publicOptions), ct);
+            quote.Original, quote.Final, quote.PromotionId, plan.Mirror, req.PaymentMethod, plan.LegacyReminderAt,
+            quote.Final > 0 ? new NewPayment(req.PaymentMethod, quote.Final) : null, publicOptions, plan, redemption), ct);
+        if (added.CouponUnavailable)
+            return Error.Conflict(couponUse!.Scope == CouponScope.Public ? CouponService.Invalid : "coupon_unavailable", "The coupon is no longer available.");
         if (added.Duplicate) return Error.Conflict("idempotency_conflict", "A request with this idempotency key is already being processed.");
         if (added.LocationClosed) return Error.Conflict("location_closed", ClosedMessage);
         if (added.OutsideLocationHours) return Error.Conflict("outside_location_hours", OutsideLocationHoursMessage);
@@ -109,7 +152,8 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
         }
 
         // картка оплачена / готівка в закладі -> підтверджено
-        return await WithTermsAsync(await store.SetStatusAsync(appt.Id, "confirmed", ct) ?? appt, ct);
+        var confirmed = await WithTermsAsync((await store.SetStatusAsync(appt.Id, "confirmed", ct))?.Value ?? appt, ct);
+        return couponDto is not null && confirmed.Coupon is null ? confirmed with { Coupon = couponDto } : confirmed;
     }
 
     // ---------- перенос / статус ----------
@@ -145,11 +189,9 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
                 case SlotCheck.Busy: return Error.Conflict("slot_unavailable", "The slot overlaps another appointment.");
             }
 
-            var offset = appt.ReminderOption switch { "1h" => TimeSpan.FromHours(1), "2h" => TimeSpan.FromHours(2), _ => (TimeSpan?)null };
-            var reminderAt = offset is null ? (DateTimeOffset?)null : newStart - offset.Value;
-            if (reminderAt is not null && reminderAt <= now) reminderAt = null;
-
-            var moved = await store.RescheduleAsync(id, newStart, reminderAt, ct);
+            // §22.4: той самий план запису (method + offsets), точки перераховуються від нового часу.
+            var plan = await reminders.ReplanForMoveAsync(appt, newStart, location.Timezone, ct);
+            var moved = await store.RescheduleAsync(id, newStart, plan, ct);
             if (moved.LocationClosed) return Error.Conflict("location_closed", ClosedMessage);
             if (moved.OutsideLocationHours) return Error.Conflict("outside_location_hours", OutsideLocationHoursMessage);
             if (moved.SpecialistBlocked) return Error.Conflict("specialist_unavailable", "The specialist is unavailable on this day or does not offer this service.");
@@ -158,7 +200,12 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
         }
 
         if (req.Status is not null)
-            current = await store.SetStatusAsync(id, req.Status, ct) ?? current;
+        {
+            var set = await store.SetStatusAsync(id, req.Status, ct);
+            if (set is { AppointmentClosed: true })
+                return Error.Conflict("appointment_closed", "Appointment was closed concurrently and cannot be changed.");
+            current = set?.Value ?? current;
+        }
         return await WithTermsAsync(current, ct);
     }
 

@@ -32,6 +32,7 @@ export function AppointmentCard({ appointment: a }: { appointment: Appointment }
         <div>
           {formatDateTime(a.startsAt)} · {formatDuration(a.durationMinutes)}
         </div>
+        {a.couponApplied ? <div data-testid="coupon-applied" className="text-[13px] font-semibold text-[#145A32]">Промокод застосовано</div> : null}
         <div className="font-semibold">
           {a.priceOriginal > a.priceFinal && (
             <span className="mr-2 font-normal text-[#5E5873] line-through">{formatPrice(a.priceOriginal)}</span>

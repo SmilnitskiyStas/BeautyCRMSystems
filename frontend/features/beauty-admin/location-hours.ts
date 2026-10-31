@@ -1,5 +1,6 @@
 import { localDateIn, weekdayOf } from "./closed-days";
 import type { BeautyLocation, StaffMember, Weekday, WorkingHours } from "./types";
+import { isLinkActive } from "./staff-links";
 import { summarizeHours, WEEKDAYS } from "./working-hours";
 
 /** Години роботи закладу (§18.1): `null`/відсутнє = не задано (обмеження немає). */
@@ -26,7 +27,8 @@ export function mapUrl(address: string | null | undefined): string | null {
 export function staffOfLocation(staff: StaffMember[], locationId: string) {
   return staff
     .flatMap((m) => {
-      const loc = m.locations.find((l) => l.locationId === locationId);
+      // F5: знятий зв'язок (isActive=false) - не спеціаліст закладу.
+      const loc = m.locations.find((l) => l.locationId === locationId && isLinkActive(l));
       return loc ? [{ member: m, workingHours: loc.workingHours }] : [];
     })
     .sort(

@@ -34,31 +34,25 @@ Definition of Done). Читати релевантну секцію перед �
 - Канали першого релізу: Telegram + Instagram (Instagram спершу через mock-адаптер).
 - AI-режим за замовчуванням: `confirm` («Готує, я підтверджую»).
 
-## Технологічний стек
+## Стек і структура
 
-Перед активною розробкою перевірити актуальні стабільні версії залежностей.
-
-| Шар | Технології |
-|---|---|
-| Frontend | [напр. Next.js App Router, React, TypeScript, Tailwind, shadcn/ui] |
-| Forms & validation | [напр. React Hook Form, Zod] |
-| i18n | [напр. next-intl — за потреби] |
-| Дані | [напр. PostgreSQL / Supabase — фіксує ADR] |
-| Хостинг | [напр. Vercel / Docker — фіксує ADR] |
-| CI/CD | [напр. GitHub Actions] |
-
-Обраний stack pack: `skills/stacks/{stack}` — постачає фреймворк-специфіку; ролі в
-`.claude/agents/` залишаються stack-нейтральними.
+- Frontend: Next.js 16 (App Router), React 19, TypeScript, Tailwind 4 — `frontend/`.
+- Backend: ASP.NET Core 8 (net8.0), EF Core 8 + Npgsql, PostgreSQL 16 з RLS (multi-tenant, `app.tenant_id`) — `backend/` (Domain, Application, Infrastructure, Api, Tests).
+- Worker: Node + TypeScript (tsx, vitest) — `worker/`: нагадування, outbox, поллери каналів.
+- `scripts/dev/` — локальне dev-середовище (PowerShell, PostgreSQL :55432); `docs/reviews/` — звіти рев'ю; `.claude/docs/` — живі документи.
+- Ролі в `.claude/agents/` залишаються stack-нейтральними.
 
 ## Команди розробки
 
-Заповнити після технічного сетапу (`dev/build/lint/typecheck/test`). Синхронізувати з
-`README.md` і `.claude/settings.local.json`.
+Повний порядок — `.claude/docs/runbook.md` (§4–§8). Коротко:
+- Backend: `$env:BEAUTY_TEST_REQUIRE_DB="1"; dotnet test backend` (потрібен Docker); API: `dotnet run --project BeautyCrm.Api --no-launch-profile` (порт 5000).
+- Worker: `npm.cmd test`, `npm.cmd start`, `npm run build` (tsc --noEmit).
+- Frontend: `npm.cmd test`, `npx tsc --noEmit`, `npm.cmd run lint`, `npm.cmd run build`; demo без backend — `npm.cmd run dev` з `NEXT_PUBLIC_USE_MOCK=1`.
+- Локальний стек: `scripts/dev/*.ps1` (setup-db, start-api, start-worker, seed, status).
 
 ## Архітектура
 
-Описати планову структуру каталогів і ключові правила. Рішення щодо хостингу,
-контент-шару, БД — через ADR (`skills/workflow/create-adr`, `templates/adr-template.md`).
+Модульний моноліт (ADR-001), ізоляція tenant через RLS (ADR-002), transactional outbox + worker (ADR-003). Рішення щодо хостингу, даних і контенту — через ADR (`.claude/docs/adr/`; шаблон і створення — `skills/workflow/create-adr`, `templates/adr-template.md`).
 
 ## Multi-Agent Workflow
 
@@ -89,33 +83,7 @@ Opus", "do not spawn reviewer".
 
 ### Agent → Task
 
-| Тип задачі | Агент |
-|---|---|
-| Класифікація запиту, вибір агента/tier | `task-intake` |
-| Уточнення неоднозначних вимог (`grill-me`) | `requirements-analyst` |
-| Пошук релевантного коду/патернів/контрактів | `project-researcher` / native `Explore` |
-| Збірка minimum-sufficient контексту | `context-manager` |
-| Архітектурне рішення / ADR / декомпозиція спеку | `project-architect` |
-| Backlog / статуси / handoff-координація / daily | `project-manager` |
-| Які review потрібні на зміну | `review-orchestrator` |
-| Сторінка / секція / компонент / форма / i18n / theming | `frontend-developer` |
-| Server Action / route handler / легкий колокований backend | `fullstack-developer` |
-| API endpoint / service-шар окремого backend-сервісу¹ | `backend-developer` |
-| Схема БД / міграції / індекси для великої моделі даних¹ | `database-engineer` |
-| Мобільний застосунок (RN/Expo, offline, push) | `mobile-developer` |
-| CI/CD / хостинг / env / деплой | `devops-engineer` |
-| Тести (unit/e2e/SEO), крос-браузер, Lighthouse-пороги | `qa-engineer` |
-| Аудит безпеки форм / auth / secrets (тільки рев'ю) | `security-reviewer` |
-| Discovery: позиціонування / sitemap / контент-модель | `product-designer` |
-| Design tokens / specs компонентів / theme / motion | `ui-ux-designer` |
-| WCAG-аудит дизайну й реалізації | `accessibility-specialist` |
-| Metadata / structured data / keyword-стратегія | `seo-specialist` |
-| Hero/CTA / friction форм / аналітична таксономія | `cro-specialist` |
-| Копірайтинг / наратив кейсів / блог / локалізація | `copywriter` |
-| Живі `.claude/docs/*` і кореневі документи | `documentation-writer` |
-
-¹ `backend-developer` + `database-engineer` — **альтернатива** `fullstack-developer`, не
-доповнення. Обрати один варіант; видалити зайві рядки й `.claude/agents/` файли.
+Вибір агента — за `description` субагентів (видно в кожній сесії) і класифікацією `task-intake`; повна карта ролей — `.claude/agents/`. Backend: `backend-developer` + `database-engineer` (не `fullstack-developer`). Тільки рев'ю: `security-reviewer`, `review-orchestrator`; документи: `documentation-writer`.
 
 ### Процедура кожного субагента
 
@@ -140,6 +108,9 @@ Opus", "do not spawn reviewer".
 (`workflow` — architecture/API/schema/integration/deployment/security/convention змінились).
 `known-issues.md` — скопіювати скелет `templates/known-issues-doc-template.md`; кожен агент
 робить retrieval релевантних lessons перед задачею (не читає весь файл).
+- `.claude/docs/beauty-contracts.md` — контракти API/сутностей, великий файл: не відкривати цілком; `Grep` за `^## §` (список розділів з номерами рядків; напр. `^## §22\.`) і `Read` з `offset`/`limit` лише потрібного розділу.
+- ADR — `.claude/docs/adr/`; звіти рев'ю — `docs/reviews/` (у git, не ігнорується).
+- `.claude/settings.json` → `permissions.deny` закриває від читання `.env*`, `node_modules`, `bin/obj`, lock-файли, міграційні Designer/Snapshot, `worker/src/testing/schema.sql` і стан dev-скриптів.
 
 ## Rules hierarchy & source of truth
 
