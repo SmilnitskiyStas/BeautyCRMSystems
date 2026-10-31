@@ -85,7 +85,7 @@ function errorCode(err: unknown): string {
 export function pollOutbox(ctx: PollContext): Promise<PollResult> {
   return forEachTenant(ctx, async () => {
     const res: PollResult = { processed: 0, errors: 0 };
-    for (const m of await ctx.store.listPendingOutbox(ctx.deps.now(), ctx.batchSize ?? 50, ctx.backoffMs ?? 5_000)) {
+    for (const m of await ctx.store.listPendingOutbox(ctx.deps.now(), ctx.batchSize ?? 50, ctx.backoffMs ?? 5_000, { campaigns: ctx.campaignsEnabled !== false, winback: ctx.winbackEnabled !== false })) {
       try {
         await processOutbox(ctx.deps, { messageId: m.id }, m.attempts);
         res.processed++;
@@ -103,6 +103,7 @@ export function pollOutbox(ctx: PollContext): Promise<PollResult> {
 export function pollWinback(ctx: PollContext, inactiveDays?: number): Promise<PollResult> {
   if (ctx.winbackEnabled === false) return Promise.resolve({ processed: 0, errors: 0 });
   return forEachTenant(ctx, async () => {
+    if (!(await ctx.deps.data.isMarketingEnabled())) return { processed: 0, errors: 0 }; // M4: module off, silently idle
     const r = await processWinback(ctx.deps, inactiveDays);
     return { processed: r.sent, errors: 0 };
   }, "pollWinback");
@@ -136,6 +137,7 @@ export function pollCampaigns(ctx: PollContext): Promise<PollResult> {
   if (ctx.campaignsEnabled === false) return Promise.resolve({ processed: 0, errors: 0 });
   return forEachTenant(ctx, async () => {
     const res: PollResult = { processed: 0, errors: 0 };
+    if (!(await ctx.deps.data.isMarketingEnabled())) return res; // M4: module off, silently idle
     for (const id of await ctx.deps.data.listDueCampaigns(ctx.deps.now())) {
       try {
         res.processed += (await processCampaign(ctx.deps, { campaignId: id })).queued;

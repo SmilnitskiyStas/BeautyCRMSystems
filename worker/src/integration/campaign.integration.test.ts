@@ -52,7 +52,7 @@ const q = (sql: string, p: unknown[] = []) => admin.query(sql, p);
 async function seed(o: { type?: "promo" | "news"; coupon?: "none" | "personal" | "shared"; status?: string; buttons?: boolean; tz?: string; promoActive?: boolean } = {}): Promise<Seed> {
   const tenantId = randomUUID();
   const [loc, spec, svc, promo, campaignId, userId, channelId] = Array.from({ length: 7 }, () => randomUUID());
-  await q("INSERT INTO tenants (id, name, slug) VALUES ($1,'T',$2)", [tenantId, `t-${tenantId.slice(0, 8)}`]);
+  await q("INSERT INTO tenants (id, name, slug, modules) VALUES ($1,'T',$2,'{beauty_marketing}')", [tenantId, `t-${tenantId.slice(0, 8)}`]);
   await q("INSERT INTO users (id, tenant_id, email, full_name, password_hash, role) VALUES ($1,$2,$3,'U','x','owner')", [userId, tenantId, `${userId}@x.test`]);
   await q("INSERT INTO beauty_locations (id, tenant_id, name, timezone, is_active) VALUES ($1,$2,'L',$3,true)", [loc, tenantId, o.tz ?? "Europe/Kyiv"]);
   await q("INSERT INTO beauty_specialists (id, tenant_id, full_name, is_active) VALUES ($1,$2,'S',true)", [spec, tenantId]);
@@ -330,9 +330,11 @@ describe("delivery, keyboard, privacy", () => {
     const s = await seed();
     await addClient(s);
     const { ctx, logs, lines } = makeCtx([s.tenantId]);
-    await pollCampaigns(ctx); await pollOutbox(ctx);
+    await pollCampaigns(ctx);
+    // TASK-791 (M1): the code is only readable before delivery (the body is masked once the message is sent), so read it between the passes
     const [m] = (await q("SELECT body FROM beauty_messages WHERE tenant_id=$1", [s.tenantId])).rows;
     const code = /Ваш код: ([0-9A-Z]{5}-[0-9A-Z]{5})/.exec(m.body)![1]!;
+    await pollOutbox(ctx);
     const all = JSON.stringify(logs) + lines.join("\n");
     for (const bad of [NAME, "Олена", "Манікюр", code, normalizeCode(code), hashCode(code), CHAT, PHONE, "знижка"]) expect(all).not.toContain(bad);
     expect(all).toContain("campaign_recipient");

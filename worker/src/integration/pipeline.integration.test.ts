@@ -51,6 +51,7 @@ async function seed(o: {
   const tenantId = randomUUID();
   const [loc, spec, svc, client, appt, channel, conv] = Array.from({ length: 7 }, () => randomUUID());
   const q = (sql: string, p: unknown[]) => admin.query(sql, p);
+  await admin.query("INSERT INTO tenants (id, name, slug, modules) VALUES ($1,'T',$2,'{beauty_marketing}')", [tenantId, `t-${tenantId.slice(0, 8)}`]); // TASK-791: marketing needs the module
   await q("INSERT INTO beauty_locations (id, tenant_id, name, timezone, is_active) VALUES ($1,$2,'L','Europe/Kyiv',true)", [loc, tenantId]);
   await q("INSERT INTO beauty_specialists (id, tenant_id, full_name, is_active) VALUES ($1,$2,'S',true)", [spec, tenantId]);
   await q("INSERT INTO beauty_services (id, tenant_id, name, duration_minutes, is_active) VALUES ($1,$2,'Svc',60,true)", [svc, tenantId]);
@@ -214,11 +215,14 @@ describe("reminder -> outbox -> channel (PostgreSQL, RLS enforced)", () => {
     const night = makeCtx(ids, { now: () => NIGHT });
     await pollWinback(night.ctx); await pollWinback(night.ctx); // daily rerun = no duplicate
     await pollOutbox(night.ctx);
-    expect(night.sent).toHaveLength(0); // 00:00 Kyiv: outside 09-20, stays pending
+    expect(night.sent).toHaveLength(0); // 00:00 Kyiv: outside 09-20
+    // TASK-791 (M6): winback has the campaign window at enqueue too, so at night no message is even created (was: created and held pending)
     expect(await row("SELECT status, idempotency_key FROM beauty_messages WHERE tenant_id = ANY($1)", [ids]))
-      .toHaveLength(1);
+      .toHaveLength(0);
 
     const day = makeCtx(ids, { now: () => NOW });
+    await pollWinback(day.ctx); await pollWinback(day.ctx); // daily rerun = no duplicate
+    expect(await row("SELECT status, idempotency_key FROM beauty_messages WHERE tenant_id = ANY($1)", [ids])).toHaveLength(1);
     await pollOutbox(day.ctx); await pollOutbox(day.ctx);
     expect(day.sent).toHaveLength(1);
     expect(day.sent[0]).toMatchObject({ tenantId: lapsed.tenantId, kind: "winback", clientId: lapsed.clientId });

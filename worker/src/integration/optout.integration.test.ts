@@ -46,6 +46,7 @@ async function seed(o: Opts) {
   const tenantId = randomUUID();
   const [loc, spec, svc, client, channel, conv] = Array.from({ length: 6 }, () => randomUUID());
   const q = (sql: string, p: unknown[]) => admin.query(sql, p);
+  await admin.query("INSERT INTO tenants (id, name, slug, modules) VALUES ($1,'T',$2,'{beauty_marketing}')", [tenantId, `t-${tenantId.slice(0, 8)}`]); // TASK-791: marketing needs the module
   await q("INSERT INTO beauty_locations (id, tenant_id, name, timezone, is_active) VALUES ($1,$2,'L','Europe/Kyiv',true)", [loc, tenantId]);
   await q("INSERT INTO beauty_specialists (id, tenant_id, full_name, is_active) VALUES ($1,$2,'S',true)", [spec, tenantId]);
   await q("INSERT INTO beauty_services (id, tenant_id, name, duration_minutes, is_active) VALUES ($1,$2,'Svc',60,true)", [svc, tenantId]);

@@ -31,6 +31,20 @@ export function makeDeps(init: {
       enqueueCampaignMessage: async () => "not_pending",
       campaignSendGuard: async () => init.guard ?? null,
       listLapsedClients: async () => init.lapsed ?? [],
+      isMarketingEnabled: async () => true,
+      enqueueWinbackMessage: async (m) => {
+        const ex = [...messages.values()].find((x) => x.idempotencyKey === m.idempotencyKey);
+        if (ex) return { result: "duplicate" };
+        const message: StoredMessage = { ...m, id: `m${messages.size + 1}`, status: "queued" };
+        messages.set(message.id, message);
+        return { result: "queued", message };
+      },
+      claimMarketingForSend: async (id, limit) => {
+        if (sent.filter((m) => m.kind === "campaign" || m.kind === "winback").length >= limit) return "limit";
+        if (messages.get(id)?.status !== "queued" || sending.has(id)) return "lost";
+        sending.add(id);
+        return "claimed";
+      },
       upsertMessage: async (m) => {
         const ex = [...messages.values()].find((x) => x.idempotencyKey === m.idempotencyKey);
         if (ex) return { message: ex, created: false };

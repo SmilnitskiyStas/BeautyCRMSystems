@@ -80,7 +80,12 @@ export interface CampaignEnqueueOptions {
 }
 
 /** `queued | deferred_window | deferred_limit | skipped:{code}`; `not_pending` = another poller owns / has handled the row. */
-export type CampaignEnqueueResult = "queued" | "deferred_window" | "deferred_limit" | "not_pending" | `skipped:${string}`;
+export type CampaignEnqueueResult = "queued" | "deferred_window" | "deferred_limit" | "deferred_disabled" | "not_pending" | `skipped:${string}`;
+
+/** Winback enqueue (M6): same checks as a campaign recipient (Telegram, consent, window, frequency, daily limit), all under one lock. */
+export type WinbackEnqueueResult =
+  | { result: "queued"; message: StoredMessage }
+  | { result: "duplicate" | "deferred_window" | "deferred_limit" | "deferred_disabled" | `skipped:${string}` };
 
 export interface LapsedClient extends ClientInfo {
   lastVisitAt: Date;
@@ -103,6 +108,10 @@ export interface BeautyDataPort {
   enqueueCampaignMessage(recipientId: string, now: Date, opts: CampaignEnqueueOptions): Promise<CampaignEnqueueResult>;
   /** Right before delivery: why a campaign message must not be sent (cancelled campaign / consent withdrawn), else null. */
   campaignSendGuard(messageId: string): Promise<"campaign_cancelled" | "consent_withdrawn" | null>;
+  /** Winback message in one transaction under the tenant's `marketing-daily` lock (frequency + daily limit + insert are atomic). */
+  enqueueWinbackMessage(msg: OutboundMessage, now: Date, opts: CampaignEnqueueOptions): Promise<WinbackEnqueueResult>;
+  /** The current tenant has the `beauty_marketing` module (kill switch together with the WORKER_* flags). */
+  isMarketingEnabled(): Promise<boolean>;
   /** `minIntervalDays` (default 7): clients with a marketing message queued/sent within it are left out (§26.5 frequency). */
   listLapsedClients(now: Date, inactiveDays: number, minIntervalDays?: number): Promise<LapsedClient[]>;
   /** Create message row, or return the existing one for the same key. */
@@ -116,6 +125,11 @@ export interface BeautyDataPort {
    * A failed attempt returns the row to `pending` (recordSendFailure); a stuck `sending` is reaped by the backend after 5 minutes.
    */
   claimForSend(id: string): Promise<boolean>;
+  /**
+   * Marketing variant of `claimForSend` (L5): under the tenant's `marketing-daily` lock counts sent/sending marketing messages
+   * since `since` and, below `limit`, performs the same CAS. `limit` = over the daily limit (row stays pending); `lost` = not pending.
+   */
+  claimMarketingForSend(id: string, limit: number, since: Date): Promise<"claimed" | "lost" | "limit">;
   /** Marketing (campaign/winback) messages of the current tenant sent since `since` (daily limit). */
   countMarketingSentSince(since: Date): Promise<number>;
   /** Persist a failed attempt (attempts/last_error); `final` => status "failed", otherwise stays queued ("pending"). */

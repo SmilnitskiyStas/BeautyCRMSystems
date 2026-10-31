@@ -1,9 +1,11 @@
 import { randomBytes } from "node:crypto";
 import type { PoolClient } from "pg";
-import type { CampaignEnqueueOptions, CampaignEnqueueResult, CampaignInfo, CampaignRecipientRef, CampaignStatus } from "../ports";
+import type {
+  CampaignEnqueueOptions, CampaignEnqueueResult, CampaignInfo, CampaignRecipientRef, CampaignStatus, OutboundMessage, StoredMessage, WinbackEnqueueResult,
+} from "../ports";
 import { currentTenantId, type TenantDb } from "../db/tenant-db";
 import {
-  COUPON_FALLBACK_DAYS, DEFAULT_FAVORITE_SERVICES_DAYS, buildCampaignKeyboard, inCampaignWindow, levelAllows, renderCampaignText,
+  COUPON_FALLBACK_DAYS, DEFAULT_FAVORITE_SERVICES_DAYS, buildCampaignKeyboard, inCampaignWindow, isValidTimeZone, levelAllows, renderCampaignText,
 } from "../jobs/beauty-campaign";
 import { codeHint, generatePersonalCode, hashCode } from "../jobs/coupon-code";
 import { channelButtonsOn } from "./pg-poll-store";
@@ -36,6 +38,49 @@ async function consentVerdict(c: PoolClient, clientId: string, type: "promo" | "
   }
   return levelAllows(r.level, type, overlap) ? "ok" : "level_mismatch";
 }
+
+
+/** Mask that replaces a personal coupon code in a stored message body after delivery (M1). */
+const COUPON_IN_BODY = /\b[0-9A-HJKMNP-TV-Z]{5}-[0-9A-HJKMNP-TV-Z]{5}\b/g;
+export const maskCouponCode = (body: string, hint: string | null): string =>
+  body.replace(COUPON_IN_BODY, hint ? `[код купона …${hint}]` : "[код купона]");
+
+/** M4/L4: the tenant has the `beauty_marketing` module (kill switch next to the WORKER_* flags). */
+export async function marketingModuleOn(c: PoolClient): Promise<boolean> {
+  const { rows } = await c.query<{ ok: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM tenants t WHERE t.id = NULLIF(current_setting('app.tenant_id', true), '')::uuid AND t.status = 'active'
+                    AND EXISTS (SELECT 1 FROM unnest(t.modules) m WHERE lower(m) = 'beauty_marketing')) AS ok`);
+  return rows[0]?.ok === true;
+}
+
+/** Zone of the client's home venue (last appointment, else `locationId`, else first active venue, else `fallback`). */
+async function homeZone(c: PoolClient, clientId: string, locationId: string | null, fallback: string): Promise<string> {
+  return (await c.query<{ timezone: string }>(
+    `SELECT timezone FROM (
+       SELECT 1 AS pr, l.timezone, a.starts_at AS ord, l.name FROM beauty_appointments a JOIN beauty_locations l ON l.tenant_id = a.tenant_id AND l.id = a.location_id WHERE a.client_id = $1
+       UNION ALL SELECT 2, l.timezone, NULL, l.name FROM beauty_locations l WHERE l.id = $2
+       UNION ALL SELECT 3, l.timezone, NULL, l.name FROM beauty_locations l WHERE l.is_active) t
+     ORDER BY pr, ord DESC NULLS LAST, name LIMIT 1`, [clientId, locationId])).rows[0]?.timezone ?? fallback;
+}
+
+/** Frequency (1 marketing message per N days; campaigns and winback). Call under the `marketing-daily` lock. */
+async function frequencyHit(c: PoolClient, clientId: string, exceptRecipientId: string | null, now: Date, days: number): Promise<boolean> {
+  const r = await c.query(
+    `SELECT 1 WHERE EXISTS (SELECT 1 FROM beauty_campaign_recipients x WHERE x.client_id = $1 AND ($2::uuid IS NULL OR x.id <> $2::uuid) AND x.status IN ('queued', 'sent')
+                            AND x.queued_at > $3::timestamptz - make_interval(days => $4::int))
+                 OR EXISTS (SELECT 1 FROM beauty_messages m WHERE m.idempotency_key LIKE 'winback:' || $1::text || ':%'
+                            AND m.created_at > $3::timestamptz - make_interval(days => $4::int))`, [clientId, exceptRecipientId, now, days]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** Rolling 24 h of created marketing messages (not failed) reached the limit? Call under the `marketing-daily` lock. */
+async function dailyLimitHit(c: PoolClient, now: Date, limit: number): Promise<boolean> {
+  const used = (await c.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM beauty_messages WHERE direction = 'outbound' AND idempotency_key ~ '^(campaign|winback):'
+       AND created_at > $1::timestamptz - interval '24 hours' AND status <> 'failed'`, [now])).rows[0]!.n;
+  return used >= limit;
+}
+const lockMarketing = (c: PoolClient, tenantId: string) => c.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`marketing-daily:${tenantId}`]);
 
 /** Campaign part of the BeautyDataPort over PostgreSQL (RLS through TenantDb). */
 export class PgCampaigns {
@@ -115,20 +160,79 @@ export class PgCampaigns {
     const m = idempotencyKey ? CAMPAIGN_KEY.exec(idempotencyKey) : null;
     if (!m) return;
     if ("sent" in outcome) {
-      await c.query(
+      const done = await c.query<{ message_id: string | null; coupon_id: string | null }>(
         `UPDATE beauty_campaign_recipients SET status = 'sent', sent_at = $3, updated_at = $3
-         WHERE campaign_id = $1 AND client_id = $2 AND status = 'queued'`, [m[1], m[2], now]);
+         WHERE campaign_id = $1 AND client_id = $2 AND status = 'queued' RETURNING message_id, coupon_id`, [m[1], m[2], now]);
+      await PgCampaigns.maskPersonalCode(c, done.rows[0]?.message_id ?? null, done.rows[0]?.coupon_id ?? null);
       return;
     }
     const withdrawn = outcome.code === "campaign_cancelled" || outcome.code === "consent_withdrawn";
     const code = withdrawn || FINAL_CODES.has(outcome.code) ? outcome.code : "send_failed";
-    const { rows } = await c.query<{ coupon_id: string | null }>(
+    const { rows } = await c.query<{ coupon_id: string | null; message_id: string | null }>(
       `UPDATE beauty_campaign_recipients SET status = $3, skip_reason = $4, updated_at = $5
-       WHERE campaign_id = $1 AND client_id = $2 AND status = 'queued' RETURNING coupon_id`,
+       WHERE campaign_id = $1 AND client_id = $2 AND status = 'queued' RETURNING coupon_id, message_id`,
       [m[1], m[2], withdrawn ? "skipped" : "failed", code, now]);
     if (rows[0]?.coupon_id) {
       await c.query(`UPDATE beauty_coupons SET status = 'revoked', updated_at = $2 WHERE id = $1 AND kind = 'personal' AND status = 'active'`, [rows[0].coupon_id, now]);
     }
+    await PgCampaigns.maskPersonalCode(c, rows[0]?.message_id ?? null, rows[0]?.coupon_id ?? null);
+  }
+
+  /**
+   * M1: the full personal code lives in `beauty_messages.body` only while the message is undelivered; in the transaction that marks it
+   * sent/failed the code is replaced by `[код купона …XYZ]` (hint = last 3 symbols), so inbox/LLM history never keep it afterwards.
+   */
+  static async maskPersonalCode(c: PoolClient, messageId: string | null, couponId: string | null): Promise<void> {
+    if (!messageId || !couponId) return;
+    const hint = (await c.query<{ code_hint: string | null }>("SELECT code_hint FROM beauty_coupons WHERE id = $1 AND kind = 'personal'", [couponId])).rows[0]?.code_hint;
+    if (hint === undefined) return; // shared coupon: the code is public by design and stays
+    const body = (await c.query<{ body: string }>("SELECT body FROM beauty_messages WHERE id = $1 FOR UPDATE", [messageId])).rows[0]?.body;
+    if (body === undefined) return;
+    const masked = maskCouponCode(body, hint);
+    if (masked !== body) await c.query("UPDATE beauty_messages SET body = $2 WHERE id = $1", [messageId, masked]);
+  }
+
+  async isMarketingEnabled(): Promise<boolean> { return this.db.tx((c) => marketingModuleOn(c)); }
+
+  async claimMarketingForSend(id: string, limit: number, since: Date, now: Date = new Date()): Promise<"claimed" | "lost" | "limit"> {
+    const tenantId = currentTenantId();
+    return this.db.tx(async (c) => {
+      await lockMarketing(c, tenantId);
+      const used = (await c.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM beauty_messages WHERE direction = 'outbound' AND status IN ('sent', 'sending') AND sent_at >= $1::timestamptz
+           AND idempotency_key ~ '^(campaign|winback):'`, [since])).rows[0]!.n;
+      if (used >= limit) return "limit";
+      const r = await c.query(`UPDATE beauty_messages SET status = 'sending', updated_at = $2 WHERE id = $1 AND direction = 'outbound' AND status = 'pending'`, [id, now]);
+      return r.rowCount === 1 ? "claimed" : "lost";
+    });
+  }
+
+  /** M6/L1/L5: winback = a campaign recipient without a campaign: Telegram only, consent, window, frequency, daily limit, one lock. */
+  async enqueueWinbackMessage(msg: OutboundMessage, now: Date, opts: CampaignEnqueueOptions): Promise<WinbackEnqueueResult> {
+    const tenantId = currentTenantId();
+    if (msg.tenantId !== tenantId) throw new Error("Message tenant does not match the tenant in scope");
+    return this.db.tx(async (c): Promise<WinbackEnqueueResult> => {
+      if (!(await marketingModuleOn(c))) return { result: "deferred_disabled" };
+      const conv = (await c.query<{ id: string }>(
+        `SELECT c.id FROM beauty_conversations c JOIN beauty_channels ch ON ch.tenant_id = c.tenant_id AND ch.id = c.channel_id
+         WHERE c.client_id = $1 AND c.external_chat_id = $2 AND ch.is_active AND lower(ch.type) = 'telegram'
+         ORDER BY c.last_message_at DESC NULLS LAST LIMIT 1`, [msg.clientId, msg.address])).rows[0];
+      if (!conv) return { result: "skipped:no_channel" };
+      const verdict = await consentVerdict(c, msg.clientId, "promo", null, now, opts.favoriteServicesDays);
+      if (verdict !== "ok") return { result: `skipped:${verdict}` };
+      const tz = await homeZone(c, msg.clientId, null, opts.defaultTimezone);
+      if (!isValidTimeZone(tz)) return { result: "skipped:invalid_timezone" };
+      if (!inCampaignWindow(now, tz)) return { result: "deferred_window" };
+      await lockMarketing(c, tenantId);
+      if ((await c.query("SELECT 1 FROM beauty_messages WHERE idempotency_key = $1", [msg.idempotencyKey])).rowCount) return { result: "duplicate" };
+      if (await frequencyHit(c, msg.clientId, null, now, opts.clientIntervalDays)) return { result: "skipped:frequency" };
+      if (await dailyLimitHit(c, now, opts.dailyLimit)) return { result: "deferred_limit" };
+      const ins = await c.query<{ id: string }>(
+        `INSERT INTO beauty_messages (tenant_id, conversation_id, direction, sender_type, body, status, idempotency_key, sent_at, created_at)
+         VALUES ($1, $2, 'outbound', 'system', $3, 'pending', $4, $5, $5) RETURNING id`, [tenantId, conv.id, msg.text, msg.idempotencyKey, now]);
+      const message: StoredMessage = { ...msg, id: ins.rows[0]!.id, status: "queued" };
+      return { result: "queued", message };
+    });
   }
 
   /** §26.8 `enqueueCampaignMessage`: one transaction, checks in contract order, first failure = `skipped` + reason (no personal data). */
@@ -138,6 +242,7 @@ export class PgCampaigns {
       const rec = (await c.query<{ campaign_id: string; client_id: string }>(
         `SELECT campaign_id, client_id FROM beauty_campaign_recipients WHERE id = $1 AND status = 'pending' FOR UPDATE SKIP LOCKED`, [recipientId])).rows[0];
       if (!rec) return "not_pending";
+      if (!(await marketingModuleOn(c))) return "deferred_disabled"; // M4/L4: module off -> the row stays pending
       const skip = async (code: string): Promise<CampaignEnqueueResult> => {
         await c.query(`UPDATE beauty_campaign_recipients SET status = 'skipped', skip_reason = $2, updated_at = $3 WHERE id = $1`, [recipientId, code, now]);
         return `skipped:${code}`;
@@ -167,27 +272,16 @@ export class PgCampaigns {
         "SELECT code, valid_from, valid_to, status, max_uses, uses_count FROM beauty_coupons WHERE id = $1", [camp.shared_coupon_id])).rows[0] : undefined;
       if (camp.type === "promo" && (!camp.p_active || (camp.p_ends && camp.p_ends <= now) || (camp.coupon_valid_to && camp.coupon_valid_to <= now))) return skip("offer_expired");
       if (camp.coupon_mode === "shared" && (!coupon || coupon.status !== "active" || coupon.valid_to <= now || (coupon.max_uses !== null && coupon.uses_count >= coupon.max_uses))) return skip("offer_expired");
-      // 6. frequency: one marketing message per client per N days (campaigns and winback)
-      const freq = await c.query(
-        `SELECT 1 WHERE EXISTS (SELECT 1 FROM beauty_campaign_recipients x WHERE x.client_id = $1 AND x.id <> $2 AND x.status IN ('queued', 'sent')
-                                AND x.queued_at > $3::timestamptz - make_interval(days => $4::int))
-                     OR EXISTS (SELECT 1 FROM beauty_messages m WHERE m.idempotency_key LIKE 'winback:' || $5::text || ':%'
-                                AND m.created_at > $3::timestamptz - make_interval(days => $4::int))`, [rec.client_id, recipientId, now, opts.clientIntervalDays, rec.client_id]);
-      if (freq.rowCount) return skip("frequency");
-      // 7. window in the home venue's zone (last appointment, else campaign venue, else first active venue, else default)
-      const tz = (await c.query<{ timezone: string }>(
-        `SELECT timezone FROM (
-           SELECT 1 AS pr, l.timezone, a.starts_at AS ord, l.name FROM beauty_appointments a JOIN beauty_locations l ON l.tenant_id = a.tenant_id AND l.id = a.location_id WHERE a.client_id = $1
-           UNION ALL SELECT 2, l.timezone, NULL, l.name FROM beauty_locations l WHERE l.id = $2
-           UNION ALL SELECT 3, l.timezone, NULL, l.name FROM beauty_locations l WHERE l.is_active) t
-         ORDER BY pr, ord DESC NULLS LAST, name LIMIT 1`, [rec.client_id, camp.location_id])).rows[0]?.timezone ?? opts.defaultTimezone;
+      // 6. frequency: one marketing message per client per N days (campaigns and winback). L1/L5: from here on the tenant lock
+      //    `marketing-daily` is held, so the frequency check, the daily limit and the insert are atomic across parallel workers.
+      await lockMarketing(c, tenantId);
+      if (await frequencyHit(c, rec.client_id, recipientId, now, opts.clientIntervalDays)) return skip("frequency");
+      // 7. window in the home venue's zone (last appointment, else campaign venue, else first active venue, else default); L11: invalid zone -> skipped
+      const tz = await homeZone(c, rec.client_id, camp.location_id, opts.defaultTimezone);
+      if (!isValidTimeZone(tz)) return skip("invalid_timezone");
       if (!inCampaignWindow(now, tz)) return "deferred_window";
       // 8. daily limit per tenant (rolling 24 h of created marketing messages)
-      await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`marketing-daily:${tenantId}`]);
-      const used = (await c.query<{ n: number }>(
-        `SELECT count(*)::int AS n FROM beauty_messages WHERE direction = 'outbound' AND idempotency_key ~ '^(campaign|winback):'
-           AND created_at > $1::timestamptz - interval '24 hours' AND status <> 'failed'`, [now])).rows[0]!.n;
-      if (used >= opts.dailyLimit) return "deferred_limit";
+      if (await dailyLimitHit(c, now, opts.dailyLimit)) return "deferred_limit";
       // 9. message (the unique key makes a repeated run reuse the message instead of creating a second one)
       const key = `campaign:${rec.campaign_id}:${rec.client_id}`;
       const existing = (await c.query<{ id: string; conversation_id: string }>("SELECT id, conversation_id FROM beauty_messages WHERE idempotency_key = $1", [key])).rows[0];

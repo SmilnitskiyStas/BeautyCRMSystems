@@ -86,9 +86,12 @@ export function formatVisitTime(date: Date, tz: string): string {
   return `${o.weekday}, ${o.day}.${o.month} о ${o.hour}:${o.minute}`;
 }
 
-/** One line, no control characters, at most 80 code points. */
+/** Unicode Cf (bidi controls, zero-width, BOM, soft hyphen): invisible text that can disguise a message (L9). */
+export const stripFormatChars = (value: string): string => value.replace(/\p{Cf}/gu, "");
+
+/** One line, no control or format (Cf) characters, at most 80 code points. */
 export function sanitizeLine(value: string | null | undefined, max = 80): string {
-  const clean = (value ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim();
+  const clean = stripFormatChars(value ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim();
   return [...clean].slice(0, max).join("").trim();
 }
 

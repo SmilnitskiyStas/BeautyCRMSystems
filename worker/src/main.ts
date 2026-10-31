@@ -6,6 +6,7 @@ import { PgBeautyData } from "./adapters/pg-data";
 import { DEFAULT_WINDOW, PgPollStore } from "./adapters/pg-poll-store";
 import { LoggerNotificationLog, PgAdvisoryIdempotency, PgQueuePort, consoleLogger } from "./adapters/pg-support";
 import { TenantDb } from "./db/tenant-db";
+import { assertMarketingLegalGate } from "./marketing-gate";
 import { StaticTenantDirectory, type TenantDirectory } from "./db/tenants";
 import { DEFAULT_CLIENT_INTERVAL_DAYS, DEFAULT_MARKETING_DAILY_LIMIT } from "./jobs/beauty-common";
 import { DEFAULT_CAMPAIGN_BATCH, DEFAULT_FAVORITE_SERVICES_DAYS } from "./jobs/beauty-campaign";
@@ -20,6 +21,7 @@ export interface WorkerRuntime { scheduler: Scheduler; ctx: PollContext; stop():
 
 /** Wires the DB-driven worker: `WORKER_DATABASE_URL` must be a role WITHOUT BYPASSRLS. */
 export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants?: TenantDirectory): Promise<WorkerRuntime> {
+  assertMarketingLegalGate(env);
   const url = env.WORKER_DATABASE_URL;
   if (!url) throw new Error("WORKER_DATABASE_URL is not set");
   const db = TenantDb.create(url, 10);
@@ -62,7 +64,8 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
     { name: "beauty.outbox", everyMs: 30_000, run: () => pollOutbox(ctx) },
     { name: "beauty.reviews", everyMs: 10 * MIN, run: () => pollReviews(ctx) },
     { name: "beauty.campaigns", everyMs: 1 * MIN, run: () => pollCampaigns(ctx) },
-    { name: "beauty.winback", everyMs: 24 * 60 * MIN, run: () => pollWinback(ctx) },
+    // hourly: a pass deferred by the 09-20 window / daily limit resumes; keys are per lapse and frequency is checked, so reruns never duplicate
+    { name: "beauty.winback", everyMs: 60 * MIN, run: () => pollWinback(ctx) },
   ], consoleLogger);
   return {
     scheduler, ctx,

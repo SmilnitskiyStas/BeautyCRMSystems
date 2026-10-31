@@ -1,7 +1,7 @@
 import type { BeautyDeps, CampaignEnqueueOptions } from "../ports";
 import { DEFAULT_CLIENT_INTERVAL_DAYS, DEFAULT_MARKETING_DAILY_LIMIT, UNSUBSCRIBE_NOTE, UNSUBSCRIBE_NOTE_BUTTONS } from "./beauty-common";
 import { formatCode } from "./coupon-code";
-import { localParts, sanitizeLine, zonedTimeToUtc } from "./reminder-time";
+import { localParts, sanitizeLine, stripFormatChars, zonedTimeToUtc } from "./reminder-time";
 
 export interface CampaignJobData { campaignId: string }
 
@@ -11,6 +11,18 @@ export const DEFAULT_CAMPAIGN_BATCH = 50;
 export const DEFAULT_FAVORITE_SERVICES_DAYS = 365;
 export const COUPON_FALLBACK_DAYS = 30;
 const MAX_TEXT_CODEPOINTS = 3500;
+
+const zoneCache = new Map<string, boolean>();
+/** L11: is `tz` a usable IANA zone? (Intl throws RangeError otherwise); cached. */
+export function isValidTimeZone(tz: string | null | undefined): boolean {
+  if (!tz) return false;
+  let ok = zoneCache.get(tz);
+  if (ok === undefined) {
+    try { new Intl.DateTimeFormat("en-US", { timeZone: tz }); ok = true; } catch { ok = false; }
+    zoneCache.set(tz, ok);
+  }
+  return ok;
+}
 
 /** Local time of `now` inside [09:00, 20:00) of the IANA zone (DST aware via Intl). */
 export function inCampaignWindow(now: Date, timeZone: string): boolean {
@@ -85,7 +97,7 @@ export function renderCampaignText(i: CampaignTextInput): string {
   const values: Record<string, string> = {
     name: greetingName(i.clientName), discount, service, valid_from: from || "сьогодні", valid_to: to, code,
   };
-  const body = i.template.replace(/\{(name|discount|service|valid_from|valid_to|code)\}/g, (_m, k: string) => sanitizeLine(values[k]!));
+  const body = stripFormatChars(i.template).replace(/\{(name|discount|service|valid_from|valid_to|code)\}/g, (_m, k: string) => sanitizeLine(values[k]!));
   const tail: string[] = [];
   if (i.type === "promo") {
     const period = i.validTo ? `діє з ${values.valid_from} по ${to}` : `діє з ${values.valid_from}, ${to}`;
@@ -158,6 +170,7 @@ export async function processCampaign(deps: BeautyDeps, data: CampaignJobData): 
       else if (result.startsWith("skipped:")) res.skipped++;
       else if (result === "deferred_window") res.deferredWindow++;
       else if (result === "deferred_limit") { res.deferredLimit = true; break scan; }
+      else if (result === "deferred_disabled") break scan; // module off: rows stay pending
       if (handled() >= batch) break scan;
     }
     if (page.length < batch) break;

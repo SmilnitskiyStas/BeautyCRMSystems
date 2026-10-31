@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 import type {
-  AppointmentInfo, AppointmentStatus, ChatActions, BeautyDataPort, CampaignEnqueueOptions, CampaignEnqueueResult, CampaignInfo, CampaignRecipientRef, ClientInfo, LapsedClient, OutboundMessage,
+  AppointmentInfo, AppointmentStatus, ChatActions, BeautyDataPort, CampaignEnqueueOptions, CampaignEnqueueResult, CampaignInfo, CampaignRecipientRef, ClientInfo, LapsedClient, OutboundMessage, WinbackEnqueueResult,
   ReminderOption, StoredMessage,
 } from "../ports";
 import { currentTenantId, type TenantDb } from "../db/tenant-db";
@@ -18,7 +18,7 @@ export function kindFromKey(key: string | null): OutboundMessage["kind"] {
 }
 
 /** Latest active conversation of a client = where we can reach them (channel + chat id). */
-const CLIENT_SQL = `
+const clientSql = (onlyTelegram: boolean) => `
   SELECT cl.id, cl.tenant_id, cl.full_name, coalesce(mc.level <> 'none', false) AS marketing_consent, cl.unsubscribed,
          coalesce(pref.method = 'none', false) AS pref_none,
          conv.external_chat_id, conv.type
@@ -28,9 +28,13 @@ const CLIENT_SQL = `
   JOIN LATERAL (
     SELECT c.external_chat_id, ch.type FROM beauty_conversations c
     JOIN beauty_channels ch ON ch.id = c.channel_id AND ch.is_active
-    WHERE c.client_id = cl.id
+    WHERE c.client_id = cl.id${onlyTelegram ? " AND lower(ch.type) = 'telegram'" : ""}
     ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC LIMIT 1
   ) conv ON true`;
+
+const CLIENT_SQL = clientSql(false);
+/** Winback addresses Telegram only (M6): the conversation is the client's latest Telegram one. */
+const CLIENT_SQL_TELEGRAM = clientSql(true);
 
 interface ClientRow {
   id: string; tenant_id: string; full_name: string; marketing_consent: boolean; unsubscribed: boolean; pref_none: boolean;
@@ -92,10 +96,13 @@ export class PgBeautyData implements BeautyDataPort {
   finishCampaignIfDrained(id: string, now: Date): Promise<boolean> { return this.campaigns.finishCampaignIfDrained(id, now); }
   enqueueCampaignMessage(recipientId: string, now: Date, opts: CampaignEnqueueOptions): Promise<CampaignEnqueueResult> { return this.campaigns.enqueueCampaignMessage(recipientId, now, opts); }
   campaignSendGuard(messageId: string) { return this.campaigns.campaignSendGuard(messageId); }
+  isMarketingEnabled(): Promise<boolean> { return this.campaigns.isMarketingEnabled(); }
+  enqueueWinbackMessage(msg: OutboundMessage, now: Date, opts: CampaignEnqueueOptions): Promise<WinbackEnqueueResult> { return this.campaigns.enqueueWinbackMessage(msg, now, opts); }
+  claimMarketingForSend(id: string, limit: number, since: Date) { return this.campaigns.claimMarketingForSend(id, limit, since, this.now()); }
 
   async listLapsedClients(now: Date, inactiveDays: number, minIntervalDays = DEFAULT_CLIENT_INTERVAL_DAYS): Promise<LapsedClient[]> {
     const { rows } = await this.db.tx((c) => c.query<ClientRow & { last_visit: Date }>(
-      `SELECT x.*, v.last_visit FROM (${CLIENT_SQL}
+      `SELECT x.*, v.last_visit FROM (${CLIENT_SQL_TELEGRAM}
          WHERE cl.deleted_at IS NULL AND coalesce(mc.level IN ('full', 'selective'), false) AND NOT cl.unsubscribed
                AND NOT coalesce(pref.method = 'none', false)) x
        JOIN LATERAL (SELECT max(a.starts_at) AS last_visit FROM beauty_appointments a

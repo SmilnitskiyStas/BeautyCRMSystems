@@ -52,18 +52,28 @@ export async function processOutbox(deps: BeautyDeps, data: OutboxJobData, attem
       await deps.log.append({ ...base, status: "skipped", reason: "unsubscribed", at: deps.now() });
       return "skipped";
     }
-    const limit = deps.marketingDailyLimit ?? DEFAULT_MARKETING_DAILY_LIMIT;
-    const since = new Date(deps.now().getTime() - 24 * 3_600_000);
-    if (await deps.data.countMarketingSentSince(since) >= limit) {
-      // Stays pending: picked up again once older sends leave the 24 h window.
+    // M4/L4 kill switch: module off -> the message stays pending (nothing is lost, nothing is sent).
+    if (!(await deps.data.isMarketingEnabled())) {
       await deps.idempotency.release(msg.idempotencyKey);
-      await deps.log.append({ ...base, status: "skipped", reason: `daily marketing limit ${limit} reached, deferred`, at: deps.now() });
+      await deps.log.append({ ...base, status: "skipped", reason: "marketing module disabled, deferred", at: deps.now() });
       return "deferred";
     }
   }
   // L3: the .NET sweeper/inline dispatcher and this worker may both see the same `pending` row. Only the winner of the CAS
   // pending -> sending delivers; the loser skips (no double send).
-  if (!(await deps.data.claimForSend(msg.id))) {
+  let claimed: "claimed" | "lost" | "limit";
+  if (MARKETING_KINDS.has(msg.kind)) {
+    // L5: the daily-limit check and the claim are one step under the tenant's `marketing-daily` lock.
+    const limit = deps.marketingDailyLimit ?? DEFAULT_MARKETING_DAILY_LIMIT;
+    claimed = await deps.data.claimMarketingForSend(msg.id, limit, new Date(deps.now().getTime() - 24 * 3_600_000));
+    if (claimed === "limit") {
+      // Stays pending: picked up again once older sends leave the 24 h window.
+      await deps.idempotency.release(msg.idempotencyKey);
+      await deps.log.append({ ...base, status: "skipped", reason: `daily marketing limit ${limit} reached, deferred`, at: deps.now() });
+      return "deferred";
+    }
+  } else claimed = (await deps.data.claimForSend(msg.id)) ? "claimed" : "lost";
+  if (claimed !== "claimed") {
     await deps.idempotency.release(msg.idempotencyKey);
     await deps.log.append({ ...base, status: "skipped", reason: "not pending: claimed elsewhere or already processed", at: deps.now() });
     return "skipped";

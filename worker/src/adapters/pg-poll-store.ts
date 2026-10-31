@@ -197,7 +197,7 @@ export class PgPollStore {
    * Pending outbound messages ready for an attempt: fewer than 3 attempts, exponential backoff since the
    * last failure, and campaign/winback only inside the local sending window of the client's last location.
    */
-  async listPendingOutbox(now: Date, limit: number, backoffMs: number): Promise<PendingMessage[]> {
+  async listPendingOutbox(now: Date, limit: number, backoffMs: number, marketing: { campaigns?: boolean; winback?: boolean } = {}): Promise<PendingMessage[]> {
     const w = this.window;
     const { rows } = await this.db.tx((c) => c.query(
       `SELECT m.id, m.attempts FROM beauty_messages m
@@ -205,12 +205,16 @@ export class PgPollStore {
        WHERE m.direction = 'outbound' AND m.status = 'pending' AND m.attempts < $2
          AND (m.attempts = 0 OR m.updated_at <= $1::timestamptz - make_interval(secs => ($3::float8 / 1000.0) * power(2, m.attempts - 1)))
          AND (m.idempotency_key IS NULL OR m.idempotency_key !~ '^(campaign|winback):'
-              OR EXTRACT(HOUR FROM ($1::timestamptz AT TIME ZONE COALESCE(
+              -- M4 kill switch: campaign/winback rows stay pending while their flag is off or the tenant lacks the beauty_marketing module
+              OR (($8::boolean OR m.idempotency_key !~ '^campaign:') AND ($9::boolean OR m.idempotency_key !~ '^winback:')
+                  AND EXISTS (SELECT 1 FROM tenants t WHERE t.id = m.tenant_id AND t.status = 'active'
+                              AND EXISTS (SELECT 1 FROM unnest(t.modules) mm WHERE lower(mm) = 'beauty_marketing'))
+                  AND EXTRACT(HOUR FROM ($1::timestamptz AT TIME ZONE COALESCE(
                    (SELECT l.timezone FROM beauty_appointments a JOIN beauty_locations l ON l.id = a.location_id
-                    WHERE a.client_id = conv.client_id ORDER BY a.starts_at DESC LIMIT 1), $6)))
-                 BETWEEN $4 AND $5 - 1)
+                    WHERE a.client_id = conv.client_id AND l.timezone IN (SELECT name FROM pg_timezone_names) ORDER BY a.starts_at DESC LIMIT 1), $6)))
+                 BETWEEN $4 AND $5 - 1))
        ORDER BY m.created_at LIMIT $7`,
-      [now, OUTBOX_MAX_ATTEMPTS, backoffMs, w.fromHour, w.toHour, w.defaultTimezone, limit]));
+      [now, OUTBOX_MAX_ATTEMPTS, backoffMs, w.fromHour, w.toHour, w.defaultTimezone, limit, marketing.campaigns !== false, marketing.winback !== false]));
     return rows.map((r) => ({ id: r.id, attempts: r.attempts }));
   }
 }
