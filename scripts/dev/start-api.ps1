@@ -31,6 +31,7 @@ $env:Beauty__AllowedOrigins = 'http://localhost:3100'
 $env:ChatAssistant__Enabled = 'true'
 $env:ChatButtons__Enabled = 'true'
 $env:ChatPhone__Enabled = 'true'   # dev: збір телефону для дзвінка (юридичний gate відкритий, поза dev вимкнено)
+$env:Marketing__Enabled = 'true'   # dev: маркетинг (згода, розсилки, купони); AdminGrant лишається вимкненим; юридичний gate відкритий, поза dev не вмикати
 $env:Ai__RateLimit__PerTenantPerMinute = '120'   # dev: щоб діалог із кількома кроками tools не впирався у хвилинний ліміт tenant
 $env:Channels__Telegram__Polling__Enabled = 'true'
 $st = Get-DevState

@@ -29,7 +29,7 @@ $workerDir = Join-Path $script:Root 'worker'
 if (-not (Test-Path (Join-Path $workerDir 'node_modules'))) { throw 'worker/node_modules відсутні: виконайте npm.cmd install у worker/.' }
 
 $names = 'WORKER_DATABASE_URL', 'WORKER_TENANT_IDS', 'Channels__EncryptionKey', 'Channels__UseMocks',
-    'WORKER_REMINDERS_ENABLED', 'WORKER_REMINDER_BUTTONS_ENABLED', 'WORKER_CAMPAIGNS_ENABLED', 'WORKER_WINBACK_ENABLED', 'ASPNETCORE_ENVIRONMENT'
+    'WORKER_REMINDERS_ENABLED', 'WORKER_REMINDER_BUTTONS_ENABLED', 'WORKER_CAMPAIGNS_ENABLED', 'WORKER_MARKETING_DAILY_LIMIT', 'WORKER_CAMPAIGN_BATCH', 'WORKER_WINBACK_ENABLED', 'ASPNETCORE_ENVIRONMENT'
 $env:WORKER_DATABASE_URL = "postgres://beautycrm_worker:$($e['DB_WORKER_PASSWORD'])@localhost:55432/beautycrm"
 $env:WORKER_TENANT_IDS = $tid
 $env:Channels__EncryptionKey = $e['Channels__EncryptionKey']
@@ -37,7 +37,9 @@ $env:Channels__UseMocks = 'false'
 $env:WORKER_REMINDERS_ENABLED = 'true'
 $env:WORKER_REMINDER_BUTTONS_ENABLED = 'true'   # потребує ChatButtons__Enabled=true і ChatAssistant__Enabled=true в API (start-api.ps1)
 # Маркетинг (TASK-791): розсилки й winback ВИМКНЕНО явно (kill switch, runbook §11.3); вмикати лише свідомо на тестовому tenant
-$env:WORKER_CAMPAIGNS_ENABLED = 'false'
+$env:WORKER_CAMPAIGNS_ENABLED = 'true'     # dev: розсилки лише з малими лімітами (рев'ю SM6)
+$env:WORKER_MARKETING_DAILY_LIMIT = '5'
+$env:WORKER_CAMPAIGN_BATCH = '5'
 $env:WORKER_WINBACK_ENABLED = 'false'
 $env:ASPNETCORE_ENVIRONMENT = 'Development'     # legal guard воркера (WORKER_MARKETING_LEGAL_APPROVED) вимагається лише поза Development
 

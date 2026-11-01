@@ -3243,3 +3243,25 @@ ADR-015 §1.1:
 - **L6:** замок акції (`UnderPromotionLockAsync` у `PromotionService.UpdateAsync`) і замок спільного купона (відкликання) беруться тими самими advisory-ключами, що й `CampaignService.ConfirmAsync` (після замка кампанії): перевірка «акція в кампанії» і зміна не розходяться з паралельним confirm.
 - **Наявні тести змінено (навмисно):** `CampaignTests.api_roles_idor_no_store_and_flags` (GET списку при вимкненому маркетингу тепер 200); `ChatMarketingPipelineTests.with_marketing_disabled_everything_behaves_as_before` (код у тілі маскується й за вимкненого маркетингу, L10); `CouponTests` - коди `DONE/LATER/TWICE` -> `DONE25/LATER25/TWICE25` (мінімум 6 символів); `ChatHarness.SeedAsync` - tenant з модулем `beauty_marketing` (L4). Нові: `Tests/Marketing/MarketingSecurityFixesTests.cs`, `CampaignTests.m4_*/l7_*`, `CouponTests.m5_*/l7_*`.
 - **Відкрито:** лімітери in-memory (на процес); L12 (старий AI-шлях `build_audience` + `draft_reply` Auto) - борг V2; «не надсилати акції» без клієнта нічого не записує (рядка немає - розсилок немає).
+
+### Уточнення (TASK-793)
+
+**`POST /api/beauty/conversations/{id}/resolve`** - дія «Опрацьовано» (закрити розмову без відповіді клієнту). Модуль `beauty_channels`, лише owner/admin (specialist -> 403 `forbidden_role` до читання тіла; чужий tenant/невідомий id -> 404 `conversation_not_found`), `Cache-Control: no-store`. Тіло не потрібне (порожнє/ігнорується). Відповідь: `204 No Content` (та сама форма, що в `resume-ai`); повторний виклик на вже закритій розмові також `204` без змін і без нового запису в журнал.
+- В одній транзакції: усі вхідні клієнта `held` -> `processed`; `awaiting_staff_since` і `handoff_at` = NULL, `handoff_reason` = NULL; `staff_last_read_at` просувається до now (як `read`, `unreadCount` = 0); `ai_state = active`, `ai_paused_until = NULL` (ШІ повертається, як `resume-ai`).
+- Активні пропозиції запису/клавіатури НЕ чіпаються (як у `resume-ai`). Повідомлення клієнту не створюється й не надсилається.
+- Розмова зникає з фільтра `needs_reply` і не входить у `meta.needsReplyCount`. Нове вхідне клієнта після закриття обробляється як зараз (ШІ відповідає; handoff знову лише якщо ШІ передасть).
+- Журнал: `ai_actions.tool_name = resolve_conversation` (payload лише `userId`), лише коли щось змінилось. Лог `inbox_resolve conversation=… user=… changed=…` без ПД. Гонка `resolve` + `reply`: обидва 2xx, стан узгоджений (awaiting = NULL, жодного `held`).
+- Міграцій немає.
+
+### Уточнення (TASK-798): ціна й акція в чаті
+
+- Порядок: завжди СПЕРШУ повна (базова) ціна, потім окремо акція («500 грн (60 хв). Зараз діє акція «X»: зі знижкою 400 грн»). Знижка не підміняє базову ціну. Розрахунок ціни не змінено; кілька акцій на послугу - код (`PromotionPricing.Quote`) вже бере найвигіднішу (найменша фінальна), LLM її не вибирає. Акція для нових клієнтів - окрема майбутня задача; приватні/купонні акції лишаються відфільтрованими (§26).
+- Блок «Послуги» контексту ходу: `повна ціна; акція «Y»: фінальна ціна`, без акції - лише повна ціна.
+- `list_services`: до `priceOriginal`/`priceFinal`/`promotionName` додано `promotionPrice` (ціна зі знижкою або `null`).
+- `get_active_promotions`: до `title`/`discountPercent`/`endsAt` додано `serviceIds` (id як у `list_services`; порожній масив = усі послуги). Лише публічні активні акції.
+- Системний промпт (`PromptComposer.ChatRules`): правило «повна ціна -> акція».
+
+### Уточнення (TASK-799): межа епізоду діалогу для LLM
+
+- До контексту моделі потрапляють лише повідомлення після останньої межі епізоду; БД та Inbox не змінюються. Межі (обчислюються з наявних даних, без міграції): вхідна команда `/book` або кнопка `i:book`; вихідні системні T-book-start, T-confirmed, T-cancelled; журнал `resolve_conversation` / `resume_ai` цієї розмови; тиша довша за `ChatAssistant`-поріг `EpisodeIdleTimeout` (6 год) перед поточним пакетом. Звичайне продовження межі не створює.
+- Код: `ChatEpisode` (Conversations), підключено в `ConversationTurnProcessor.BuildHistoryAsync`. Правило в системному промпті: не повертатися до відхилених/завершених запитів і не «виправляти» попередні відповіді без запиту клієнта.
