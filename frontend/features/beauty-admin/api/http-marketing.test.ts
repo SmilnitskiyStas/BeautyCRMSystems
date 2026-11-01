@@ -88,7 +88,7 @@ describe("http §26: шляхи, методи, заголовки", () => {
 
   it("акція: access у POST /promotions; запис: coupon без повного коду; тіло розмови з кодом маскується", async () => {
     apiJson.mockResolvedValueOnce({ id: "p9" });
-    await httpBeautyApi.createPromotion({ name: "N", percent: 10, locationIds: [], serviceIds: [], from: "01.10.2026", to: "02.10.2026", access: "code_only" });
+    await httpBeautyApi.createPromotion({ name: "N", percent: 10, locationIds: [], serviceIds: [], from: "2026-10-01", to: "2026-10-02", access: "code_only" });
     expect(JSON.parse(last()[1]!.body!).access).toBe("code_only");
     apiJson.mockResolvedValueOnce({
       conversation: { id: "c", channel: { id: "1", type: "telegram", name: "t" }, aiState: "active", title: "T", lastMessageAt: "x", lastMessagePreview: "", lastMessageSenderType: "system", unreadCount: 0, canReply: true },

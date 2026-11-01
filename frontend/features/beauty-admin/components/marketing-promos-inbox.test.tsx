@@ -23,6 +23,11 @@ function wrap(ui: React.ReactNode) {
   return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>{ui}</QueryClientProvider>);
 }
 
+async function fillPromo() {
+  await userEvent.type(await screen.findByLabelText("Назва"), "Тест");
+  await userEvent.click(await screen.findByRole("button", { name: CATALOG[0].name }));
+}
+
 beforeEach(() => {
   h.auth.user.role = "owner";
   h.api = {
@@ -41,6 +46,7 @@ describe("«Ціни та акції»: доступ і загальний ко�
   it("«Для всіх» за замовчуванням; після створення - кнопка «Розіслати клієнтам» з акцією", async () => {
     wrap(<PromosScreen />);
     expect(await screen.findByLabelText(/Для всіх/)).toBeChecked();
+    await fillPromo();
     await userEvent.click(screen.getByRole("button", { name: "Запустити акцію" }));
     const done = await screen.findByTestId("promo-created");
     expect(within(done).getByRole("link", { name: /Розіслати клієнтам/ })).toHaveAttribute("href", "/beauty/campaigns/new?promotionId=newp");
@@ -59,6 +65,7 @@ describe("«Ціни та акції»: доступ і загальний ко�
     await userEvent.type(code, "autumn15");
     expect(code).toHaveValue("AUTUMN15");
     await userEvent.type(screen.getByLabelText(/Ліміт використань/), "50");
+    await fillPromo();
     await userEvent.click(screen.getByRole("button", { name: "Запустити акцію" }));
     await screen.findByTestId("promo-created");
     expect(h.api.createPromotion.mock.calls[0][0]).toMatchObject({ access: "code_only" });
@@ -70,6 +77,7 @@ describe("«Ціни та акції»: доступ і загальний ко�
     wrap(<PromosScreen />);
     await userEvent.click(await screen.findByLabelText(/Лише за кодом/));
     await userEvent.type(screen.getByLabelText(/Код \(4–20/), "TAKEN1");
+    await fillPromo();
     await userEvent.click(screen.getByRole("button", { name: "Запустити акцію" }));
     const alert = await screen.findByText(/Акцію створено, але код не збережено/);
     expect(alert).toHaveTextContent("Такий код уже існує");
@@ -85,6 +93,7 @@ describe("«Ціни та акції»: доступ і загальний ко�
     wrap(<PromosScreen />);
     expect(await screen.findByTestId("code-only-unavailable")).toBeInTheDocument();
     expect(screen.queryByLabelText(/Лише за кодом/)).toBeNull();
+    await fillPromo();
     await userEvent.click(screen.getByRole("button", { name: "Запустити акцію" }));
     await screen.findByTestId("promo-created");
     expect(screen.queryByRole("link", { name: /Розіслати клієнтам/ })).toBeNull();

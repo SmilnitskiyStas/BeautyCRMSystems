@@ -407,3 +407,34 @@ export function couponFormErrors(v: { code: string; maxUses: string; from: strin
   else if (v.to < v.from) out.period = "Кінець дії коду має бути не раніше початку.";
   return out;
 }
+
+// ---------- форма нової акції (TASK-792) ----------
+
+/** `YYYY-MM-DD` -> `dd.MM.yyyy` для повідомлень і перегляду; некоректне -> `""`. */
+export function ymdToDmy(ymd: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : "";
+}
+
+/** Помилка періоду нової акції; `today` - `YYYY-MM-DD` у зоні браузера. */
+export function promoPeriodError(from: string, to: string, today: string): string | null {
+  if (!from || !to) return "Вкажіть дати початку й завершення акції.";
+  if (to < from) return "Завершення має бути не раніше початку.";
+  if (from < today) return `Початок не може бути в минулому: найраніше ${ymdToDmy(today)}.`;
+  return null;
+}
+
+/** Тексти 422/409 створення акції за кодом; серверне `message` не показуємо. */
+const PROMO_ERRORS: Record<string, string> = {
+  invalid_name: "Назва акції: від 1 до 200 символів.",
+  invalid_discount: "Знижка має бути від 1% до 100%.",
+  invalid_access: "Некоректний доступ до акції. Оберіть «Для всіх» або «Лише за кодом».",
+  invalid_period: "Некоректний період: завершення має бути пізніше за початок.",
+  unknown_reference: "Заклад або послугу не знайдено. Оновіть сторінку й оберіть їх знову.",
+  promotion_in_campaign: "Акція бере участь у розсилці, змінити її не можна.",
+};
+
+export function humanizePromoError(e: unknown): string {
+  if (e instanceof BeautyApiError && PROMO_ERRORS[e.code]) return PROMO_ERRORS[e.code];
+  return humanizeMarketingError(e, "Не вдалося запустити акцію. Спробуйте ще раз.");
+}

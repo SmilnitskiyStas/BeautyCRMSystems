@@ -562,6 +562,22 @@ export function createMockInbox(deps: Deps) {
       await wait(null);
     },
 
+    /** «Опрацьовано» (TASK-793): без відповіді клієнту; ШІ активний, очікування знято, held -> processed, прочитано. */
+    resolveConversation: async (id: string): Promise<void> => {
+      guard();
+      const c = find(id);
+      c.aiState = "active";
+      c.handoffReason = undefined;
+      c.aiPausedUntil = undefined;
+      c.awaitingSince = undefined;
+      c.readAt = now();
+      c.messages.forEach((x) => {
+        if (x.status === "held") x.status = "processed";
+      });
+      if (c.proposal) c.proposal.status = "superseded";
+      await wait(null);
+    },
+
     markConversationRead: async (id: string, upToMessageId?: string): Promise<void> => {
       guard();
       const c = find(id);

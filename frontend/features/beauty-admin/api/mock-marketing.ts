@@ -406,8 +406,9 @@ export function createMockMarketing(deps: MarketingDeps) {
     },
     registerPromotion(draft: PromoDraft): { id: string } {
       const parse = (d: string, end: boolean) => {
-        const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(d.trim());
-        return m ? new Date(`${m[3]}-${m[2]}-${m[1]}T${end ? "23:59:59" : "00:00:00"}Z`).toISOString() : null;
+        if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(d)) return null;
+        const t = new Date(`${d}T${end ? "23:59:59" : "00:00:00"}`);
+        return Number.isNaN(t.getTime()) ? null : t.toISOString();
       };
       const id = `promo-${promotions.length + 1}-${now()}`;
       promotions.push({

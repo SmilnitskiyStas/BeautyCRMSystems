@@ -71,6 +71,11 @@ export function useResumeAi(id: string) {
   return useMutation({ mutationFn: () => beautyApi.resumeConversationAi(id), onSuccess: refresh });
 }
 
+export function useResolveConversation(id: string) {
+  const refresh = useRefreshInbox();
+  return useMutation({ mutationFn: () => beautyApi.resolveConversation(id), onSuccess: refresh });
+}
+
 export function useMarkConversationRead(id: string) {
   const refresh = useRefreshInbox();
   return useMutation({ mutationFn: (upToMessageId?: string) => beautyApi.markConversationRead(id, upToMessageId), onSuccess: refresh });

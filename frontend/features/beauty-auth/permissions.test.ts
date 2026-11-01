@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canEditAiSettings, canEditCosts, canSeeFinance, canSeeFullPhone, canEditReminderSettings, canManageAiKey, canManageReminderPrefs, canOpen, canUseCalls, canUseInbox, navFor, safeNext } from "./permissions";
+import { canEditAiSettings, canEditCosts, canSeeFinance, canSeeFullPhone, canEditReminderSettings, canManageAiKey, canManageReminderPrefs, canOpen, canUseCalls, canUseInbox, navFor, NAV_GROUPS, safeNext } from "./permissions";
 
 describe("safeNext", () => {
   it("пропускає відносні шляхи сайту з query і hash", () => {
@@ -105,5 +105,16 @@ describe("§24.9/§25.9: фінанси, собівартість і повни�
     expect(navFor("specialist").some((n) => n.href === "/beauty/services")).toBe(false);
     expect(canOpen("specialist", "/beauty/services")).toBe(false);
     expect(canOpen("owner", "/beauty/services")).toBe(true);
+  });
+});
+
+describe("групи меню (TASK-796)", () => {
+  it("4 блоки в заданому порядку з тими самими маршрутами", () => {
+    expect(NAV_GROUPS.map((g) => g.label)).toEqual(["Щоденна робота", "Каталог і продажі", "Аналітика та AI", "Система"]);
+    expect(NAV_GROUPS[0].items.map((n) => n.href)).toEqual(["/beauty", "/beauty/calendar", "/beauty/inbox", "/beauty/calls", "/beauty/clients"]);
+    expect(NAV_GROUPS[1].items.map((n) => n.href)).toEqual(["/beauty/staff", "/beauty/locations", "/beauty/services", "/beauty/promos", "/beauty/campaigns"]);
+    expect(NAV_GROUPS[2].items.map((n) => n.href)).toEqual(["/beauty/analytics", "/beauty/ai"]);
+    expect(NAV_GROUPS[3].items.map((n) => n.href)).toEqual(["/beauty/channels", "/beauty/settings"]);
+    expect(navFor("owner")).toHaveLength(14);
   });
 });

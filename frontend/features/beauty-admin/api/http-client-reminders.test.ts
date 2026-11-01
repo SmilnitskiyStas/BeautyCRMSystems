@@ -68,6 +68,10 @@ describe("http-клієнт §22.6: шляхи, методи, тіла", () => {
     await httpBeautyApi.resumeConversationAi("cv1");
     expect(last()[0]).toBe("/api/beauty/conversations/cv1/resume-ai");
     expect(last()[1]).toMatchObject({ method: "POST" });
+    await httpBeautyApi.resolveConversation("cv1");
+    expect(last()[0]).toBe("/api/beauty/conversations/cv1/resolve");
+    expect(last()[1]).toMatchObject({ method: "POST" });
+    expect(last()[1]!.body).toBeUndefined();
     await httpBeautyApi.markConversationRead("cv1", "m5");
     expect(last()[0]).toBe("/api/beauty/conversations/cv1/read");
     expect(JSON.parse(last()[1]!.body!)).toEqual({ upToMessageId: "m5" });

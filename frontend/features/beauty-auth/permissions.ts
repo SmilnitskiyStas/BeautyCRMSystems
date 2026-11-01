@@ -5,22 +5,55 @@ export interface NavItem {
   href: string;
 }
 
-const ALL_NAV: NavItem[] = [
-  { label: "Огляд", href: "/beauty" },
-  { label: "Записи", href: "/beauty/calendar" },
-  { label: "Розмови", href: "/beauty/inbox" },
-  { label: "Дзвінки", href: "/beauty/calls" },
-  { label: "Клієнти", href: "/beauty/clients" },
-  { label: "Спеціалісти", href: "/beauty/staff" },
-  { label: "Заклади", href: "/beauty/locations" },
-  { label: "Послуги", href: "/beauty/services" },
-  { label: "Ціни та акції", href: "/beauty/promos" },
-  { label: "Розсилки", href: "/beauty/campaigns" },
-  { label: "Аналітика", href: "/beauty/analytics" },
-  { label: "AI-асистент", href: "/beauty/ai" },
-  { label: "Канали", href: "/beauty/channels" },
-  { label: "Налаштування", href: "/beauty/settings" },
+export interface NavGroup {
+  id: string;
+  label: string;
+  items: NavItem[];
+}
+
+/** Логічні блоки бічного меню (TASK-796). Маршрути не змінюються. */
+export const NAV_GROUPS: NavGroup[] = [
+  {
+    id: "daily",
+    label: "Щоденна робота",
+    items: [
+      { label: "Огляд", href: "/beauty" },
+      { label: "Записи", href: "/beauty/calendar" },
+      { label: "Розмови", href: "/beauty/inbox" },
+      { label: "Дзвінки", href: "/beauty/calls" },
+      { label: "Клієнти", href: "/beauty/clients" },
+    ],
+  },
+  {
+    id: "catalog",
+    label: "Каталог і продажі",
+    items: [
+      { label: "Спеціалісти", href: "/beauty/staff" },
+      { label: "Заклади", href: "/beauty/locations" },
+      { label: "Послуги", href: "/beauty/services" },
+      { label: "Ціни та акції", href: "/beauty/promos" },
+      { label: "Розсилки", href: "/beauty/campaigns" },
+    ],
+  },
+  {
+    id: "insights",
+    label: "Аналітика та AI",
+    items: [
+      { label: "Аналітика", href: "/beauty/analytics" },
+      { label: "AI-асистент", href: "/beauty/ai" },
+    ],
+  },
+  {
+    id: "system",
+    label: "Система",
+    items: [
+      { label: "Канали", href: "/beauty/channels" },
+      { label: "Налаштування", href: "/beauty/settings" },
+    ],
+  },
 ];
+
+const ALL_NAV: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 
 /**
  * Узгоджено з матрицею ролей §10/§13: specialist — свій календар і власний профіль (`/beauty/staff` перенаправляє

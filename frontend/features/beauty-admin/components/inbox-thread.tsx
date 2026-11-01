@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
-import { BeautyApiError, humanizeError } from "@/features/beauty-auth/errors";
+import { BeautyApiError, humanizeError, humanizeResolveError } from "@/features/beauty-auth/errors";
 import { dateTimeLabel } from "../format";
 import { maskCouponCodes } from "../marketing/logic";
 import { safeMask } from "../phone";
@@ -22,13 +22,14 @@ import {
   replyLength,
   senderOf,
 } from "../inbox-logic";
-import { useConversation, useMarkConversationRead, useReplyToConversation, useResumeAi } from "../hooks/use-inbox";
+import { useConversation, useMarkConversationRead, useReplyToConversation, useResolveConversation, useResumeAi } from "../hooks/use-inbox";
 import { useLocations } from "../hooks/use-beauty-admin";
 import { reminderLine } from "../reminders";
 import type { ConversationMessage } from "../types";
+import { AiActionsMenu } from "./ai-actions-menu";
 import { AiConfirmDialog } from "./ai-confirm-dialog";
 import { ConfirmedBadge } from "./client-confirmed-badge";
-import { Badge, Card, FIELD_LABEL, PrimaryButton, QueryState, SecondaryButton, TextLink } from "./ui";
+import { Badge, Card, FIELD_LABEL, PrimaryButton, QueryState, TextLink } from "./ui";
 
 const subscribeVisibility = (cb: () => void) => {
   document.addEventListener("visibilitychange", cb);
@@ -191,10 +192,12 @@ export function ConversationThread({ id, onBack }: { id: string; onBack: () => v
   const q = useConversation(id);
   const locations = useLocations();
   const resume = useResumeAi(id);
+  const resolve = useResolveConversation(id);
   const markRead = useMarkConversationRead(id);
   const visible = useSyncExternalStore(subscribeVisibility, isVisible, () => true);
   const [confirming, setConfirming] = useState(false);
   const [resumed, setResumed] = useState(false);
+  const [resolved, setResolved] = useState(false);
   /** Роздільник «нові повідомлення» визначається один раз при першому завантаженні розмови. */
   const [divider, setDivider] = useState<{ ready: boolean; id: string | null }>({ ready: false, id: null });
   const heading = useRef<HTMLHeadingElement>(null);
@@ -248,6 +251,17 @@ export function ConversationThread({ id, onBack }: { id: string; onBack: () => v
 
   const state = conv ? aiStateView(conv, timezone) : null;
   const canResume = !!conv && (conv.aiState === "handoff" || !!conv.awaitingStaffSince);
+  /** Розмова в стані очікування (needsReply / held / handoff): її можна закрити без відповіді. */
+  const canResolve = canResume || messages.some((m) => m.status === "held");
+  function markResolved() {
+    setResumed(false);
+    resolve.mutate(undefined, {
+      onSuccess: () => {
+        setResolved(true);
+        heading.current?.focus();
+      },
+    });
+  }
 
   return (
     <Card className="flex flex-col gap-4 p-4 sm:p-5">
@@ -284,23 +298,37 @@ export function ConversationThread({ id, onBack }: { id: string; onBack: () => v
             </div>
 
             {state ? (
-              <div data-testid="ai-state" className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-(--page) p-3">
-                <div className="flex min-w-0 flex-col gap-1">
-                  <Badge tone={state.tone} className="self-start">
+              <div data-testid="ai-state" className="flex flex-col gap-3 rounded-xl bg-(--page) p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 flex-col items-start gap-1">
+                  <Badge tone={state.tone} className="max-w-full !whitespace-normal">
                     {state.label}
                   </Badge>
-                  {state.extra ? <span className="text-[13px] text-(--muted)">{state.extra}</span> : null}
+                  {state.extra ? <span className="text-xs text-(--muted)">{state.extra}</span> : null}
                 </div>
-                {canResume && !confirming ? (
-                  <SecondaryButton
-                    ref={resumeBtn}
-                    onClick={() => {
-                      setResumed(false);
-                      setConfirming(true);
-                    }}
-                  >
-                    Повернути ШІ
-                  </SecondaryButton>
+                {canResolve && !confirming ? (
+                  <AiActionsMenu
+                    buttonRef={resumeBtn}
+                    busy={resolve.isPending}
+                    actions={[
+                      {
+                        key: "resume",
+                        label: "Повернути ШІ",
+                        hint: canResume ? "ШІ знову відповідає клієнту; повідомлення, що чекали людини, не відновлюються" : "Недоступно: ШІ вже відповідає",
+                        disabled: !canResume,
+                        onSelect: () => {
+                          setResumed(false);
+                          setResolved(false);
+                          setConfirming(true);
+                        },
+                      },
+                      {
+                        key: "resolve",
+                        label: "Опрацьовано",
+                        hint: "Закрити без відповіді: прибрати з «Потрібна відповідь», позначити прочитаною, ШІ знову відповідає",
+                        onSelect: markResolved,
+                      },
+                    ]}
+                  />
                 ) : null}
               </div>
             ) : null}
@@ -327,6 +355,14 @@ export function ConversationThread({ id, onBack }: { id: string; onBack: () => v
                   </p>
                 ) : null}
               </AiConfirmDialog>
+            ) : null}
+            <div role="status" data-testid="resolve-status">
+              {resolved ? <p className="rounded-xl bg-[#DDF3E6] px-3.5 py-2.5 text-sm text-[#145A32]">Розмову позначено опрацьованою</p> : null}
+            </div>
+            {resolve.isError ? (
+              <p role="alert" data-testid="resolve-error" className="rounded-xl bg-[#FBE4E4] px-3.5 py-2.5 text-sm text-[#8A1F1F]">
+                {humanizeResolveError(resolve.error)}
+              </p>
             ) : null}
             {resumed ? (
               <p role="status" className="rounded-xl bg-[#DDF3E6] px-3.5 py-2.5 text-sm text-[#145A32]">

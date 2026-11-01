@@ -142,6 +142,9 @@ const BY_CODE: Record<string, string> = {
   invalid_schedule: "Некоректний час відправки: не раніше ніж зараз і не далі ніж за 30 днів.",
   invalid_name: "Назва розсилки: від 1 до 200 символів.",
   invalid_type: "Невідомий тип розсилки.",
+  invalid_discount: "Знижка має бути від 1% до 100%.",
+  invalid_access: "Некоректний доступ до акції.",
+  unknown_reference: "Заклад або послугу не знайдено. Оновіть сторінку й оберіть їх знову.",
   promotion_required: "Для розсилки про акцію оберіть акцію.",
   promotion_not_found: "Акцію не знайдено. Оновіть сторінку.",
   promotion_not_code_only: "Купон можна створити лише для акції «Лише за кодом».",
@@ -201,6 +204,17 @@ export function humanizeSyncCommandsError(e: unknown): string {
     if (e.status === 502) return SYNC_COMMANDS_BY_CODE.telegram_unavailable;
   }
   return humanizeError(e, "Не вдалося оновити меню команд. Спробуйте ще раз.");
+}
+
+/** Тексти для «Опрацьовано» (§22.6.5): серверний message не показуємо. */
+export function humanizeResolveError(e: unknown): string {
+  if (e instanceof BeautyApiError) {
+    if (e.status === 403) return "У вас немає прав позначати розмови опрацьованими.";
+    if (e.status === 404) return "Розмову не знайдено. Можливо, її вже немає в списку.";
+    if (e.status === 409) return "Стан розмови вже змінився. Оновіть її й спробуйте ще раз.";
+    if (e.status === 429) return "Забагато запитів. Зачекайте хвилину і спробуйте ще раз.";
+  }
+  return humanizeError(e, "Не вдалося позначити розмову опрацьованою. Спробуйте ще раз.");
 }
 
 export function humanizeError(e: unknown, fallback = "Щось пішло не так. Спробуйте ще раз."): string {

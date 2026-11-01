@@ -55,7 +55,10 @@ export function ModalDialog({
     }
   };
 
+  // Портал виходить за межі `.beauty-admin`: без обгортки зникають токени теми (--ink, --accent…) і колір тексту стає кольором body (білий на білому у темній темі).
+  // `contents` не створює власного блоку: обгортка лише передає змінні й колір нащадкам.
   return createPortal(
+    <div className="beauty-admin contents">
     <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/50 p-3 sm:items-center">
       <div
         ref={root}
@@ -74,6 +77,7 @@ export function ModalDialog({
         </div>
         <div className="flex flex-wrap gap-2">{actions}</div>
       </div>
+    </div>
     </div>,
     document.body,
   );

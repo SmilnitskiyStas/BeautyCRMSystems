@@ -350,6 +350,7 @@ export const mockBeautyApi: BeautyAdminApi = {
   getConversation: mockInbox.getConversation,
   replyToConversation: mockInbox.replyToConversation,
   resumeConversationAi: mockInbox.resumeConversationAi,
+  resolveConversation: mockInbox.resolveConversation,
   markConversationRead: mockInbox.markConversationRead,
 
   getLocations: () => wait(activeLocations()),

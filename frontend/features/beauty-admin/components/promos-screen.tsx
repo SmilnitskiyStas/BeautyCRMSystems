@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { useCreatePromotion, useLocations, usePriceList, usePromoPreview } from "../hooks/use-beauty-admin";
 import { useCreateCoupon, useMarketingAvailability } from "../hooks/use-marketing";
-import { durationLabel, money } from "../format";
-import { couponFormErrors, humanizeMarketingError, parseDmy } from "../marketing/logic";
+import { addDaysIso, durationLabel, money, todayIso } from "../format";
+import { couponFormErrors, humanizeMarketingError, humanizePromoError, promoPeriodError, ymdToDmy } from "../marketing/logic";
 import { dateToIso } from "../marketing/wizard";
 import type { PromoDraft } from "../types";
 import { AccessFields, CodesCard, PromotionsCard, type AccessValue } from "./promo-access";
@@ -17,12 +17,14 @@ function toggle(list: string[], id: string): string[] {
 }
 
 export function PromosScreen() {
-  const [name, setName] = useState("Осінній манікюр");
+  const [today] = useState(() => todayIso());
+  const [name, setName] = useState("");
   const [percent, setPercent] = useState(20);
-  const [locationIds, setLocationIds] = useState<string[]>(["c", "p"]);
-  const [serviceIds, setServiceIds] = useState<string[]>(["mn", "pd"]);
-  const [from, setFrom] = useState("07.10.2026");
-  const [to, setTo] = useState("14.10.2026");
+  // null = користувач ще не чіпав вибір: діють усі активні заклади з API.
+  const [pickedLocations, setPickedLocations] = useState<string[] | null>(null);
+  const [serviceIds, setServiceIds] = useState<string[]>([]);
+  const [from, setFrom] = useState(today);
+  const [to, setTo] = useState(() => addDaysIso(today, 7));
   const [access, setAccess] = useState<AccessValue>({ access: "public", code: "", maxUses: "", from: "", to: "" });
   const [created, setCreated] = useState<{ id: string; name: string; couponError?: string } | null>(null);
   const marketing = useMarketingAvailability();
@@ -32,14 +34,18 @@ export function PromosScreen() {
   const locations = useLocations();
   const priceList = usePriceList();
   // Для перерахунку цін назва й дати не потрібні — не перезапитуємо на кожну літеру.
+  const activeLocationIds = (locations.data ?? []).filter((l) => l.isActive !== false).map((l) => l.id);
+  const locationIds = pickedLocations ?? activeLocationIds;
   const preview = usePromoPreview({ name: "", from: "", to: "", percent, locationIds, serviceIds });
   const create = useCreatePromotion();
 
   const codeOnly = marketingOn && access.access === "code_only";
   // Строк коду за замовчуванням збігається з періодом акції.
-  const couponPeriod = { from: access.from || parseDmy(from), to: access.to || parseDmy(to) };
+  const couponPeriod = { from: access.from || from, to: access.to || to };
   const couponErrors = codeOnly ? couponFormErrors({ code: access.code, maxUses: access.maxUses, ...couponPeriod }) : {};
-  const canLaunch = name.trim().length > 0 && locationIds.length > 0 && serviceIds.length > 0 && Object.keys(couponErrors).length === 0;
+  const periodError = promoPeriodError(from, to, today);
+  const canLaunch = name.trim().length > 0 && locationIds.length > 0 && serviceIds.length > 0 && !periodError && Object.keys(couponErrors).length === 0;
+  const hint = !name.trim() ? "Вкажіть назву акції." : locationIds.length === 0 ? "Оберіть хоча б один заклад." : serviceIds.length === 0 ? "Оберіть хоча б одну послугу." : null;
   const draft: PromoDraft = { name: name.trim(), percent, locationIds, serviceIds, from, to, access: codeOnly ? "code_only" : "public" };
 
   async function saveCoupon(promotionId: string, promoName: string) {
@@ -102,7 +108,7 @@ export function PromosScreen() {
             <h2 className="text-lg font-semibold">Нова акція</h2>
             <div className="flex flex-col gap-1.5">
               <label htmlFor="promo-name" className={FIELD_LABEL}>Назва</label>
-              <input id="promo-name" type="text" value={name} onChange={(e) => setName(e.target.value)} className={FIELD_INPUT} />
+              <input id="promo-name" type="text" maxLength={200} placeholder="Наприклад, «Осінній манікюр»" value={name} onChange={(e) => setName(e.target.value)} className={FIELD_INPUT} />
             </div>
 
             <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0">
@@ -120,7 +126,7 @@ export function PromosScreen() {
               <legend className={`${FIELD_LABEL} mb-2 p-0`}>Де діє</legend>
               <div className="flex flex-wrap gap-2">
                 {locations.data?.map((l) => (
-                  <Chip key={l.id} pressed={locationIds.includes(l.id)} onClick={() => setLocationIds(toggle(locationIds, l.id))}>
+                  <Chip key={l.id} pressed={locationIds.includes(l.id)} onClick={() => setPickedLocations(toggle(locationIds, l.id))}>
                     {l.name}
                   </Chip>
                 ))}
@@ -142,14 +148,15 @@ export function PromosScreen() {
 
             <div className="flex flex-wrap gap-3">
               <div className="flex min-w-[140px] flex-1 flex-col gap-1.5">
-                <label htmlFor="d-from" className={FIELD_LABEL}>Початок</label>
-                <input id="d-from" type="text" value={from} onChange={(e) => setFrom(e.target.value)} className={FIELD_INPUT} />
+                <label htmlFor="d-from" className={FIELD_LABEL}>Діє з</label>
+                <input id="d-from" type="date" min={today} value={from} onChange={(e) => setFrom(e.target.value)} aria-invalid={periodError ? true : undefined} className={FIELD_INPUT} />
               </div>
               <div className="flex min-w-[140px] flex-1 flex-col gap-1.5">
-                <label htmlFor="d-to" className={FIELD_LABEL}>Завершення</label>
-                <input id="d-to" type="text" value={to} onChange={(e) => setTo(e.target.value)} className={FIELD_INPUT} />
+                <label htmlFor="d-to" className={FIELD_LABEL}>Діє по</label>
+                <input id="d-to" type="date" min={from || today} value={to} onChange={(e) => setTo(e.target.value)} aria-invalid={periodError ? true : undefined} className={FIELD_INPUT} />
               </div>
             </div>
+            {periodError ? <p role="alert" data-testid="promo-period-error" className="text-[13px] text-[#8A1F1F]">{periodError}</p> : null}
 
             <button
               type="submit"
@@ -158,12 +165,10 @@ export function PromosScreen() {
             >
               {create.isPending ? "Запускаємо…" : "Запустити акцію"}
             </button>
-            {!canLaunch ? (
-              <p className="text-[13px] text-(--muted)">Вкажіть назву, хоча б один заклад і одну послугу.</p>
-            ) : null}
+            {hint ? <p className="text-[13px] text-(--muted)">{hint}</p> : null}
             {created ? (
               <div role="status" data-testid="promo-created" className="flex flex-col gap-2 rounded-xl bg-[#DDF3E6] px-3 py-2 text-sm text-[#145A32]">
-                <span>Акцію «{created.name}» запущено.</span>
+                <span>Акцію «{created.name}» запущено: {ymdToDmy(from)} - {ymdToDmy(to)}.</span>
                 {marketingOn ? (
                   <span>
                     <LinkButton href={`/beauty/campaigns/new?promotionId=${encodeURIComponent(created.id)}`} ariaLabel={`Розіслати клієнтам: ${created.name}`}>
@@ -185,7 +190,7 @@ export function PromosScreen() {
             ) : null}
             {create.isError ? (
               <p role="alert" className="text-sm text-[#8A1F1F]">
-                Не вдалося запустити акцію. Спробуйте ще раз.
+                {humanizePromoError(create.error)}
               </p>
             ) : null}
           </form>
@@ -197,7 +202,7 @@ export function PromosScreen() {
             <div className="text-[13px] font-semibold text-(--muted)">Так акцію побачить клієнт</div>
             <div className="flex flex-col gap-2 rounded-2xl border-2 border-(--promo) bg-[#FFF8F3] p-4">
               <span className="self-start rounded-lg bg-[#FDE9DC] px-2 py-1 text-[13px] font-semibold text-(--promo)">
-                −{percent}% до {to}
+                −{percent}% до {ymdToDmy(to) || "…"}
               </span>
               <span className="text-base font-semibold">Манікюр + гель-лак</span>
               <span className="text-[13px] text-(--muted)">{preview.data?.locationSummary ?? "…"}</span>

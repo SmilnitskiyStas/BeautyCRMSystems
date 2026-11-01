@@ -36,7 +36,7 @@ function setup(role = "owner") {
     channels: () => channels,
     staffName: (id) => STAFF.find((m) => m.id === id)?.name ?? "",
   });
-  const names = ["getConversations", "getConversation", "replyToConversation", "resumeConversationAi", "markConversationRead"] as const;
+  const names = ["getConversations", "getConversation", "replyToConversation", "resumeConversationAi", "resolveConversation", "markConversationRead"] as const;
   spies = Object.fromEntries(names.map((k) => [k, vi.fn(real[k] as (...a: unknown[]) => unknown)]));
   spies.getLocations = vi.fn(async () => structuredClone(DEMO_LOCATIONS));
   h.api = spies as unknown as typeof h.api;
@@ -127,20 +127,22 @@ describe("передача від ШІ адміністратору: повни�
   it("«Повернути ШІ»: підтвердження, скасування нічого не змінює, підтвердження повертає стан «ШІ відповідає»", async () => {
     renderInbox();
     await open(/Софія Мартин/);
-    await userEvent.click(screen.getByRole("button", { name: "Повернути ШІ" }));
+    await userEvent.click(screen.getByRole("button", { name: /^Дії/ }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /^Повернути ШІ/ }));
     const dialog = screen.getByRole("alertdialog");
     expect(within(dialog).getByRole("heading", { name: "Повернути розмову ШІ?" })).toHaveFocus();
     await userEvent.click(within(dialog).getByRole("button", { name: "Скасувати" }));
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(spies.resumeConversationAi).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Повернути ШІ" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: /^Дії/ })).toHaveFocus();
 
-    await userEvent.click(screen.getByRole("button", { name: "Повернути ШІ" }));
+    await userEvent.click(screen.getByRole("button", { name: /^Дії/ }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /^Повернути ШІ/ }));
     await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Повернути ШІ" }));
     await waitFor(() => expect(spies.resumeConversationAi).toHaveBeenCalledWith("cv2"));
     expect(await screen.findByText("ШІ знову відповідає в цій розмові.")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("ai-state")).toHaveTextContent("ШІ відповідає"));
-    expect(screen.queryByRole("button", { name: "Повернути ШІ" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Дії/ })).not.toBeInTheDocument();
   });
 
   it("повідомлення ШІ-чернетка, системне, не доставлено (бот заблоковано) мають свої позначки", async () => {

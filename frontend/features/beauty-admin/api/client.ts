@@ -290,6 +290,8 @@ export interface BeautyAdminApi {
   replyToConversation(id: string, text: string, idempotencyKey: string): Promise<ReplyResult>;
   /** POST /conversations/{id}/resume-ai (§22.6.5): 204, ідемпотентно. */
   resumeConversationAi(id: string): Promise<void>;
+  /** POST /conversations/{id}/resolve (TASK-793): без тіла; закрити очікування без відповіді (ШІ active, held -> processed). 403/404/409/429. Відповідь толерантно ігнорується. */
+  resolveConversation(id: string): Promise<void>;
   /** POST /conversations/{id}/read (§22.6.5): 204. */
   markConversationRead(id: string, upToMessageId?: string): Promise<void>;
 

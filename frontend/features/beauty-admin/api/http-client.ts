@@ -636,7 +636,12 @@ async function saveChannel(
   return toChannel(id, saved);
 }
 
-const parseDraftDate = (d: string, endOfDay: boolean) => (d ? `${d}T${endOfDay ? "23:59:59" : "00:00:00"}Z` : null);
+/** `YYYY-MM-DD` -> ISO 8601 (UTC): початок/кінець локальної доби браузера (DST враховує `Date`); інакше `null`. */
+export function parseDraftDate(d: string, endOfDay: boolean): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+  const t = new Date(`${d}T${endOfDay ? "23:59:59" : "00:00:00"}`);
+  return Number.isNaN(t.getTime()) ? null : t.toISOString();
+}
 
 async function weeklyAppointments(from: Date, to: Date, extra = ""): Promise<AppointmentDto[]> {
   return get<AppointmentDto[]>(`/appointments?${range(from, to)}${extra}`);
@@ -1346,6 +1351,9 @@ export const httpBeautyApi: BeautyAdminApi = {
     }),
   resumeConversationAi: async (id) => {
     await send("POST", `/conversations/${encodeURIComponent(id)}/resume-ai`);
+  },
+  resolveConversation: async (id) => {
+    await send("POST", `/conversations/${encodeURIComponent(id)}/resolve`);
   },
   markConversationRead: async (id, upToMessageId) => {
     await send("POST", `/conversations/${encodeURIComponent(id)}/read`, upToMessageId ? { upToMessageId } : {});
