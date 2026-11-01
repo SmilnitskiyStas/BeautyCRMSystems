@@ -1,8 +1,8 @@
 ---
 name: create-section-component
 description: >-
-  Create Section Component — Use when building the user-facing web layer.
-x-generated-from: skills/frontend/create-section-component/SKILL.md
+  Build a reusable page-section component from a spec using design tokens. Use when implementing a visual section.
+x-generated-from: .claude/skills/create-section-component/SKILL.md
 ---
 
 ## Location

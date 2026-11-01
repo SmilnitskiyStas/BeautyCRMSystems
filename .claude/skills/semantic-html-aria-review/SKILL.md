@@ -1,8 +1,8 @@
 ---
 name: semantic-html-aria-review
 description: >-
-  Semantic HTML ARIA Review — Use during a WCAG 2.2 AA review of design specs or built UI.
-x-generated-from: skills/accessibility/semantic-html-aria-review/SKILL.md
+  Review markup for semantic HTML, correct landmarks/labels, and ARIA used only where needed. Use when auditing page structure or form accessibility.
+x-generated-from: .claude/skills/semantic-html-aria-review/SKILL.md
 ---
 
 # Semantic HTML ARIA Review

@@ -1,6 +1,7 @@
 ---
 name: ai-business-assistant
 description: AI-асистент Beauty CRM — tools, режими автономності, журнал дій, захист від prompt injection. Використовуй при коді AI.
+x-generated-from: project:stacks/beauty/ai-business-assistant
 ---
 
 - Увесь код Claude API, промпти й tool-визначення лише в `Infrastructure/AI/Beauty/`; бізнес-логіка не знає про провайдера.

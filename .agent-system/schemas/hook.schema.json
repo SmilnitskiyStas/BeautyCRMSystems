@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SmilnitskiyStas/AI_agent_only/schemas/hook.schema.json",
+  "title": "Shared hook definition",
+  "description": "Vendor-neutral hook definition. Lives in hooks/<id>.md as YAML frontmatter; the markdown body documents behavior, config, and failure mode. adapters/claude/generate-hooks.mjs compiles this into a .claude/settings.hooks.json fragment plus a copied runtime script under .claude/hooks/.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "category", "version", "summary", "event", "script", "applies_to"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*[a-z0-9]$",
+      "description": "Unique kebab-case identifier. Must match the file name."
+    },
+    "category": {
+      "enum": ["lifecycle", "guardrail", "gate"],
+      "description": "lifecycle = keeps an artifact/task-log in sync; guardrail = blocks touching something; gate = blocks an action pending human sign-off."
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 12,
+      "maxLength": 240,
+      "description": "One sentence: what this hook blocks or syncs, and why."
+    },
+    "event": {
+      "enum": [
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SubagentStop",
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreCompact",
+        "Notification"
+      ],
+      "description": "Claude Code hook event this definition maps to."
+    },
+    "matcher": {
+      "type": "string",
+      "description": "Claude tool-name matcher regex (e.g. \"Write|Edit|MultiEdit\"). Omit to match every occurrence of the event."
+    },
+    "script": {
+      "type": "string",
+      "pattern": "^hooks/scripts/[a-z0-9-]+\\.mjs$",
+      "description": "Path to the zero-dependency Node implementation, relative to the library root."
+    },
+    "applies_to": {
+      "enum": ["self", "consuming_project", "both"],
+      "description": "self = only meaningful when this repo dogfoods its own .claude/; consuming_project = only meaningful once generated into a real project; both = meaningful either way."
+    },
+    "config_keys": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Keys this hook reads from the consuming project's .ai/hooks.config.yaml, if any."
+    },
+    "codex_status": {
+      "enum": ["supported", "unverified", "unsupported"],
+      "description": "Whether an equivalent Codex CLI hook has been verified against the binary (adapters/COMPATIBILITY.md). Defaults to \"unverified\" when omitted."
+    }
+  }
+}

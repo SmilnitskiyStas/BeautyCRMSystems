@@ -8,7 +8,7 @@
 (`task_type`, `complexity`, `risk`, `candidate_agents`, `requires_*`) сесія:
 1. показує користувачу коротке резюме: тип задачі, обрані агенти й порядок;
 2. якщо `requires_human_clarification` або `ambiguity: high` — ставить питання (`AskUserQuestion`);
-3. запускає агентів за `candidate_agents` у порядку залежностей (`workflow/task-dag.md`),
+3. запускає агентів за `candidate_agents` у порядку залежностей (`.claude/workflow/task-dag.md`),
    незалежних — паралельно; `project-manager` веде статуси;
 4. після реалізації викликає `review-orchestrator`, щоб визначити потрібні рев'ю.
 
@@ -52,7 +52,7 @@ Definition of Done). Читати релевантну секцію перед �
 
 ## Архітектура
 
-Модульний моноліт (ADR-001), ізоляція tenant через RLS (ADR-002), transactional outbox + worker (ADR-003). Рішення щодо хостингу, даних і контенту — через ADR (`.claude/docs/adr/`; шаблон і створення — `skills/workflow/create-adr`, `templates/adr-template.md`).
+Модульний моноліт (ADR-001), ізоляція tenant через RLS (ADR-002), transactional outbox + worker (ADR-003). Рішення щодо хостингу, даних і контенту — через ADR (`.claude/docs/adr/`; шаблон і створення — `skills/workflow/create-adr`, `.claude/templates/adr-template.md`).
 
 ## Multi-Agent Workflow
 
@@ -64,13 +64,13 @@ Definition of Done). Читати релевантну секцію перед �
 Патерн «спавн `general-purpose` + прочитай persona.md» більше не використовується.
 
 **Ручний override має пріоритет** над авто-роутингом, якщо не порушує safety/project
-rules (`workflow/model-routing.md` §manual): "use `X`", "use reasoning tier", "do not use
+rules (`.claude/workflow/model-routing.md` §manual): "use `X`", "use reasoning tier", "do not use
 Opus", "do not spawn reviewer".
 
 **Ворота уточнення перед делегуванням.** Якщо задача вимагає продуктового / UX / брендового
 рішення, яке може ухвалити лише людина — запитати **до** делегування. Повністю
 специфіковані задачі йдуть одразу. Якщо агент під час роботи натрапляє на нерозв'язне
-питання — зупиняється й повертає результат (`workflow/escalation-policy.md`).
+питання — зупиняється й повертає результат (`.claude/workflow/escalation-policy.md`).
 
 **Головна сесія діє напряму, без субагента:** читання/дослідження; `typecheck` / `lint` /
 `git status` / `git push`; правки < ~10 рядків; архітектурні Q&A без коду.
@@ -78,8 +78,8 @@ Opus", "do not spawn reviewer".
 ### Model tiers
 
 `cheap` / `standard` / `reasoning`. Кожен агент має `default_model_tier`; router підвищує
-за ризиком, знижує для тривіальних задач. Правила — `workflow/model-routing.md`.
-Резолвинг у модель — `adapters/claude/model-map.yaml` (не хардкодити в агентах).
+за ризиком, знижує для тривіальних задач. Правила — `.claude/workflow/model-routing.md`.
+Резолвинг у модель — `.agent-system/adapters/claude/model-map.yaml` (не хардкодити в агентах).
 
 ### Agent → Task
 
@@ -89,24 +89,26 @@ Opus", "do not spawn reviewer".
 
 Визначена в `workflow/` — не повторювати тут:
 `context-policy.md` (що читати) → перевірка залежностей DAG → реалізація лише своєї
-відповідальності → task log (`templates/task-log-template.md`) → handoff за потреби
+відповідальності → task log (`.claude/templates/task-log-template.md`) → handoff за потреби
 (`handoff-policy.md`; блокер → `project-manager`) → оновлення статусу задачі
 (`task-lifecycle.md`) → оновлення `.claude/docs/*`, якщо змінилась архітектура/дані.
 
 ### Artifacts, DAG, review, human gates
 
-- Агенти обмінюються результатами через `.ai/artifacts/**` (`workflow/artifact-policy.md`).
-- Задачі — граф залежностей, перевага artifact-залежностям (`workflow/task-dag.md`).
-- Cross-agent запити проходять Interaction Gate (`workflow/agent-communication-policy.md`).
+- Агенти обмінюються результатами через `.ai/artifacts/**` (`.claude/workflow/artifact-policy.md`).
+- Задачі — граф залежностей, перевага artifact-залежностям (`.claude/workflow/task-dag.md`).
+- Cross-agent запити проходять Interaction Gate (`.claude/workflow/agent-communication-policy.md`).
 - Review робить незалежний агент, не сесія-імплементатор; ліміт циклів
-  (`workflow/review-policy.md`).
-- Irreversible/high-impact дії — human gate (`workflow/human-gates.md`).
+  (`.claude/workflow/review-policy.md`).
+- Irreversible/high-impact дії — human gate (`.claude/workflow/human-gates.md`).
+- Паралельні гілки worktree-агентів зводить лише `integration-steward` в `integrate/*`;
+  merge у base-гілку — human gate (`.claude/workflow/parallel-work.md`). `worktree.baseRef: head`.
 
 ## Документація
 
 `.claude/docs/` — жива документація, веде `documentation-writer` за тригерами
 (`workflow` — architecture/API/schema/integration/deployment/security/convention змінились).
-`known-issues.md` — скопіювати скелет `templates/known-issues-doc-template.md`; кожен агент
+`known-issues.md` — скопіювати скелет `.claude/templates/known-issues-doc-template.md`; кожен агент
 робить retrieval релевантних lessons перед задачею (не читає весь файл).
 - `.claude/docs/beauty-contracts.md` — контракти API/сутностей, великий файл: не відкривати цілком; `Grep` за `^## §` (список розділів з номерами рядків; напр. `^## §22\.`) і `Read` з `offset`/`limit` лише потрібного розділу.
 - ADR — `.claude/docs/adr/`; звіти рев'ю — `docs/reviews/` (у git, не ігнорується).
@@ -114,9 +116,17 @@ Opus", "do not spawn reviewer".
 
 ## Rules hierarchy & source of truth
 
-Порядок пріоритету при конфлікті — `workflow/rules-hierarchy.md`. Яке сховище
-авторитетне для якого факту — `workflow/source-of-truth.md`. Документ, що суперечить коду,
+Порядок пріоритету при конфлікті — `.claude/workflow/rules-hierarchy.md`. Яке сховище
+авторитетне для якого факту — `.claude/workflow/source-of-truth.md`. Документ, що суперечить коду,
 — stale: позначити й виправити окремою задачею, не діяти за ним.
+
+## Compact instructions
+
+Коли контекст стискається (`/compact` або авто) — зберегти: поточний TASK-ID і його статус,
+прийняті рішення/ADR з причинами, список змінених файлів, невирішені питання та блокери,
+результат останнього запуску тестів/build (лише падіння). Не зберігати: повні виводи тестів/логів,
+повністю прочитані файли, проміжні роздуми. Між несумісними задачами — `/clear`; кінець етапу —
+skill `handoff-session`. Не міняти модель посеред сесії (кожна модель має власний кеш).
 
 ## Token efficiency
 

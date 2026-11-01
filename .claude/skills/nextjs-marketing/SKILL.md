@@ -2,7 +2,7 @@
 name: nextjs-marketing
 description: >-
   Architectural playbook for premium SEO-driven bilingual marketing/portfolio sites on Next.js App Router + TypeScript + Tailwind + shadcn/ui + Framer Motion + next-intl. Use when building or reviewing marketing pages, case studies, lead forms, i18n routing, SEO/structured data, or content architecture on this stack.
-x-generated-from: skills/stacks/nextjs-marketing/SKILL.md
+x-generated-from: .claude/skills/nextjs-marketing/SKILL.md
 ---
 
 # Next.js Marketing Architect

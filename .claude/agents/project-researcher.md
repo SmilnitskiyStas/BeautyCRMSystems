@@ -5,12 +5,14 @@ model: haiku
 effort: low
 tools: Read, Grep, Glob
 disallowedTools: Write, Edit
+maxTurns: 30
+omitClaudeMd: true
 ---
 
 <!-- GENERATED — DO NOT EDIT DIRECTLY. Source: agents/control/project-researcher.md
      Regenerate with: node scripts/sync-agents.mjs -->
 
-> Model tier: **cheap** (allowed: cheap, standard). Escalation and downgrade rules: workflow/model-routing.md.
+> Model tier: **cheap** (allowed: cheap, standard). Escalation and downgrade rules: .claude/workflow/model-routing.md.
 
 # Project Researcher
 
@@ -29,7 +31,7 @@ Filesystem first, in this order: repository tree -> ripgrep/grep -> symbol searc
 AST search -> git history -> file names -> docs -> then LLM reranking of what was found.
 **No vector RAG** — that is Phase 8, if filesystem retrieval ever stops being enough.
 
-## Output (`templates/research-report-template.md`)
+## Output (`.claude/templates/research-report-template.md`)
 
 ```yaml
 task_id:

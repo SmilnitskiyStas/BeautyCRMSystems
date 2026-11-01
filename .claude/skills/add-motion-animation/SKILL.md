@@ -1,12 +1,12 @@
 ---
 name: add-motion-animation
 description: >-
-  Add Motion Animation — Use when building the user-facing web layer.
-x-generated-from: skills/frontend/add-motion-animation/SKILL.md
+  Implement UI motion per the motion guidelines, honoring prefers-reduced-motion. Use when adding transitions or animation.
+x-generated-from: .claude/skills/add-motion-animation/SKILL.md
 ---
 
 ## Purpose
-Імплементує анімацію за specs від `ui-ux-designer` (`.claude/skills/ui-ux-design/specify-motion-guidelines.md`) з обов'язковим урахуванням `prefers-reduced-motion`.
+Імплементує анімацію за specs від `ui-ux-designer` (`.claude/.claude/skills/specify-motion-guidelines/SKILL.md`) з обов'язковим урахуванням `prefers-reduced-motion`.
 
 ## Pattern
 1. Framer Motion `motion.*`-компоненти лише в `"use client"` дочірніх компонентах — не позначати всю секцію client через одну анімацію.

@@ -1,8 +1,8 @@
 ---
 name: cross-browser-testing
 description: >-
-  Cross Browser Testing — Use when writing or running tests.
-x-generated-from: skills/qa/cross-browser-testing/SKILL.md
+  Check behavior across target browsers and mobile viewports. Use before release or after layout/CSS-heavy changes.
+x-generated-from: .claude/skills/cross-browser-testing/SKILL.md
 ---
 
 ## Матриця браузерів (розділ тестування проєктного спеку)

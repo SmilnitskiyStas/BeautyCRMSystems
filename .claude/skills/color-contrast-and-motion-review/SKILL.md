@@ -1,8 +1,8 @@
 ---
 name: color-contrast-and-motion-review
 description: >-
-  Color Contrast And Motion Review — Use during a WCAG 2.2 AA review of design specs or built UI.
-x-generated-from: skills/accessibility/color-contrast-and-motion-review/SKILL.md
+  Check text/UI contrast ratios, text scaling, and reduced-motion handling. Use when reviewing design tokens, a visual spec, or animated UI for WCAG 2.2 AA.
+x-generated-from: .claude/skills/color-contrast-and-motion-review/SKILL.md
 ---
 
 # Color Contrast And Motion Review

@@ -1,8 +1,8 @@
 ---
 name: map-sitemap-and-user-flows
 description: >-
-  Map Sitemap And User Flows — Use during the discovery phase — positioning, IA, content model.
-x-generated-from: skills/product-design/map-sitemap-and-user-flows/SKILL.md
+  Produce the sitemap and key user flows. Use when structuring a site or validating navigation.
+x-generated-from: .claude/skills/map-sitemap-and-user-flows/SKILL.md
 ---
 
 ## Purpose

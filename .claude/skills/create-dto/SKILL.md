@@ -1,8 +1,8 @@
 ---
 name: create-dto
 description: >-
-  Create DTO — Use when implementing a standalone backend service.
-x-generated-from: skills/backend/create-dto/SKILL.md
+  Define request/response DTOs and their mapping, separate from domain entities. Use when an endpoint needs new input/output shapes.
+x-generated-from: .claude/skills/create-dto/SKILL.md
 ---
 
 ## Розташування

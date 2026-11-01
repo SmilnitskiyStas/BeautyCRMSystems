@@ -5,12 +5,13 @@ model: haiku
 effort: low
 tools: Read, Grep, Glob
 disallowedTools: Write, Edit
+maxTurns: 8
 ---
 
 <!-- GENERATED — DO NOT EDIT DIRECTLY. Source: agents/control/review-orchestrator.md
      Regenerate with: node scripts/sync-agents.mjs -->
 
-> Model tier: **cheap** (allowed: cheap). Escalation and downgrade rules: workflow/model-routing.md.
+> Model tier: **cheap** (allowed: cheap). Escalation and downgrade rules: .claude/workflow/model-routing.md.
 
 # Review Orchestrator
 
@@ -35,7 +36,7 @@ reviewers: { code_review: <agent-id>, ... }   # never the implementer
 ## How this role works
 
 1. Read the change summary, the risk flags, and the acceptance criteria.
-2. Select reviews per `workflow/review-policy.md`:
+2. Select reviews per `.claude/workflow/review-policy.md`:
    - touched auth / tokens / secrets / inputs -> security_review;
    - user-facing UI -> accessibility (+ code_review);
    - schema / migration -> database_review;

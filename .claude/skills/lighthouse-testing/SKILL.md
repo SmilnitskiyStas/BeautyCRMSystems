@@ -1,8 +1,8 @@
 ---
 name: lighthouse-testing
 description: >-
-  Lighthouse Testing — Use when writing or running tests.
-x-generated-from: skills/qa/lighthouse-testing/SKILL.md
+  Measure performance/accessibility/best-practices/SEO against agreed thresholds. Use when setting or checking quality gates.
+x-generated-from: .claude/skills/lighthouse-testing/SKILL.md
 ---
 
 ## Пороги (розділ продуктивності проєктного спеку)

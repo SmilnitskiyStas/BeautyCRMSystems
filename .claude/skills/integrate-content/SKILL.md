@@ -1,15 +1,15 @@
 ---
 name: integrate-content
 description: >-
-  Integrate Content — Use when building the user-facing web layer.
-x-generated-from: skills/frontend/integrate-content/SKILL.md
+  Wire typed content (files/MDX/CMS) into components instead of hardcoding copy. Use when a component needs text or structured content.
+x-generated-from: .claude/skills/integrate-content/SKILL.md
 ---
 
 ## Purpose
 Визначає, як компоненти споживають типізований content layer (MDX або headless CMS) — жодна секція не хардкодить копірайт.
 
 ## Pattern
-1. Контент визначається за моделлю з `.claude/skills/product-design/create-content-model.md` (case study — 24 поля, industry page — своя модель; точний перелік полів фіксується в проєктній специфікації) і типізується `zod`-схемою в `content/` або через CMS-клієнт у `lib/`.
+1. Контент визначається за моделлю з `.claude/.claude/skills/create-content-model/SKILL.md` (case study — 24 поля, industry page — своя модель; точний перелік полів фіксується в проєктній специфікації) і типізується `zod`-схемою в `content/` або через CMS-клієнт у `lib/`.
 2. Читання контенту — окрема функція в `content/` чи `lib/`, що повертає вже провалідовані типізовані дані; компонент її викликає, не парсить сирий MDX/CMS-response самостійно.
 3. Page-компонент (`create-page-route.md`) отримує контент і передає його вниз як типізовані props у section-компоненти (`create-section-component.md`) — компонент секції ніколи сам не імпортує MDX-файл чи CMS SDK.
 4. Локалізований контент — окремий запис на мову (MDX frontmatter `locale` або поле CMS), не runtime-переклад (без client-side машинного перекладу під час завантаження сторінки).

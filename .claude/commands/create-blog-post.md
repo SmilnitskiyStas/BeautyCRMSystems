@@ -17,7 +17,7 @@ Playbook для планування й диспетчеризації — го�
 
 ## Workflow
 1. Підтвердити категорію: Web Development / Business Automation / AI for Business / Mobile Development / Product Design / Case Studies / Guides for Business Owners (відповідна секція `{PROJECT_SPEC}`)
-2. Заповнити `templates/blog-post-template.md` — frontmatter (title, slug, category, tags, author, publishedAt, updatedAt, description, ogImage, relatedSlugs) і body (TOC, вступ, основний контент із внутрішніми посиланнями, CTA, related articles)
+2. Заповнити `.claude/templates/blog-post-template.md` — frontmatter (title, slug, category, tags, author, publishedAt, updatedAt, description, ogImage, relatedSlugs) і body (TOC, вступ, основний контент із внутрішніми посиланнями, CTA, related articles)
 3. Перевірити, що `relatedSlugs` посилаються лише на реально існуючі статті — не вигадувати slug'и, яких ще немає
 4. Заспавнити агентів у порядку: `seo-specialist` (відповідність keyword-кластеру й таксономії — відповідна секція `{PROJECT_SPEC}`) → `copywriter` (драфт uk/en) → `frontend-developer` (якщо маршрут `/blog/[slug]`/MDX-рендеринг ще не готовий) → `qa-engineer` (SEO-тест: metadata, structured data)
 5. Перед переведенням статусу в `done` перевірити, що автор, дата створення й дата оновлення заповнені (відповідна секція `{PROJECT_SPEC}` — обов'язкові поля)

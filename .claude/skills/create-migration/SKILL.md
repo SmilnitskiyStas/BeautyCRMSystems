@@ -1,8 +1,8 @@
 ---
 name: create-migration
 description: >-
-  Create Migration — Use when working on database schema, migrations, or query performance.
-x-generated-from: skills/database/create-migration/SKILL.md
+  Write a reversible database migration and verify apply/rollback on a copy. Use for any schema change; destructive ones need a human gate.
+x-generated-from: .claude/skills/create-migration/SKILL.md
 ---
 
 # Create Migration

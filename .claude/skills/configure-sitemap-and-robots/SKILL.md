@@ -1,8 +1,8 @@
 ---
 name: configure-sitemap-and-robots
 description: >-
-  Configure Sitemap And Robots — Use when implementing technical SEO or planning content strategy.
-x-generated-from: skills/seo/configure-sitemap-and-robots/SKILL.md
+  Configure sitemap.xml, robots.txt, and noindex rules for private/technical pages. Use when setting up or changing crawl rules.
+x-generated-from: .claude/skills/configure-sitemap-and-robots/SKILL.md
 ---
 
 ## sitemap.ts
