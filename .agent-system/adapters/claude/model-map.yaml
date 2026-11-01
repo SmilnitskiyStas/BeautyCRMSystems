@@ -1,0 +1,35 @@
+# Claude Code model map — tier -> concrete model.
+# The ONLY place a Claude model name appears. Change here without touching any agent.
+# Values: family aliases (sonnet | opus | haiku | fable), a full model id, or `inherit`.
+#
+# Verified against the Claude Code docs on 2026-10-31 (aliases resolve to the newest
+# model of the family and float over time):
+#   haiku -> Haiku 5.5   (needs Claude Code >= 2.1.293)
+#   sonnet -> Sonnet 5.5 (needs >= 2.1.284)
+#   opus -> Opus 5.5     (needs >= 2.1.280)
+#   fable -> Fable 5.1   (needs >= 2.1.257) — hardest / longest-running work; on some
+#                          plans billed against usage credits.
+# To PIN a version instead of floating, use the full id, e.g. claude-opus-5-5,
+# claude-haiku-5-5, claude-fable-5-1.
+
+tiers:
+  cheap: haiku
+  standard: sonnet
+  reasoning: opus
+  frontier: fable        # optional tier — no agent defaults to it; used by escalation only
+
+# Per-tier effort -> emitted as the subagent `effort:` field.
+# Levels on all 5.x models: low | medium | high | xhigh | max. Default on 5.5 models is
+# medium. Do not set `max` for a whole tier — pass it per task.
+effort:
+  cheap: low
+  standard: medium
+  reasoning: high
+  frontier: xhigh
+
+# If the project runs Claude Code against a non-Anthropic model (e.g. a local model via
+# settings.json `model:`), tier resolution still works — the generated `model:` line is
+# advisory and the runtime's configured model wins. No separate local profile in v2.
+notes: >
+  `inherit` is the Claude Code default. We emit an explicit model per tier so a subagent's
+  cost profile does not silently follow whatever the main session happens to use.

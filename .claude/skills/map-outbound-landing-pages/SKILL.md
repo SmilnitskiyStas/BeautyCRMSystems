@@ -1,8 +1,8 @@
 ---
 name: map-outbound-landing-pages
 description: >-
-  Map Outbound Landing Pages — Use when shaping conversion structure — hero/CTA, forms, analytics.
-x-generated-from: skills/cro/map-outbound-landing-pages/SKILL.md
+  Map campaigns to dedicated landing pages with UTM parameters. Use when planning outbound or paid campaigns.
+x-generated-from: .claude/skills/map-outbound-landing-pages/SKILL.md
 ---
 
 ## Галузеві сторінки (розділ галузевих сторінок проєктного спеку)

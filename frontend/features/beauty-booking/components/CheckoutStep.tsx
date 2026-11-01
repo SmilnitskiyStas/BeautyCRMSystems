@@ -7,10 +7,12 @@ import {
   formatPrice,
   paymentOptions,
   paymentPolicy,
+  reminderHint,
   reminderOptions,
 } from "../content";
 import { useBookingFlow } from "../hooks/useBookingFlow";
 import type { ReminderOption } from "../types";
+import { CouponField } from "./CouponField";
 import { OptionCard, PriceTag, SummaryRow } from "./ui";
 
 export interface ClientErrors {
@@ -28,6 +30,7 @@ export function CheckoutStep({ errors, submitError }: { errors: ClientErrors; su
   const setClient = useBookingFlow((s) => s.setClient);
   const website = useBookingFlow((s) => s.website);
   const setWebsite = useBookingFlow((s) => s.setWebsite);
+  const coupon = useBookingFlow((s) => s.coupon);
   if (!service || !slot) return null;
 
   return (
@@ -47,6 +50,12 @@ export function CheckoutStep({ errors, submitError }: { errors: ClientErrors; su
         </div>
         {service.promoLabel && (
           <span className="text-xs font-semibold text-[#A2300A]">{service.promoLabel}</span>
+        )}
+        {coupon?.result.outcome === "applied" && (
+          <div className="flex items-center justify-between text-sm font-semibold text-[#145A32]">
+            <span>З промокодом</span>
+            <span>{formatPrice(coupon.result.priceFinal)}</span>
+          </div>
         )}
       </section>
 
@@ -90,6 +99,8 @@ export function CheckoutStep({ errors, submitError }: { errors: ClientErrors; su
         )}
       </div>
 
+      <CouponField />
+
       {/* Honeypot: невидиме для людей й допоміжних технологій поле; боти його заповнюють - сервер відхиляє запис. */}
       <div aria-hidden="true" className="absolute -left-[9999px] h-0 w-0 overflow-hidden">
         <label htmlFor="website">Website</label>
@@ -111,6 +122,7 @@ export function CheckoutStep({ errors, submitError }: { errors: ClientErrors; su
         id="remind"
         value={reminder}
         onChange={(e) => setReminder(e.target.value as ReminderOption)}
+        aria-describedby="remind-hint"
         className={`${inputCls} font-semibold`}
       >
         {reminderOptions.map((r) => (
@@ -119,6 +131,9 @@ export function CheckoutStep({ errors, submitError }: { errors: ClientErrors; su
           </option>
         ))}
       </select>
+      <p id="remind-hint" className="text-[13px] text-[#5E5873]">
+        {reminderHint}
+      </p>
 
       <div role="group" aria-labelledby="pay-heading" className="mt-1 flex flex-col gap-2">
         <div id="pay-heading" className="text-sm font-semibold">
@@ -150,7 +165,7 @@ export function CheckoutStep({ errors, submitError }: { errors: ClientErrors; su
           {submitError}
         </p>
       )}
-      <span className="sr-only">Разом до сплати {formatPrice(service.priceFinal)}</span>
+      <span className="sr-only">Разом до сплати {formatPrice(coupon?.result.outcome === "applied" ? coupon.result.priceFinal : service.priceFinal)}</span>
     </>
   );
 }

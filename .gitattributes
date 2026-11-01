@@ -1,0 +1,10 @@
+# Generated / vendored agent files are byte-compared by sync-agents --check: keep LF on every checkout.
+.claude/agents/** text eol=lf
+.claude/skills/** text eol=lf
+.claude/workflow/** text eol=lf
+.claude/schemas/** text eol=lf
+.claude/templates/** text eol=lf
+.claude/hooks/** text eol=lf
+.claude/settings.hooks.json text eol=lf
+.codex/** text eol=lf
+.agent-system/** text eol=lf

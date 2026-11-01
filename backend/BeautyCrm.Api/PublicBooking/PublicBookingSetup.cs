@@ -3,6 +3,7 @@ using System.Text;
 using System.Threading.RateLimiting;
 using BeautyCrm.Api.Auth;
 using BeautyCrm.Api.Infrastructure;
+using BeautyCrm.Application.Features.BeautyChatBooking;
 using BeautyCrm.Application.Features.BeautyPublicBooking;
 using BeautyCrm.Infrastructure.Data.Beauty;
 using Microsoft.AspNetCore.Mvc;
@@ -56,13 +57,16 @@ public static class PublicBookingSetup
             TokenKey = ResolveTokenKey(config),
         };
         services.AddBeautyPublicBookingApplication(options).AddBeautyPublicBookingData();
+        // Запис з чату (§21.6): спільне ядро OnlineBookingCore; споживач - конвеєр розмов (TASK-728).
+        services.AddBeautyChatBookingApplication(new ChatBookingOptions { ProposalTtlMinutes = config.GetValue("ChatAssistant:ProposalTtlMinutes", 15) })
+            .AddBeautyChatBookingData();
 
         var window = TimeSpan.FromSeconds(config.GetValue("PublicBooking:RateLimit:WindowSeconds", 60));
         services.AddRateLimiter(o =>
         {
             void Add(string name, int permit) => o.AddPolicy(name, http => RateLimitPartition.GetFixedWindowLimiter(
                 // Ключ — IP клієнта (за reverse proxy потрібен ForwardedHeaders із довіреними проксі).
-                http.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                BeautyCrm.Application.Features.BeautyCoupons.ClientIpKey.Normalize(http.Connection.RemoteIpAddress?.ToString()),
                 _ => new FixedWindowRateLimiterOptions { PermitLimit = permit, Window = window, QueueLimit = 0 }));
             Add(PublicRateLimit.Read, config.GetValue("PublicBooking:RateLimit:ReadPermit", 120));
             Add(PublicRateLimit.Token, config.GetValue("PublicBooking:RateLimit:TokenPermit", 30));

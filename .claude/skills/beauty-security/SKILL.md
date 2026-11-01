@@ -1,6 +1,7 @@
 ---
 name: beauty-security
 description: Чекліст безпеки Beauty CRM — RLS, ролі, webhook, секрети, prompt injection, розсилки. Використовуй при рев'ю безпеки.
+x-generated-from: project:stacks/beauty/beauty-security
 ---
 
 - RLS на всіх нових таблицях; ролі: власник, адміністратор, спеціаліст.

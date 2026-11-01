@@ -1,8 +1,8 @@
 ---
 name: create-api-endpoint
 description: >-
-  Create API Endpoint — Use when implementing a standalone backend service.
-x-generated-from: skills/backend/create-api-endpoint/SKILL.md
+  Add a REST/GraphQL endpoint with a thin controller that only routes, calls a service, and returns a typed result. Use when adding or changing a backend endpoint.
+x-generated-from: .claude/skills/create-api-endpoint/SKILL.md
 ---
 
 ## Route/Controller Pattern (приклад — Node.js/TypeScript, Express-style; адаптувати синтаксис під свій фреймворк)

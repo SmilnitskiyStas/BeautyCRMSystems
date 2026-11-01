@@ -1,8 +1,8 @@
 ---
 name: propose-visual-direction
 description: >-
-  Propose Visual Direction — Use during the discovery phase — positioning, IA, content model.
-x-generated-from: skills/product-design/propose-visual-direction/SKILL.md
+  Prepare 2-3 visual directions with a recommendation. Use before design tokens are defined.
+x-generated-from: .claude/skills/propose-visual-direction/SKILL.md
 ---
 
 ## Purpose

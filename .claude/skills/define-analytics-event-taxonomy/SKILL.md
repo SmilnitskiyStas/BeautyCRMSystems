@@ -1,8 +1,8 @@
 ---
 name: define-analytics-event-taxonomy
 description: >-
-  Define Analytics Event Taxonomy — Use when shaping conversion structure — hero/CTA, forms, analytics.
-x-generated-from: skills/cro/define-analytics-event-taxonomy/SKILL.md
+  Define event names, properties, and the UTM/attribution model. Use when planning or auditing analytics tracking.
+x-generated-from: .claude/skills/define-analytics-event-taxonomy/SKILL.md
 ---
 
 ## Провайдер-агностична абстракція

@@ -10,7 +10,7 @@ import {
   type Service,
   type Slot,
   type Specialist,
-  reminderOptionSchema,
+  appointmentReminderOptionSchema,
 } from "../types";
 import type { BookingApi } from "./client";
 
@@ -76,6 +76,7 @@ export interface PublicAppointmentDto {
   paymentMethod: string | null;
   paymentStatus: string | null;
   cancellation: CancellationTerms | null;
+  couponApplied?: boolean;
 }
 interface PublicBookingCreatedDto {
   publicToken: string;
@@ -146,7 +147,7 @@ export function toSlots(rows: FreeSlotDto[]): Slot[] {
 }
 
 export function toAppointment(a: PublicAppointmentDto): Appointment {
-  const reminder = reminderOptionSchema.safeParse(a.reminderOption);
+  const reminder = appointmentReminderOptionSchema.safeParse(a.reminderOption);
   return {
     locationName: a.locationName,
     specialistName: a.specialistName,
@@ -162,6 +163,7 @@ export function toAppointment(a: PublicAppointmentDto): Appointment {
     paymentMethod: a.paymentMethod === "card" || a.paymentMethod === "cash" ? (a.paymentMethod as PaymentMethod) : undefined,
     paymentStatus: a.paymentStatus ?? undefined,
     cancellation: a.cancellation ?? undefined,
+    ...(a.couponApplied === true ? { couponApplied: true } : {}),
   };
 }
 
@@ -260,9 +262,19 @@ export const httpBookingApi: BookingApi = {
         reminder: req.reminder,
         paymentMethod: req.paymentMethod,
         website: req.website ?? "",
+        ...(req.couponCode ? { couponCode: req.couponCode } : {}),
       },
     });
     return { token: r.publicToken, appointment: toAppointment(r.appointment) };
+  },
+
+  async checkCoupon(tenant, p) {
+    const r = await request<{ outcome?: string; priceOriginal?: number; priceFinal?: number }>(
+      tenant,
+      `/coupons/check${q({ code: p.code, locationId: p.locationId, serviceId: p.serviceId })}`,
+    );
+    const outcome = r.outcome === "applied" || r.outcome === "not_better" ? r.outcome : "not_applicable";
+    return { outcome, priceOriginal: Number(r.priceOriginal) || 0, priceFinal: Number(r.priceFinal) || 0 };
   },
 
   getAppointment: async (tenant, token) =>

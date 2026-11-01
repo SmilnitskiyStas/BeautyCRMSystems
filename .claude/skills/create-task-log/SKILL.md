@@ -2,7 +2,7 @@
 name: create-task-log
 description: >-
   Write a task log for completed work — what changed, decisions, test status. Use when finishing any task.
-x-generated-from: skills/workflow/create-task-log/SKILL.md
+x-generated-from: .claude/skills/create-task-log/SKILL.md
 ---
 
 ## Purpose

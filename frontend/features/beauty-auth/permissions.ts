@@ -5,18 +5,55 @@ export interface NavItem {
   href: string;
 }
 
-const ALL_NAV: NavItem[] = [
-  { label: "Огляд", href: "/beauty" },
-  { label: "Записи", href: "/beauty/calendar" },
-  { label: "Клієнти", href: "/beauty/clients" },
-  { label: "Спеціалісти", href: "/beauty/staff" },
-  { label: "Заклади", href: "/beauty/locations" },
-  { label: "Ціни та акції", href: "/beauty/promos" },
-  { label: "Аналітика", href: "/beauty/analytics" },
-  { label: "AI-асистент", href: "/beauty/ai" },
-  { label: "Канали", href: "/beauty/channels" },
-  { label: "Налаштування", href: "/beauty/settings" },
+export interface NavGroup {
+  id: string;
+  label: string;
+  items: NavItem[];
+}
+
+/** Логічні блоки бічного меню (TASK-796). Маршрути не змінюються. */
+export const NAV_GROUPS: NavGroup[] = [
+  {
+    id: "daily",
+    label: "Щоденна робота",
+    items: [
+      { label: "Огляд", href: "/beauty" },
+      { label: "Записи", href: "/beauty/calendar" },
+      { label: "Розмови", href: "/beauty/inbox" },
+      { label: "Дзвінки", href: "/beauty/calls" },
+      { label: "Клієнти", href: "/beauty/clients" },
+    ],
+  },
+  {
+    id: "catalog",
+    label: "Каталог і продажі",
+    items: [
+      { label: "Спеціалісти", href: "/beauty/staff" },
+      { label: "Заклади", href: "/beauty/locations" },
+      { label: "Послуги", href: "/beauty/services" },
+      { label: "Ціни та акції", href: "/beauty/promos" },
+      { label: "Розсилки", href: "/beauty/campaigns" },
+    ],
+  },
+  {
+    id: "insights",
+    label: "Аналітика та AI",
+    items: [
+      { label: "Аналітика", href: "/beauty/analytics" },
+      { label: "AI-асистент", href: "/beauty/ai" },
+    ],
+  },
+  {
+    id: "system",
+    label: "Система",
+    items: [
+      { label: "Канали", href: "/beauty/channels" },
+      { label: "Налаштування", href: "/beauty/settings" },
+    ],
+  },
 ];
+
+const ALL_NAV: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 
 /**
  * Узгоджено з матрицею ролей §10/§13: specialist — свій календар і власний профіль (`/beauty/staff` перенаправляє
@@ -44,6 +81,22 @@ export const homeFor = (role: Role) => (role === "specialist" ? "/beauty/calenda
 /** Лише власник змінює налаштування; admin їх бачить (§11). */
 export const canEditSettings = (role: Role) => role === "owner";
 
+/** §20.9: ключ API провайдера ШІ бачить і змінює лише власник. */
+export const canManageAiKey = (role: Role) => role === "owner";
+
+/** §20.9: налаштування ШІ (моделі, режим, промпт, ліміти) - owner і admin; specialist розділу не бачить. */
+export const canEditAiSettings = (role: Role) => role === "owner" || role === "admin";
+
+/**
+ * §22.10: inbox розмов, задачі дзвінків і вподобання нагадувань - лише owner/admin; specialist отримує 403 від API
+ * ще до читання, тому ці розділи для нього не показуються й не відкриваються.
+ */
+export const canUseInbox = (role: Role) => role === "owner" || role === "admin";
+export const canUseCalls = canUseInbox;
+export const canManageReminderPrefs = canUseInbox;
+/** Налаштування нагадувань (§22.6.4): читають owner/admin, змінює лише owner. */
+export const canEditReminderSettings = (role: Role) => role === "owner";
+
 const CONTROL_CHARS = /[\x00-\x1f\x7f]/;
 /** Умовний origin для розбору відносного шляху: перевіряємо лише, що розбір не виводить за межі сайту. */
 const BASE_ORIGIN = "http://safe.invalid";
@@ -68,3 +121,20 @@ export function safeNext(next: string | null | undefined, fallback = "/beauty"):
   // "/..//evil" нормалізується до "//evil" — це вже protocol-relative URL.
   return path.startsWith("//") ? fallback : path;
 }
+
+/**
+ * §24.9: аналітика, фінансові поля (собівартість, виплата, чистий дохід), деталі періоду й редактор собівартості -
+ * лише owner/admin; specialist отримує 403 до читання тіла. Повний телефон клієнта (§25.9) - теж лише вони.
+ */
+export const canSeeFinance = (role: Role) => role === "owner" || role === "admin";
+export const canEditCosts = canSeeFinance;
+export const canSeeFullPhone = canSeeFinance;
+
+/**
+ * §26.11.1: розсилки (кампанії, аудиторії, купони) і згода в картці клієнта - лише owner/admin; specialist отримує 403 до читання,
+ * тому розділ для нього не показується й не відкривається, а персональних даних і кодів купонів у його DOM немає.
+ */
+export const canUseMarketing = (role: Role) => role === "owner" || role === "admin";
+export const canManageConsent = canUseMarketing;
+/** Код купона (`codeHint`) на записі бачать лише керівники. */
+export const canSeeCouponHint = canUseMarketing;

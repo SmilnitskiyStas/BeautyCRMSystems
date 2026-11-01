@@ -1,8 +1,8 @@
 ---
 name: setup-review-token-flow
 description: >-
-  Setup Review Token Flow — Use when implementing a light backend colocated with the frontend.
-x-generated-from: skills/fullstack/setup-review-token-flow/SKILL.md
+  Implement unique, expiring, single-use review/invite tokens with replay protection. Use when building tokenized links (reviews, invites, resets).
+x-generated-from: .claude/skills/setup-review-token-flow/SKILL.md
 ---
 
 # Setup Review Token Flow

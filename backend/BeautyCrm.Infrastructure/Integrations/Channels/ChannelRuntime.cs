@@ -122,6 +122,14 @@ public sealed class OutboundDispatcher(
         var ch = await db.Messages.AsNoTracking().Where(m => m.Id == messageId)
             .Select(m => m.Conversation!.Channel!).FirstOrDefaultAsync(ct);
         if (ch is null) return OutboxResult.NotFound;
+        if (!ch.IsActive)
+        {
+            // §22.5: вимкнений канал - постійна помилка з кодом; повідомлення не повторюється. draft/sent не чіпаємо.
+            await db.Messages.Where(m => m.Id == messageId && (m.Status == "sending" || m.Status == "pending"))
+                .ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, "failed").SetProperty(m => m.LastError, ChannelSendCodes.ChannelInactive)
+                    .SetProperty(m => m.UpdatedAt, DateTimeOffset.UtcNow), ct);
+            return OutboxResult.Failed;
+        }
         var c = ChannelSecrets.Read(secrets, ch.CredentialsEncrypted);
         using var _ = context.Begin(new ResolvedChannel(tenantId, ch.Id, ChannelTypeMap.ToAdapterId(EnumText<ChannelType>.ToDb(ch.Type)),
             new ChannelCredentials(c.Token, c.WebhookSecret, c.AppSecret, c.VerifyToken)));
@@ -130,7 +138,9 @@ public sealed class OutboundDispatcher(
 }
 
 /// <summary>Реалізація IChannelMessageRepository над beauty_conversations / beauty_messages.</summary>
-public sealed class EfChannelMessageRepository(BeautyDbContext db, ChannelRequestContext context) : IChannelMessageRepository
+public sealed class EfChannelMessageRepository(
+    BeautyDbContext db, ChannelRequestContext context, ChatPhoneOptions? phone = null,
+    InboundUnsubscribeHandler? unsubscribe = null, BeautyCrm.Infrastructure.AI.Beauty.Conversations.ChatAssistantOptions? assistant = null) : IChannelMessageRepository
 {
     private const string UniqueViolation = "23505";
 
@@ -143,6 +153,7 @@ public sealed class EfChannelMessageRepository(BeautyDbContext db, ChannelReques
         var fresh = new List<InboundMessage>();
         foreach (var m in messages)
         {
+            if (m.AckOnly) continue; // ack-only callback не зберігається (§23.4)
             // Ключ дедуплікації включає channelId: два канали одного tenant (два боти) можуть мати однакові chat_id:message_id.
             var key = InboundKey(channel.ChannelId, m);
             if (await db.Messages.AnyAsync(x => x.IdempotencyKey == key, ct)) continue;
@@ -150,17 +161,37 @@ public sealed class EfChannelMessageRepository(BeautyDbContext db, ChannelReques
             var conv = await db.Conversations.FirstOrDefaultAsync(c => c.ChannelId == channel.ChannelId && c.ExternalChatId == m.ExternalConversationId, ct);
             if (conv is null)
                 db.Conversations.Add(conv = new Conversation { Id = Guid.NewGuid(), ChannelId = channel.ChannelId, ExternalChatId = m.ExternalConversationId });
-            conv.LastMessageAt = m.ReceivedAt;
+            if (conv.LastMessageAt is null || m.ReceivedAt > conv.LastMessageAt) conv.LastMessageAt = m.ReceivedAt;
+            var isContact = m.Kind == InboundKinds.Contact;
+            // TASK-768 (§25.4): verdict зі списку; номер лише для own, лише у форматі E.164 (CHECK) і лише при ChatPhone:Enabled.
+            // Валідуємо до INSERT: порушення CHECK віддало б рядок з номером у PostgresException.Detail.
+            var verdict = !isContact ? null : m.ContactVerdict is ContactVerdicts.Own or ContactVerdicts.Invalid ? m.ContactVerdict : ContactVerdicts.Foreign;
+            if (verdict == ContactVerdicts.Own && !ContactPhoneNormalizer.IsE164(m.ContactPhone)) verdict = ContactVerdicts.Invalid;
+            // TASK-790 (H1): відписка на вході, транзакційно з прийомом, незалежно від ШІ-конвеєра. Конвеєр вимкнено - повідомлення processed (мовчки).
+            var unsub = unsubscribe is null ? InboundUnsubscribeKind.None
+                : InboundUnsubscribeHandler.Classify(m, conv.PendingPrompt == BeautyCrm.Infrastructure.AI.Beauty.Conversations.ReminderChoiceMenu.PromptKind
+                    && conv.PendingPromptExpiresAt is { } pe && m.ReceivedAt < pe);
+            var pipelineOn = unsub != InboundUnsubscribeKind.None && assistant is { Enabled: true }
+                && BeautyCrm.Infrastructure.AI.Beauty.Conversations.ConversationTurnProcessor.ChannelAssistantEnabled(
+                    await db.Channels.AsNoTracking().Where(c => c.Id == channel.ChannelId).Select(c => c.Settings).FirstOrDefaultAsync(ct));
+            await using var tx = db.Database.CurrentTransaction is null ? await db.Database.BeginTransactionAsync(ct) : null;
             db.Messages.Add(new Message
             {
                 Id = Guid.NewGuid(), ConversationId = conv.Id, Direction = MessageDirection.Inbound, SenderType = MessageSenderType.Client,
-                Body = m.Text, ExternalMessageId = m.ExternalMessageId, SentAt = m.ReceivedAt, Status = "received",
+                Body = isContact ? InboundKinds.ContactBody : m.Text, Kind = m.Kind, ExternalMessageId = m.ExternalMessageId, SentAt = m.ReceivedAt, Status = unsub != InboundUnsubscribeKind.None && !pipelineOn ? "processed" : "received",
                 IdempotencyKey = key,
+                // TASK-750 (§23.4): лише для kind=callback (CHECK ck_beauty_messages_callback_fields); callback_data = null, якщо формат невалідний.
+                CallbackData = m.Kind == InboundKinds.Callback ? m.CallbackData : null,
+                CallbackMessageRef = m.Kind == InboundKinds.Callback ? m.CallbackMessageRef : null,
+                ContactVerdict = verdict,
+                ContactPhone = verdict == ContactVerdicts.Own && phone is { Enabled: true } ? m.ContactPhone : null,
             });
             try
             {
                 await db.SaveChangesAsync(ct);
-                fresh.Add(m);
+                if (unsub != InboundUnsubscribeKind.None) await unsubscribe!.ApplyAsync(conv.Id, conv.ClientId, m, unsub, ct);
+                if (tx is not null) await tx.CommitAsync(ct);
+                fresh.Add(m with { ConversationId = conv.Id });
             }
             catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: UniqueViolation })
             {
@@ -176,22 +207,29 @@ public sealed class EfChannelMessageRepository(BeautyDbContext db, ChannelReques
             .Where(m => m.Id == messageId && m.Direction == MessageDirection.Outbound)
             .Select(m => new
             {
-                m.Body, m.Status, m.Attempts, m.ConversationId, Type = m.Conversation!.Channel!.Type, m.Conversation.ExternalChatId,
+                m.Body, m.Actions, m.Status, m.Attempts, m.ConversationId, Type = m.Conversation!.Channel!.Type, m.Conversation.ExternalChatId,
                 LastInbound = db.Messages.Where(x => x.ConversationId == m.ConversationId && x.Direction == MessageDirection.Inbound)
                     .Max(x => (DateTimeOffset?)x.SentAt),
             }).FirstOrDefaultAsync(ct);
         if (row is null) return null;
         var status = row.Status switch { "pending" or "sending" => OutboxStatus.Pending, "failed" => OutboxStatus.Failed, _ => OutboxStatus.Sent };
         return new OutboxItem(
-            new OutboundMessage(messageId, ChannelTypeMap.ToAdapterId(EnumText<ChannelType>.ToDb(row.Type)), row.ExternalChatId, row.Body, row.LastInbound),
+            new OutboundMessage(messageId, ChannelTypeMap.ToAdapterId(EnumText<ChannelType>.ToDb(row.Type)), row.ExternalChatId, row.Body, row.LastInbound,
+                ChatActionLayout.TryParse(row.Actions)),
             status, row.Attempts);
     }
 
-    public async Task MarkSentAsync(Guid messageId, CancellationToken ct)
+    public Task MarkSentAsync(Guid messageId, CancellationToken ct) => MarkSentAsync(messageId, null, ct);
+
+    /// <summary>status=sent + sent_at + external_message_id одним UPDATE (§23.4). Id каналу не затирається, якщо квитанція порожня.</summary>
+    public async Task MarkSentAsync(Guid messageId, string? externalMessageId, CancellationToken ct)
     {
-        var m = await db.Messages.FirstAsync(x => x.Id == messageId, ct);
-        m.Status = "sent"; m.LastError = null; m.SentAt = DateTimeOffset.UtcNow;
-        await db.SaveChangesAsync(ct);
+        var ext = externalMessageId is { Length: > 0 } e ? (e.Length > 256 ? e[..256] : e) : null;
+        var now = DateTimeOffset.UtcNow;
+        await db.Messages.Where(x => x.Id == messageId).ExecuteUpdateAsync(s => s
+            .SetProperty(x => x.Status, "sent").SetProperty(x => x.LastError, (string?)null).SetProperty(x => x.SentAt, now)
+            .SetProperty(x => x.ExternalMessageId, x => ext ?? x.ExternalMessageId)
+            .SetProperty(x => x.UpdatedAt, now), ct);
     }
 
     public async Task MarkAttemptFailedAsync(Guid messageId, int attempts, string error, bool final, CancellationToken ct)

@@ -5,12 +5,13 @@ model: haiku
 effort: low
 tools: Read, Grep, Glob
 disallowedTools: Write, Edit
+maxTurns: 8
 ---
 
 <!-- GENERATED — DO NOT EDIT DIRECTLY. Source: agents/control/task-intake.md
      Regenerate with: node scripts/sync-agents.mjs -->
 
-> Model tier: **cheap** (allowed: cheap). Escalation and downgrade rules: workflow/model-routing.md.
+> Model tier: **cheap** (allowed: cheap). Escalation and downgrade rules: .claude/workflow/model-routing.md.
 
 # Task Intake / Router
 
@@ -37,8 +38,8 @@ requires_human_clarification: false
 ## How this role works
 
 1. Read the request and the project root rules.
-2. Classify per `workflow/task-lifecycle.md` (complexity, risk) and
-   `workflow/model-routing.md` (tier).
+2. Classify per `.claude/workflow/task-lifecycle.md` (complexity, risk) and
+   `.claude/workflow/model-routing.md` (tier).
 3. Decide the path:
    - trivial / low, no risk, no ambiguity -> straight to the owner agent, cheapest tier;
    - high ambiguity or a product decision -> `requirements-analyst` first;

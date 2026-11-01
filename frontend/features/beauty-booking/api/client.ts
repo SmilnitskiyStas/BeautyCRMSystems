@@ -1,5 +1,6 @@
 import type {
   BookingResult,
+  CouponCheckResult,
   CancelResult,
   Appointment,
   CreateAppointmentRequest,
@@ -27,6 +28,11 @@ export interface BookingApi {
   ): Promise<Slot[]>;
   /** POST /appointments з заголовком Idempotency-Key */
   createAppointment(tenant: string, req: CreateAppointmentRequest, idempotencyKey: string): Promise<BookingResult>;
+  /**
+   * GET /coupons/check?code&locationId&serviceId (§26.11.4): лише загальні коди. 404 `coupon_invalid` - однакове тіло для всіх причин
+   * (нема, прострочено, використано, персональний), 429 `rate_limited` (10 перевірок / 10 хв з IP).
+   */
+  checkCoupon(tenant: string, q: { code: string; locationId: string; serviceId: string }): Promise<CouponCheckResult>;
   /** GET /appointments/{publicToken} */
   getAppointment(tenant: string, token: string): Promise<Appointment>;
   /** POST /appointments/{publicToken}/cancel */

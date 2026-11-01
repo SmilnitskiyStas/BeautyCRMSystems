@@ -13,7 +13,14 @@ const profile: ClientProfile = {
     { id: "v4", dateLabel: "3 жовт., 10:00", serviceName: "Фарбування", specialistId: "m", specialistName: "Марина", locationName: "Центр", sum: "2 400 ₴", status: "cancelled", viaPromo: false, cancelledBy: { type: "system" } },
   ],
 };
-vi.mock("../api", () => ({ beautyApi: { getClient: () => Promise.resolve(profile) } }));
+vi.mock("@/features/beauty-auth/components/auth-provider", () => ({ useAuth: () => ({ user: { id: "u", email: "e", fullName: "n", role: "owner" } }) }));
+vi.mock("../api", () => ({
+  beautyApi: {
+    getClient: () => Promise.resolve(profile),
+    getContactPreferences: () =>
+      Promise.resolve({ state: "unset", offsetsMinutes: [], telegramAvailable: true, phoneAvailable: true, telegramEnabled: true, callEnabled: true }),
+  },
+}));
 
 import { ClientProfileScreen } from "./clients-screens";
 

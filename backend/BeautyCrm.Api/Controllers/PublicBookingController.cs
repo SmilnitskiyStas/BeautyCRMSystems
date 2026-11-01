@@ -1,6 +1,7 @@
 using BeautyCrm.Api.Infrastructure;
 using BeautyCrm.Api.PublicBooking;
 using BeautyCrm.Application.Features.BeautyBooking;
+using BeautyCrm.Application.Features.BeautyCoupons;
 using BeautyCrm.Application.Features.BeautyPublicBooking;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -74,6 +75,21 @@ public sealed class PublicBookingController(PublicBookingService service) : Cont
             Response.Headers["Idempotent-Replayed"] = "true";
             return Ok(r.Booking);
         });
+    }
+
+    /// <summary>
+    /// Перевірка ЗАГАЛЬНОГО коду (§26.11.4): 200 {outcome, priceOriginal, priceFinal}; будь-яка причина відмови (і персональний код) -
+    /// однакове 404 coupon_invalid; 429 понад ліміт на IP.
+    /// </summary>
+    [HttpGet("coupons/check")]
+    [EnableRateLimiting(PublicRateLimit.Read)]
+    [ProducesResponseType<PublicCouponCheckDto>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> CheckCoupon([FromQuery] string? code, [FromQuery] Guid locationId, [FromQuery] Guid serviceId, CancellationToken ct)
+    {
+        NoStore();
+        var r = await service.CheckCouponAsync(code, locationId, serviceId, HttpContext.Connection.RemoteIpAddress?.ToString(), ct);
+        if (!r.IsOk && r.Error!.Kind == BeautyCrm.Application.Features.BeautyCommon.ErrorKind.TooManyRequests) Response.Headers.RetryAfter = "600";
+        return this.ToResult(r);
     }
 
     /// <summary>Перегляд запису за довгим випадковим токеном. Невідомий/чужий/зіпсований токен — однакова 404.</summary>

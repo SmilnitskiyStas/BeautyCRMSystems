@@ -3,7 +3,7 @@ name: root-cause-analysis
 description: >-
   Structured root-cause analysis before proposing a fix — reproduce, isolate, explain.
   Use when debugging a non-trivial failure, a flaky test, or "works here but not there".
-x-generated-from: skills/workflow/root-cause-analysis/SKILL.md
+x-generated-from: .claude/skills/root-cause-analysis/SKILL.md
 ---
 
 # Root Cause Analysis
@@ -23,7 +23,7 @@ differences, regressions after a deploy.
 4. **Confirm** — show that changing the identified cause changes the symptom.
 5. **Fix** — the smallest change that addresses the mechanism, not the symptom.
 6. **Prevent** — a concrete rule: a test that now covers it, a lint rule, a checklist
-   item in the relevant skill. Record via `skills/workflow/resolve-known-issue`.
+   item in the relevant skill. Record via `.claude/skills/resolve-known-issue`.
 
 ## Validation
 

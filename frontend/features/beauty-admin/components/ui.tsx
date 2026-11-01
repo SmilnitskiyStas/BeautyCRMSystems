@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import type { AppointmentStatus, ClientTag, OverviewKpi } from "../types";
 
 export const TONES = {
@@ -103,15 +103,16 @@ export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { id: 
   );
 }
 
-export function Switch({ label, checked, onChange }: { label: string; checked: boolean; onChange: (next: boolean) => void }) {
+export function Switch({ label, checked, onChange, disabled }: { label: string; checked: boolean; onChange: (next: boolean) => void; disabled?: boolean }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
-      className="flex h-11 w-[52px] flex-none cursor-pointer items-center border-0 bg-transparent p-0"
+      className="flex h-11 w-[52px] flex-none cursor-pointer items-center border-0 bg-transparent p-0 disabled:cursor-not-allowed disabled:opacity-50"
     >
       <span className={`relative block h-[30px] w-[52px] rounded-full ${checked ? "bg-(--accent)" : "bg-[#6F6985]"}`}>
         <span className={`absolute top-[3px] block h-6 w-6 rounded-full bg-white transition-[left] ${checked ? "left-[25px]" : "left-[3px]"}`} />
@@ -120,7 +121,7 @@ export function Switch({ label, checked, onChange }: { label: string; checked: b
   );
 }
 
-export function PrimaryButton({ children, ...rest }: ButtonHTMLAttributes<HTMLButtonElement>) {
+export function PrimaryButton({ children, ...rest }: ComponentProps<"button">) {
   return (
     <button
       type="button"
@@ -132,7 +133,7 @@ export function PrimaryButton({ children, ...rest }: ButtonHTMLAttributes<HTMLBu
   );
 }
 
-export function SecondaryButton({ children, ...rest }: ButtonHTMLAttributes<HTMLButtonElement>) {
+export function SecondaryButton({ children, ...rest }: ComponentProps<"button">) {
   return (
     <button
       type="button"

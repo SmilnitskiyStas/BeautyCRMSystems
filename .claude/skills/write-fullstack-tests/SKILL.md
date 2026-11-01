@@ -1,8 +1,8 @@
 ---
 name: write-fullstack-tests
 description: >-
-  Write Fullstack Tests — Use when implementing a light backend colocated with the frontend.
-x-generated-from: skills/fullstack/write-fullstack-tests/SKILL.md
+  Test server actions, validation, and persistence together with component tests. Use after implementing a colocated backend feature.
+x-generated-from: .claude/skills/write-fullstack-tests/SKILL.md
 ---
 
 ## Обсяг

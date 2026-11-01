@@ -1,8 +1,8 @@
 ---
 name: create-page-route
 description: >-
-  Create Page Route — Use when building the user-facing web layer.
-x-generated-from: skills/frontend/create-page-route/SKILL.md
+  Add a route/page following the project's routing, i18n and metadata conventions. Use when creating a new page.
+x-generated-from: .claude/skills/create-page-route/SKILL.md
 ---
 
 ## Location

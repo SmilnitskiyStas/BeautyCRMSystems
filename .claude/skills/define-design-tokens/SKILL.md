@@ -1,8 +1,8 @@
 ---
 name: define-design-tokens
 description: >-
-  Define Design Tokens — Use when producing the design foundation — tokens, specs, theme, motion.
-x-generated-from: skills/ui-ux-design/define-design-tokens/SKILL.md
+  Define color, type, spacing, radius, shadow tokens from the chosen visual direction. Use at the start of the design foundation.
+x-generated-from: .claude/skills/define-design-tokens/SKILL.md
 ---
 
 ## Purpose
@@ -17,7 +17,7 @@ x-generated-from: skills/ui-ux-design/define-design-tokens/SKILL.md
 - [ ] Shadows/elevation — шкала для cards/dropdowns/modals, узгоджена з light/dark темою
 
 ## Process
-1. Вивести палітру й типографіку з обраної концепції (`.claude/skills/product-design/propose-visual-direction.md`), не з нуля.
+1. Вивести палітру й типографіку з обраної концепції (`.claude/.claude/skills/propose-visual-direction/SKILL.md`), не з нуля.
 2. Визначити токени як Tailwind theme extension (`tailwind.config`) або CSS custom properties — джерело істини одне, не дублювати в обох місцях.
 3. Перевірити контраст кожної пари text/background (WCAG 2.2 AA) для обох тем.
 4. Перевірити, що вся шкала spacing/radius/shadow покриває реальні потреби компонентів з `create-component-visual-spec.md` — не залишати токен, який ніхто не використовує.

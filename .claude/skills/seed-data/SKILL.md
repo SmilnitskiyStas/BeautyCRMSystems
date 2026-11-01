@@ -1,8 +1,8 @@
 ---
 name: seed-data
 description: >-
-  Seed Data — Use when working on database schema, migrations, or query performance.
-x-generated-from: skills/database/seed-data/SKILL.md
+  Create deterministic seed/fixture data for dev and tests, never real personal data. Use when a feature needs sample data.
+x-generated-from: .claude/skills/seed-data/SKILL.md
 ---
 
 ## Розташування

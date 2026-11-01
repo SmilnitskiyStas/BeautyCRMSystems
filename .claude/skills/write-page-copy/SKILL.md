@@ -1,8 +1,8 @@
 ---
 name: write-page-copy
 description: >-
-  Write Page Copy — Use when writing page copy, case studies, or blog content.
-x-generated-from: skills/copywriting/write-page-copy/SKILL.md
+  Write page copy (hero, sections, CTAs) in the project's tone, honest and specific. Use when a page needs text.
+x-generated-from: .claude/skills/write-page-copy/SKILL.md
 ---
 
 ## Тон (розділ тону комунікації проєктного спеку)

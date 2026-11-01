@@ -6,8 +6,10 @@ import {
   useChannels,
   useConnectChannel,
   useDisconnectChannel,
+  useSyncTelegramCommands,
   useUpdateChannel,
 } from "../hooks/use-beauty-admin";
+import { humanizeSyncCommandsError } from "@/features/beauty-auth/errors";
 import type { ChannelConfig, ChannelId } from "../types";
 import { AI_MODES, buildChannelPreview } from "./channel-preview";
 import {
@@ -67,6 +69,49 @@ function ConnectForm({ channel }: { channel: ChannelConfig }) {
   );
 }
 
+/** §23.10: кнопки в Telegram-чаті й оновлення меню команд бота. Токен бота в UI не показується й не передається. */
+function TelegramButtons({ channel, onToggle }: { channel: ChannelConfig; onToggle: (v: boolean) => void }) {
+  const sync = useSyncTelegramCommands();
+  const noteId = useId();
+  const assistantOn = channel.assistantEnabled === true;
+  const label = "Кнопки в чаті";
+  return (
+    <div data-testid="telegram-buttons" className="flex flex-col gap-2.5 border-t border-(--line) pt-3.5">
+      <div className="flex items-center justify-between gap-4">
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-[15px] font-semibold">{label}</span>
+          <span id={noteId} className="text-[13px] leading-snug text-(--muted)">
+            {assistantOn
+              ? "Бот додає кнопки під повідомленнями: підтвердити запис, обрати час, скасувати візит. Вимкнено — бот підкаже, що написати текстом."
+              : "Кнопки діють лише тоді, коли для каналу ввімкнено чат-асистента. Зараз він вимкнений."}
+          </span>
+        </span>
+        <span aria-describedby={noteId}>
+          <Switch label={label} checked={assistantOn && channel.buttons !== false} disabled={!assistantOn} onChange={onToggle} />
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <SecondaryButton disabled={sync.isPending || !channel.connected} onClick={() => sync.mutate(channel.id)}>
+          {sync.isPending ? "Оновлюємо…" : "Оновити меню команд бота"}
+        </SecondaryButton>
+        <span className="min-w-[200px] flex-1 text-[13px] text-(--muted)">
+          Оновіть, якщо змінився токен бота або в Telegram не видно команд /start, /my, /cancel.
+        </span>
+      </div>
+      {sync.isSuccess ? (
+        <p role="status" className="rounded-xl bg-[#DDF3E6] px-3.5 py-2.5 text-sm text-[#145A32]">
+          Меню команд бота оновлено.
+        </p>
+      ) : null}
+      {sync.isError ? (
+        <p role="alert" className="rounded-xl bg-[#FBE4E4] px-3.5 py-2.5 text-sm text-[#8A1F1F]">
+          {humanizeSyncCommandsError(sync.error)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function ChannelSettings({ channel }: { channel: ChannelConfig }) {
   const update = useUpdateChannel();
   const disconnect = useDisconnectChannel();
@@ -102,6 +147,8 @@ function ChannelSettings({ channel }: { channel: ChannelConfig }) {
           </div>
         ))}
       </div>
+
+      {channel.id === "tg" ? <TelegramButtons channel={channel} onToggle={(v) => patch({ buttons: v })} /> : null}
 
       {aiActive ? (
         <div className="flex flex-col gap-2.5 border-t border-(--line) pt-3.5">

@@ -1,8 +1,8 @@
 ---
 name: implement-metadata-and-hreflang
 description: >-
-  Implement Metadata And Hreflang — Use when implementing technical SEO or planning content strategy.
-x-generated-from: skills/seo/implement-metadata-and-hreflang/SKILL.md
+  Specify per-route title/description/canonical/Open Graph and hreflang for all locales. Use when adding routes or locales.
+x-generated-from: .claude/skills/implement-metadata-and-hreflang/SKILL.md
 ---
 
 ## generateMetadata Pattern

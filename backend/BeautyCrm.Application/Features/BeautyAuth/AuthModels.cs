@@ -17,6 +17,12 @@ public static class BeautyModules
 {
     public static readonly IReadOnlyList<string> All =
         ["beauty_booking", "beauty_catalog", "beauty_clients", "beauty_analytics", "beauty_channels", "beauty_ai"];
+
+    /// <summary>TASK-777 (§26.11.1, ADR-015): кампанії й купони. Не входить у <see cref="All"/> (нікому не вмикається за замовчуванням, без backfill).</summary>
+    public const string Marketing = "beauty_marketing";
+
+    /// <summary>Усі допустимі імена модулів (для валідації списку модулів tenant): <see cref="All"/> + опційні.</summary>
+    public static readonly IReadOnlyList<string> Known = [.. All, Marketing];
 }
 
 /// <summary>Автентифікований користувач tenant (з claims JWT).</summary>

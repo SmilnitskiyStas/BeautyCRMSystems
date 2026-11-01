@@ -26,5 +26,13 @@ logs/
 .claude/worktrees/
 .claude/logs/
 .claude/private/
+.claude/tasks/*.bak
 .claude/scheduled_tasks.lock
 !.env.example
+
+# локальний dev-стан (PID, логи, GUID каналу)
+scripts/dev/.state/
+
+# agent library: per-session state and usage analytics (local)
+.ai/state/
+.ai/logs/agent-runs.jsonl
