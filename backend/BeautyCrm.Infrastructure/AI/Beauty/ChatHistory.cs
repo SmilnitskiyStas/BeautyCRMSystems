@@ -23,6 +23,8 @@ public sealed class ChatPromptOptions
     public int ContextMaxServices { get => _ctxServices; set => _ctxServices = Math.Clamp(value, 0, 100); }
     /// <summary>Скільки майстрів максимум наводиться в каталозі контексту ходу (0..50). `ChatAssistant:ContextMaxSpecialists`.</summary>
     public int ContextMaxSpecialists { get => _ctxSpecialists; set => _ctxSpecialists = Math.Clamp(value, 0, 50); }
+    /// <summary>Тиша в розмові довша за цей поріг починає новий епізод діалогу для моделі (TASK-799).</summary>
+    public TimeSpan EpisodeIdleTimeout { get; set; } = TimeSpan.FromHours(6);
     /// <summary>Підпис валюти в підсумку (валюти в БД немає).</summary>
     public string CurrencyLabel { get; set; } = "грн";
 }

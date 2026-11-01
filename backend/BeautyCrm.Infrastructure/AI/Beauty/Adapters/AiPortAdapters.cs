@@ -81,7 +81,7 @@ public sealed class GetActivePromotionsAdapter(Cat.PromotionService promotions, 
         // Порт оперує відсотками: фіксовані знижки не віддаємо.
         return (await promotions.ListAsync(ct))
             .Where(p => p.IsActive && p.Access == "public" && p.DiscountType == "percent" && (p.StartsAt is null || p.StartsAt <= now) && (p.EndsAt is null || now < p.EndsAt))
-            .Select(p => new PromotionDto(p.Id, p.Name, p.DiscountValue, p.EndsAt)).ToList();
+            .Select(p => new PromotionDto(p.Id, p.Name, p.DiscountValue, p.EndsAt, p.ServiceIds)).ToList();
     }
 }
 

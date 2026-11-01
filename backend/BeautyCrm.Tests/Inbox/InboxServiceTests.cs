@@ -1,3 +1,4 @@
+using BeautyCrm.Application.Features.BeautyChatBooking;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -469,6 +470,7 @@ public sealed class InboxServiceTests : IClassFixture<PostgresRlsFixture>
             (await Svc(e, i => i.GetAsync(e.Specialist, conv, null, null, default))).Error,
             (await Svc(e, i => i.ReplyAsync(e.Specialist, conv, Key(), "hi"))).Error,
             (await Svc(e, i => i.ResumeAiAsync(e.Specialist, conv, default))).Error,
+            (await Svc(e, i => i.ResolveAsync(e.Specialist, conv, default))).Error,
             (await Svc(e, i => i.MarkReadAsync(e.Specialist, conv, null, default))).Error,
         };
         Assert.All(denied, err =>
@@ -799,12 +801,101 @@ public sealed class InboxServiceTests : IClassFixture<PostgresRlsFixture>
         await Svc(e, i => i.ReplyAsync(e.Admin, conv, key, "інший текст СЕКРЕТНА-ВІДПОВІДЬ-МЕНЕДЖЕРА")); // conflict
         await Svc(e, i => i.ReplyAsync(e.Admin, conv, Key(), new string('a', 4000)));                    // invalid
         await Svc(e, i => i.ResumeAiAsync(e.Admin, conv, default));
+        await Svc(e, i => i.ResolveAsync(e.Admin, conv, default));
         await Svc(e, i => i.GetAsync(e.Admin, conv, null, null, default));
 
         var logs = e.H.Logs.All;
         Assert.Contains("inbox_reply", logs);
         Assert.Contains("inbox_resume_ai", logs);
+        Assert.Contains("inbox_resolve", logs);
         foreach (var secret in new[] { "СЕКРЕТНЕ-ПОВІДОМЛЕННЯ-КЛІЄНТА", "СЕКРЕТНА-ВІДПОВІДЬ-МЕНЕДЖЕРА", Chat, "Олена Адмін", "Anna", ChatHarness.BotToken, "BOTTOKENSECRETVALUE", key })
             Assert.DoesNotContain(secret, logs);
+    }
+
+    // ------------------------------------------------------------------ resolve (TASK-793)
+
+    [SkippableFact]
+    public async Task resolve_closes_without_reply_leaves_needs_reply_and_counter_returns_ai_and_is_idempotent()
+    {
+        var e = await NewAsync();
+        var conv = await ConvAsync(e);
+        var other = await ConvAsync(e, "5550999999", "Інша розмова");
+        await Ingest(e, "ще повідомлення");
+        await SqlAsync(e, $@"UPDATE beauty_conversations SET ai_state = 'handoff', handoff_reason = 'complaint', handoff_at = now(),
+              ai_paused_until = now() + interval '5 hours', awaiting_staff_since = now() WHERE id IN ({conv}, {other})");
+        await SqlAsync(e, $"UPDATE beauty_messages SET status = 'held' WHERE conversation_id IN ({conv}, {other})");
+        var before = (await MsgsAsync(e, conv)).Count;
+
+        var list0 = await Svc(e, i => i.ListAsync(e.Admin, null, null, null, null, null, default));
+        Assert.Equal(2, list0.Value!.Meta.NeedsReplyCount);
+
+        Assert.True((await Svc(e, i => i.ResolveAsync(e.Admin, conv, default))).IsOk);
+        var c = await LoadConvAsync(e, conv);
+        Assert.Equal(("active", null, null, null, null), (c.AiState, c.HandoffReason, c.HandoffAt, c.AiPausedUntil, c.AwaitingStaffSince));
+        Assert.NotNull(c.StaffLastReadAt);
+        var msgs = await MsgsAsync(e, conv);
+        Assert.Equal(before, msgs.Count);
+        Assert.All(msgs, m => Assert.Equal("processed", m.Status));
+        Assert.Empty(msgs.Where(m => m.Direction == MessageDirection.Outbound));
+        Assert.Empty(e.H.Bot.Messages);
+        Assert.Equal("held", (await MsgsAsync(e, other)).Single().Status);
+
+        var list = await Svc(e, i => i.ListAsync(e.Admin, null, null, null, null, null, default));
+        Assert.Equal(other, Assert.Single(list.Value!.Items).Id);
+        Assert.Equal(1, list.Value.Meta.NeedsReplyCount);
+        var all = await Svc(e, i => i.ListAsync(e.Admin, "all", null, null, null, null, default));
+        Assert.Equal(0, all.Value!.Items.Single(x => x.Id == conv).UnreadCount);
+
+        async Task<List<AiAction>> Journal()
+        {
+            await using var ctx = _db.CreateContext(e.TenantId);
+            return await ctx.AiActions.AsNoTracking().Where(a => a.ToolName == "resolve_conversation").ToListAsync();
+        }
+        var row = Assert.Single(await Journal());
+        Assert.Equal(e.Admin.UserId, JsonDocument.Parse(row.Payload).RootElement.GetProperty("userId").GetGuid());
+        var stamp = (await LoadConvAsync(e, conv)).UpdatedAt;
+        Assert.True((await Svc(e, i => i.ResolveAsync(e.Admin, conv, default))).IsOk);
+        Assert.Single(await Journal());
+        Assert.Equal(stamp, (await LoadConvAsync(e, conv)).UpdatedAt);
+
+        e.H.Ai.Enqueue(ChatHarness.Text("Вітаю! Чим допомогти?"));
+        await Ingest(e, "Скільки триває стрижка?");
+        await e.H.TurnAsync(e.TenantId, conv);
+        Assert.Single(e.H.Ai.Calls);
+        Assert.Single(e.H.Bot.Messages);
+        Assert.Equal("active", (await LoadConvAsync(e, conv)).AiState);
+    }
+
+    [SkippableFact]
+    public async Task resolve_does_not_touch_active_booking_proposals_like_resume_ai()
+    {
+        var e = await NewAsync();
+        var conv = await ConvAsync(e);
+        await SqlAsync(e, $"UPDATE beauty_conversations SET ai_state = 'handoff', awaiting_staff_since = now() WHERE id = {conv}");
+        await SqlAsync(e, $"UPDATE beauty_messages SET status = 'held' WHERE conversation_id = {conv}");
+        await Svc(e, i => i.ResolveAsync(e.Admin, conv, default));
+        await using var ctx = _db.CreateContext(e.TenantId);
+        Assert.Equal(0, await ctx.ChatBookingProposals.CountAsync(p => p.ConversationId == conv && p.Status == ChatProposalStatus.Superseded));
+    }
+
+    [SkippableFact]
+    public async Task resolve_and_reply_race_ends_in_a_consistent_state_without_errors()
+    {
+        var e = await NewAsync();
+        var conv = await ConvAsync(e);
+        await SqlAsync(e, $"UPDATE beauty_conversations SET ai_state = 'handoff', awaiting_staff_since = now() WHERE id = {conv}");
+        await SqlAsync(e, $"UPDATE beauty_messages SET status = 'held' WHERE conversation_id = {conv}");
+
+        var a = Svc(e, i => i.ResolveAsync(e.Admin, conv, default));
+        var b = Svc(e, i => i.ReplyAsync(e.Admin, conv, Key(), "Відповідь"));
+        await Task.WhenAll(a, b);
+        Assert.True(a.Result.IsOk);
+        Assert.True(b.Result.IsOk);
+        var c = await LoadConvAsync(e, conv);
+        Assert.Null(c.AwaitingStaffSince);
+        Assert.Contains(c.AiState, new[] { "active", "handoff" });
+        var msgs = await MsgsAsync(e, conv);
+        Assert.DoesNotContain(msgs, m => m.Direction == MessageDirection.Inbound && m.Status == "held");
+        Assert.Single(msgs.Where(m => m.Direction == MessageDirection.Outbound));
     }
 }

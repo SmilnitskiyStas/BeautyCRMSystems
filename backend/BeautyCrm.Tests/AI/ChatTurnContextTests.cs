@@ -53,7 +53,7 @@ public class ChatTurnContextTests
         await rig.Assistant(ai).HandleAsync(rig.Req("Привіт"), default);
         var req = ai.Requests.Single();
         Assert.Contains($"id={rig.Port.Loc}", req.System);
-        Assert.Contains($"{rig.Port.Svc} | Манікюр | 90 хв | 500 грн", req.System);
+        Assert.Contains($"{rig.Port.Svc} | Манікюр | 90 хв | 600 грн; акція «Будні»: 500 грн", req.System);
         Assert.Contains($"{rig.Port.Spec} | Марина, Майстер | Манікюр", req.System);
         Assert.DoesNotContain(req.Messages.SelectMany(m => m.Blocks.OfType<AiTextBlock>()), b => b.Text.Contains(ChatContextBuilder.Open));
         Assert.All(rig.Port.TenantsSeen, t => Assert.Equal(Tenant, t));
@@ -216,5 +216,76 @@ public class ChatTurnContextTests
         Assert.Equal((8, 30, 300), (o.MaxTurnsPerConversationPerMinute, o.MaxCallsPerConversationPerMinute, o.MaxCallsPerConversationPerDay));
         Assert.Equal(6, new ChatPromptOptions().MaxToolIterations);
         Assert.True(o.MaxCallsPerConversationPerMinute >= 5 * new ChatPromptOptions().MaxToolIterations);
+    }
+
+    // ---- TASK-798: спершу повна ціна, потім акція ----
+
+    [Fact]
+    public async Task context_shows_the_full_price_first_and_the_promotion_separately_never_as_the_main_price()
+    {
+        var rig = new Rig();
+        var ctx = await rig.Context.BuildAsync(Tenant, rig.Port.Loc, default);
+        var line = ctx.Split((char)10).Single(l => l.StartsWith($"- {rig.Port.Svc} |")).TrimEnd();
+        Assert.EndsWith("600 грн; акція «Будні»: 500 грн", line);
+        Assert.True(line.IndexOf("600", StringComparison.Ordinal) < line.IndexOf("500", StringComparison.Ordinal));
+        Assert.DoesNotContain("було", line);
+    }
+
+    [Fact]
+    public async Task context_without_a_promotion_keeps_the_plain_price()
+    {
+        var rig = new Rig();
+        rig.Port.Services.Clear();
+        rig.Port.Services.Add(new ChatServiceDto(rig.Port.Svc, "Манікюр", "Нігті", 90, 600m, 600m, null));
+        var ctx = await rig.Context.BuildAsync(Tenant, rig.Port.Loc, default);
+        Assert.Contains($"{rig.Port.Svc} | Манікюр | 90 хв | 600 грн", ctx);
+        Assert.DoesNotContain("акція", ctx.Split((char)10).Single(l => l.StartsWith($"- {rig.Port.Svc} |")).TrimEnd());
+    }
+
+    [Fact]
+    public void chat_rules_require_full_price_before_the_promotion_and_forbid_presenting_it_as_regular()
+    {
+        var rules = ChatPromptRules();
+        Assert.Contains("спершу називай повну (базову) ціну", rules);
+        Assert.Contains("ніколи не називай як звичайну ціну", rules);
+        Assert.Contains("Остаточну суму визначає система", rules);
+        Assert.Contains("лише ту, що вже вказана в даних", rules);
+    }
+
+    [Fact]
+    public void chat_rules_forbid_returning_to_closed_requests_but_allow_follow_ups()
+    {
+        var rules = ChatPromptRules();
+        Assert.Contains("Не повертайся до відхилених, завершених чи старих запитів", rules);
+        Assert.Contains("не «виправляй» свої попередні відповіді", rules);
+        Assert.Contains("продовжують поточну тему", rules);
+    }
+
+    private static string ChatPromptRules() => PromptComposer.ChatRules;
+
+    [Fact]
+    public async Task list_services_gives_the_full_price_and_the_promotion_price_separately()
+    {
+        var rig = new Rig();
+        var r = await rig.Tools.ExecuteAsync(rig.Ctx(), "list_services", J(new { }), default);
+        var svc = JsonDocument.Parse(r.Content).RootElement[0];
+        Assert.Equal(600m, svc.GetProperty("priceOriginal").GetDecimal());
+        Assert.Equal(500m, svc.GetProperty("promotionPrice").GetDecimal());
+        Assert.Equal("Будні", svc.GetProperty("promotionName").GetString());
+
+        rig.Port.Services.Clear();
+        rig.Port.Services.Add(new ChatServiceDto(rig.Port.Svc, "Манікюр", "Нігті", 90, 600m, 600m, null));
+        var plain = await rig.Tools.ExecuteAsync(rig.Ctx(), "list_services", J(new { }), default);
+        Assert.Equal(JsonValueKind.Null, JsonDocument.Parse(plain.Content).RootElement[0].GetProperty("promotionPrice").ValueKind);
+    }
+
+    [Fact]
+    public async Task get_active_promotions_exposes_service_ids_and_nothing_internal()
+    {
+        var rig = new Rig();
+        var r = await rig.Tools.ExecuteAsync(rig.Ctx(), "get_active_promotions", J(new { }), default);
+        var p = JsonDocument.Parse(r.Content).RootElement[0];
+        Assert.Equal(JsonValueKind.Array, p.GetProperty("serviceIds").ValueKind);
+        Assert.False(p.TryGetProperty("id", out _));
     }
 }

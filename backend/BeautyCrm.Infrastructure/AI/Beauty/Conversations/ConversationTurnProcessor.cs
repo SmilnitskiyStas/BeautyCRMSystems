@@ -1007,6 +1007,22 @@ public sealed partial class ConversationTurnProcessor(
             .OrderByDescending(m => m.CreatedAt).Take(promptOpts.HistoryMessages).ToListAsync(ct);
         older.Reverse();
 
+        // TASK-799: межа епізоду - модель не бачить повідомлень до /book, підтвердження/скасування запису, дій менеджера й довгої тиші (БД не змінюється).
+        var batchStart = t.Batch.Min(m => m.CreatedAt);
+        var batchEnd = t.Batch.Max(m => m.CreatedAt);
+        var candidates = await db.Messages.AsNoTracking()
+            .Where(m => m.ConversationId == t.Conv.Id
+                && ((m.Direction == MessageDirection.Inbound && (m.Kind == InboundKinds.Command || m.Kind == InboundKinds.Callback))
+                    || (m.Direction == MessageDirection.Outbound && m.SenderType == MessageSenderType.System)))
+            .OrderByDescending(m => m.CreatedAt).Take(60)
+            .Select(m => new EpisodeCandidate(m.CreatedAt, m.Direction == MessageDirection.Inbound, m.SenderType == MessageSenderType.System,
+                m.Kind, m.Body, m.CallbackData)).ToListAsync(ct);
+        var managerAt = await db.AiActions.AsNoTracking()
+            .Where(a => a.ConversationId == t.Conv.Id && ChatEpisode.ManagerBoundaryTools.Contains(a.ToolName))
+            .Select(a => (DateTimeOffset?)a.CreatedAt).MaxAsync(ct);
+        var cutoff = ChatEpisode.FindCutoff(candidates, managerAt, older.Select(m => m.CreatedAt).ToList(), batchStart, batchEnd, promptOpts.EpisodeIdleTimeout);
+        if (cutoff is { } cut) older = older.Where(m => m.CreatedAt > cut).ToList();
+
         var items = new List<ChatHistoryItem>();
         foreach (var m in older)
         {

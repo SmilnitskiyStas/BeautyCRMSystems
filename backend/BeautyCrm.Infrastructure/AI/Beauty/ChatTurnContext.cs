@@ -200,12 +200,13 @@ public sealed partial class ChatContextBuilder(IClientChatPort port, TimeProvide
             sb.AppendLine($"Послуг багато ({svc.Count}): список не наводиться, використовуй list_services.");
             return;
         }
-        sb.AppendLine("Послуги (id | назва | тривалість | ціна; актуальну ціну й акцію остаточно визначає система):");
+        sb.AppendLine("Послуги (id | назва | тривалість | повна ціна; якщо діє акція - вона окремо після «;». Повну ціну називай першою, акційну - лише як ціну акції; остаточну суму визначає система):");
         foreach (var s in svc)
         {
+            // TASK-798: спершу повна (базова) ціна, акція окремо; знижка ніколи не підміняє базову ціну.
             var price = s.PromotionName is not null || s.PriceFinal < s.PriceOriginal
-                ? $"{Money(s.PriceFinal)} {options.CurrencyLabel} (було {Money(s.PriceOriginal)}, акція «{Name(s.PromotionName)}»)"
-                : $"{Money(s.PriceFinal)} {options.CurrencyLabel}";
+                ? $"{Money(s.PriceOriginal)} {options.CurrencyLabel}; акція «{Name(s.PromotionName)}»: {Money(s.PriceFinal)} {options.CurrencyLabel}"
+                : $"{Money(s.PriceOriginal)} {options.CurrencyLabel}";
             sb.AppendLine($"- {s.Id} | {Name(s.Name)} | {s.DurationMinutes.ToString(inv)} хв | {price}");
         }
 

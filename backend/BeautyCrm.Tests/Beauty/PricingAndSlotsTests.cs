@@ -59,6 +59,16 @@ public class PromotionPricingTests
     [Fact]
     public void quote_rounds_to_cents() =>
         Assert.Equal(66.67m, PromotionPricing.Quote(100m, L1, S1, At, [Rule(value: 33.333m)]).Final);
+
+    [Fact]
+    public void quote_picks_the_promotion_with_the_lowest_final_price_across_percent_and_fixed_types()
+    {
+        var fixedBest = Rule("fixed", 300);              // 1000 -> 700
+        var q = PromotionPricing.Quote(1000m, L1, S1, At, [Rule(value: 10), fixedBest, Rule(value: 25)]);
+        Assert.Equal(700m, q.Final);
+        Assert.Equal(1000m, q.Original);
+        Assert.Equal(fixedBest.Id, q.PromotionId);
+    }
 }
 
 public class SlotCalculatorTests

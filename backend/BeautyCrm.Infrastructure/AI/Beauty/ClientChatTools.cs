@@ -127,6 +127,8 @@ public sealed partial class ClientChatToolbox(
         {
             id = s.Id, name = s.Name, category = s.Category, durationMinutes = s.DurationMinutes,
             priceOriginal = s.PriceOriginal, priceFinal = s.PriceFinal, promotionName = s.PromotionName,
+            // TASK-798: ціна акції окремим полем (null, якщо акції немає); priceOriginal - повна ціна, називається першою
+            promotionPrice = s.PromotionName is not null && s.PriceFinal < s.PriceOriginal ? (decimal?)s.PriceFinal : null,
         }), ct);
     }
 
@@ -197,7 +199,9 @@ public sealed partial class ClientChatToolbox(
         var list = await promos.GetAsync(ctx.TenantId, ct);
         // Без внутрішніх id; знижки лише з БД (порт читає активні акції).
         return await OkAsync(ctx, AiToolNames.GetActivePromotions, "promotions",
-            list.Select(p => new { title = p.Title, discountPercent = p.DiscountPercent, endsAt = p.EndsAt }), ct);
+            list.Select(p => new { title = p.Title, discountPercent = p.DiscountPercent, endsAt = p.EndsAt,
+                // TASK-798: послуги, на які діє акція (id як у list_services); порожній масив = усі послуги. Лише публічні активні акції.
+                serviceIds = p.ServiceIds ?? [] }), ct);
     }
 
     // ---- етап 1 запису ----

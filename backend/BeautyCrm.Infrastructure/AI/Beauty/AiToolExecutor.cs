@@ -60,7 +60,7 @@ public static class AiToolCatalog
     public static readonly IReadOnlyList<AiToolDefinition> ClientChat = new[]
     {
         T(ClientChatToolNames.ListLocations, "Активні заклади: назва, адреса, зона, години роботи, вихідні.", "", ""),
-        T(ClientChatToolNames.ListServices, "Послуги закладу з актуальною ціною й акцією (ціни лише звідси).",
+        T(ClientChatToolNames.ListServices, "Послуги закладу: priceOriginal - повна ціна (називай першою); акція окремо: promotionName і promotionPrice (ціна зі знижкою). Ціни лише звідси.",
             $"\"locationId\":{{{Uuid}}}", ""),
         T(ClientChatToolNames.ListSpecialists, "Майстри закладу (за потреби - що виконують послугу).",
             $"\"locationId\":{{{Uuid}}},\"serviceId\":{{{Uuid}}}", ""),

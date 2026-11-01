@@ -483,6 +483,47 @@ public sealed partial class InboxService(
         return true;
     }
 
+    // ------------------------------------------------------------------ «Опрацьовано» (TASK-793)
+
+    /// <summary>
+    /// Закрити розмову без відповіді клієнту: held -> processed, awaiting/handoff скидаються, прочитано, ШІ активний (як resume-ai).
+    /// Пропозиції запису/клавіатури не чіпаються (як у resume-ai). Повідомлення клієнту не створюється. Ідемпотентно (журнал лише при зміні).
+    /// </summary>
+    public async Task<Result<bool>> ResolveAsync(Actor actor, Guid id, CancellationToken ct)
+    {
+        if (Guard(actor) is { } denied) return denied;
+        if (!await db.Conversations.AnyAsync(c => c.Id == id, ct)) return NotFound();
+
+        var now = clock.GetUtcNow();
+        var changed = 0;
+        await using (var tx = await db.Database.BeginTransactionAsync(ct))
+        {
+            var held = await db.Messages.Where(m => m.ConversationId == id && m.Direction == MessageDirection.Inbound && m.Status == Held)
+                .ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, Processed).SetProperty(m => m.UpdatedAt, now), ct);
+            var state = await db.Conversations
+                .Where(c => c.Id == id && (c.AiState != "active" || c.HandoffReason != null || c.HandoffAt != null || c.AiPausedUntil != null
+                    || c.AwaitingStaffSince != null
+                    || db.Messages.Any(m => m.ConversationId == id && m.Direction == MessageDirection.Inbound
+                        && (c.StaffLastReadAt == null || m.CreatedAt > c.StaffLastReadAt))))
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(c => c.AiState, "active")
+                    .SetProperty(c => c.HandoffReason, (string?)null)
+                    .SetProperty(c => c.HandoffAt, (DateTimeOffset?)null)
+                    .SetProperty(c => c.AiPausedUntil, (DateTimeOffset?)null)
+                    .SetProperty(c => c.AwaitingStaffSince, (DateTimeOffset?)null)
+                    .SetProperty(c => c.StaffLastReadAt, c => c.StaffLastReadAt == null || c.StaffLastReadAt < now ? now : c.StaffLastReadAt)
+                    .SetProperty(c => c.UpdatedAt, now), ct);
+            changed = held + state;
+            if (changed > 0)
+                await journal.AppendAsync(new AiActionRecord(Guid.NewGuid(), actor.TenantId, "resolve_conversation", $"conversation:{id}", now, AiStatus.Done,
+                    false, AiMode.Confirm, JsonSerializer.Serialize(new { userId = actor.UserId }), id), ct);
+            await tx.CommitAsync(ct);
+        }
+        db.ChangeTracker.Clear();
+        log.LogInformation("inbox_resolve conversation={ConversationId} user={UserId} changed={Changed}", id, actor.UserId, changed > 0);
+        return true;
+    }
+
     // ------------------------------------------------------------------ прочитане
 
     /// <summary>staff_last_read_at = max(поточне, created_at повідомлення | now): назад не рухається.</summary>

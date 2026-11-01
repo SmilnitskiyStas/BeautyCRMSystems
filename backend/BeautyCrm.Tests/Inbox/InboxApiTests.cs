@@ -110,6 +110,7 @@ public sealed class InboxApiTests(AuthApiFixture fx) : IClassFixture<AuthApiFixt
             (HttpMethod.Get, $"{Base}/{t.Conv}", null, null),
             (HttpMethod.Post, $"{Base}/{t.Conv}/reply", new { text = "hi" }, K()),
             (HttpMethod.Post, $"{Base}/{t.Conv}/resume-ai", null, null),
+            (HttpMethod.Post, $"{Base}/{t.Conv}/resolve", null, null),
             (HttpMethod.Post, $"{Base}/{t.Conv}/read", null, null),
         };
         foreach (var (m, url, body, key) in calls)
@@ -228,6 +229,7 @@ public sealed class InboxApiTests(AuthApiFixture fx) : IClassFixture<AuthApiFixt
             (HttpMethod.Get, $"{Base}/{a.Conv}", null, null),
             (HttpMethod.Post, $"{Base}/{a.Conv}/reply", new { text = "чужа" }, K()),
             (HttpMethod.Post, $"{Base}/{a.Conv}/resume-ai", null, null),
+            (HttpMethod.Post, $"{Base}/{a.Conv}/resolve", null, null),
             (HttpMethod.Post, $"{Base}/{a.Conv}/read", null, null),
             (HttpMethod.Get, $"{Base}/{Guid.NewGuid()}", null, null),
         };
@@ -306,6 +308,28 @@ public sealed class InboxApiTests(AuthApiFixture fx) : IClassFixture<AuthApiFixt
         Assert.Equal("active", d.GetProperty("conversation").GetProperty("aiState").GetString());
         Assert.Equal(JsonValueKind.Null, d.GetProperty("conversation").GetProperty("awaitingStaffSince").ValueKind);
         Assert.Equal("processed", d.GetProperty("messages")[0].GetProperty("status").GetString());
+        Assert.Equal(0, d.GetProperty("conversation").GetProperty("unreadCount").GetInt32());
+    }
+
+    [SkippableFact]
+    public async Task resolve_returns_204_no_store_and_is_idempotent_and_removes_the_conversation_from_needs_reply()
+    {
+        NeedDb();
+        var e = NewEnv(); var t = await NewTenantAsync(e);
+        await using (var ctx = fx.Db.CreateContext(t.Id))
+            await ctx.Database.ExecuteSqlInterpolatedAsync($"UPDATE beauty_conversations SET awaiting_staff_since = now(), ai_state = 'handoff' WHERE id = {t.Conv}");
+        Assert.Equal(1, (await J(await e.Client.SendAsync(Req(HttpMethod.Get, Base, t.Admin)))).GetProperty("meta").GetProperty("needsReplyCount").GetInt32());
+
+        var r1 = await e.Client.SendAsync(Req(HttpMethod.Post, $"{Base}/{t.Conv}/resolve", t.Admin));
+        Assert.Equal(HttpStatusCode.NoContent, r1.StatusCode);
+        Assert.Equal("no-store", r1.Headers.CacheControl?.ToString());
+        Assert.Equal(HttpStatusCode.NoContent, (await e.Client.SendAsync(Req(HttpMethod.Post, $"{Base}/{t.Conv}/resolve", t.Owner))).StatusCode);
+
+        var list = await J(await e.Client.SendAsync(Req(HttpMethod.Get, Base, t.Admin)));
+        Assert.Equal(0, list.GetProperty("items").GetArrayLength());
+        Assert.Equal(0, list.GetProperty("meta").GetProperty("needsReplyCount").GetInt32());
+        var d = await J(await e.Client.SendAsync(Req(HttpMethod.Get, $"{Base}/{t.Conv}", t.Admin)));
+        Assert.Equal("active", d.GetProperty("conversation").GetProperty("aiState").GetString());
         Assert.Equal(0, d.GetProperty("conversation").GetProperty("unreadCount").GetInt32());
     }
 }

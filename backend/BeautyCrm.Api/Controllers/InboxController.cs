@@ -86,6 +86,13 @@ public sealed class InboxController(InboxService inbox) : ControllerBase
     public async Task<IActionResult> ResumeAi(Guid id, CancellationToken ct) =>
         User.ToActor() is { } actor ? Map(await inbox.ResumeAiAsync(actor, id, ct), _ => NoContent()) : Unauthorized();
 
+    /// <summary>«Опрацьовано» (TASK-793): закриває розмову без відповіді клієнту. Ідемпотентно: 204 також, коли вже закрита.</summary>
+    [HttpPost("{id:guid}/resolve")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Resolve(Guid id, CancellationToken ct) =>
+        User.ToActor() is { } actor ? Map(await inbox.ResolveAsync(actor, id, ct), _ => NoContent()) : Unauthorized();
+
     [HttpPost("{id:guid}/read")]
     [RequestSizeLimit(SmallBody)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]

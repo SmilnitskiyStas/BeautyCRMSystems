@@ -512,6 +512,9 @@ public sealed class ChatSecurityFixesTests : IClassFixture<PostgresRlsFixture>
     [InlineData("Добрий день! Стрижка коштує 500 грн, найближчий вільний час завтра о 10:00.")]
     [InlineData("Пропоную записатися до майстра Марини. Скасування й перенесення запису — через адміністратора.")]
     [InlineData("Ми дружній і професійний салон, вітаємо вас!")]
+    // TASK-798: відповідь «повна ціна -> акція» не збігається з текстом правил (дослівний приклад у промпті блокував її як витік)
+    [InlineData("Стрижка — 500 грн (60 хв). Зараз діє акція «Весна»: зі знижкою 400 грн.")]
+    [InlineData("Чоловіча стрижка коштує 500 грн, триває 60 хв. Зараз діє акція «Будні», за нею вийде 400 грн.")]
     public void l1_ordinary_replies_pass_the_canary(string reply) =>
         Assert.Null(ChatOutputGuard.FindLeak(reply, null));
 

@@ -239,6 +239,10 @@ public static class ChatTemplates
     public static string Cancelled(DateTimeOffset startsAt, string timezone) =>
         $"Запис на {LocalWhen(startsAt, timezone)} скасовано. Нагадувань про нього не буде. Записатися знову — /book.";
 
+    /// <summary>Тіло T-cancelled (для межі епізоду діалогу, TASK-799).</summary>
+    public static bool IsCancelledBody(string body) =>
+        body.StartsWith("Запис на ", StringComparison.Ordinal) && body.Contains("скасовано. Нагадувань про нього не буде.", StringComparison.Ordinal);
+
     public static string CancelKept(DateTimeOffset startsAt, string timezone) => $"Добре, запис залишається: {LocalWhen(startsAt, timezone)}.";
 
     public static string AttendOk(DateTimeOffset startsAt, string timezone) => $"Дякуємо, чекаємо вас {LocalWhen(startsAt, timezone)}!";
