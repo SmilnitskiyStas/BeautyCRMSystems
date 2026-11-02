@@ -1,0 +1,10 @@
+# Відомі хибні спрацювання gitleaks (rule generic-api-key): синтетичні значення в тестових файлах.
+# Кожен рядок - відбиток commit:file:rule:line. Реальних секретів тут немає
+# (Idempotency-Key "key-12345678", "wrong-key-...", тестовий пароль "Pw-...").
+# Не розширювати до шаблонів на всю теку тестів: нові знахідки мають перевірятись окремо.
+b185580a1022f57ee7ce373695af111f4e585399:frontend/features/beauty-admin/api/mock-marketing.test.ts:generic-api-key:164
+b185580a1022f57ee7ce373695af111f4e585399:frontend/features/beauty-admin/api/http-marketing.test.ts:generic-api-key:31
+9362cc76fdaff85bd7f0751454ce985a8399d011:frontend/features/beauty-admin/api/http-client-reminders.test.ts:generic-api-key:65
+9362cc76fdaff85bd7f0751454ce985a8399d011:frontend/features/beauty-admin/api/mock-inbox.test.ts:generic-api-key:36
+746810e66735f7a4e66653d8a3bdadd83ca671f1:backend/BeautyCrm.Tests/Beauty/AiSettingsApiTests.cs:generic-api-key:898
+d4019711f586541988558f17b94357967fe9f77d:backend/BeautyCrm.Tests/Security/HardeningTests.cs:generic-api-key:211

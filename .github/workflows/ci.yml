@@ -38,6 +38,9 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci --no-audit --no-fund
+      - name: Generate Next.js types
+        # LayoutProps/PageProps генерує Next; на чистому runner-і .next ще немає
+        run: npx next typegen
       - name: Typecheck
         run: npx tsc --noEmit
       - name: Lint
