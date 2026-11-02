@@ -119,6 +119,7 @@ app.UseMiddleware<TenantMiddleware>(); // після автентифікаці�
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapBeautyHealth(); // /healthz (liveness), /readyz (БД): анонімні, без деталей (TASK-800)
 
 app.Run();
 

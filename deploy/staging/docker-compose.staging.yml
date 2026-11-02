@@ -1,0 +1,102 @@
+# Beauty CRM: staging на СПІЛЬНОМУ сервері з Docker Compose (ADR-016). ШАБЛОН без секретів.
+# СПІЛЬНИЙ СЕРВЕР З ЧУЖИМ ПРОДАКШНОМ: цей файл нічого не публікує назовні, окрім 127.0.0.1:<BEAUTY_API_PORT> і
+# 127.0.0.1:<BEAUTY_WEB_PORT>; усі імена (проєкт, контейнери, мережі, томи) мають префікс beauty_staging. Власного reverse proxy
+# немає: публікацію назовні робить системний nginx за прикладом у README (рішення людини).
+# Запуск:  docker compose --env-file .env.compose -f docker-compose.staging.yml up -d <сервіс>
+# Секрети лежать в окремих env-файлах ПОЗА клоном репозиторію ($SECRETS_DIR, режим 600): db.env, api.env, worker.env.
+# migrator.env тут НЕ підключається до жодного сервісу (див. README, розділ міграцій).
+# Рівно ОДИН інстанс api і worker: не використовувати --scale та deploy.replicas > 1 (in-memory ліміти, гонка кампаній).
+name: beauty_staging
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "5" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  logging: *logging
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  db:
+    <<: *hardening
+    container_name: beauty_staging_db
+    image: postgres:16.14-alpine
+    env_file: ["${SECRETS_DIR:?set SECRETS_DIR in .env.compose}/db.env"]
+    volumes:
+      - beauty_staging_pgdata:/var/lib/postgresql/data
+      - ./db/init-roles.sh:/docker-entrypoint-initdb.d/10-init-roles.sh:ro
+    networks: [db_net] # порт БД на хості НЕ публікується
+    mem_limit: 1g
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d beautycrm -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  api:
+    <<: *hardening
+    container_name: beauty_staging_api
+    image: ${API_IMAGE:?set API_IMAGE (ghcr.io/OWNER/beautycrm-api@sha256:...)}
+    env_file: ["${SECRETS_DIR}/api.env"]
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [db_net, beauty_staging]
+    ports:
+      - "127.0.0.1:${BEAUTY_API_PORT:?set BEAUTY_API_PORT}:8080" # лише loopback
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    mem_limit: 768m
+    cpus: 1.0
+    # healthcheck (/healthz) визначено в образі
+
+  worker:
+    <<: *hardening
+    container_name: beauty_staging_worker
+    image: ${WORKER_IMAGE:?set WORKER_IMAGE (ghcr.io/OWNER/beautycrm-worker@sha256:...)}
+    env_file: ["${SECRETS_DIR}/worker.env"]
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [db_net, beauty_staging] # beauty_staging - лише вихід в інтернет (Telegram API)
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    mem_limit: 384m
+    cpus: 0.5
+
+  web:
+    <<: *hardening
+    container_name: beauty_staging_web
+    image: ${WEB_IMAGE:?set WEB_IMAGE (ghcr.io/OWNER/beautycrm-web@sha256:...)}
+    environment:
+      API_URL: "http://api:8080" # серверні виклики Next до API всередині мережі (не секрет)
+    depends_on: [api]
+    networks: [beauty_staging]
+    ports:
+      - "127.0.0.1:${BEAUTY_WEB_PORT:?set BEAUTY_WEB_PORT}:3000" # лише loopback
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp", "/app/.next/cache"]
+    mem_limit: 512m
+    cpus: 0.5
+
+networks:
+  db_net:
+    name: beauty_staging_db
+    internal: true # без виходу назовні
+  beauty_staging:
+    name: beauty_staging
+    ipam:
+      config:
+        # Підмережу оберіть вільну (docker network ls; docker network inspect ... | grep Subnet): див. README.
+        - subnet: ${BEAUTY_SUBNET:?set BEAUTY_SUBNET}
+          gateway: ${BEAUTY_GATEWAY:?set BEAUTY_GATEWAY}
+
+volumes:
+  beauty_staging_pgdata:
+    name: beauty_staging_pgdata

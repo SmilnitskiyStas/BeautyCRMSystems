@@ -46,6 +46,8 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Docker-збірка (frontend/Dockerfile) задає NEXT_OUTPUT=standalone; локально й у CI вихід стандартний.
+  ...(process.env.NEXT_OUTPUT === "standalone" ? { output: "standalone" as const } : {}),
   cacheComponents: true,
   partialPrefetching: true,
   poweredByHeader: false,
