@@ -2,6 +2,9 @@ import { z } from "zod";
 
 export const reminderOptionSchema = z.enum(["none", "1h", "2h"]);
 export type ReminderOption = z.infer<typeof reminderOptionSchema>;
+/** Відповідь API (§22.6.1): запис може мати `custom` (кілька точок, задані адміністратором). Запит приймає лише `reminderOptionSchema`. */
+export const appointmentReminderOptionSchema = z.enum(["none", "1h", "2h", "custom"]);
+export type AppointmentReminderOption = z.infer<typeof appointmentReminderOptionSchema>;
 
 export const paymentMethodSchema = z.enum(["card", "cash"]);
 export type PaymentMethod = z.infer<typeof paymentMethodSchema>;
@@ -83,6 +86,8 @@ export const createAppointmentSchema = z.object({
   paymentMethod: paymentMethodSchema,
   /** Honeypot: люди його не бачать і не заповнюють; непорожнє значення сервер відхиляє (422). */
   website: z.string().optional(),
+  /** §26.11.4: загальний промокод закладу (персональні коди в публічній формі не діють). */
+  couponCode: z.string().trim().max(24).optional(),
 });
 export type CreateAppointmentRequest = z.infer<typeof createAppointmentSchema>;
 
@@ -100,10 +105,19 @@ export interface Appointment {
   priceOriginal: number;
   priceFinal: number;
   promotionId?: string;
-  reminderOption: ReminderOption;
+  reminderOption: AppointmentReminderOption;
   paymentMethod?: PaymentMethod;
   paymentStatus?: string;
   cancellation?: CancellationTerms;
+  /** §26.11.4: до запису застосовано промокод. */
+  couponApplied?: boolean;
+}
+
+/** Результат перевірки промокоду (`GET /coupons/check`): ціни без жодних подробиць про код. */
+export interface CouponCheckResult {
+  outcome: "applied" | "not_applicable" | "not_better";
+  priceOriginal: number;
+  priceFinal: number;
 }
 
 /** Результат створення: `publicToken` — єдиний ключ доступу до запису (у шляху `/book/appointment/{token}`). */

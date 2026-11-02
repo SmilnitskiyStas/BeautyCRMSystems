@@ -1,4 +1,4 @@
-import type { CancellationTerms, PaymentMethod, ReminderOption } from "./types";
+import type { AppointmentReminderOption, CancellationTerms, PaymentMethod, ReminderOption } from "./types";
 
 export const reminderOptions: { id: ReminderOption; label: string }[] = [
   { id: "none", label: "Не нагадувати" },
@@ -77,8 +77,13 @@ export function formatDateTime(iso: string): string {
   });
 }
 
-export function reminderSummary(r: ReminderOption): string {
+/** Підказка біля вибору нагадування (§22.11, текст може правити копірайтер): канал нагадувань - Telegram-бот закладу. */
+export const reminderHint =
+  "Нагадування надсилає Telegram-бот закладу. Воно надійде, якщо ви вже писали боту; інакше нагадування не буде.";
+
+export function reminderSummary(r: AppointmentReminderOption): string {
   if (r === "none") return "Нагадування вимкнено.";
+  if (r === "custom") return "Нагадаємо про запис у вибрані адміністратором моменти перед візитом.";
   const label = reminderOptions.find((o) => o.id === r)?.label.toLowerCase();
   return `Нагадаємо про запис ${label} до візиту.`;
 }

@@ -120,6 +120,7 @@ public sealed partial class EfBeautyStore
         p.Name = r.Name.Trim(); p.Description = r.Description;
         p.DiscountType = EnumText<DiscountType>.FromDb(r.DiscountType); p.DiscountValue = r.DiscountValue;
         p.StartsAt = r.StartsAt; p.EndsAt = r.EndsAt; p.IsActive = r.IsActive;
+        if (r.Access is not null) p.Access = r.Access;
     }
 
     private void AddJunctions(Guid promotionId, UpsertPromotionRequest r)
@@ -130,16 +131,35 @@ public sealed partial class EfBeautyStore
             db.PromotionServices.Add(new Ent.PromotionService { PromotionId = promotionId, ServiceId = s });
     }
 
-    private async Task<IReadOnlyList<PromotionDto>> LoadPromotionsAsync(Guid? id, bool activeOnly, CancellationToken ct)
+    /// <summary>TASK-790 (L6): ключ замка акції; той самий у <see cref="CampaignService.ConfirmAsync"/>.</summary>
+    internal static string PromotionLockKey(Guid promotionId) => "promotion-campaign:" + promotionId;
+    internal static string CouponLockKey(Guid couponId) => "coupon-campaign:" + couponId;
+
+    public async Task<T> UnderPromotionLockAsync<T>(Guid promotionId, Func<Task<T>> work, CancellationToken ct)
+    {
+        await using var tx = db.Database.CurrentTransaction is null ? await db.Database.BeginTransactionAsync(ct) : null;
+        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock(hashtextextended({PromotionLockKey(promotionId)}, 0))", ct);
+        var r = await work();
+        if (tx is not null) await tx.CommitAsync(ct);
+        return r;
+    }
+
+    public Task<bool> HasActiveCampaignAsync(Guid promotionId, CancellationToken ct) =>
+        db.Campaigns.AsNoTracking().AnyAsync(c => c.PromotionId == promotionId && (c.Status == "scheduled" || c.Status == "sending"), ct);
+
+    /// <param name="publicOnly">true - лише access=public (каталог, ціноутворення, AI); code_only діє тільки через купон (§26.6).</param>
+    private async Task<IReadOnlyList<PromotionDto>> LoadPromotionsAsync(Guid? id, bool activeOnly, CancellationToken ct, bool publicOnly = false)
     {
         var promos = await db.Promotions.AsNoTracking()
-            .Where(p => (id == null || p.Id == id) && (!activeOnly || p.IsActive)).OrderBy(p => p.Name).ToListAsync(ct);
+            .Where(p => (id == null || p.Id == id) && (!activeOnly || p.IsActive) && (!publicOnly || p.Access == "public")).OrderBy(p => p.Name).ToListAsync(ct);
         var ids = promos.Select(p => p.Id).ToList();
         var locs = (await db.PromotionLocations.AsNoTracking().Where(x => ids.Contains(x.PromotionId))
             .Select(x => new { x.PromotionId, x.LocationId }).ToListAsync(ct)).ToLookup(x => x.PromotionId, x => x.LocationId);
         var svcs = (await db.PromotionServices.AsNoTracking().Where(x => ids.Contains(x.PromotionId))
             .Select(x => new { x.PromotionId, x.ServiceId }).ToListAsync(ct)).ToLookup(x => x.PromotionId, x => x.ServiceId);
+        var campaigns = (await db.Campaigns.AsNoTracking().Where(c => c.PromotionId != null && ids.Contains(c.PromotionId.Value) && (c.Status == "scheduled" || c.Status == "sending"))
+            .GroupBy(c => c.PromotionId!.Value).Select(g => new { Id = g.Key, N = g.Count() }).ToListAsync(ct)).ToDictionary(x => x.Id, x => x.N);
         return promos.Select(p => new PromotionDto(p.Id, p.Name, p.Description, EnumText<DiscountType>.ToDb(p.DiscountType),
-            p.DiscountValue, p.StartsAt, p.EndsAt, p.IsActive, locs[p.Id].ToList(), svcs[p.Id].ToList())).ToList();
+            p.DiscountValue, p.StartsAt, p.EndsAt, p.IsActive, locs[p.Id].ToList(), svcs[p.Id].ToList(), p.Access, campaigns.GetValueOrDefault(p.Id))).ToList();
     }
 }

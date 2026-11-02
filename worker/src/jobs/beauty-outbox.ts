@@ -1,5 +1,5 @@
 import type { BeautyDeps } from "../ports";
-import { DEFAULT_MARKETING_DAILY_LIMIT, MARKETING_KINDS, OUTBOX_MAX_ATTEMPTS } from "./beauty-common";
+import { DEFAULT_MARKETING_DAILY_LIMIT, MARKETING_KINDS, OUTBOX_MAX_ATTEMPTS, isChannelErrorCode } from "./beauty-common";
 
 export interface OutboxJobData { messageId: string }
 
@@ -23,6 +23,26 @@ export async function processOutbox(deps: BeautyDeps, data: OutboxJobData, attem
     await deps.log.append({ ...base, status: "skipped", reason: "already sent", at: deps.now() });
     return "skipped";
   }
+  if (msg.kind === "review") {
+    // Last check for the review request: the client may have sent STOP / chosen `none` after it was queued (TASK-760).
+    const client = msg.clientId ? await deps.data.getClient(msg.clientId) : null;
+    if (!client || client.optedOut) {
+      await deps.idempotency.release(msg.idempotencyKey);
+      await deps.data.recordSendFailure(msg.id, attempt, "recipient unsubscribed", true);
+      await deps.log.append({ ...base, status: "skipped", reason: "unsubscribed", at: deps.now() });
+      return "skipped";
+    }
+  }
+  if (msg.kind === "campaign") {
+    // §26.8: cancelled campaign / withdrawn consent (table, level vs campaign type) -> final failure with a code, recipient skipped.
+    const stop = await deps.data.campaignSendGuard(msg.id);
+    if (stop) {
+      await deps.idempotency.release(msg.idempotencyKey);
+      await deps.data.recordSendFailure(msg.id, attempt, stop, true);
+      await deps.log.append({ ...base, status: "skipped", reason: stop, at: deps.now() });
+      return "skipped";
+    }
+  }
   if (MARKETING_KINDS.has(msg.kind)) {
     // Last check right before delivery: the client may have unsubscribed after the audience was picked.
     const client = msg.clientId ? await deps.data.getClient(msg.clientId) : null;
@@ -32,28 +52,49 @@ export async function processOutbox(deps: BeautyDeps, data: OutboxJobData, attem
       await deps.log.append({ ...base, status: "skipped", reason: "unsubscribed", at: deps.now() });
       return "skipped";
     }
+    // M4/L4 kill switch: module off -> the message stays pending (nothing is lost, nothing is sent).
+    if (!(await deps.data.isMarketingEnabled())) {
+      await deps.idempotency.release(msg.idempotencyKey);
+      await deps.log.append({ ...base, status: "skipped", reason: "marketing module disabled, deferred", at: deps.now() });
+      return "deferred";
+    }
+  }
+  // L3: the .NET sweeper/inline dispatcher and this worker may both see the same `pending` row. Only the winner of the CAS
+  // pending -> sending delivers; the loser skips (no double send).
+  let claimed: "claimed" | "lost" | "limit";
+  if (MARKETING_KINDS.has(msg.kind)) {
+    // L5: the daily-limit check and the claim are one step under the tenant's `marketing-daily` lock.
     const limit = deps.marketingDailyLimit ?? DEFAULT_MARKETING_DAILY_LIMIT;
-    const since = new Date(deps.now().getTime() - 24 * 3_600_000);
-    if (await deps.data.countMarketingSentSince(since) >= limit) {
+    claimed = await deps.data.claimMarketingForSend(msg.id, limit, new Date(deps.now().getTime() - 24 * 3_600_000));
+    if (claimed === "limit") {
       // Stays pending: picked up again once older sends leave the 24 h window.
       await deps.idempotency.release(msg.idempotencyKey);
       await deps.log.append({ ...base, status: "skipped", reason: `daily marketing limit ${limit} reached, deferred`, at: deps.now() });
       return "deferred";
     }
+  } else claimed = (await deps.data.claimForSend(msg.id)) ? "claimed" : "lost";
+  if (claimed !== "claimed") {
+    await deps.idempotency.release(msg.idempotencyKey);
+    await deps.log.append({ ...base, status: "skipped", reason: "not pending: claimed elsewhere or already processed", at: deps.now() });
+    return "skipped";
   }
+  let externalMessageId: string | null = null;
   try {
-    await deps.sender.send(msg);
+    const receipt = await deps.sender.send(msg);
+    externalMessageId = (receipt && receipt.externalMessageId) || null;
   } catch (err) {
     await deps.idempotency.release(msg.idempotencyKey);
     // A permanent channel error (bad token, closed 24h window) will not heal by retrying.
     const final = attempt >= OUTBOX_MAX_ATTEMPTS || (err as { permanent?: boolean } | null)?.permanent === true;
-    const error = err instanceof Error ? err.message : String(err);
+    // Known channel failures are stored as a code (bot_blocked, chat_not_found, ...), never as free text.
+    const code = (err as { code?: unknown } | null)?.code;
+    const error = isChannelErrorCode(code) ? code : err instanceof Error ? err.message : String(err);
     await deps.data.recordSendFailure(msg.id, attempt, error, final);
     await deps.log.append({ ...base, status: final ? "failed" : "retry", error, at: deps.now() });
     throw err; // never swallow: BullMQ retries / marks failed
   }
   try {
-    await deps.data.setMessageStatus(msg.id, "sent");
+    await deps.data.setMessageStatus(msg.id, "sent", externalMessageId);
     await deps.idempotency.complete(msg.idempotencyKey);
   } catch (err) {
     await deps.idempotency.release(msg.idempotencyKey); // delivered but not recorded: surface it, never hold the claim

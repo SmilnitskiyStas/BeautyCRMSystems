@@ -49,7 +49,43 @@ public static class PhoneNormalizer
             if (digits.Length == 10 && digits[0] == '0') digits = "38" + digits;
             else if (digits.Length < 11) return null;
         }
-        return digits.Length is >= 9 and <= 15 && digits[0] != '0' ? "+" + digits : null;
+        // §25.5.3: E.164 = 8..15 цифр, перша не 0; український код +380 = рівно 12 цифр (+380 і 9 цифр абонента)
+        if (digits.Length is < 8 or > 15 || digits[0] == '0') return null;
+        if (digits.StartsWith("380", StringComparison.Ordinal) && digits.Length != 12) return null;
+        return "+" + digits;
+    }
+
+    /// <summary>Лише ASCII-цифри рядка (порівняння номерів у різних форматах, TASK-769 / §25.5.3).</summary>
+    public static string Digits(string? raw) =>
+        raw is null ? "" : new string(raw.Where(char.IsAsciiDigit).ToArray());
+
+    /// <summary>
+    /// Варіанти цифр номера для порівняння зі спадковими (ненормалізованими) значеннями в БД: сирі цифри, нормалізовані цифри
+    /// і національний вигляд 0XXXXXXXXX для +380. Порожній список = номер без цифр. Порівняння лише за цифрами (V1, §25.7).
+    /// </summary>
+    public static IReadOnlyList<string> MatchCandidates(string? raw)
+    {
+        var set = new List<string>(3);
+        void Add(string d)
+        {
+            if (d.Length >= 5 && !set.Contains(d)) set.Add(d);
+        }
+        Add(Digits(raw));
+        if (Normalize(raw) is { } e164)
+        {
+            var d = e164[1..];
+            Add(d);
+            if (d.StartsWith("380", StringComparison.Ordinal) && d.Length == 12) Add("0" + d[3..]);
+        }
+        return set;
+    }
+
+    /// <summary>Маска для inbox (§25.7): «+», потім • замість усіх цифр, крім останніх двох. Порожній номер -> null.</summary>
+    public static string? Mask(string? phone)
+    {
+        var d = Digits(phone);
+        if (d.Length == 0) return null;
+        return d.Length <= 2 ? "+" + d : "+" + new string('•', d.Length - 2) + d[^2..];
     }
 }
 

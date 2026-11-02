@@ -101,6 +101,7 @@ public static class AuthSetup
         services.AddSingleton(new AbsenceThrottle(
             config.GetValue("Staff:AbsenceRateLimit:PermitLimit", 20),
             TimeSpan.FromSeconds(config.GetValue("Staff:AbsenceRateLimit:WindowSeconds", 60))));
+        services.AddSingleton(new ServiceCostThrottle(config.GetValue("ServiceCosts:WritePerUserPerMinute", ServiceCostThrottle.Default)));
         services.AddSingleton(config.GetSection("Staff").Get<StaffOptions>() ?? new StaffOptions());
         services.AddScoped<ActiveSpecialistFilter>();
         return services;

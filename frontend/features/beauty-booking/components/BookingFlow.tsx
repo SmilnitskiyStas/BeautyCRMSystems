@@ -15,7 +15,8 @@ import { SpecialistStep } from "./SpecialistStep";
 
 function Flow() {
   const flow = useBookingFlow();
-  const { step, location, specialist, service, slot, client, reminder, paymentMethod, website } = flow;
+  const { step, location, specialist, service, slot, client, reminder, paymentMethod, website, couponCode, coupon } = flow;
+  const payable = coupon?.result.outcome === "applied" ? coupon.result.priceFinal : (service?.priceFinal ?? 0);
   const create = useCreateAppointment();
   const [errors, setErrors] = useState<ClientErrors>({});
   const [submitError, setSubmitError] = useState<string>();
@@ -33,7 +34,7 @@ function Flow() {
         ? create.isPending
           ? "Зачекайте…"
           : paymentMethod === "card" && service
-            ? `Оплатити ${formatPrice(service.priceFinal)}`
+            ? `Оплатити ${formatPrice(payable)}`
             : "Підтвердити запис"
         : "Далі";
 
@@ -60,6 +61,7 @@ function Flow() {
         reminder,
         paymentMethod,
         website,
+        ...(couponCode.trim() ? { couponCode: couponCode.trim() } : {}),
       });
       flow.done(a);
     } catch (e) {

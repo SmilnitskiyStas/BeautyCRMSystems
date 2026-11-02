@@ -201,7 +201,8 @@ public sealed class BookingRegressionTests : IClassFixture<AuthApiFixture>
     {
         NeedDb();
         var s = await _h.CreateSalonAsync();
-        var first = Start((await _h.SlotsAsync(s, RegressionHarness.SlotDate()))[0]);
+        // TASK-737 (§22.4): точка 2h до першого слоту (09:00) потрапляє в тишу 22:00-08:00 і зсувається на 08:00 - беремо слот 10:00
+        var first = Start((await _h.SlotsAsync(s, RegressionHarness.SlotDate()))[4]);
         var created = await _h.BookAsync(s, first, reminder: option);
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         var id = (await Read<JsonElement>(created)).GetProperty("id").GetGuid();

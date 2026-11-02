@@ -378,11 +378,12 @@ public sealed class ConcurrencyTests(AuthApiFixture fx) : IClassFixture<AuthApiF
         public bool VerifySignature(WebhookRequest req, string body) => false;
         public Task<IReadOnlyList<InboundMessage>> ParseInboundAsync(string body) => Task.FromResult<IReadOnlyList<InboundMessage>>([]);
 
-        public async Task SendAsync(OutboundMessage msg, CancellationToken ct)
+        public async Task<ChannelSendReceipt> SendAsync(OutboundMessage msg, CancellationToken ct)
         {
             StatusDuringSend.Add(await statusOf(msg.MessageId));
             await Task.Delay(200, ct);
             _sent.Add(msg.MessageId);
+            return new ChannelSendReceipt(null);
         }
     }
 
