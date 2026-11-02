@@ -666,5 +666,79 @@ public sealed class CouponDbTests : IClassFixture<PostgresRlsFixture>
         Assert.NotEmpty(personalCode);
     }
 
+    // ---------- TASK-786: прогалини §26.14 ----------
+
+    /// <summary>Сц. 22: збій повернення коштів (ReleaseCancel) -> погашення лишається active; скасування клієнтом (CancelOrigin.Client) -> released.</summary>
+    [SkippableFact]
+    public async Task qa_s22_refund_failure_keeps_the_redemption_active_and_a_client_cancel_releases_it()
+    {
+        SkipIfNoDb();
+        var w = await SeedAsync();
+        var s = await SharedAsync(w, "REFUND25", maxUses: 1);
+        var booked = await BookAsync(w, w.ClientA, 0, "REFUND25", pay: "card");
+        Assert.True(booked.IsOk, booked.Error?.Code);
+        Assert.Equal((1, 1, 0), await StateAsync(w, s.Id));
+
+        var failed = await WithRigAsync(w, r =>
+        {
+            r.Pay.RefundOk = false;
+            return r.Cancel.CancelAsync(booked.Value!.Id, default, CancelOrigin.Client);
+        });
+        Assert.Equal("refund_failed", failed.Error!.Code);
+        Assert.Equal((1, 1, 0), await StateAsync(w, s.Id)); // запис активний, купон не повернуто
+        await using (var ctx = _db.CreateContext(w.TenantId))
+            Assert.NotEqual("cancelled", (await ctx.Appointments.AsNoTracking().SingleAsync()).Status.ToString().ToLowerInvariant());
+
+        var ok = await WithRigAsync(w, r => r.Cancel.CancelAsync(booked.Value!.Id, default, CancelOrigin.Client));
+        Assert.True(ok.IsOk, ok.Error?.Code);
+        Assert.Equal((0, 0, 1), await StateAsync(w, s.Id)); // клієнтське скасування повертає купон
+        Assert.True((await BookAsync(w, w.ClientB, 1, "REFUND25")).IsOk); // і він знову дійсний
+    }
+
+    /// <summary>Сц. 23: публічний шлях - однакова відповідь для невідомого / простроченого / відкликаного / вичерпаного / personal.</summary>
+    [SkippableFact]
+    public async Task qa_s23_public_path_gives_the_same_error_for_unknown_expired_revoked_exhausted_and_personal_codes()
+    {
+        SkipIfNoDb();
+        var w = await SeedAsync();
+        var personal = await IssueAsync(w, w.ClientA);
+        var exhausted = await SharedAsync(w, "EXHAUST1", maxUses: 1);
+        Assert.True((await BookAsync(w, w.ClientB, 0, "EXHAUST1")).IsOk);
+        Assert.Equal(1, (await StateAsync(w, exhausted.Id)).Uses);
+        await SharedAsync(w, "EXPIRED1", to: w.Clock.Now.AddMinutes(1));
+        var revoked = await SharedAsync(w, "REVOKED1");
+        await WithRigAsync(w, r => r.Coupons.RevokeAsync(revoked.Id, null, default));
+        w.Clock.Now = w.Clock.Now.AddMinutes(2);
+
+        var errors = new List<Error>();
+        var i = 1;
+        foreach (var code in new[] { "UNKNOWN99", "EXPIRED1", "REVOKED1", "EXHAUST1", personal })
+        {
+            var r = await BookAsync(w, w.ClientA, i++, code, scope: CouponScope.Public, rateKey: "2.2.2.2");
+            Assert.False(r.IsOk);
+            errors.Add(r.Error!);
+        }
+        Assert.All(errors, e => Assert.Equal(CouponService.Invalid, e.Code));
+        Assert.All(errors, e => Assert.Equal(errors[0], e)); // той самий код, статус і тіло
+        Assert.Equal(ErrorKind.Conflict, errors[0].Kind);
+    }
+
+    /// <summary>Сц. 24: інструмент ШІ get_active_promotions (порт) не віддає акцію code_only, публічну віддає.</summary>
+    [SkippableFact]
+    public async Task qa_s24_active_promotions_port_for_the_assistant_hides_code_only()
+    {
+        SkipIfNoDb();
+        var w = await SeedAsync();
+        await using (var ctx = _db.CreateContext(w.TenantId))
+            await ctx.Promotions.Where(p => p.Id == w.PublicPromo).ExecuteUpdateAsync(x => x.SetProperty(p => p.IsActive, true));
+        await using var r = NewRig(w);
+        var adapter = new BeautyCrm.Infrastructure.AI.Beauty.Adapters.GetActivePromotionsAdapter(
+            new BeautyCrm.Application.Features.BeautyCatalog.PromotionService(r.Store, w.Clock),
+            new BeautyCrm.Infrastructure.Data.Tenancy.TenantContext(w.TenantId), w.Clock);
+        var list = await adapter.GetAsync(w.TenantId, default);
+        Assert.Contains(list, p => p.Id == w.PublicPromo);
+        Assert.DoesNotContain(list, p => p.Id == w.CodeOnlyPromo);
+    }
+
     private Guid _msg;
 }

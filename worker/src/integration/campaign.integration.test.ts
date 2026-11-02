@@ -362,3 +362,151 @@ describe("pure helpers", () => {
     expect(text).toContain("«Стоп»");
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// TASK-786 (QA, §26.14): gaps found while mapping the 30 scenarios to the existing tests.
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe("QA s11: window boundaries, DST days and a separate window for another venue zone", () => {
+  it("inCampaignWindow_08:59-09:00-19:59-20:00_in-kyiv-new-york_and-on-dst-days", () => {
+    const cases: Array<[string, string, boolean]> = [
+      // Kyiv winter (EET, UTC+2)
+      ["2026-01-10T06:59:00Z", "Europe/Kyiv", false], ["2026-01-10T07:00:00Z", "Europe/Kyiv", true],
+      ["2026-01-10T17:59:00Z", "Europe/Kyiv", true], ["2026-01-10T18:00:00Z", "Europe/Kyiv", false],
+      // Kyiv summer (EEST, UTC+3)
+      ["2026-07-10T05:59:00Z", "Europe/Kyiv", false], ["2026-07-10T06:00:00Z", "Europe/Kyiv", true],
+      ["2026-07-10T16:59:00Z", "Europe/Kyiv", true], ["2026-07-10T17:00:00Z", "Europe/Kyiv", false],
+      // spring-forward day 2026-03-29 (03:00 EET -> 04:00 EEST): window is the local wall clock
+      ["2026-03-29T05:59:00Z", "Europe/Kyiv", false], ["2026-03-29T06:00:00Z", "Europe/Kyiv", true],
+      ["2026-03-29T16:59:00Z", "Europe/Kyiv", true], ["2026-03-29T17:00:00Z", "Europe/Kyiv", false],
+      // fall-back day 2026-10-25 (04:00 EEST -> 03:00 EET)
+      ["2026-10-25T06:59:00Z", "Europe/Kyiv", false], ["2026-10-25T07:00:00Z", "Europe/Kyiv", true],
+      ["2026-10-25T17:59:00Z", "Europe/Kyiv", true], ["2026-10-25T18:00:00Z", "Europe/Kyiv", false],
+      // New York: EDT in July, EST in January, and the DST days (2026-03-08, 2026-11-01)
+      ["2026-07-10T12:59:00Z", "America/New_York", false], ["2026-07-10T13:00:00Z", "America/New_York", true],
+      ["2026-07-10T23:59:00Z", "America/New_York", true], ["2026-07-11T00:00:00Z", "America/New_York", false],
+      ["2026-01-10T13:59:00Z", "America/New_York", false], ["2026-01-10T14:00:00Z", "America/New_York", true],
+      ["2026-03-08T12:59:00Z", "America/New_York", false], ["2026-03-08T13:00:00Z", "America/New_York", true],
+      ["2026-11-01T13:59:00Z", "America/New_York", false], ["2026-11-01T14:00:00Z", "America/New_York", true],
+      ["2026-11-02T00:59:00Z", "America/New_York", true], ["2026-11-02T01:00:00Z", "America/New_York", false],
+    ];
+    for (const [iso, zone, expected] of cases) expect([iso, zone, inCampaignWindow(new Date(iso), zone)]).toEqual([iso, zone, expected]);
+  });
+
+  it("new-york-venue_recipient-waits-for-its-own-window-while-kyiv-is-already-open", async () => {
+    const s = await seed({ type: "news", tz: "America/New_York" });
+    const c = await addClient(s, { visited: true });
+    // 2026-11-10 10:00Z = 12:00 Kyiv (open) but 05:00 New York (closed)
+    await pollCampaigns(makeCtx([s.tenantId], { now: NOON }).ctx);
+    expect(await recipient(c.recipientId)).toMatchObject({ status: "pending" });
+    expect(await msgCount(s.tenantId)).toBe(0);
+    // 14:00Z = 09:00 EST
+    await pollCampaigns(makeCtx([s.tenantId], { now: new Date("2026-11-10T14:00:00Z") }).ctx);
+    expect(await recipient(c.recipientId)).toMatchObject({ status: "queued" });
+  });
+});
+
+describe("QA s12: default daily limit of 200", () => {
+  it("250-recipients_200-queued-and-50-pending-until-the-24h-window-frees-up", async () => {
+    const s = await seed({ type: "news" });
+    const clients: ClientSeed[] = [];
+    for (let i = 0; i < 250; i += 25) clients.push(...await Promise.all(Array.from({ length: 25 }, () => addClient(s))));
+    const ctx1 = makeCtx([s.tenantId], { limit: 200 });
+    for (let pass = 0; pass < 8; pass++) await pollCampaigns(ctx1.ctx); // the poller handles a batch per pass
+    const states = async () => (await q("SELECT status, count(*)::int AS n FROM beauty_campaign_recipients WHERE campaign_id=$1 GROUP BY status", [s.campaignId])).rows
+      .reduce<Record<string, number>>((m, r) => ({ ...m, [r.status as string]: r.n as number }), {});
+    expect(await states()).toEqual({ queued: 200, pending: 50 });
+    expect(await msgCount(s.tenantId)).toBe(200);
+    expect(await campaignStatus(s.campaignId)).toBe("sending");
+    expect(clients).toHaveLength(250);
+    // 25 h later (15:00 Kyiv next day) the first 200 left the rolling window: the rest goes out
+    const later = new Date(NOON.getTime() + 25 * 3_600_000);
+    for (let pass = 0; pass < 8; pass++) await pollCampaigns(makeCtx([s.tenantId], { limit: 200, now: later }).ctx);
+    expect(await states()).toEqual({ queued: 250 });
+  }, 120_000);
+});
+
+describe("QA s24: offer_expired", () => {
+  it("promotion-deactivated-or-ended_remaining-recipients-are-skipped-offer_expired_and-no-coupon-is-issued", async () => {
+    // deactivated before the first pass
+    const s1 = await seed({ promoActive: false });
+    const c1 = await addClient(s1);
+    await pollCampaigns(makeCtx([s1.tenantId]).ctx);
+    expect(await recipient(c1.recipientId)).toMatchObject({ status: "skipped", skip_reason: "offer_expired", coupon_id: null });
+    expect(await msgCount(s1.tenantId)).toBe(0);
+    expect((await q("SELECT 1 FROM beauty_coupons WHERE tenant_id=$1", [s1.tenantId])).rowCount).toBe(0);
+
+    // deactivated while sending: the delivered one stays, the rest is expired
+    const s2 = await seed({ type: "promo" });
+    const a = await addClient(s2); const b = await addClient(s2);
+    await pollCampaigns(makeCtx([s2.tenantId], { limit: 1 }).ctx);
+    await q("UPDATE beauty_promotions SET is_active=false WHERE id=$1", [s2.promo]);
+    await pollCampaigns(makeCtx([s2.tenantId], { limit: 1 }).ctx);
+    const rows = await Promise.all([recipient(a.recipientId), recipient(b.recipientId)]);
+    expect(rows.map((r) => `${r.status}:${r.skip_reason}`).sort()).toEqual(["queued:null", "skipped:offer_expired"]);
+
+    // promotion ended before now
+    const s3 = await seed({ type: "promo" });
+    const c3 = await addClient(s3);
+    await q("UPDATE beauty_promotions SET ends_at='2026-11-05T00:00:00Z' WHERE id=$1", [s3.promo]);
+    await pollCampaigns(makeCtx([s3.tenantId]).ctx);
+    expect(await recipient(c3.recipientId)).toMatchObject({ status: "skipped", skip_reason: "offer_expired" });
+  });
+});
+
+describe("QA s25: text rendering", () => {
+  const base = {
+    template: "<b>{name}</b> знижка {discount} до {valid_to}", type: "promo" as const, clientName: "Клієнт Telegram", discountType: "percent" as const,
+    discountValue: 20, currencyLabel: "грн", serviceNames: ["Манікюр"], validFrom: null, validTo: null, timeZone: "Europe/Kyiv", code: undefined, buttons: true,
+  };
+
+  it("valid_to-is-exclusive_shown-as-the-previous-day-in-the-venue-zone", () => {
+    // 2026-12-01 00:00 Kyiv (EET) exclusive -> "30.11.2026"
+    expect(renderCampaignText({ ...base, validTo: new Date("2026-11-30T22:00:00Z") })).toContain("до 30.11.2026");
+    // 2026-12-01 00:00 New York (EST) exclusive -> "30.11.2026"
+    expect(renderCampaignText({ ...base, validTo: new Date("2026-12-01T05:00:00Z"), timeZone: "America/New_York" })).toContain("до 30.11.2026");
+  });
+
+  it("html-is-sent-literally_conditions-and-unsubscribe-lines-are-always-there_telegram-client-gets-a-plain-greeting_and-4096-is-never-exceeded", () => {
+    const text = renderCampaignText({ ...base, validTo: new Date("2026-11-30T22:00:00Z") });
+    expect(text).toContain("<b>Вітаємо</b>");
+    expect(text).toContain("Умови:");
+    expect(text).toContain("«Стоп»");
+    const long = renderCampaignText({ ...base, template: "😀".repeat(900) + " {name}", serviceNames: Array.from({ length: 30 }, (_, i) => "Дуже довга назва послуги номер " + i) });
+    expect(long.length).toBeLessThanOrEqual(4096); // UTF-16 code units
+    expect(long).toContain("«Стоп»");
+  });
+});
+
+describe("QA s27 / SM11: log scanner over a full worker marketing scenario", () => {
+  it("no-coupon-codes-or-parts-hashes-bot-token-names-phones-chat-ids-message-texts-or-ai-keys-in-any-log", async () => {
+    const s = await seed();
+    const cs = [await addClient(s), await addClient(s), await addClient(s)];
+    let calls = 0;
+    const run = makeCtx([s.tenantId], {
+      send: async () => { calls++; if (calls === 2) throw new ChannelSendError("Telegram sendMessage failed with HTTP 403", true, "bot_blocked"); },
+    });
+    await pollCampaigns(run.ctx);
+    const bodies = (await q("SELECT body FROM beauty_messages WHERE tenant_id=$1", [s.tenantId])).rows.map((r) => r.body as string);
+    const codes = bodies.map((b) => /Ваш код: ([0-9A-Z]{5}-[0-9A-Z]{5})/.exec(b)![1]!);
+    expect(codes).toHaveLength(3);
+    // one client withdraws the consent between enqueue and send
+    await q("UPDATE beauty_marketing_consents SET level='none', source='stop' WHERE client_id=$1", [cs[2]!.clientId]);
+    await pollOutbox(run.ctx); await pollOutbox(run.ctx);
+    await q("UPDATE beauty_campaigns SET status='cancelled', cancelled_at=now() WHERE id=$1", [s.campaignId]);
+    await pollCampaigns(run.ctx);
+    // winback pass over the same tenant
+    await pollWinback(run.ctx);
+
+    const all = JSON.stringify(run.logs) + "\n" + run.lines.join("\n");
+    expect(all).toContain("campaign_recipient"); // the scanner sees real log output
+    const forbidden = [NAME, "Олена", PHONE, "501234567", CHAT, "Манікюр", "знижка", "TG-TOKEN", "webhookSecret", "Ваш код"];
+    for (const code of codes) {
+      const raw = normalizeCode(code);
+      forbidden.push(code, raw, hashCode(code));
+      for (let i = 0; i + 4 <= raw.length; i++) forbidden.push(raw.slice(i, i + 4));
+    }
+    for (const bad of forbidden) expect(all.toLowerCase(), `forbidden value in logs: ${bad}`).not.toContain(bad.toLowerCase());
+    expect(all).not.toMatch(/sk-ant-|ANTHROPIC_API_KEY|Bearer\s+\S{8,}/);
+  });
+});

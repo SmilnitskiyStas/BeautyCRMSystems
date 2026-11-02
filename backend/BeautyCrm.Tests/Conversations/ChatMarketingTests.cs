@@ -885,5 +885,87 @@ public sealed class ChatMarketingPipelineTests : IClassFixture<PostgresRlsFixtur
         Assert.DoesNotContain("/marketing", system);
         Assert.DoesNotContain("активна знижка", system);
     }
+
+    // ======================================================================== TASK-786: прогалини §26.14
+
+    private async Task SetOfferedAtAsync(Env e, DateTimeOffset at)
+    {
+        await using var ctx = _db.CreateContext(e.Tenant);
+        await ctx.Clients.Where(c => c.Id == e.ClientId).ExecuteUpdateAsync(u => u.SetProperty(c => c.MarketingOfferedAt, (DateTimeOffset?)at));
+    }
+
+    /// <summary>§26.14 сц. 7: клієнт без рядка згоди - через 30 днів пропозиції немає (кулдаун 90), через 91 день - знову.</summary>
+    [SkippableFact]
+    public async Task qa_s7_offer_cooldown_blocks_at_30_days_and_repeats_after_91_days_for_a_client_without_a_consent_row()
+    {
+        var e = await NewAsync(withClient: false);
+        await BookAsync(e);
+        e.ClientId = (await ConvAsync(e)).ClientId!.Value;
+        await PressAsync(e, e.H.Bot.Messages.Last(m => m.Markup is not null && Kb(m).Any(b => b.Text.Contains("За 1 год"))), "За 1 год");
+        Assert.Single(e.H.Bot.Messages, m => m.Text == ChatTemplates.MarketingOffer);
+        Assert.Null(await ConsentAsync(e)); // рядка згоди немає
+
+        await SetOfferedAtAsync(e, DateTimeOffset.UtcNow.AddDays(-30));
+        await BookAsync(e, e.S.Start.AddHours(3));
+        Assert.Single(e.H.Bot.Messages, m => m.Text == ChatTemplates.MarketingOffer); // 30 днів < 90: нової пропозиції немає
+
+        await SetOfferedAtAsync(e, DateTimeOffset.UtcNow.AddDays(-91));
+        await BookAsync(e, e.S.Start.AddHours(5));
+        Assert.Equal(2, e.H.Bot.Messages.Count(m => m.Text == ChatTemplates.MarketingOffer)); // 91 день: знову
+    }
+
+    /// <summary>
+    /// §26.14 сц. 27 / SM11 (API, ланцюг чату): згода -> кнопка купона -> код текстом -> повідомлення з ПД -> запис із купоном -> скасування -> «Стоп».
+    /// У жодному логу немає повного коду (ні його частин ≥ 4 символи), хеша, токена бота, ключа ШІ, імені, телефону й тексту повідомлення клієнта.
+    /// </summary>
+    [SkippableFact]
+    public async Task qa_s27_log_scanner_full_marketing_scenario_leaves_no_code_token_pii_or_ai_key_in_logs()
+    {
+        const string phone = "+380509998877";
+        const string clientText = "Моя адреса вулиця Таємна 17 квартира 9, телефон +380509998877";
+        var e = await NewAsync(preference: true);
+        await using (var ctx = _db.CreateContext(e.Tenant))
+            await ctx.Clients.Where(c => c.Id == e.ClientId).ExecuteUpdateAsync(u => u.SetProperty(c => c.Phone, phone));
+
+        // згода кнопкою
+        await SayCommandAsync(e, "/marketing");
+        await PressAsync(e, e.H.Bot.Messages.Last(m => m.Markup is not null), "Повна");
+        Assert.Equal("full", (await ConsentAsync(e))!.Level);
+
+        // кнопка кампанії -> повідомлення з ПД до моделі -> підсумок із купоном -> запис
+        var o = await OfferAsync(e);
+        await PressCoAsync(e, o);
+        e.H.Ai.Enqueue(ChatHarness.Text("Добре, дякую."));
+        await e.H.SayAsync(e.S, clientText);
+        await e.H.ShowSummaryAsync(e.S);
+        var summary = e.H.Bot.Messages.Last(m => m.Markup is not null);
+        await e.H.PressAsync(e.S, Data(summary, "Так, записатися"), Ref(summary));
+        var appt = Assert.Single(await e.H.AppointmentsAsync(e.S));
+        Assert.Equal(o.Coupon, appt.CouponId);
+
+        // скасування -> купон повернуто -> код текстом -> «Стоп»
+        using (var scope = e.H.Sp.CreateScope())
+        {
+            scope.ServiceProvider.GetRequiredService<TenantContext>().SetTenant(e.Tenant);
+            var cancel = await scope.ServiceProvider.GetRequiredService<BeautyCrm.Application.Features.BeautyBooking.CancellationService>()
+                .CancelAsync(appt.Id, default, BeautyCrm.Application.Features.BeautyBooking.CancelOrigin.Client);
+            Assert.True(cancel.IsOk, cancel.Error?.Code);
+        }
+        await e.H.SayAsync(e.S, Code);
+        await e.H.SayAsync(e.S, "Стоп");
+        Assert.Equal("none", (await ConsentAsync(e))!.Level);
+
+        var logs = e.H.Logs.All;
+        Assert.True(e.H.Logs.Lines.Count > 0, "сканер бачить логи");
+        var raw = Code.Replace("-", "");
+        var forbidden = new List<string>
+        {
+            Code, raw, CouponCodes.Hash(Code), ChatHarness.BotToken, "BOTTOKENSECRETVALUE", ChatHarness.PlatformKey, "NOTREAL-7f3a",
+            "Анна Секретна", "Секретна", phone, "380509998877", "вулиця Таємна", "квартира 9",
+        };
+        for (var i = 0; i + 4 <= raw.Length; i++) forbidden.Add(raw.Substring(i, 4)); // будь-яка частина коду ≥ 4 символи
+        foreach (var bad in forbidden)
+            Assert.False(logs.Contains(bad, StringComparison.OrdinalIgnoreCase), $"у логах знайдено заборонене значення '{bad}'");
+    }
 }
 
