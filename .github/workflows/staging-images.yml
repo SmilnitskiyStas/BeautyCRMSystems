@@ -1,0 +1,142 @@
+# Ручна публікація образів staging у ghcr.io (TASK-800, ADR-016 §2.4). НЕ деплоїть: розгортання робить людина вручну
+# (deploy/staging/README.md). Автоматичного CD через SSH немає і не додається без окремого рішення.
+name: Staging images
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Гілка або SHA для збірки (мердж у main заблоковано, тож зазвичай feature/integrate-гілка)"
+        required: true
+        type: string
+      public_origin:
+        description: "Публічний origin staging (https://host, без слеша й шляху): вшивається в web як NEXT_PUBLIC_API_URL"
+        required: true
+        type: string
+      tenant_slug:
+        description: "NEXT_PUBLIC_TENANT_SLUG для публічного запису (необов'язково)"
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: staging-images
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-and-verify-ci:
+    name: resolve SHA and require green CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Validate public_origin
+        env:
+          ORIGIN: ${{ inputs.public_origin }}
+        run: |
+          set -euo pipefail
+          [[ "$ORIGIN" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || { echo "::error::public_origin must look like https://host[:port]"; exit 1; }
+      - name: Require a successful CI run for this exact SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # CI (ci.yml) - це усі перевірки: frontend, worker, backend, secret-scan, dependency-audit. Обхід PR-перевірок
+          # ручним запуском заборонений: без зеленого CI саме для цього SHA публікація зупиняється.
+          ok=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SHA}&status=completed&per_page=20" \
+                 --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')
+          if [ "$ok" -lt 1 ]; then
+            echo "::error::No successful CI run found for ${SHA}. Push the branch / open a PR so ci.yml passes, then re-run."
+            exit 1
+          fi
+
+  migration-script:
+    name: EF migrations SQL (idempotent) artifact
+    needs: resolve-and-verify-ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve-and-verify-ci.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 8.0.x
+      - name: Generate script (reviewed and applied by a human, ADR-016 section 2.8)
+        run: |
+          set -euo pipefail
+          dotnet tool install dotnet-ef --version 8.0.11 --tool-path "$RUNNER_TEMP/tools"
+          cd backend
+          "$RUNNER_TEMP/tools/dotnet-ef" migrations script --idempotent \
+            --project BeautyCrm.Infrastructure --startup-project BeautyCrm.Infrastructure \
+            --output "$RUNNER_TEMP/migrate-${{ needs.resolve-and-verify-ci.outputs.sha }}.sql"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: migrations-${{ needs.resolve-and-verify-ci.outputs.sha }}
+          path: ${{ runner.temp }}/migrate-*.sql
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: publish ${{ matrix.service }}
+    needs: resolve-and-verify-ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write # лише цей job
+    strategy:
+      fail-fast: true
+      matrix:
+        service: [api, worker, web]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve-and-verify-ci.outputs.sha }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image name (ghcr requires lowercase)
+        id: img
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "name=ghcr.io/${owner}/beautycrm-${{ matrix.service }}" >> "$GITHUB_OUTPUT"
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.service == 'api' && 'backend' || matrix.service }}
+          push: true
+          provenance: false
+          tags: ${{ steps.img.outputs.name }}:sha-${{ needs.resolve-and-verify-ci.outputs.sha }}
+          build-args: |
+            ${{ matrix.service == 'web' && format('NEXT_PUBLIC_API_URL={0}', inputs.public_origin) || '' }}
+            ${{ matrix.service == 'web' && format('NEXT_PUBLIC_TENANT_SLUG={0}', inputs.tenant_slug) || '' }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+      - name: Digest for the deploy (use the digest, not the tag)
+        run: |
+          {
+            echo "### ${{ matrix.service }}"
+            echo '```'
+            echo "${{ steps.img.outputs.name }}@${{ steps.build.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
