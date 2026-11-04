@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { beautyApi } from "../api";
+import { runCreateService, type CreateProgress, type ServiceCreatePlan } from "../service-create";
 import type {
   AiKeyDeleteInput,
   AiKeySaveInput,
@@ -240,6 +241,25 @@ export const useStaffProfile = (id: string) =>
 
 export const useServices = () =>
   useQuery({ queryKey: beautyKeys.services, queryFn: () => beautyApi.getServices() });
+
+/**
+ * Створення послуги з ціною, цінами закладів і призначенням майстрам (кілька запитів послідовно).
+ * Кеш інвалідуємо й при частковому успіху (послугу вже створено) - `onSettled`.
+ */
+export function useCreateService() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ plan, progress }: { plan: ServiceCreatePlan; progress: CreateProgress }) => runCreateService(beautyApi, plan, progress),
+    onSettled: (_d, _e, { progress }) => {
+      if (!progress.serviceId) return;
+      void qc.invalidateQueries({ queryKey: beautyKeys.services });
+      void qc.invalidateQueries({ queryKey: beautyKeys.priceList });
+      void qc.invalidateQueries({ queryKey: beautyKeys.staff });
+      void qc.invalidateQueries({ queryKey: ["beauty", "service-costs"] });
+      void qc.invalidateQueries({ queryKey: ["beauty", "service-cost"] });
+    },
+  });
+}
 
 /** Після зміни працівника оновлюємо і список, і профіль. */
 function useInvalidateStaff() {

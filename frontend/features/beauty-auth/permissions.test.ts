@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canEditAiSettings, canEditCosts, canSeeFinance, canSeeFullPhone, canEditReminderSettings, canManageAiKey, canManageReminderPrefs, canOpen, canUseCalls, canUseInbox, navFor, NAV_GROUPS, safeNext } from "./permissions";
+import { canManageCatalog, canEditAiSettings, canEditCosts, canSeeFinance, canSeeFullPhone, canEditReminderSettings, canManageAiKey, canManageReminderPrefs, canOpen, canUseCalls, canUseInbox, navFor, NAV_GROUPS, safeNext } from "./permissions";
 
 describe("safeNext", () => {
   it("пропускає відносні шляхи сайту з query і hash", () => {
@@ -88,6 +88,14 @@ describe("розмови, дзвінки, нагадування (§22.10)", () 
     expect(roles.map(canUseCalls)).toEqual([true, true, false]);
     expect(roles.map(canManageReminderPrefs)).toEqual([true, true, false]);
     expect(roles.map(canEditReminderSettings)).toEqual([true, false, false]);
+  });
+});
+
+describe("каталог: створення послуг - лише owner/admin", () => {
+  it("ролі", () => {
+    expect(canManageCatalog("owner")).toBe(true);
+    expect(canManageCatalog("admin")).toBe(true);
+    expect(canManageCatalog("specialist")).toBe(false);
   });
 });
 

@@ -138,6 +138,8 @@ const locationRules = (locationId: string) => ({
 });
 
 const staff: StaffMember[] = structuredClone(STAFF_SEED);
+/** Перевизначення ціни послуги по закладу: `serviceId|locationId` -> ціна. */
+const locationPrices = new Map<string, number>();
 const absences: MockAbsence[] = ABSENCES_SEED();
 const mockInvites: { staffId: string; id: string; email: string; expiresAt: string }[] = [];
 
@@ -621,6 +623,31 @@ export const mockBeautyApi: BeautyAdminApi = {
     return wait(m ? staffView(m) : null);
   },
   getServices: () => wait(SERVICES),
+
+  createService: async (input) => {
+    if (!isManager()) throw forbid();
+    const name = input.name.trim();
+    if (name.length < 1 || name.length > 200) throw new BeautyApiError(422, "invalid_name", "invalid name");
+    if (!Number.isInteger(input.durationMinutes) || input.durationMinutes < 5 || input.durationMinutes > 720) throw new BeautyApiError(422, "invalid_duration", "invalid duration");
+    const created = { id: `svc${Date.now()}${SERVICES.length}`, name, category: input.category.trim() || null, durationMinutes: input.durationMinutes };
+    SERVICES.push(created);
+    PRICE_LIST.push({ serviceId: created.id, name, durationMinutes: created.durationMinutes, price: 0 });
+    return wait(created);
+  },
+
+  setServicePrice: async (serviceId, price, locationId) => {
+    if (!isManager()) throw forbid();
+    if (!SERVICES.some((s) => s.id === serviceId)) throw new BeautyApiError(404, "service_not_found", "not found");
+    if (!Number.isFinite(price) || price < 0 || price > 1_000_000) throw new BeautyApiError(422, "validation_failed", "invalid price");
+    if (locationId) {
+      if (!locations.some((l) => l.id === locationId)) throw new BeautyApiError(404, "location_not_found", "not found");
+      locationPrices.set(`${serviceId}|${locationId}`, price);
+    } else {
+      const row = PRICE_LIST.find((p) => p.serviceId === serviceId);
+      if (row) row.price = price;
+    }
+    await wait(null);
+  },
 
   createStaff: async (input) => {
     if (!isManager()) throw forbid();

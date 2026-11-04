@@ -267,6 +267,15 @@ export interface ServiceItem {
   durationMinutes: number;
 }
 
+/** POST /services (owner, admin): нова послуга; створюється активною. */
+export interface ServiceCreateInput {
+  name: string;
+  description: string;
+  category: string;
+  durationMinutes: number;
+  isActive: boolean;
+}
+
 export interface StaffLocation {
   locationId: LocationId;
   locationName: string;

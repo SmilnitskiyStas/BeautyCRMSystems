@@ -63,6 +63,7 @@ import type {
   AbsenceResult,
   InviteResult,
   PendingInvite,
+  ServiceCreateInput,
   ServiceItem,
   StaffCreateInput,
   StaffMember,
@@ -160,6 +161,13 @@ export interface BeautyAdminApi {
   getStaffProfile(id: string): Promise<StaffMember | null>;
   /** GET /services — каталог для призначення послуг */
   getServices(): Promise<ServiceItem[]>;
+  /** POST /services (owner, admin): створює послугу (без ціни). 422/409 - див. `humanizeError`. */
+  createService(input: ServiceCreateInput): Promise<ServiceItem>;
+  /**
+   * PUT /services/{id}/prices (owner, admin): `{price}` - мережева ціна; з `locationId` - перевизначення закладу
+   * (`null`/відсутній = мережева). 404 service_not_found|location_not_found.
+   */
+  setServicePrice(serviceId: string, price: number, locationId?: LocationId | null): Promise<void>;
   /** POST /specialists (owner, admin) */
   createStaff(input: StaffCreateInput): Promise<StaffMember>;
   /** PUT /specialists/{id} (owner, admin) */

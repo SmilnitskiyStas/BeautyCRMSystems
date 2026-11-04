@@ -130,6 +130,9 @@ export const canSeeFinance = (role: Role) => role === "owner" || role === "admin
 export const canEditCosts = canSeeFinance;
 export const canSeeFullPhone = canSeeFinance;
 
+/** Каталог (створення послуг із цінами й призначенням майстрам) - лише owner/admin. */
+export const canManageCatalog = (role: Role) => role === "owner" || role === "admin";
+
 /**
  * §26.11.1: розсилки (кампанії, аудиторії, купони) і згода в картці клієнта - лише owner/admin; specialist отримує 403 до читання,
  * тому розділ для нього не показується й не відкривається, а персональних даних і кодів купонів у його DOM немає.
