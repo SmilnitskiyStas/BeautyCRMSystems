@@ -3,6 +3,7 @@ import { CLIENT_TG_REASON } from "../cancellation";
 import { money, dayIndex, weekDayLabels, weekRangeLabel } from "../format";
 import { mastersForCalendar } from "../calendar-masters";
 import { closedDayInfo, localDateIn, validateClosure, weekdayOf } from "../closed-days";
+import { pageUrlFrom, validateFeedbackMessage } from "../feedback";
 import { isValidTimeZone } from "../locations-logic";
 import { outsideHours } from "../location-hours";
 import { activeLinks } from "../staff-links";
@@ -55,6 +56,13 @@ import type {
   PromoGoalId,
   StaffMember,
 } from "../types";
+
+/** Мітки часу заявок у mock: ліміт 5 на годину (§27.9). */
+let feedbackLog: number[] = [];
+/** Лише для тестів: скидає лічильник ліміту заявок. */
+export const resetMockFeedback = () => {
+  feedbackLog = [];
+};
 
 const LATENCY_MS = 150;
 const wait = <T>(value: T): Promise<T> =>
@@ -633,6 +641,20 @@ export const mockBeautyApi: BeautyAdminApi = {
     SERVICES.push(created);
     PRICE_LIST.push({ serviceId: created.id, name, durationMinutes: created.durationMinutes, price: 0 });
     return wait(created);
+  },
+
+  sendFeedback: async (input) => {
+    // Дзеркало §27.9: порядок перевірок 422 -> 429; невалідні запити ліміт не витрачають.
+    if (!["cooperation", "improvement", "bug"].includes(input.type)) throw new BeautyApiError(422, "invalid_type", "invalid type");
+    if (!["low", "normal", "high", "critical"].includes(input.severity)) throw new BeautyApiError(422, "invalid_severity", "invalid severity");
+    const text = input.message.trim();
+    if (validateFeedbackMessage(text)) throw new BeautyApiError(422, "invalid_message", "invalid message");
+    if (input.pageUrl !== undefined && pageUrlFrom(input.pageUrl) !== input.pageUrl) throw new BeautyApiError(422, "invalid_page_url", "invalid page url");
+    const now = Date.now();
+    feedbackLog = feedbackLog.filter((t) => now - t < 3_600_000);
+    if (feedbackLog.length >= 5) throw new BeautyApiError(429, "rate_limited", "rate limited", Math.ceil((feedbackLog[0] + 3_600_000 - now) / 1000));
+    feedbackLog.push(now);
+    return wait({ id: `fb${now}${feedbackLog.length}` });
   },
 
   setServicePrice: async (serviceId, price, locationId) => {

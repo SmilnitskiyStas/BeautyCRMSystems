@@ -213,31 +213,33 @@ public sealed class EfAuthStore(BeautyDbContext db, TenantContext tenant, IConfi
         return (WriteOutcome.Ok, ownerEntity.Id);
     }
 
+    /// <summary>
+    /// Спільна доменна операція для PATCH /api/platform/tenants/{id} і /api/control/v1 (<see cref="TenantMutations"/>):
+    /// призупинення відкликає refresh-токени, відновлення очищає suspended_*; усе в одній транзакції.
+    /// </summary>
     public async Task<WriteOutcome> UpdateTenantAsync(
         Guid tenantId, IReadOnlyList<string>? modules, string? status, DateTimeOffset now, CancellationToken ct)
     {
         UseTenant(tenantId);
-        var query = Db.Tenants.Where(x => x.Id == tenantId);
-        var n = await query.ExecuteUpdateAsync(s => s.SetProperty(x => x.UpdatedAt, now), ct);
-        if (modules is not null)
-        {
-            var array = modules.ToArray();
-            await query.ExecuteUpdateAsync(s => s.SetProperty(x => x.Modules, array), ct);
-        }
-        if (status is not null)
-            await query.ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, status), ct);
-        return n == 1 ? WriteOutcome.Ok : WriteOutcome.Unavailable;
+        await using var tx = await Db.Database.BeginTransactionAsync(ct);
+        var n = await db.Tenants.Where(x => x.Id == tenantId).ExecuteUpdateAsync(s => s.SetProperty(x => x.UpdatedAt, now), ct);
+        if (n != 1) return WriteOutcome.Unavailable;
+        if (modules is not null) await TenantMutations.SetModulesAsync(db, tenantId, modules, now, ct);
+        if (status == "suspended") await TenantMutations.SuspendAsync(db, tenantId, reason: null, now, ct);
+        else if (status == "active") await TenantMutations.ResumeAsync(db, tenantId, now, ct);
+        await tx.CommitAsync(ct);
+        return WriteOutcome.Ok;
     }
 
     // ---------- helpers ----------
 
     private static readonly System.Linq.Expressions.Expression<Func<User, UserRecord>> Project = u =>
         new UserRecord(u.Id, u.TenantId, u.Email, u.FullName, u.PasswordHash, u.Role, u.SpecialistId, u.IsActive,
-            u.FailedLoginCount, u.LockoutUntil, u.LastLoginAt);
+            u.FailedLoginCount, u.LockoutUntil, u.LastLoginAt, u.State);
 
     private static User NewUserEntity(NewUser u) => new()
     {
-        Id = Guid.NewGuid(), Email = u.Email, FullName = u.FullName, PasswordHash = u.PasswordHash, Role = u.Role, SpecialistId = u.SpecialistId,
+        Id = Guid.NewGuid(), Email = u.Email, FullName = u.FullName, PasswordHash = u.PasswordHash, State = u.State, Role = u.Role, SpecialistId = u.SpecialistId,
     };
 
     private static UserRecord ToRecord(User u) => Project.Compile()(u);

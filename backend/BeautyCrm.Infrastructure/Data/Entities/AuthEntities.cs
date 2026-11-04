@@ -17,6 +17,15 @@ public class Tenant
     public string Status { get; set; } = "active";
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
+
+    /// <summary>ADR-018: id підприємства в зовнішній системі (ShelfGuard). NULL для tenant, створених вручну.</summary>
+    public string? ExternalRef { get; set; }
+    /// <summary>ADR-018: джерело <see cref="ExternalRef"/> (лише 'shelfguard'). Задається разом із ExternalRef.</summary>
+    public string? ExternalSource { get; set; }
+    /// <summary>ADR-018: коли призупинено; NULL для активного tenant (CHECK: не NULL лише при status = suspended).</summary>
+    public DateTimeOffset? SuspendedAt { get; set; }
+    /// <summary>ADR-018: причина призупинення (до 500 символів).</summary>
+    public string? SuspendedReason { get; set; }
 }
 
 /// <summary>Користувач tenant. Роль: owner | admin | specialist. Пароль зберігається лише як хеш.</summary>
@@ -25,7 +34,10 @@ public class User : TenantEntity
     /// <summary>Нормалізований (trim + lower) email; унікальний у межах tenant.</summary>
     public string Email { get; set; } = null!;
     public string FullName { get; set; } = null!;
-    public string PasswordHash { get; set; } = null!;
+    /// <summary>ADR-018: NULL лише для користувача в стані <see cref="State"/> = invited (CHECK у БД). Вхід без хеша неможливий.</summary>
+    public string? PasswordHash { get; set; }
+    /// <summary>ADR-018: active | invited. invited = власник створений control plane і ще не задав пароль.</summary>
+    public string State { get; set; } = "active";
     public string Role { get; set; } = null!;
     /// <summary>Для ролі specialist: профіль майстра, чиї записи бачить користувач.</summary>
     public Guid? SpecialistId { get; set; }

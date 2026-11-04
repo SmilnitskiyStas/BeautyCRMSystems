@@ -13,15 +13,25 @@ namespace BeautyCrm.Api.Auth;
 /// Ключ коротший за 32 символи = ендпоінти оператора вимкнені (fail closed). Порівняння — у сталий час.
 /// </summary>
 public sealed class PlatformKeyHandler(
-    IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder, IConfiguration config)
+    IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder, IConfiguration config,
+    IHostEnvironment env)
     : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
     public const string Scheme = "PlatformKey";
     public const string HeaderName = "X-Platform-Key";
     public const int MinKeyLength = 32;
+    public const string EnabledSetting = "Auth:PlatformKeyEnabled";
+
+    /// <summary>
+    /// Auth:PlatformKeyEnabled (ADR-018 D1): явний прапорець; без нього X-Platform-Key працює лише в Development
+    /// (у Staging/Production за замовчуванням вимкнено, fail closed).
+    /// </summary>
+    public static bool IsEnabled(IConfiguration config, IHostEnvironment env) =>
+        config.GetValue<bool?>(EnabledSetting) ?? env.IsDevelopment();
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
+        if (!IsEnabled(config, env)) return Task.FromResult(AuthenticateResult.NoResult());
         var expected = config["Auth:PlatformKey"];
         if (string.IsNullOrEmpty(expected) || expected.Length < MinKeyLength) return Task.FromResult(AuthenticateResult.NoResult());
         if (!Request.Headers.TryGetValue(HeaderName, out var provided) || provided.Count != 1)

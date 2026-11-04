@@ -101,11 +101,19 @@ public sealed partial class PublicTenantResolver(IAuthStore store)
 
     public Guid? TenantId { get; private set; }
 
+    /// <summary>true, якщо slug належить призупиненому tenant (ADR-018 D2: ResolveAsync = false, відповідь 403 tenant_suspended).</summary>
+    public bool IsSuspended { get; private set; }
+
     public async Task<bool> ResolveAsync(string? slug, CancellationToken ct)
     {
         var normalized = slug?.Trim().ToLowerInvariant();
         if (normalized is null || !SlugPattern().IsMatch(normalized)) return false;
         var tenant = await store.FindTenantBySlugAsync(normalized, ct);
+        if (tenant is { Status: "suspended" })
+        {
+            IsSuspended = true;
+            return false;
+        }
         if (tenant is not { IsActive: true } || !tenant.Modules.Contains("beauty_booking", StringComparer.OrdinalIgnoreCase))
             return false;
         store.UseTenant(tenant.Id);

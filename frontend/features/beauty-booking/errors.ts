@@ -50,6 +50,10 @@ export function humanizeBookingError(e: unknown, fallback = "Щось пішло
   return fallback;
 }
 
+/** ADR-018 D2: tenant призупинено (403 + `{code:"tenant_suspended"}`). Інші 403 сюди не потрапляють. */
+export const isTenantSuspended = (e: unknown): boolean =>
+  e instanceof BookingApiError && e.status === 403 && e.code === "tenant_suspended";
+
 /** Слот зайнятий/недоступний: UI скидає вибір часу й оновлює слоти. */
 export const isSlotLost = (e: unknown): boolean =>
   e instanceof BookingApiError &&

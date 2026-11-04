@@ -19,6 +19,7 @@ import {
   TextLink,
 } from "./ui";
 import { initials } from "../format";
+import { OnboardingChecklist } from "./onboarding-checklist";
 
 export function OverviewScreen() {
   const [location, setLocation] = useState<LocationId | null>(null);
@@ -43,6 +44,7 @@ export function OverviewScreen() {
           </div>
         }
       />
+      <OnboardingChecklist />
       <QueryState isPending={overview.isPending} isError={overview.isError} onRetry={() => overview.refetch()}>
         {overview.data ? (
           <>

@@ -12,7 +12,7 @@ namespace BeautyCrm.Api.Controllers;
 /// <summary>
 /// ПУБЛІЧНИЙ API онлайн-запису (TASK-688): без JWT, tenant за slug з URL. Явний виняток із "автентифікація за замовчуванням".
 /// Контролер лише маршрутизує; уся логіка — Application/Features/BeautyPublicBooking.
-/// Невідомий slug / призупинений tenant / вимкнений модуль -> однакова 404 `not_found`.
+/// Невідомий slug / вимкнений модуль -> однакова 404 `not_found`; призупинений tenant -> 403 `tenant_suspended` (ADR-018 D2).
 /// </summary>
 [ApiController]
 [Route("api/public/{tenantSlug}")]

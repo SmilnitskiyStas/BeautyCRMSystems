@@ -1025,6 +1025,16 @@ export const httpBeautyApi: BeautyAdminApi = {
     await send<unknown>("PUT", `/services/${encodeURIComponent(serviceId)}/prices`, locationId ? { locationId, price } : { price });
   },
 
+  sendFeedback: async (input) => {
+    const r = await send<{ id: string }>("POST", "/feedback", {
+      type: input.type,
+      severity: input.severity,
+      message: input.message.trim(),
+      ...(input.pageUrl ? { pageUrl: input.pageUrl } : {}),
+    });
+    return { id: r.id };
+  },
+
   createStaff: async (input) =>
     toStaff(
       await send<SpecialistDto>("POST", "/specialists", {

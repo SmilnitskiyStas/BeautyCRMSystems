@@ -11,6 +11,7 @@ import { useAiPanel } from "../hooks/use-ai-panel";
 import { useNeedsReplyCount } from "../hooks/use-inbox";
 import { useMarketingAvailability } from "../hooks/use-marketing";
 import { aiContextFor } from "./ai-contexts";
+import { FeedbackDialog } from "./feedback-dialog";
 
 function isActive(pathname: string, href: string) {
   if (href === "/beauty") return pathname === "/beauty";
@@ -206,6 +207,7 @@ export function SideNav() {
   const pathname = usePathname();
   const { user, logout } = useAuth();
   const [leaving, setLeaving] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const wide = useIsWide();
   const [open, setOpen] = useState(false);
   const [prevPath, setPrevPath] = useState(pathname);
@@ -336,6 +338,17 @@ export function SideNav() {
         </div>
         <button
           type="button"
+          aria-haspopup="dialog"
+          onClick={() => {
+            setOpen(false);
+            setFeedbackOpen(true);
+          }}
+          className="min-h-11 cursor-pointer rounded-xl border border-white/40 bg-transparent px-3.5 text-left text-[15px] font-semibold text-white hover:bg-white/10"
+        >
+          Звернення до розробників
+        </button>
+        <button
+          type="button"
           disabled={leaving}
           onClick={() => {
             setLeaving(true);
@@ -348,6 +361,7 @@ export function SideNav() {
       </div>
     </Panel>
     ) : null}
+    {feedbackOpen ? <FeedbackDialog onClose={() => setFeedbackOpen(false)} /> : null}
     </>
   );
 }

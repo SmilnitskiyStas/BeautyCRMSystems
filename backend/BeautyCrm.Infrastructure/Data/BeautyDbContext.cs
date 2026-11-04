@@ -72,6 +72,12 @@ public class BeautyDbContext : DbContext
     public DbSet<Invite> Invites => Set<Invite>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
 
+    // control plane ShelfGuard (TASK-816, ADR-018)
+    public DbSet<PlatformOwnerInvite> PlatformOwnerInvites => Set<PlatformOwnerInvite>();
+    public DbSet<PlatformAuditRow> PlatformAuditLog => Set<PlatformAuditRow>();
+    public DbSet<ControlPlaneNonce> ControlPlaneNonces => Set<ControlPlaneNonce>();
+    public DbSet<PlatformFeedback> PlatformFeedbacks => Set<PlatformFeedback>();
+
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
         StampEntities();
@@ -545,6 +551,7 @@ public class BeautyDbContext : DbContext
         ConfigureServiceCosts(mb);
         ConfigureMarketing(mb);
         ConfigureAuth(mb);
+        ConfigurePlatform(mb);
     }
 
     // ---------- Собівартість послуг (TASK-762, §24.3, ADR-014; RLS in migration beauty_service_costs) ----------
@@ -1124,10 +1131,20 @@ public class BeautyDbContext : DbContext
             {
                 t.HasCheckConstraint("ck_tenants_status", "status IN ('active', 'suspended')");
                 t.HasCheckConstraint("ck_tenants_slug", "slug ~ '^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$'");
+                // ADR-018 §4
+                t.HasCheckConstraint("ck_tenants_external_ref", "external_ref IS NULL OR external_ref ~ '^[A-Za-z0-9_-]{1,64}$'");
+                t.HasCheckConstraint("ck_tenants_external_source", "external_source IS NULL OR external_source IN ('shelfguard')");
+                t.HasCheckConstraint("ck_tenants_external_pair", "(external_ref IS NULL) = (external_source IS NULL)");
+                t.HasCheckConstraint("ck_tenants_suspended", "status = 'suspended' OR (suspended_at IS NULL AND suspended_reason IS NULL)");
             });
             b.HasKey(x => x.Id);
             b.Property(x => x.Name).HasMaxLength(200);
             b.Property(x => x.Slug).HasMaxLength(64);
+            b.Property(x => x.ExternalRef).HasMaxLength(64);
+            b.Property(x => x.ExternalSource).HasMaxLength(16);
+            b.Property(x => x.SuspendedReason).HasMaxLength(500);
+            b.HasIndex(x => new { x.ExternalSource, x.ExternalRef }).IsUnique()
+                .HasFilter("external_ref IS NOT NULL").HasDatabaseName("ux_tenants_external_ref");
             b.Property(x => x.Modules).HasColumnType("text[]").HasDefaultValueSql("'{}'");
             b.Property(x => x.Status).HasMaxLength(16).HasDefaultValue("active");
             b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
@@ -1137,10 +1154,17 @@ public class BeautyDbContext : DbContext
 
         mb.Entity<User>(b =>
         {
-            Base(b, "users", t => t.HasCheckConstraint("ck_users_role", "role IN ('owner', 'admin', 'specialist')"));
+            Base(b, "users", t =>
+            {
+                t.HasCheckConstraint("ck_users_role", "role IN ('owner', 'admin', 'specialist')");
+                // ADR-018 §4: password_hash може бути NULL лише в стані invited
+                t.HasCheckConstraint("ck_users_state", "state IN ('active', 'invited')");
+                t.HasCheckConstraint("ck_users_password_or_invited", "password_hash IS NOT NULL OR state = 'invited'");
+            });
             b.Property(x => x.Email).HasMaxLength(320);
             b.Property(x => x.FullName).HasMaxLength(200);
             b.Property(x => x.PasswordHash).HasMaxLength(255);
+            b.Property(x => x.State).HasMaxLength(16).HasDefaultValue("active");
             b.Property(x => x.Role).HasMaxLength(16);
             b.Property(x => x.IsActive).HasDefaultValue(true);
             b.Property(x => x.FailedLoginCount).HasDefaultValue(0);
@@ -1172,6 +1196,104 @@ public class BeautyDbContext : DbContext
             TenantFk(b, x => x.User, x => new { x.TenantId, x.UserId }, DeleteBehavior.Cascade);
             b.HasIndex(x => new { x.TenantId, x.TokenHash }).IsUnique();
             b.HasIndex(x => new { x.TenantId, x.UserId });
+        });
+    }
+
+    // ---------- control plane ShelfGuard (TASK-816, ADR-018; RLS/grants/trigger in migrations platform_control_plane) ----------
+
+    private static void ConfigurePlatform(ModelBuilder mb)
+    {
+        mb.Entity<PlatformOwnerInvite>(b =>
+        {
+            b.ToTable("platform_owner_invites", t =>
+            {
+                t.HasCheckConstraint("ck_platform_owner_invites_token_hash", "octet_length(token_hash) = 32");
+                t.HasCheckConstraint("ck_platform_owner_invites_expires", "expires_at > created_at");
+                t.HasCheckConstraint("ck_platform_owner_invites_used_or_revoked", "used_at IS NULL OR revoked_at IS NULL");
+            });
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            b.Property(x => x.TokenHash).HasColumnType("bytea");
+            b.Property(x => x.CreatedByActor).HasMaxLength(130);
+            b.HasOne<Tenant>().WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.UserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Cascade);
+            b.HasIndex(x => x.TokenHash).IsUnique();
+            // одне активне (не використане й не відкликане) запрошення на користувача
+            b.HasIndex(x => x.UserId).IsUnique().HasFilter("used_at IS NULL AND revoked_at IS NULL")
+                .HasDatabaseName("ux_platform_owner_invites_active_user");
+            b.HasIndex(x => new { x.TenantId, x.UserId });
+        });
+
+        mb.Entity<PlatformAuditRow>(b =>
+        {
+            b.ToTable("platform_audit_log", t =>
+            {
+                t.HasCheckConstraint("ck_platform_audit_log_action",
+                    "action IN ('tenant.created', 'tenant.create_replayed', 'tenant.suspended', 'tenant.resumed', 'tenant.modules_changed', " +
+                    "'owner_invite.issued', 'owner_invite.revoked', 'owner_invite.accepted', 'control_auth.failed')");
+                t.HasCheckConstraint("ck_platform_audit_log_actor_type",
+                    "actor_type IN ('shelfguard_admin', 'platform_key', 'owner', 'system')");
+                t.HasCheckConstraint("ck_platform_audit_log_details", "jsonb_typeof(details) = 'object'");
+            });
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).UseIdentityAlwaysColumn();
+            b.Property(x => x.OccurredAt).HasDefaultValueSql("now()");
+            b.Property(x => x.Action).HasMaxLength(40);
+            b.Property(x => x.ActorType).HasMaxLength(20);
+            b.Property(x => x.ActorId).HasMaxLength(64);
+            b.Property(x => x.ActorDisplay).HasMaxLength(120);
+            b.Property(x => x.KeyId).HasMaxLength(32);
+            b.Property(x => x.RequestId).HasMaxLength(64);
+            b.Property(x => x.Ip).HasColumnType("inet");
+            b.Property(x => x.Details).HasColumnType("jsonb").HasDefaultValueSql("'{}'::jsonb");
+            b.HasIndex(x => new { x.TenantId, x.OccurredAt }).IsDescending(false, true).HasFilter("tenant_id IS NOT NULL");
+            b.HasIndex(x => x.OccurredAt);
+        });
+
+        mb.Entity<ControlPlaneNonce>(b =>
+        {
+            b.ToTable("control_plane_nonces", t =>
+            {
+                t.HasCheckConstraint("ck_control_plane_nonces_key_id", "key_id ~ '^[a-z0-9-]{3,32}$'");
+                t.HasCheckConstraint("ck_control_plane_nonces_nonce", "nonce ~ '^[A-Za-z0-9_-]{22,64}$'");
+            });
+            b.HasKey(x => new { x.KeyId, x.Nonce });
+            b.Property(x => x.KeyId).HasMaxLength(32);
+            b.Property(x => x.Nonce).HasMaxLength(64);
+            b.Property(x => x.SeenAt).HasDefaultValueSql("now()");
+            b.HasIndex(x => x.SeenAt); // очищення старших за 15 хв
+        });
+
+        mb.Entity<PlatformFeedback>(b =>
+        {
+            Base(b, "beauty_platform_feedback", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_platform_feedback_type", "type IN ('cooperation', 'improvement', 'bug')");
+                t.HasCheckConstraint("ck_beauty_platform_feedback_severity", "severity IN ('low', 'normal', 'high', 'critical')");
+                t.HasCheckConstraint("ck_beauty_platform_feedback_message", "char_length(message) BETWEEN 10 AND 2000");
+                t.HasCheckConstraint("ck_beauty_platform_feedback_delivery_status", "delivery_status IN ('pending', 'delivered', 'failed')");
+                t.HasCheckConstraint("ck_beauty_platform_feedback_attempts", "attempts >= 0");
+                t.HasCheckConstraint("ck_beauty_platform_feedback_delivered", "(delivery_status = 'delivered') = (delivered_at IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_platform_feedback_lead", "external_lead_id IS NULL OR delivery_status = 'delivered'");
+            });
+            b.Property(x => x.Type).HasMaxLength(16);
+            b.Property(x => x.Severity).HasMaxLength(8).HasDefaultValue("normal");
+            b.Property(x => x.Message).HasMaxLength(2000);
+            b.Property(x => x.PageUrl).HasMaxLength(500);
+            b.Property(x => x.DeliveryStatus).HasMaxLength(16).HasDefaultValue("pending");
+            b.Property(x => x.Attempts).HasDefaultValue(0);
+            b.Property(x => x.NextAttemptAt).HasDefaultValueSql("now()");
+            b.Property(x => x.LastError).HasMaxLength(200);
+            b.Property(x => x.ExternalLeadId).HasMaxLength(64);
+            b.HasOne<Tenant>().WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            TenantFk(b, x => x.User, x => new { x.TenantId, x.UserId }, DeleteBehavior.Restrict);
+            // rate limit (5/год на користувача) + індекс FK user_id
+            b.HasIndex(x => new { x.TenantId, x.UserId, x.CreatedAt });
+            // черга доставки worker-а
+            b.HasIndex(x => new { x.TenantId, x.NextAttemptAt }).HasFilter("delivery_status = 'pending'")
+                .HasDatabaseName("ix_beauty_platform_feedback_pending");
         });
     }
 

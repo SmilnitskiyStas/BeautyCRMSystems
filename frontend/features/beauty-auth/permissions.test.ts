@@ -120,7 +120,7 @@ describe("групи меню (TASK-796)", () => {
   it("4 блоки в заданому порядку з тими самими маршрутами", () => {
     expect(NAV_GROUPS.map((g) => g.label)).toEqual(["Щоденна робота", "Каталог і продажі", "Аналітика та AI", "Система"]);
     expect(NAV_GROUPS[0].items.map((n) => n.href)).toEqual(["/beauty", "/beauty/calendar", "/beauty/inbox", "/beauty/calls", "/beauty/clients"]);
-    expect(NAV_GROUPS[1].items.map((n) => n.href)).toEqual(["/beauty/staff", "/beauty/locations", "/beauty/services", "/beauty/promos", "/beauty/campaigns"]);
+    expect(NAV_GROUPS[1].items.map((n) => n.href)).toEqual(["/beauty/locations", "/beauty/staff", "/beauty/services", "/beauty/promos", "/beauty/campaigns"]);
     expect(NAV_GROUPS[2].items.map((n) => n.href)).toEqual(["/beauty/analytics", "/beauty/ai"]);
     expect(NAV_GROUPS[3].items.map((n) => n.href)).toEqual(["/beauty/channels", "/beauty/settings"]);
     expect(navFor("owner")).toHaveLength(14);

@@ -28,8 +28,8 @@ export const NAV_GROUPS: NavGroup[] = [
     id: "catalog",
     label: "Каталог і продажі",
     items: [
-      { label: "Спеціалісти", href: "/beauty/staff" },
       { label: "Заклади", href: "/beauty/locations" },
+      { label: "Спеціалісти", href: "/beauty/staff" },
       { label: "Послуги", href: "/beauty/services" },
       { label: "Ціни та акції", href: "/beauty/promos" },
       { label: "Розсилки", href: "/beauty/campaigns" },

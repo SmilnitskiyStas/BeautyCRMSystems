@@ -64,6 +64,7 @@ import type {
   InviteResult,
   PendingInvite,
   ServiceCreateInput,
+  FeedbackInput,
   ServiceItem,
   StaffCreateInput,
   StaffMember,
@@ -168,6 +169,11 @@ export interface BeautyAdminApi {
    * (`null`/відсутній = мережева). 404 service_not_found|location_not_found.
    */
   setServicePrice(serviceId: string, price: number, locationId?: LocationId | null): Promise<void>;
+  /**
+   * POST /feedback (§27.9, owner/admin/specialist): заявка розробникам -> 202 `{id}`. 422 invalid_type|invalid_severity|invalid_message|
+   * invalid_page_url; 429 rate_limited + Retry-After (5/год на користувача, 30/добу на заклад); 403 tenant_suspended|user_inactive.
+   */
+  sendFeedback(input: FeedbackInput): Promise<{ id: string }>;
   /** POST /specialists (owner, admin) */
   createStaff(input: StaffCreateInput): Promise<StaffMember>;
   /** PUT /specialists/{id} (owner, admin) */

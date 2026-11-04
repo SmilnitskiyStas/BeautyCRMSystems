@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using BeautyCrm.Api.Auth;
+using BeautyCrm.Api.Auth.ControlPlane;
 using BeautyCrm.Api.Infrastructure;
 using BeautyCrm.Api.PublicBooking;
 using BeautyCrm.Api.Tenancy;
@@ -103,6 +104,7 @@ app.UseBeautyForwardedHeaders(); // лише довірені проксі (Beau
 app.UseBeautySecurityHeaders(app.Environment);
 app.UseBeautyAiNoStore(); // Cache-Control: no-store на /ai/settings*, /ai/models, /ai/usage
 app.UseBeautyAnalyticsNoStore(); // Cache-Control: no-store на /analytics/* (TASK-764, §24)
+app.UseOwnerInviteNoStore(); // Cache-Control: no-store на /api/auth/invite/* (TASK-819, §27.8)
 
 if (app.Environment.IsDevelopment())
 {
@@ -115,6 +117,7 @@ app.UseHttpsRedirection();
 app.UseBeautyCors(); // до автентифікації: preflight (OPTIONS) не несе токена
 app.UseRateLimiter();
 app.UseAuthentication();
+app.UseControlPlane(); // /api/control/*: лише ControlPlaneHmac (ADR-018); після UseAuthentication, щоб JWT не підміняв principal
 app.UseMiddleware<TenantMiddleware>(); // після автентифікації (claim tenant_id), до авторизації й контролерів
 app.UseAuthorization();
 

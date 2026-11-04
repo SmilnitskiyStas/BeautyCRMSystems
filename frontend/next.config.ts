@@ -54,6 +54,14 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       { source: "/:path*", headers: securityHeaders },
+      // Запрошення власника (§27.8): токен у фрагменті; без Referer і без кешу.
+      {
+        source: "/invite",
+        headers: [
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "Cache-Control", value: "no-store" },
+        ],
+      },
       // Публічний токен запису в шляху: не віддаємо його у Referer і не кешуємо (узгоджено з §12).
       {
         source: "/book/appointment/:path*",

@@ -31,7 +31,10 @@ public sealed class PublicTenantAttribute : Attribute, IAsyncActionFilter
         var slug = context.RouteData.Values["tenantSlug"] as string;
         if (!await resolver.ResolveAsync(slug, context.HttpContext.RequestAborted))
         {
-            context.Result = new NotFoundObjectResult(new ApiError("not_found", "Not found."));
+            // ADR-018 D2 (§27.5): призупинений tenant відрізняється від невідомого (403 tenant_suspended); модуль вимкнений = 404.
+            context.Result = resolver.IsSuspended
+                ? new ObjectResult(new ApiError("tenant_suspended", "Booking is temporarily unavailable.")) { StatusCode = StatusCodes.Status403Forbidden }
+                : new NotFoundObjectResult(new ApiError("not_found", "Not found."));
             return;
         }
         await next();

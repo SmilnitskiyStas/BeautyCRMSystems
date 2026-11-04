@@ -118,6 +118,17 @@ describe("групування меню (TASK-796)", () => {
     expect(screen.getByRole("link", { name: "Ціни та акції" })).toBeInTheDocument();
   });
 
+  it("блок «Каталог і продажі» розставлено за послідовністю налаштування: заклади, спеціалісти, послуги", () => {
+    renderNav("owner", 0);
+    const nav = screen.getByRole("navigation", { name: "Головне меню" });
+    const hrefs = within(nav).getAllByRole("link").map((a) => a.getAttribute("href"));
+    const idx = (h: string) => hrefs.indexOf(h);
+    expect(idx("/beauty/locations")).toBeGreaterThan(-1);
+    expect(idx("/beauty/locations")).toBeLessThan(idx("/beauty/staff"));
+    expect(idx("/beauty/staff")).toBeLessThan(idx("/beauty/services"));
+    expect(idx("/beauty/services")).toBeLessThan(idx("/beauty/promos"));
+  });
+
   it("specialist: плоский список без заголовків і без «Запису клієнта»", () => {
     renderNav("specialist", 0);
     expect(screen.queryAllByRole("button", { name: /Щоденна|Каталог|Аналітика|Система/ })).toHaveLength(0);

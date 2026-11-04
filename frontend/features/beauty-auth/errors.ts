@@ -207,6 +207,40 @@ export function humanizeSyncCommandsError(e: unknown): string {
   return humanizeError(e, "Не вдалося оновити меню команд. Спробуйте ще раз.");
 }
 
+/** Тексти форми «Звернення до розробників» (§27.9): коди `invalid_type` тощо тут мають власний зміст, тож окрема мапа. */
+const FEEDBACK_BY_CODE: Record<string, string> = {
+  invalid_type: "Оберіть тип звернення: співпраця, покращити або не працює.",
+  invalid_severity: "Оберіть критичність зі списку.",
+  invalid_message: "Текст звернення має містити від 10 до 2000 символів, без службових символів.",
+  invalid_page_url: "Не вдалося визначити сторінку. Оновіть її й надішліть звернення ще раз.",
+  tenant_suspended: "Роботу вашого закладу призупинено, тому надіслати звернення зараз не можна. Зверніться до постачальника послуги.",
+  user_inactive: "Ваш обліковий запис вимкнено. Зверніться до власника закладу.",
+};
+
+/** Людський час очікування за `Retry-After` (секунди) для 429. */
+export function retryWaitText(seconds: number): string {
+  if (seconds < 60) return "менше хвилини";
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes} хв`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m === 0 ? `${h} год` : `${h} год ${m} хв`;
+}
+
+export function humanizeFeedbackError(e: unknown): string {
+  if (e instanceof BeautyApiError) {
+    if (e.status === 429) {
+      return e.retryAfterSeconds
+        ? `Ви вже надіслали забагато звернень. Спробуйте ще раз приблизно через ${retryWaitText(e.retryAfterSeconds)}.`
+        : "Ви вже надіслали забагато звернень (до 5 на годину). Спробуйте пізніше.";
+    }
+    const text = FEEDBACK_BY_CODE[e.code];
+    if (text && (e.status === 403 || e.status === 422)) return text;
+    if (e.status === 422) return "Перевірте введені дані: тип, критичність і текст звернення.";
+  }
+  return humanizeError(e, "Не вдалося надіслати звернення. Спробуйте ще раз.");
+}
+
 /** Тексти для «Опрацьовано» (§22.6.5): серверний message не показуємо. */
 export function humanizeResolveError(e: unknown): string {
   if (e instanceof BeautyApiError) {

@@ -154,7 +154,23 @@ function couponPrice(code: string, serviceId: string) {
   return { outcome, priceOriginal: service.priceOriginal, priceFinal: outcome === "applied" ? withCoupon : service.priceFinal } as const;
 }
 
-export const mockBookingApi: BookingApi = {
+/** Демо-сценарій ADR-018 D2: заклад із цим slug відповідає 403 tenant_suspended на кожен запит. */
+export const MOCK_SUSPENDED_TENANT = "suspended-demo";
+
+function guardSuspended(api: BookingApi): BookingApi {
+  const out = {} as Record<string, unknown>;
+  for (const [name, fn] of Object.entries(api) as [string, (t: string, ...a: unknown[]) => Promise<unknown>][]) {
+    out[name] = (tenant: string, ...a: unknown[]) =>
+      tenant === MOCK_SUSPENDED_TENANT
+        ? delay(null).then(() => {
+            throw new BookingApiError(403, "tenant_suspended");
+          })
+        : fn(tenant, ...a);
+  }
+  return out as unknown as BookingApi;
+}
+
+export const mockBookingApi: BookingApi = guardSuspended({
   getLocations: () => delay(locations()),
 
   getSpecialists: (_t, locationId) =>
@@ -249,4 +265,4 @@ export const mockBookingApi: BookingApi = {
     saveStore(store);
     return delay({ appointment: publicView(store[token]), refundAmount, refundPercent, feePercent: 0 });
   },
-};
+});

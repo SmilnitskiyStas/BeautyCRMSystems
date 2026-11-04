@@ -3265,3 +3265,146 @@ ADR-015 §1.1:
 
 - До контексту моделі потрапляють лише повідомлення після останньої межі епізоду; БД та Inbox не змінюються. Межі (обчислюються з наявних даних, без міграції): вхідна команда `/book` або кнопка `i:book`; вихідні системні T-book-start, T-confirmed, T-cancelled; журнал `resolve_conversation` / `resume_ai` цієї розмови; тиша довша за `ChatAssistant`-поріг `EpisodeIdleTimeout` (6 год) перед поточним пакетом. Звичайне продовження межі не створює.
 - Код: `ChatEpisode` (Conversations), підключено в `ConversationTurnProcessor.BuildHistoryAsync`. Правило в системному промпті: не повертатися до відхилених/завершених запитів і не «виправляти» попередні відповіді без запиту клієнта.
+
+## §27. Control plane ShelfGuard: provisioning, призупинення, модулі, запрошення власника, заявки (v0.30, 2026-11-04)
+
+Джерело: ADR-018 (accepted, 2026-11-04; D1–D5). Розділ деталізує DTO; при розбіжності з ADR-018 діє ADR, зміна — новим ADR. Пункти з позначкою **[уточнення §27]** — деталі контракту, яких немає в ADR (не суперечать йому). Відкрито: **Q4** (вхідний ендпоінт лідів ShelfGuard, §27.9), **Q2b** (worker/канали призупиненого tenant), **Q5** (технічні факти, звіряються в TASK-816/818), **Q8** (юридичний текст примітки форми, §27.8).
+
+### 27.1 Загальне
+- Формат помилок чинний: `{ "code": "..." }`. Тіла — `application/json; charset=utf-8`, ліміт 64 KB (`413` не віддається для control plane: завеликий запит → `401 control_auth_failed`, причина `body_too_large`).
+- Час — ISO 8601 UTC (`2026-11-04T10:00:00Z`); id — uuid.
+- `externalRef` (id підприємства ShelfGuard) — `[A-Za-z0-9_-]{1,64}`; у шляху й тілі однаковий.
+- `actor: { id: string(1..64), displayName: string(1..120) }` — адмін ShelfGuard; обов'язковий у кожному змінному запиті (`422 actor_required`). Пишеться в `platform_audit_log` (`actor_type=shelfguard_admin`).
+- `modules[]` — значення з чинного переліку beauty-модулів (`BeautyModules.Known`), та сама валідація, що в `/api/platform/tenants` (`422 unknown_module`). ShelfGuard не хардкодить перелік без звірки з backend (TASK-818/831 фіксують його в «Уточненні»).
+- `/api/control/v1/*` відкриває лише `ControlPlaneHmac`; `X-Platform-Key` і JWT користувача → `401 control_auth_failed`. `/api/platform/*` HMAC не відкриває і ззовні закритий nginx (`deny all`).
+- Rate limit групи: 60 запитів/хв на `kid` → `429 rate_limited` + `Retry-After` (секунди).
+- Порядок перевірок: підпис (`401`) → `429` → `400` → існування (`404`) → тіло (`422`) → стан (`409`). **[уточнення §27]** Виняток: непорожній query відсікається до перевірки підпису (§27.2).
+- Відповіді control plane мають `Cache-Control: no-store`. **[уточнення §27]**
+
+### 27.2 Підпис запиту `ControlPlaneHmac` v1 (ShelfGuard→Beauty; той самий формат Beauty→ShelfGuard, §27.9)
+
+| Заголовок | Значення |
+|---|---|
+| `X-BCRM-Key-Id` | `kid`, `[a-z0-9-]{3,32}` |
+| `X-BCRM-Timestamp` | Unix-секунди UTC, десяткове ціле без знака й провідних нулів |
+| `X-BCRM-Nonce` | 22..64 символи `[A-Za-z0-9_-]`, ≥ 128 біт випадковості, новий на кожен запит (зокрема на кожен повтор) |
+| `X-BCRM-Signature` | `v1=<base64url без padding від HMAC-SHA256(key[kid], canonical)>` (43 символи після `v1=`) |
+| `X-Request-Id` | необов'язковий, ≤ 64 символи; пишеться в аудит |
+
+Canonical string — рядки через LF (`\n`), без кінцевого переводу рядка, кодування UTF-8:
+```
+BCRM-HMAC-SHA256-v1
+{kid}
+{timestamp}            # точно як у заголовку
+{nonce}
+{METHOD}               # GET | POST | PUT, верхній регістр
+{path}                 # як бачить Kestrel, без нормалізації й без кінцевого '/'
+{query}                # v1: завжди порожній рядок
+{hex_lower(sha256(body bytes))}   # порожнє тіло → e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+- **Ключ HMAC [уточнення §27]:** сирі байти після base64-декодування `ControlPlane:Inbound:Keys:{kid}:Secret` (не base64-текст); ≥ 32 байти, інакше група вимкнена (fail closed). Відбиток ключа для БД/аудиту/логів — перші 12 hex `sha256(сирі байти)`; сам секрет — лише server-side env (D1).
+- Тіло хешується **байтами як отримано**; відправник підписує рівно ті байти, які надсилає (без повторної серіалізації після підпису).
+- Перевірка в Beauty (строго в такому порядку): заголовки й формат → `kid` відомий і `active|retiring` → `|now − timestamp| ≤ 300 с` → тіло ≤ 64 KB → підпис (`FixedTimeEquals`) → лише тоді `INSERT … ON CONFLICT DO NOTHING` у `control_plane_nonces` (0 рядків = replay); nonce зберігається 15 хв.
+- Непорожній query → `400 query_not_allowed` **[уточнення §27: код]**.
+- Будь-яка невдача → `401 { "code": "control_auth_failed" }`, однакове тіло; причина (`missing_header | unknown_key | timestamp_skew | body_too_large | bad_signature | nonce_replayed`) — лише в лог/аудит, без значень підпису/секрету. Кожна відповідь групи (і 2xx, і 4xx) має `X-BCRM-Server-Time: <unix-секунди>`.
+- Ключі: `ControlPlane:Inbound:Keys:{kid}:Secret` (base64), `…:Status` = `active | retiring`. Ротація (human gate): додати `kid2` active → ShelfGuard переходить → `kid1` retiring (≤ 7 днів) → видалити з env + рестарт.
+- **Тестовий вектор:** `.ai/artifacts/contracts/ADR-018-hmac-test-vector.json` (генератор `.ai/artifacts/contracts/ADR-018-hmac-test-vector.py`, stdlib, `python -I`). Секрет вектора `TEST-ONLY-NOT-A-REAL-SECRET-0001` — лише для тестів. Обов'язковий у тестах TASK-817 (Beauty), TASK-827 і TASK-829 (ShelfGuard): годинник заморожений на `timestamp` вектора; зміна будь-якого поля canonical або одного байта тіла змінює підпис.
+
+### 27.3 `POST /api/control/v1/tenants` — створити tenant і запрошення власника
+Запит:
+```json
+{ "externalRef": "sg-123", "name": "Salon X", "slug": "salon-x", "modules": ["beauty_booking"],
+  "owner": { "email": "owner@x.test", "fullName": "Ім'я Прізвище" },
+  "actor": { "id": "sg-admin-7", "displayName": "Admin" } }
+```
+- `name`, `slug`, `modules` — ті самі правила, що в `POST /api/platform/tenants`; `modules` відсутній → усі beauty-модулі за замовчуванням (як у platform) **[уточнення §27: звірити з кодом у TASK-818]**. `owner.email` — email (`invalid_email`), `owner.fullName` — непорожній (`invalid_name`).
+- `owner.password` у тілі → `422 password_not_allowed`.
+
+Відповідь `201`:
+```json
+{ "tenantId": "uuid", "externalRef": "sg-123", "slug": "salon-x", "status": "active", "modules": ["beauty_booking"],
+  "owner": { "userId": "uuid", "email": "owner@x.test", "state": "invited" },
+  "invite": { "url": "https://app.example/invite#t=<token>", "expiresAt": "2026-11-07T10:00:00Z" } }
+```
+- **Ідемпотентність:** tenant з цим `externalRef` є, `slug` і `owner.email` (без урахування регістру **[уточнення §27]**) збігаються → `200` з поточним станом (форма як `201`; `status`/`modules`/`owner.state` — поточні), `invite: null`, заголовок `Idempotent-Replayed: true`, аудит `tenant.create_replayed`. Розбіжність → `409 external_ref_conflict`. Паралельні дублікати: унікальний індекс, програвший перечитує стан → `200`.
+- Помилки: `409 tenant_slug_taken` (slug іншого tenant), `422 invalid_slug | unknown_module | invalid_email | invalid_name | invalid_external_ref | actor_required | password_not_allowed`.
+- `invite.url` віддається лише тут і в §27.7; ShelfGuard показує його адміну один раз і не зберігає відкритим текстом. Аудит `tenant.created`, `owner_invite.issued`.
+
+### 27.4 `GET /api/control/v1/tenants/{externalRef}`
+`200`:
+```json
+{ "tenantId": "uuid", "externalRef": "sg-123", "slug": "salon-x", "name": "Salon X",
+  "status": "active", "modules": ["beauty_booking"], "suspendedAt": null,
+  "owner": { "userId": "uuid", "email": "owner@x.test", "state": "invited", "inviteExpiresAt": "2026-11-07T10:00:00Z" },
+  "createdAt": "2026-11-04T10:00:00Z" }
+```
+- `suspendedAt` — лише для `suspended` (інакше `null`); `inviteExpiresAt` — лише при `state=invited` і активному запрошенні (інакше `null`). Бізнес-даних tenant (клієнти, записи, суми) і посилання-запрошення немає. `404 tenant_not_found`. Аудит не пишеться **[уточнення §27]**.
+
+### 27.5 `POST …/{externalRef}/suspend` і `POST …/{externalRef}/resume`
+- suspend: `{ "reason": string(1..500), "actor": {…} }` → `200 { "status": "suspended", "suspendedAt": "…" }`. Повтор → `200` з тим самим `suspendedAt`, аудит лише `noop` (`details.noop=true`). Помилки: `404 tenant_not_found`, `422 reason_required | actor_required`. Аудит `tenant.suspended` (`details.reason` — без ПД).
+- resume: `{ "actor": {…} }` → `200 { "status": "active" }`. Повтор → `200` noop. `404 tenant_not_found`, `422 actor_required`. Аудит `tenant.resumed`. Сесії не відновлюються.
+- **Ефект призупинення** (та сама доменна операція, що `PATCH /api/platform/tenants/{id}` `{status:"suspended"}`):
+  - staff API tenant → `403` (чинний код; звірити в Q5); `POST /api/auth/login`, `POST /api/auth/refresh` → `401`; refresh-токени tenant відкликаються;
+  - публічний запис і віджет (`/api/public/{slug}/…`: каталог, слоти, створення запису, чат віджета) → `403 { "code": "tenant_suspended" }`; UI — «Запис тимчасово призупинено» без технічних деталей, каталог і слоти не показуються (TASK-834);
+  - `POST /api/auth/invite/inspect|accept` → `403 tenant_suspended`; `POST …/owner-invite` → `409 tenant_suspended`;
+  - дані не змінюються; worker/канали — Q2b (до підтвердження поведінка чинна).
+
+### 27.6 `PUT /api/control/v1/tenants/{externalRef}/modules` (D4)
+- `{ "modules": string[], "actor": {…} }` — повний набір увімкнених модулів (порядок не важливий, дублікати згортаються **[уточнення §27]**) → `200 { "modules": [] }` (поточний набір). Той самий набір → `200` noop.
+- Помилки: `404 tenant_not_found`, `422 unknown_module | modules_required` (порожній або відсутній масив) `| actor_required`.
+- Дозволено для `suspended`. Доменна операція — та сама, що `PATCH /api/platform/tenants/{id}` `{modules}`; вимкнений модуль → `403 module_disabled` у staff API. Аудит `tenant.modules_changed`, `details: { before[], after[] }`.
+
+### 27.7 `POST /api/control/v1/tenants/{externalRef}/owner-invite` — перевипуск
+- `{ "actor": {…} }` → `201 { "url": "…/invite#t=<token>", "expiresAt": "…" }`. Попереднє невикористане запрошення відкликається (аудит `owner_invite.revoked`, потім `owner_invite.issued`).
+- Помилки: `404 tenant_not_found`, `409 owner_already_active` (скидання пароля — поза ADR), `409 tenant_suspended`, `422 actor_required`.
+
+### 27.8 Запрошення власника (публічні, без автентифікації)
+- Токен: 32 байти CSPRNG, base64url без padding; у БД лише `sha256(token)`; TTL `ControlPlane:InviteTtlHours` (72); одне активне на користувача.
+- URL: `{PublicAppUrl}/invite#t={token}` — токен у фрагменті. Сторінка `/invite`: `Referrer-Policy: no-referrer`, `noindex`; frontend читає фрагмент і одразу прибирає його з адреси (`history.replaceState`) **[уточнення §27]**.
+- **`POST /api/auth/invite/inspect`** `{ "token": "…" }` → `200 { "tenantName": "Salon X", "email": "o***@x.test", "expiresAt": "…" }`. Маска email: перший символ локальної частини + `***` + `@домен` **[уточнення §27]**.
+- **`POST /api/auth/invite/accept`** `{ "token": "…", "password": "…" }` → `200`, тіло тієї самої форми, що `POST /api/auth/login` (одразу вхід, refresh-токен — як у login). Погашення атомарне (`UPDATE … WHERE token_hash=$1 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > now() RETURNING …`) в одній транзакції з встановленням пароля й `state=active`; аудит `owner_invite.accepted`.
+- Помилки обох: `410 invite_invalid` (невідомий / прострочений / використаний / відкликаний — один код), `403 tenant_suspended`, `422` за чинною політикою пароля (лише accept), `429 rate_limited` (10/хв на IP).
+- Токен і пароль не логуються; `Cache-Control: no-store`.
+
+### 27.9 Заявки «співпраця / покращити / не працює»
+**`POST /api/beauty/feedback`** (JWT, будь-яка роль, tenant `active`; від модулів не залежить **[уточнення §27]**):
+```json
+{ "type": "bug", "severity": "high", "message": "Текст 10..2000 символів", "pageUrl": "/beauty/calendar" }
+```
+- `type`: `cooperation | improvement | bug`; `severity`: `low | normal | high | critical` — має сенс для `bug`; не передано → `normal` (для будь-якого типу).
+- `pageUrl?` ≤ 500 — лише шлях сторінки без query і фрагмента (frontend шле `location.pathname`) **[уточнення §27]**; інакше `422 invalid_page_url` **[уточнення §27: код]**.
+- `202 { "id": "uuid" }` — заявка записана в `beauty_platform_feedback` (`delivery_status=pending`) і подія outbox `platform_feedback.submitted` в одній транзакції. `202` і тоді, коли `ShelfGuard:Outbound` не налаштовано (fail closed: заявка чекає).
+- Помилки: `422 invalid_type | invalid_severity | invalid_message | invalid_page_url`, `429 rate_limited` + `Retry-After` (5/год на користувача, 30/добу на tenant), `403` для призупиненого tenant (чинний механізм).
+- Форма показує примітку, що заявка йде провайдеру; текст — Q8 (до закриття — плейсхолдер, TASK-823). Логи без тексту заявки, email маскований.
+
+**Доставка Beauty→ShelfGuard (worker)** — `POST {ShelfGuard:BaseUrl}{ShelfGuard:LeadsPath}`, підпис §27.2 ключем напрямку Beauty→ShelfGuard `ShelfGuard:Outbound:Keys:{kid}` (окремий від вхідного). Тіло (зафіксовано цим контрактом):
+```json
+{ "source": "beauty", "feedbackId": "uuid", "type": "bug", "severity": "high", "message": "...", "pageUrl": "/beauty/calendar",
+  "tenant": { "externalRef": "sg-123", "tenantId": "uuid", "slug": "salon-x", "name": "Salon X" },
+  "user": { "userId": "uuid", "role": "admin", "fullName": "...", "email": "..." },
+  "createdAt": "2026-11-04T10:00:00Z" }
+```
+- `source` — завжди `"beauty"` (D3). `feedbackId` — ключ ідемпотентності в ShelfGuard. `pageUrl` — `null`, якщо не передано. `tenant.externalRef` — `null` для tenant, створених поза ShelfGuard. `user.role` — `owner | admin | specialist`. `severity` — завжди заповнене (після дефолту).
+- Повтори: експоненційна затримка до 24 год, потім `delivery_status=failed` + алерт у лог; успіх → `delivered`, `delivered_at`, `external_lead_id` (якщо ShelfGuard його поверне).
+- **ВІДКРИТО — Q4 (блокує TASK-829, TASK-821):** шлях `ShelfGuard:LeadsPath`, автентифікація вхідного ендпоінта лідів у `feat/beauty-leads-telegram`, форма відповіді (поле id ліда), коди «дубль `feedbackId`» і «невалідне тіло», відповідність `type`/`severity` полям LandingLead. До закриття Q4 пропозиція для worker (не контракт ShelfGuard): `2xx` → delivered; дубль `feedbackId` → delivered; `408 | 429 | 5xx | мережа` → повтор; інші `4xx` → `failed` без повторів.
+
+### 27.10 Аудит (`platform_audit_log`, append-only)
+Дії: `tenant.created | tenant.create_replayed | tenant.suspended | tenant.resumed | tenant.modules_changed | owner_invite.issued | owner_invite.revoked | owner_invite.accepted | control_auth.failed` (агрегація ≤ 1 запис/хв на IP+причину). Поля: `actor_type` (`shelfguard_admin | platform_key | owner | system`), `actor_id`, `actor_display`, `key_id`, `request_id`, `ip`, `details`. `details` без секретів, токенів, паролів, тексту заявок; email → `user_id`. Noop фіксується з `details.noop=true` **[уточнення §27]**.
+
+### 27.11 Коди помилок §27
+| Код | HTTP | Де |
+|---|---|---|
+| `control_auth_failed` | 401 | будь-яка невдача підпису/формату/вікна/nonce/розміру |
+| `query_not_allowed` | 400 | непорожній query у v1 |
+| `rate_limited` | 429 | control (60/хв на kid), invite (10/хв на IP), feedback (5/год, 30/добу) |
+| `tenant_not_found` | 404 | get, suspend, resume, modules, owner-invite |
+| `actor_required`, `reason_required`, `modules_required` | 422 | змінні control-запити |
+| `invalid_slug`, `unknown_module`, `invalid_email`, `invalid_name`, `invalid_external_ref`, `password_not_allowed` | 422 | create (і `unknown_module` у modules) |
+| `external_ref_conflict`, `tenant_slug_taken` | 409 | create |
+| `owner_already_active` | 409 | owner-invite |
+| `tenant_suspended` | 409 / 403 | 409 — owner-invite; 403 — invite inspect/accept, публічний запис і віджет |
+| `invite_invalid` | 410 | invite inspect/accept |
+| `invalid_type`, `invalid_severity`, `invalid_message`, `invalid_page_url` | 422 | feedback |
+
+### 27.12 Споживачі
+TASK-817 (схема HMAC, вектор), TASK-818 (§27.3–§27.5, §27.7), TASK-819 (§27.8), TASK-820 (§27.9 API), TASK-821 (доставка, після Q4), TASK-822/823 (frontend invite / форма заявки), TASK-831 (§27.6), TASK-834 (UI `tenant_suspended`); ShelfGuard — TASK-827 (клієнт v1, вектор), TASK-829 (вхідні ліди, Q4), TASK-832 (`setModules`).

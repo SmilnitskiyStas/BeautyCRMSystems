@@ -276,6 +276,19 @@ export interface ServiceCreateInput {
   isActive: boolean;
 }
 
+/** Тип звернення до розробників (§27.9). */
+export type FeedbackType = "cooperation" | "improvement" | "bug";
+/** Критичність (§27.9); має сенс для `bug`, інакше `normal`. */
+export type FeedbackSeverity = "low" | "normal" | "high" | "critical";
+
+/** POST /feedback (§27.9): `pageUrl` - лише шлях без query/fragment (`location.pathname`). */
+export interface FeedbackInput {
+  type: FeedbackType;
+  severity: FeedbackSeverity;
+  message: string;
+  pageUrl?: string;
+}
+
 export interface StaffLocation {
   locationId: LocationId;
   locationName: string;

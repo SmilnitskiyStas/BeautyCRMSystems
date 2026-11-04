@@ -287,7 +287,7 @@ public sealed class PublicBookingApiTests : IClassFixture<AuthApiFixture>, IDisp
     }
 
     [SkippableFact]
-    public async Task unknown_suspended_and_module_disabled_tenants_are_indistinguishable_404()
+    public async Task unknown_and_module_disabled_tenants_are_indistinguishable_404_and_suspended_is_403_tenant_suspended()
     {
         NeedDb();
         var noModule = await SeedAsync(modules: ["beauty_catalog"]);
@@ -296,8 +296,13 @@ public sealed class PublicBookingApiTests : IClassFixture<AuthApiFixture>, IDisp
             platformKey: PlatformKey);
         Assert.Equal(HttpStatusCode.NoContent, patch.StatusCode);
 
+        // ADR-018 D2 (§27.5): призупинений tenant відрізняється від невідомого - 403 tenant_suspended (каталог і слоти не віддаються).
+        var blocked = await _client.GetAsync($"/api/public/{suspended.Slug}/locations");
+        Assert.Equal(HttpStatusCode.Forbidden, blocked.StatusCode);
+        Assert.Contains("tenant_suspended", await blocked.Content.ReadAsStringAsync());
+
         string? expected = null;
-        foreach (var slug in new[] { "no-such-salon-0000", noModule.Slug, suspended.Slug, "UPPER_and-bad", "x" })
+        foreach (var slug in new[] { "no-such-salon-0000", noModule.Slug, "UPPER_and-bad", "x" })
         {
             var r = await _client.GetAsync($"/api/public/{slug}/locations");
             Assert.Equal(HttpStatusCode.NotFound, r.StatusCode);

@@ -642,6 +642,21 @@ CREATE POLICY tenants_login_lookup ON tenants
 
 Similar flow: set `app.tenant_slug`, resolve `tenant_id`, then set `app.tenant_id` for remaining queries.
 
+### Special Policy: `tenants_control_lookup` (tenants, SELECT only, TASK-816 / ADR-018)
+
+For the ShelfGuard control plane, which knows only `external_ref` (not `tenant_id`). `tenants` is FORCE RLS, so without this
+the registry cannot be read by external id:
+
+```sql
+CREATE POLICY tenants_control_lookup ON tenants
+  FOR SELECT
+  USING (external_source = 'shelfguard'
+         AND external_ref = NULLIF(current_setting('app.tenant_external_ref', true), ''));
+```
+
+Set `app.tenant_external_ref` with `set_config(..., true)` (transaction-local), resolve `tenant_id`, then set `app.tenant_id`
+(also transaction-local) for writes. No `BYPASSRLS` role is involved.
+
 ---
 
 ## 4. Migrations (in order, 8 total)
@@ -677,6 +692,19 @@ Adds cancelled_by_user_id, cancelled_at to beauty_specialist_absences. DO-block 
 ### 8. `20261008124507_beauty_locations_and_cancellation_history` (TASK-697)
 
 Adds cancelled_by_type, cancelled_by_user_id, cancel_reason to beauty_appointments. CHECK constraints for cancel metadata. FK RESTRICT on users. Backfill: set cancelled_by_type='system' for existing cancelled rows (under NO FORCE, then FORCE again). DO-block verifies FORCE on beauty_appointments, beauty_locations.
+
+> Stale note: this section lists only migrations 1-8; later migrations (through `20261026203521_beauty_marketing`) are not described here. Source of truth is `backend/BeautyCrm.Infrastructure/Data/Migrations/` (separate doc task).
+
+### `20261104182836_platform_control_plane` (TASK-816, ADR-018)
+
+- `tenants`: `external_ref varchar(64) NULL`, `external_source varchar(16) NULL` ('shelfguard'), `suspended_at`, `suspended_reason varchar(500)`. Partial `UNIQUE (external_source, external_ref) WHERE external_ref IS NOT NULL` (`ux_tenants_external_ref`). CHECK: ref format `^[A-Za-z0-9_-]{1,64}$`, source in ('shelfguard'), ref and source set together, `suspended_*` only while `status = 'suspended'`. Policy `tenants_control_lookup` (see section 3).
+- `users`: `password_hash` is NULL-able; new `state` ('active' default | 'invited'); CHECK `password_hash IS NOT NULL OR state = 'invited'`. Login for a user without a hash must be rejected (done in `AuthService`).
+- `platform_owner_invites` (platform table, no tenant RLS): `token_hash bytea` (sha256, 32 bytes, UNIQUE), composite FK `(tenant_id, user_id)` -> users, partial unique "one active invite per user" (`ux_platform_owner_invites_active_user`).
+- `platform_audit_log` (platform table, no tenant RLS, no FK on `tenant_id`): append-only by trigger (UPDATE/DELETE/TRUNCATE -> 42501) and by `REVOKE UPDATE, DELETE` for `beautycrm_app`. `details` must be a JSON object without secrets/tokens/passwords/message text.
+- `control_plane_nonces` (platform table): PK `(key_id, nonce)`, index on `seen_at` for the worker cleanup (> 15 min).
+- `beauty_platform_feedback` (tenant table, ENABLE + FORCE `tenant_isolation`): doubles as the delivery queue (`delivery_status`, `attempts`, `next_attempt_at`, `last_error`, `delivered_at`, `external_lead_id`). There is no generic outbox table in this schema.
+- GRANTs (`deploy/staging/db/grants.sql` and `scripts/dev/setup-db.ps1`): app `REVOKE UPDATE, DELETE ON platform_audit_log`; worker `SELECT, UPDATE` on feedback, `SELECT, DELETE` on nonces, column-level `SELECT (id, tenant_id, email, full_name, role)` on users (no `password_hash`).
+- Down is a human gate: it refuses (RAISE) while any user has `state = 'invited'` / NULL hash, and it drops the audit log, invites, nonces, feedback and the `external_ref` link.
 
 ---
 

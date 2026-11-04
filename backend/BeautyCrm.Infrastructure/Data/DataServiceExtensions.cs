@@ -68,6 +68,7 @@ public static class DataServiceExtensions
         services.AddScoped<CampaignService>(); // TASK-779: кампанії (§26.7, §26.11.3)
         services.AddScoped<ClientPhoneService>(); // TASK-769: телефон клієнта (збереження, pending, cooldown), §25
         services.AddScoped<ServiceCostService>(); // TASK-763: CRUD собівартості послуг (§24.6.1)
+        services.AddScoped<PlatformFeedbackService>(); // TASK-820: заявки до провайдера (§27.9, ADR-018)
 
         return services;
     }

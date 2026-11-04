@@ -4653,3 +4653,351 @@ BEGIN
 END $EF$;
 COMMIT;
 
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    ALTER TABLE users ADD state character varying(16) NOT NULL DEFAULT 'active';
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    ALTER TABLE tenants ADD external_ref character varying(64);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    ALTER TABLE tenants ADD external_source character varying(16);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    ALTER TABLE tenants ADD suspended_at timestamp with time zone;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    ALTER TABLE tenants ADD suspended_reason character varying(500);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    CREATE TABLE beauty_platform_feedback (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        user_id uuid NOT NULL,
+        type character varying(16) NOT NULL,
+        severity character varying(8) NOT NULL DEFAULT 'normal',
+        message character varying(2000) NOT NULL,
+        page_url character varying(500),
+        delivery_status character varying(16) NOT NULL DEFAULT 'pending',
+        attempts integer NOT NULL DEFAULT 0,
+        next_attempt_at timestamp with time zone NOT NULL DEFAULT (now()),
+        last_error character varying(200),
+        delivered_at timestamp with time zone,
+        external_lead_id character varying(64),
+        tenant_id uuid NOT NULL,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        updated_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_platform_feedback PRIMARY KEY (id),
+        CONSTRAINT ak_beauty_platform_feedback_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT ck_beauty_platform_feedback_attempts CHECK (attempts >= 0),
+        CONSTRAINT ck_beauty_platform_feedback_delivered CHECK ((delivery_status = 'delivered') = (delivered_at IS NOT NULL)),
+        CONSTRAINT ck_beauty_platform_feedback_delivery_status CHECK (delivery_status IN ('pending', 'delivered', 'failed')),
+        CONSTRAINT ck_beauty_platform_feedback_lead CHECK (external_lead_id IS NULL OR delivery_status = 'delivered'),
+        CONSTRAINT ck_beauty_platform_feedback_message CHECK (char_length(message) BETWEEN 10 AND 2000),
+        CONSTRAINT ck_beauty_platform_feedback_severity CHECK (severity IN ('low', 'normal', 'high', 'critical')),
+        CONSTRAINT ck_beauty_platform_feedback_type CHECK (type IN ('cooperation', 'improvement', 'bug')),
+        CONSTRAINT fk_beauty_platform_feedback_tenants_tenant_id FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_platform_feedback_users_tenant_id_user_id FOREIGN KEY (tenant_id, user_id) REFERENCES users (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    CREATE TABLE control_plane_nonces (
+        key_id character varying(32) NOT NULL,
+        nonce character varying(64) NOT NULL,
+        seen_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_control_plane_nonces PRIMARY KEY (key_id, nonce),
+        CONSTRAINT ck_control_plane_nonces_key_id CHECK (key_id ~ '^[a-z0-9-]{3,32}$'),
+        CONSTRAINT ck_control_plane_nonces_nonce CHECK (nonce ~ '^[A-Za-z0-9_-]{22,64}$')
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    CREATE TABLE platform_audit_log (
+        id bigint GENERATED ALWAYS AS IDENTITY,
+        occurred_at timestamp with time zone NOT NULL DEFAULT (now()),
+        action character varying(40) NOT NULL,
+        tenant_id uuid,
+        actor_type character varying(20) NOT NULL,
+        actor_id character varying(64),
+        actor_display character varying(120),
+        key_id character varying(32),
+        request_id character varying(64),
+        ip inet,
+        details jsonb NOT NULL DEFAULT ('{}'::jsonb),
+        CONSTRAINT pk_platform_audit_log PRIMARY KEY (id),
+        CONSTRAINT ck_platform_audit_log_action CHECK (action IN ('tenant.created', 'tenant.create_replayed', 'tenant.suspended', 'tenant.resumed', 'tenant.modules_changed', 'owner_invite.issued', 'owner_invite.revoked', 'owner_invite.accepted', 'control_auth.failed')),
+        CONSTRAINT ck_platform_audit_log_actor_type CHECK (actor_type IN ('shelfguard_admin', 'platform_key', 'owner', 'system')),
+        CONSTRAINT ck_platform_audit_log_details CHECK (jsonb_typeof(details) = 'object')
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    CREATE TABLE platform_owner_invites (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        tenant_id uuid NOT NULL,
+        user_id uuid NOT NULL,
+        token_hash bytea NOT NULL,
+        expires_at timestamp with time zone NOT NULL,
+        used_at timestamp with time zone,
+        revoked_at timestamp with time zone,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        created_by_actor character varying(130) NOT NULL,
+        CONSTRAINT pk_platform_owner_invites PRIMARY KEY (id),
+        CONSTRAINT ck_platform_owner_invites_expires CHECK (expires_at > created_at),
+        CONSTRAINT ck_platform_owner_invites_token_hash CHECK (octet_length(token_hash) = 32),
+        CONSTRAINT ck_platform_owner_invites_used_or_revoked CHECK (used_at IS NULL OR revoked_at IS NULL),
+        CONSTRAINT fk_platform_owner_invites_tenants_tenant_id FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE RESTRICT,
+        CONSTRAINT fk_platform_owner_invites_users_tenant_id_user_id FOREIGN KEY (tenant_id, user_id) REFERENCES users (tenant_id, id) ON DELETE CASCADE
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    ALTER TABLE users ADD CONSTRAINT ck_users_password_or_invited CHECK (password_hash IS NOT NULL OR state = 'invited');
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    ALTER TABLE users ADD CONSTRAINT ck_users_state CHECK (state IN ('active', 'invited'));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    CREATE UNIQUE INDEX ux_tenants_external_ref ON tenants (external_source, external_ref) WHERE external_ref IS NOT NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    ALTER TABLE tenants ADD CONSTRAINT ck_tenants_external_pair CHECK ((external_ref IS NULL) = (external_source IS NULL));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    ALTER TABLE tenants ADD CONSTRAINT ck_tenants_external_ref CHECK (external_ref IS NULL OR external_ref ~ '^[A-Za-z0-9_-]{1,64}$');
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    ALTER TABLE tenants ADD CONSTRAINT ck_tenants_external_source CHECK (external_source IS NULL OR external_source IN ('shelfguard'));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    ALTER TABLE tenants ADD CONSTRAINT ck_tenants_suspended CHECK (status = 'suspended' OR (suspended_at IS NULL AND suspended_reason IS NULL));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    CREATE INDEX ix_beauty_platform_feedback_pending ON beauty_platform_feedback (tenant_id, next_attempt_at) WHERE delivery_status = 'pending';
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    CREATE INDEX ix_beauty_platform_feedback_tenant_id_user_id_created_at ON beauty_platform_feedback (tenant_id, user_id, created_at);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    CREATE INDEX ix_control_plane_nonces_seen_at ON control_plane_nonces (seen_at);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    CREATE INDEX ix_platform_audit_log_occurred_at ON platform_audit_log (occurred_at);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    CREATE INDEX ix_platform_audit_log_tenant_id_occurred_at ON platform_audit_log (tenant_id, occurred_at DESC) WHERE tenant_id IS NOT NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    CREATE INDEX ix_platform_owner_invites_tenant_id_user_id ON platform_owner_invites (tenant_id, user_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    CREATE UNIQUE INDEX ix_platform_owner_invites_token_hash ON platform_owner_invites (token_hash);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    CREATE UNIQUE INDEX ux_platform_owner_invites_active_user ON platform_owner_invites (user_id) WHERE used_at IS NULL AND revoked_at IS NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    ALTER TABLE beauty_platform_feedback ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    ALTER TABLE beauty_platform_feedback FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_platform_feedback
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+
+                    CREATE POLICY tenants_control_lookup ON tenants
+                        FOR SELECT
+                        USING (external_source = 'shelfguard'
+                               AND external_ref = NULLIF(current_setting('app.tenant_external_ref', true), ''));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+
+                    CREATE FUNCTION platform_audit_log_block_mutation() RETURNS trigger
+                    LANGUAGE plpgsql AS $fn$
+                    BEGIN
+                        RAISE EXCEPTION 'platform_audit_log is append-only' USING ERRCODE = '42501';
+                    END
+                    $fn$;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+
+                    CREATE TRIGGER platform_audit_log_append_only
+                        BEFORE UPDATE OR DELETE ON platform_audit_log
+                        FOR EACH ROW EXECUTE FUNCTION platform_audit_log_block_mutation();
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+
+                    CREATE TRIGGER platform_audit_log_no_truncate
+                        BEFORE TRUNCATE ON platform_audit_log
+                        FOR EACH STATEMENT EXECUTE FUNCTION platform_audit_log_block_mutation();
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+
+    DO $$
+    DECLARE
+        t text;
+    BEGIN
+        FOREACH t IN ARRAY ARRAY['beauty_platform_feedback', 'users', 'tenants']
+        LOOP
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_class c
+                WHERE c.oid = to_regclass('public.' || t) AND c.relrowsecurity AND c.relforcerowsecurity) THEN
+                RAISE EXCEPTION 'FORCE ROW LEVEL SECURITY is not enabled on %', t;
+            END IF;
+        END LOOP;
+        IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'beauty_platform_feedback' AND policyname = 'tenant_isolation') THEN
+            RAISE EXCEPTION 'tenant_isolation policy is missing on beauty_platform_feedback';
+        END IF;
+        IF (SELECT count(*) FROM pg_trigger WHERE tgrelid = to_regclass('public.platform_audit_log') AND NOT tgisinternal) <> 2 THEN
+            RAISE EXCEPTION 'append-only triggers are missing on platform_audit_log';
+        END IF;
+    END
+    $$;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261104182836_platform_control_plane') THEN
+    INSERT INTO "__EFMigrationsHistory" (migration_id, product_version)
+    VALUES ('20261104182836_platform_control_plane', '8.0.11');
+    END IF;
+END $EF$;
+COMMIT;
+

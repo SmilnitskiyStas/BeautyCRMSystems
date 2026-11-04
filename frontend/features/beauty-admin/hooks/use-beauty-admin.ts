@@ -239,8 +239,8 @@ export const useStaff = (enabled = true) =>
 export const useStaffProfile = (id: string) =>
   useQuery({ queryKey: beautyKeys.staffProfile(id), queryFn: () => beautyApi.getStaffProfile(id) });
 
-export const useServices = () =>
-  useQuery({ queryKey: beautyKeys.services, queryFn: () => beautyApi.getServices() });
+export const useServices = (enabled = true) =>
+  useQuery({ queryKey: beautyKeys.services, queryFn: () => beautyApi.getServices(), enabled });
 
 /**
  * Створення послуги з ціною, цінами закладів і призначенням майстрам (кілька запитів послідовно).

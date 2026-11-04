@@ -18,7 +18,8 @@ public sealed class AuthService(
 
         store.UseTenant(tenant.Id);
         var user = await store.FindUserByEmailAsync(email, ct);
-        if (user is null) return RejectUnknown(key, req.Password, now);
+        // ADR-018: власник у стані invited ще без пароля (password_hash NULL) - вхід неможливий, відповідь як для невідомого.
+        if (user is null || user.PasswordHash is null || user.State != UserStates.Active) return RejectUnknown(key, req.Password, now);
 
         if (user.LockoutUntil is { } until && until > now) return AccountLocked;
         if (user.LockoutUntil is not null)
