@@ -10,6 +10,7 @@ ORIGIN="${1:?Вкажіть public origin, напр. https://beauty.agrusystems.
 case "$ORIGIN" in https://*[!/]) ;; *) echo "Origin має бути https://host без слеша в кінці" >&2; exit 1;; esac
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+AI_KID="k1"   # id майстер-ключа ШІ = Ai__Secrets__ActiveKeyId у шаблоні api.env
 S="${SECRETS_DIR:-/opt/beauty_staging/secrets}"
 GATEWAY="${BEAUTY_GATEWAY:-172.29.200.1}"
 
@@ -50,7 +51,7 @@ subst "$HERE/.env.db.example" "$S/db.env" \
 
 subst "$HERE/.env.api.example" "$S/api.env" \
   ConnectionStrings__Default=APP_PW Auth__JwtSigningKey=JWT Auth__PlatformKey=PLATFORM \
-  Channels__EncryptionKey=ENC Ai__Secrets__Keys__k1=AIKEY
+  Channels__EncryptionKey=ENC "Ai__Secrets__Keys__${AI_KID}=AIKEY"
 
 subst "$HERE/.env.worker.example" "$S/worker.env" \
   WORKER_DATABASE_URL=WORKER_PW Channels__EncryptionKey=ENC
