@@ -27,7 +27,7 @@ services:
       - beauty_staging_pgdata:/var/lib/postgresql/data
       - ./db/init-roles.sh:/docker-entrypoint-initdb.d/10-init-roles.sh:ro
     networks: [db_net] # порт БД на хості НЕ публікується
-    mem_limit: 1g
+    mem_limit: 512m
     cpus: 1.0
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d beautycrm -h 127.0.0.1"]
@@ -51,7 +51,7 @@ services:
     cap_drop: ["ALL"]
     read_only: true
     tmpfs: ["/tmp"]
-    mem_limit: 768m
+    mem_limit: 512m
     cpus: 1.0
     # healthcheck (/healthz) визначено в образі
 
@@ -66,7 +66,7 @@ services:
     cap_drop: ["ALL"]
     read_only: true
     tmpfs: ["/tmp"]
-    mem_limit: 384m
+    mem_limit: 256m
     cpus: 0.5
 
   web:
@@ -82,7 +82,7 @@ services:
     cap_drop: ["ALL"]
     read_only: true
     tmpfs: ["/tmp", "/app/.next/cache"]
-    mem_limit: 512m
+    mem_limit: 384m
     cpus: 0.5
 
 networks:

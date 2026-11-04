@@ -36,3 +36,4 @@ scripts/dev/.state/
 # agent library: per-session state and usage analytics (local)
 .ai/state/
 .ai/logs/agent-runs.jsonl
+deploy/staging/migrations/

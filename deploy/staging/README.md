@@ -20,7 +20,7 @@
 | Том | `beauty_staging_pgdata` | дані PostgreSQL 16 |
 | Порти на хості | `127.0.0.1:${BEAUTY_API_PORT}` -> api, `127.0.0.1:${BEAUTY_WEB_PORT}` -> web | лише loopback; порт БД не публікується; redis немає |
 
-Ліміти (mem/cpu): db 1g/1.0, api 768m/1.0, worker 384m/0.5, web 512m/0.5, разом близько 2.7 ГБ і 3 vCPU у піку. Перевірте запас сервера (`free -h`, `uptime`) і за потреби зменшіть.
+Ліміти (mem/cpu): db 512m/1.0, api 512m/1.0, worker 256m/0.5, web 384m/0.5, разом близько 1.7 ГБ (знижено через малий запас пам'яті спільного сервера, ADR-016); у setup-server.sh є крок створення swap. Перевірте запас сервера (`free -h`, `uptime`) і за потреби змініть.
 `restart: unless-stopped` для всіх. Журнали Docker обмежено (10 МБ x 5).
 
 ## 1. Підготовка (нічого не змінює)
@@ -220,7 +220,7 @@ server {
 `/etc/nginx/beauty-staging-proxy.conf` (заголовки **перезаписуються**, клієнтський `X-Forwarded-*` не довіряється):
 ```nginx
 proxy_http_version 1.1;
-proxy_set_header Host $host;
+proxy_set_header Host $http_host;   # зберігає порт: BFF порівнює його з Origin (isSameOrigin)
 proxy_set_header X-Forwarded-For $remote_addr;
 proxy_set_header X-Forwarded-Proto https;
 proxy_set_header Connection "";
