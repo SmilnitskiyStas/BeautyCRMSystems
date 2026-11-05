@@ -643,7 +643,8 @@ public sealed class ChatButtonsDbTests : IClassFixture<PostgresRlsFixture>
 
         var codes = string.Join(",", results.Select(r => r.Code));
         Assert.True(results.Count(r => r.Code == ButtonResultCodes.Confirmed) == 1, "коди результатів: " + codes);
-        Assert.True(results.Count(r => r.Code == ButtonResultCodes.Used) == 1, "коди результатів: " + codes);
+        // програш у гонці: або CAS (used), або переможець встиг підтвердити раніше (proposal_not_active) - обидва коректні, головне одне бронювання
+        Assert.True(results.Count(r => r.Code is ButtonResultCodes.Used or ButtonResultCodes.ProposalNotActive) == 1, "коди результатів: " + codes);
         Assert.Single(await h.AppointmentsAsync(s));
         Assert.Single((await h.ActionsAsync(s)).Where(a => a.ToolName == "confirm_booking"));
     }
