@@ -1,8 +1,8 @@
 ---
 name: write-blog-post
 description: >-
-  Write Blog Post — Use when writing page copy, case studies, or blog content.
-x-generated-from: skills/copywriting/write-blog-post/SKILL.md
+  Draft a blog article from a topic brief: structure, internal links, CTA, metadata. Use when asked for a new article or draft.
+x-generated-from: .claude/skills/write-blog-post/SKILL.md
 ---
 
 ## Обов'язкові елементи (розділ структури блог-статті проєктного спеку)

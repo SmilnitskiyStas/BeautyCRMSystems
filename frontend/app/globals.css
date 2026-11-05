@@ -24,3 +24,17 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Адаптивне меню адмінки (TASK-797): м'яка поява панелі й затемнення; без анімації при prefers-reduced-motion. */
+@keyframes beauty-drawer-in {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+@keyframes beauty-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .beauty-drawer-in { animation: beauty-drawer-in 0.2s ease-out; }
+  .beauty-backdrop-in { animation: beauty-backdrop-in 0.2s ease-out; }
+}

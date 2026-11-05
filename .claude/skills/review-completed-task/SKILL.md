@@ -2,7 +2,7 @@
 name: review-completed-task
 description: >-
   Independent review of a completed implementation against acceptance criteria and standards. Use when reviewing another agent's finished work.
-x-generated-from: skills/workflow/review-completed-task/SKILL.md
+x-generated-from: .claude/skills/review-completed-task/SKILL.md
 ---
 
 ## Purpose
@@ -42,7 +42,7 @@ x-generated-from: skills/workflow/review-completed-task/SKILL.md
 ### Documentation
 - `.claude/docs/*` оновлено, якщо змінилась архітектура, доменна модель чи SEO-мапа
 - Task log створено в `.claude/logs/tasks/`
-- **Якщо задача включала виправлення неочікуваної помилки** (не тривіальний typo) — `.claude/docs/known-issues.md` має запис із заповненими `Root cause` і `Prevention`, не лише `Resolution` (`.claude/skills/workflow/resolve-known-issue.md`). Без цього задача не переходить у `done`.
+- **Якщо задача включала виправлення неочікуваної помилки** (не тривіальний typo) — `.claude/docs/known-issues.md` має запис із заповненими `Root cause` і `Prevention`, не лише `Resolution` (`.claude/.claude/skills/resolve-known-issue/SKILL.md`). Без цього задача не переходить у `done`.
 
 ## Review Log Location
 `.claude/logs/reviews/TASK-ID_YYYY-MM-DD_review.md`

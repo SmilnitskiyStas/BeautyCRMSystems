@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import type {
   BookingResult,
+  CouponCheckResult,
   Location,
   PaymentMethod,
   ReminderOption,
@@ -27,6 +28,11 @@ interface BookingState {
   /** Honeypot-поле: людина його не бачить, тож значення завжди порожнє. */
   website: string;
   setWebsite: (v: string) => void;
+  /** Промокод (§26): введений текст і результат останньої перевірки для саме цього коду, послуги й закладу. */
+  couponCode: string;
+  coupon: { code: string; result: CouponCheckResult } | null;
+  setCouponCode: (v: string) => void;
+  setCoupon: (c: { code: string; result: CouponCheckResult } | null) => void;
   setLocation: (l: Location) => void;
   setSpecialist: (s: Specialist) => void;
   setService: (s: Service) => void;
@@ -51,14 +57,16 @@ const initial = {
   client: { name: "", phone: "" },
   booking: null,
   website: "",
+  couponCode: "",
+  coupon: null,
 };
 
 export const useBookingFlow = create<BookingState>((set) => ({
   ...initial,
   // Зміна попереднього вибору скидає залежні кроки.
-  setLocation: (location) => set({ location, specialist: null, service: null, slot: null }),
-  setSpecialist: (specialist) => set({ specialist, service: null, slot: null }),
-  setService: (service) => set({ service, slot: null }),
+  setLocation: (location) => set({ location, specialist: null, service: null, slot: null, coupon: null }),
+  setSpecialist: (specialist) => set({ specialist, service: null, slot: null, coupon: null }),
+  setService: (service) => set({ service, slot: null, coupon: null }),
   setSlot: (slot) => set({ slot }),
   setReminder: (reminder) => set({ reminder }),
   setPaymentMethod: (paymentMethod) => set({ paymentMethod }),
@@ -66,6 +74,9 @@ export const useBookingFlow = create<BookingState>((set) => ({
   next: () => set((s) => ({ step: Math.min(5, s.step + 1) as Step })),
   back: () => set((s) => ({ step: Math.max(1, s.step - 1) as Step })),
   setWebsite: (website) => set({ website }),
+  // Зміна коду скидає результат перевірки: ціна показується лише для перевіреного коду.
+  setCouponCode: (couponCode) => set((s) => ({ couponCode, coupon: s.coupon && s.coupon.code === couponCode.trim() ? s.coupon : null })),
+  setCoupon: (coupon) => set({ coupon }),
   done: (booking) => set({ booking, step: 5 }),
   reset: () => set(initial),
 }));

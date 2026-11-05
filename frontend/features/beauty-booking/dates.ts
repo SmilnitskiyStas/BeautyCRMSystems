@@ -7,10 +7,12 @@ export interface DateOption {
   closed: boolean;
 }
 
-/** Вихідні закладу з публічного каталогу (§17). Причин закриття публічний API не віддає. */
+/** Вихідні й години закладу з публічного каталогу (§17, §18.1). Причин закриття публічний API не віддає. */
 export interface ClosedRules {
   closedWeekdays?: string[];
   closures?: { dateFrom: string; dateTo: string }[];
+  /** `null`/відсутнє = години не задано (обмеження немає); день без інтервалів = заклад не працює (F8). */
+  workingHours?: Partial<Record<string, { from: string; to: string }[]>> | null;
 }
 
 const WEEKDAY_BY_UTC_DAY = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
@@ -20,7 +22,9 @@ export function isClosedDate(iso: string, rules?: ClosedRules): boolean {
   if (!rules) return false;
   if (rules.closures?.some((c) => c.dateFrom <= iso && iso <= c.dateTo)) return true;
   const key = WEEKDAY_BY_UTC_DAY[new Date(`${iso}T00:00:00Z`).getUTCDay()];
-  return rules.closedWeekdays?.includes(key) ?? false;
+  if (rules.closedWeekdays?.includes(key)) return true;
+  // §18.1/§18.3: при заданих годинах день без інтервалів = заклад не працює, дата не пропонується.
+  return rules.workingHours != null && (rules.workingHours[key]?.length ?? 0) === 0;
 }
 
 export const CLOSED_DAY_HINT = "Заклад не працює в цей день";

@@ -34,12 +34,13 @@ public sealed record PublicServiceDto(
     Guid Id, string Name, string? Description, string? Category, int DurationMinutes,
     decimal PriceOriginal, decimal PriceFinal, Guid? PromotionId, string? PromotionName);
 
-/// <param name="MarketingConsent">Лише явне true дає згоду на маркетинг (лише для нового клієнта; наявного профілю не змінює).</param>
+/// <param name="MarketingConsent">Приймається й ІГНОРУЄТЬСЯ (§26, TASK-777): згоду дає лише сам клієнт кнопкою в чаті.</param>
 public sealed record PublicClientInput(string? Name, string? Phone, bool? MarketingConsent = null);
 
 public sealed record PublicCreateAppointmentRequest(
     Guid? LocationId, Guid? SpecialistId, Guid? ServiceId, DateTimeOffset? StartsAt,
-    PublicClientInput? Client, string? Reminder, string? PaymentMethod, string? CaptchaToken, string? Website = null);
+    PublicClientInput? Client, string? Reminder, string? PaymentMethod, string? CaptchaToken, string? Website = null,
+    string? CouponCode = null); // §26.6: лише ЗАГАЛЬНІ коди; персональні -> 409 coupon_invalid
 
 /// <summary>Контекст HTTP-запиту, потрібний захисту від зловживань (без PII).</summary>
 public sealed record PublicRequestContext(string? IdempotencyKey, string? CaptchaToken, string? RemoteIp);
@@ -49,7 +50,11 @@ public sealed record PublicAppointmentDto(
     Guid LocationId, string LocationName, Guid SpecialistId, string SpecialistName, Guid ServiceId, string ServiceName,
     DateTimeOffset StartsAt, DateTimeOffset EndsAt, int DurationMinutes, string Status,
     decimal PriceOriginal, decimal PriceFinal, Guid? PromotionId, string ReminderOption,
-    string? PaymentMethod, string? PaymentStatus, CancellationTerms? Cancellation);
+    string? PaymentMethod, string? PaymentStatus, CancellationTerms? Cancellation,
+    PublicRemindersDto? Reminders = null, bool CouponApplied = false);
+
+/// <summary>§22.6.1: публічний DTO бачить лише спосіб і точки (без стану окремих нагадувань).</summary>
+public sealed record PublicRemindersDto(string Method, IReadOnlyList<int> OffsetsMinutes);
 
 public sealed record PublicBookingCreatedDto(string PublicToken, PublicAppointmentDto Appointment);
 

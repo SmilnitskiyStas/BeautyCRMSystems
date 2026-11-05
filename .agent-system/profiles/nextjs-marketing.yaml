@@ -1,0 +1,22 @@
+description: Marketing / portfolio site with a light colocated backend. Product + design + SEO roles, fullstack-developer instead of backend + database. 20 roles.
+include:
+  - task-intake
+  - requirements-analyst
+  - project-researcher
+  - context-manager
+  - project-architect
+  - project-manager
+  - review-orchestrator
+  - integration-steward
+  - frontend-developer
+  - fullstack-developer
+  - devops-engineer
+  - qa-engineer
+  - security-reviewer
+  - product-designer
+  - ui-ux-designer
+  - accessibility-specialist
+  - seo-specialist
+  - cro-specialist
+  - copywriter
+  - documentation-writer

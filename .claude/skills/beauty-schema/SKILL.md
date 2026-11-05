@@ -1,6 +1,7 @@
 ---
 name: beauty-schema
 description: Схема БД Beauty CRM — таблиці, RLS, запобігання перетину записів. Використовуй при міграціях і моделі даних beauty_*.
+x-generated-from: project:stacks/beauty/beauty-schema
 ---
 
 - Таблиці: `beauty_locations`, `beauty_specialists`, `beauty_specialist_locations` (графік по закладах), `beauty_services`, `beauty_service_prices` (ціна мережі + override по закладу), `beauty_appointments`, `beauty_clients`, `beauty_client_notes`, `beauty_promotions` (+ `_locations`, `_services`), `beauty_channels`, `beauty_conversations`, `beauty_messages`, `beauty_ai_actions`, `beauty_reminders`, `beauty_payments`.

@@ -60,6 +60,14 @@ export const useCreateAppointment = () => {
   });
 };
 
+/** Перевірка загального промокоду (§26.11.4): відповідь без подробиць про причину відмови. */
+export const useCheckCoupon = () => {
+  const tenant = useTenant();
+  return useMutation({
+    mutationFn: (q: { code: string; locationId: string; serviceId: string }) => bookingApi.checkCoupon(tenant, q),
+  });
+};
+
 export const useAppointment = (token: string) => {
   const tenant = useTenant();
   return useQuery({

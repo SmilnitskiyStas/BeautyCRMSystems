@@ -1,6 +1,7 @@
 ---
 name: beauty-booking-api
 description: API запису, слотів, послуг, акцій, клієнтів і аналітики Beauty CRM. Використовуй при бекенд-логіці beauty.
+x-generated-from: project:stacks/beauty/beauty-booking-api
 ---
 
 - Тонкі контролери, логіка в `Application/Features/Beauty*`. Ендпоінти під `[RequireModule("beauty_*")]`.

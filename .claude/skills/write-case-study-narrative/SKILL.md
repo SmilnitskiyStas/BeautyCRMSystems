@@ -1,8 +1,8 @@
 ---
 name: write-case-study-narrative
 description: >-
-  Write Case Study Narrative — Use when writing page copy, case studies, or blog content.
-x-generated-from: skills/copywriting/write-case-study-narrative/SKILL.md
+  Write a case study narrative to the project's structure without inventing metrics or client claims. Use when documenting a delivered project.
+x-generated-from: .claude/skills/write-case-study-narrative/SKILL.md
 ---
 
 ## Структура кейсу (розділ структури кейсів проєктного спеку)

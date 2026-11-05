@@ -1,5 +1,5 @@
 import { BeautyApiError, readApiError } from "./errors";
-import { API_URL, type SessionResponse, type SessionUser } from "./types";
+import { API_URL, USE_MOCK, type SessionResponse, type SessionUser } from "./types";
 
 /**
  * Клієнтське сховище сесії.
@@ -52,6 +52,20 @@ async function postSession(path: string, body?: unknown): Promise<Response> {
 
 export async function login(input: { tenant: string; email: string; password: string }): Promise<SessionUser> {
   const res = await postSession("login", input);
+  if (!res.ok) throw await readApiError(res);
+  const s = (await res.json()) as SessionResponse;
+  store(s);
+  return s.user;
+}
+
+/** Прийняття запрошення власника (§27.8): відповідь як у login, сесія встановлюється так само. */
+export async function acceptOwnerInvite(input: { token: string; password: string }): Promise<SessionUser> {
+  if (USE_MOCK) {
+    const user: SessionUser = { id: "mock-user", email: "owner@beauty.test", fullName: "Демо власник", role: "owner", specialistId: null };
+    store({ accessToken: "mock", expiresInSeconds: 900, user });
+    return user;
+  }
+  const res = await postSession("owner-invite/accept", input);
   if (!res.ok) throw await readApiError(res);
   const s = (await res.json()) as SessionResponse;
   store(s);

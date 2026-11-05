@@ -1,0 +1,168 @@
+# CI Beauty CRM (TASK-800). Усі джоби блокують PR (у налаштуваннях репозиторію потрібно позначити їх як required status checks).
+# Дії закріплено за commit SHA (коментар = тег). Оновлення версій: окремий PR, SHA перевіряти за тегом у репозиторії дії.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+  CI: "true"
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  frontend:
+    name: frontend (tsc, lint, vitest, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Generate Next.js types
+        # LayoutProps/PageProps генерує Next; на чистому runner-і .next ще немає
+        run: npx next typegen
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Lint
+        run: npm run lint
+      - name: Unit tests
+        # jsdom-тести під повним паралелізмом дають таймаути на runner-ах; 2 воркери стабільні
+        run: npx vitest run --maxWorkers=2
+      - name: Build
+        run: npm run build
+
+  worker:
+    name: worker (tsc, vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Typecheck
+        run: npm run build # tsc --noEmit
+      - name: Tests (integration tests start PostgreSQL via Testcontainers; Docker is preinstalled on ubuntu-latest)
+        run: npm test
+
+  backend:
+    name: backend (dotnet test, real PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # Без цієї змінної тести БД мовчки пропускаються; з нею відсутність Docker = падіння.
+      BEAUTY_TEST_REQUIRE_DB: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Рішення збирається SDK 10 (формат BeautyCrm.slnx), цільовий фреймворк проєктів net8.0 -> потрібен і runtime 8.
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('backend/**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+      - name: Docker is available (Testcontainers)
+        run: docker version --format '{{.Server.Version}}'
+      # Тести самі піднімають postgres:16-alpine через Testcontainers (PostgresRlsFixture); сервісний контейнер не потрібен.
+      - name: Test
+        run: dotnet test backend --nologo
+
+  secret-scan:
+    name: secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" # gitleaks_8.30.1_linux_x64.tar.gz
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # уся історія: секрет, видалений наступним комітом, лишається в історії
+          persist-credentials: false
+      - name: Install gitleaks (pinned version, checksum verified)
+        run: |
+          set -euo pipefail
+          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tgz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tgz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/gitleaks-bin"
+          tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP/gitleaks-bin" gitleaks
+      - name: Scan git history and working tree
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/gitleaks-bin/gitleaks" git --redact --no-banner --exit-code 1 --verbose .
+
+  dependency-audit:
+    name: dependency audit (high/critical block)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('backend/**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+      - name: npm audit (frontend)
+        working-directory: frontend
+        run: npm audit --audit-level=high
+      - name: npm audit (worker)
+        working-directory: worker
+        run: npm audit --audit-level=high
+      - name: NuGet vulnerabilities (backend, including transitive)
+        run: |
+          set -euo pipefail
+          dotnet restore backend
+          dotnet list backend package --vulnerable --include-transitive 2>&1 | tee "$RUNNER_TEMP/nuget-vuln.txt"
+          # Порожній звіт = "no vulnerable packages"; блокуємо лише High/Critical (стовпець Severity), решту показуємо в логу.
+          if grep -Eq '^\s*>\s.*\s(High|Critical)\s' "$RUNNER_TEMP/nuget-vuln.txt"; then
+            echo "::error::NuGet packages with High/Critical vulnerabilities found (see log)"; exit 1
+          fi
+          # Захист від мовчазного збою: звіт має містити або перелік вразливих, або підтвердження.
+          if ! grep -Eq 'no vulnerable packages|has the following vulnerable packages' "$RUNNER_TEMP/nuget-vuln.txt"; then
+            echo "::error::Unexpected dotnet list output: audit result could not be determined"; exit 1
+          fi

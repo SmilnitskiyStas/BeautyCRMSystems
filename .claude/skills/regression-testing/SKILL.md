@@ -1,8 +1,8 @@
 ---
 name: regression-testing
 description: >-
-  Regression Testing — Use when writing or running tests.
-x-generated-from: skills/qa/regression-testing/SKILL.md
+  Pick and run the regression set for a change and record gaps. Use after a bug fix or a refactor.
+x-generated-from: .claude/skills/regression-testing/SKILL.md
 ---
 
 ## Після зміни контенту (MDX/CMS-запис)

@@ -1,0 +1,103 @@
+{
+  "artifact": "ADR-018-hmac-test-vector",
+  "adr": ".claude/docs/adr/ADR-018-shelfguard-control-plane-integration.md",
+  "contract": ".claude/docs/beauty-contracts.md#27.2",
+  "version": "v1",
+  "status": "complete",
+  "generator": ".ai/artifacts/contracts/ADR-018-hmac-test-vector.py",
+  "warning": "TEST-ONLY secret. Never configure it in any environment (dev, staging, prod).",
+  "algorithm": {
+    "mac": "HMAC-SHA256",
+    "key": "raw bytes of base64-decoded ControlPlane:Inbound:Keys:{kid}:Secret (NOT the base64 text)",
+    "canonical": "lines joined with LF, no trailing newline: prefix, kid, timestamp, nonce, METHOD, path, query, hex_lower(sha256(body bytes))",
+    "canonicalEncoding": "UTF-8",
+    "signatureHeader": "v1=<base64url without padding of the 32-byte MAC>",
+    "keyFingerprint": "first 12 hex of sha256(raw key bytes); the only key-derived value allowed in DB/audit/logs"
+  },
+  "key": {
+    "kid": "test-k1",
+    "secretRawAscii": "TEST-ONLY-NOT-A-REAL-SECRET-0001",
+    "secretBase64": "VEVTVC1PTkxZLU5PVC1BLVJFQUwtU0VDUkVULTAwMDE=",
+    "fingerprint": "7229c8656833"
+  },
+  "emptyBodySha256Hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "verifierNotes": [
+    "tests must freeze the clock at the vector timestamp (window |now - ts| <= 300 s)",
+    "changing any of kid, timestamp, nonce, method, path, query or one body byte must change the signature",
+    "non-empty query in v1 is rejected with 400 before signature verification"
+  ],
+  "vectors": [
+    {
+      "name": "create_tenant_post",
+      "method": "POST",
+      "path": "/api/control/v1/tenants",
+      "query": "",
+      "timestamp": 1793700000,
+      "nonce": "TEST_nonce_0000000000000001",
+      "bodyUtf8": "{\"externalRef\":\"sg-test-123\",\"name\":\"Test Salon\",\"slug\":\"test-salon\",\"modules\":[\"beauty_booking\"],\"owner\":{\"email\":\"owner@example.test\",\"fullName\":\"Test Owner\"},\"actor\":{\"id\":\"sg-admin-test\",\"displayName\":\"Test Admin\"}}",
+      "bodyBase64": "eyJleHRlcm5hbFJlZiI6InNnLXRlc3QtMTIzIiwibmFtZSI6IlRlc3QgU2Fsb24iLCJzbHVnIjoidGVzdC1zYWxvbiIsIm1vZHVsZXMiOlsiYmVhdXR5X2Jvb2tpbmciXSwib3duZXIiOnsiZW1haWwiOiJvd25lckBleGFtcGxlLnRlc3QiLCJmdWxsTmFtZSI6IlRlc3QgT3duZXIifSwiYWN0b3IiOnsiaWQiOiJzZy1hZG1pbi10ZXN0IiwiZGlzcGxheU5hbWUiOiJUZXN0IEFkbWluIn19",
+      "bodySha256Hex": "aa9334c1581240c879e1683a077eb6280cf195259e249544fc3ea7601d58c5b8",
+      "canonicalString": "BCRM-HMAC-SHA256-v1\ntest-k1\n1793700000\nTEST_nonce_0000000000000001\nPOST\n/api/control/v1/tenants\n\naa9334c1581240c879e1683a077eb6280cf195259e249544fc3ea7601d58c5b8",
+      "canonicalStringBase64": "QkNSTS1ITUFDLVNIQTI1Ni12MQp0ZXN0LWsxCjE3OTM3MDAwMDAKVEVTVF9ub25jZV8wMDAwMDAwMDAwMDAwMDAxClBPU1QKL2FwaS9jb250cm9sL3YxL3RlbmFudHMKCmFhOTMzNGMxNTgxMjQwYzg3OWUxNjgzYTA3N2ViNjI4MGNmMTk1MjU5ZTI0OTU0NGZjM2VhNzYwMWQ1OGM1Yjg=",
+      "headers": {
+        "X-BCRM-Key-Id": "test-k1",
+        "X-BCRM-Timestamp": "1793700000",
+        "X-BCRM-Nonce": "TEST_nonce_0000000000000001",
+        "X-BCRM-Signature": "v1=4pVZio-2ub51chRhFjuOzd22DcplDEvG0u5izlm4yWQ"
+      },
+      "expectedSignature": "v1=4pVZio-2ub51chRhFjuOzd22DcplDEvG0u5izlm4yWQ",
+      "negative": {
+        "bodyWithTrailingSpaceSignature": "v1=IIMsNj2QnAm243lqrRroxYKl7bTgPcVT-i28LMTsm-U",
+        "note": "signature of the same request with one extra trailing space in the body; a verifier holding expectedSignature must reject it"
+      }
+    },
+    {
+      "name": "get_tenant_empty_body",
+      "method": "GET",
+      "path": "/api/control/v1/tenants/sg-test-123",
+      "query": "",
+      "timestamp": 1793700060,
+      "nonce": "TEST_nonce_0000000000000002",
+      "bodyUtf8": "",
+      "bodyBase64": "",
+      "bodySha256Hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonicalString": "BCRM-HMAC-SHA256-v1\ntest-k1\n1793700060\nTEST_nonce_0000000000000002\nGET\n/api/control/v1/tenants/sg-test-123\n\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonicalStringBase64": "QkNSTS1ITUFDLVNIQTI1Ni12MQp0ZXN0LWsxCjE3OTM3MDAwNjAKVEVTVF9ub25jZV8wMDAwMDAwMDAwMDAwMDAyCkdFVAovYXBpL2NvbnRyb2wvdjEvdGVuYW50cy9zZy10ZXN0LTEyMwoKZTNiMGM0NDI5OGZjMWMxNDlhZmJmNGM4OTk2ZmI5MjQyN2FlNDFlNDY0OWI5MzRjYTQ5NTk5MWI3ODUyYjg1NQ==",
+      "headers": {
+        "X-BCRM-Key-Id": "test-k1",
+        "X-BCRM-Timestamp": "1793700060",
+        "X-BCRM-Nonce": "TEST_nonce_0000000000000002",
+        "X-BCRM-Signature": "v1=lJjQuKcNYUScAmVKL0-V8hFwpC-szS5cGHAHUIAuzEQ"
+      },
+      "expectedSignature": "v1=lJjQuKcNYUScAmVKL0-V8hFwpC-szS5cGHAHUIAuzEQ",
+      "negative": {
+        "bodyWithTrailingSpaceSignature": "v1=YrkYNu3aiJiR4Q_QyMp7vwGdNkvQCWOwrPdDSpnMPi8",
+        "note": "signature of the same request with one extra trailing space in the body; a verifier holding expectedSignature must reject it"
+      }
+    },
+    {
+      "name": "suspend_utf8_body",
+      "method": "POST",
+      "path": "/api/control/v1/tenants/sg-test-123/suspend",
+      "query": "",
+      "timestamp": 1793700120,
+      "nonce": "TEST_nonce_0000000000000003",
+      "bodyUtf8": "{\"reason\":\"Несплата рахунку\",\"actor\":{\"id\":\"sg-admin-test\",\"displayName\":\"Тест Адмін\"}}",
+      "bodyBase64": "eyJyZWFzb24iOiLQndC10YHQv9C70LDRgtCwINGA0LDRhdGD0L3QutGDIiwiYWN0b3IiOnsiaWQiOiJzZy1hZG1pbi10ZXN0IiwiZGlzcGxheU5hbWUiOiLQotC10YHRgiDQkNC00LzRltC9In19",
+      "bodySha256Hex": "bd8f29f9392f7dc8b79b0fb8d0617ceba43a731e976f1c5d86f58dae98da8559",
+      "canonicalString": "BCRM-HMAC-SHA256-v1\ntest-k1\n1793700120\nTEST_nonce_0000000000000003\nPOST\n/api/control/v1/tenants/sg-test-123/suspend\n\nbd8f29f9392f7dc8b79b0fb8d0617ceba43a731e976f1c5d86f58dae98da8559",
+      "canonicalStringBase64": "QkNSTS1ITUFDLVNIQTI1Ni12MQp0ZXN0LWsxCjE3OTM3MDAxMjAKVEVTVF9ub25jZV8wMDAwMDAwMDAwMDAwMDAzClBPU1QKL2FwaS9jb250cm9sL3YxL3RlbmFudHMvc2ctdGVzdC0xMjMvc3VzcGVuZAoKYmQ4ZjI5ZjkzOTJmN2RjOGI3OWIwZmI4ZDA2MTdjZWJhNDNhNzMxZTk3NmYxYzVkODZmNThkYWU5OGRhODU1OQ==",
+      "headers": {
+        "X-BCRM-Key-Id": "test-k1",
+        "X-BCRM-Timestamp": "1793700120",
+        "X-BCRM-Nonce": "TEST_nonce_0000000000000003",
+        "X-BCRM-Signature": "v1=HZ5R7HEulat_6epI2sU9QD3o5hN9vUzUoqIouNfJb5Y"
+      },
+      "expectedSignature": "v1=HZ5R7HEulat_6epI2sU9QD3o5hN9vUzUoqIouNfJb5Y",
+      "negative": {
+        "bodyWithTrailingSpaceSignature": "v1=0cuKOdIIFBgd2M22IrNPS0b-_ktkH2CuFZWbKfc-Dts",
+        "note": "signature of the same request with one extra trailing space in the body; a verifier holding expectedSignature must reject it"
+      }
+    }
+  ]
+}

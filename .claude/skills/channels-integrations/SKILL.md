@@ -1,6 +1,7 @@
 ---
 name: channels-integrations
 description: Адаптери каналів зв'язку (Telegram, Instagram, Messenger, WhatsApp, Viber, віджет) і outbox. Використовуй при інтеграціях каналів.
+x-generated-from: project:stacks/beauty/channels-integrations
 ---
 
 - Єдиний інтерфейс `IChannelAdapter`: прийом webhook, відправка, перевірка підпису.

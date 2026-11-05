@@ -11,6 +11,8 @@ public static class AuthDataServiceExtensions
     {
         services.TryAddSingleton<IPasswordHasher, BcryptPasswordHasher>();
         services.AddScoped<IAuthStore, EfAuthStore>();
+        services.AddScoped<BeautyCrm.Application.Features.BeautyControlPlane.IControlPlaneStore, EfControlPlaneStore>();
+        services.AddScoped<BeautyCrm.Application.Features.BeautyControlPlane.IOwnerInviteStore, EfOwnerInviteStore>();
         return services;
     }
 }

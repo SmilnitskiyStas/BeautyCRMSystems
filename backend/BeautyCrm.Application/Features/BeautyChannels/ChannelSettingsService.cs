@@ -41,6 +41,8 @@ public sealed class ChannelSettingsService(IChannelSettingsStore store)
         if (string.IsNullOrWhiteSpace(req.Name) || req.Name.Length > 200) return Error.Validation("invalid_name", "Name is required (max 200).");
         if (req.SettingsJson is not null && !IsJsonObject(req.SettingsJson))
             return Error.Validation("invalid_settings", "settingsJson must be a JSON object.");
+        if (req.SettingsJson is not null && !AssistantButtonsValid(req.SettingsJson)) // §23.10: assistant.buttons - bool або відсутнє
+            return Error.Validation("invalid_settings", "settingsJson.assistant.buttons must be a boolean.");
         var existing = await store.GetAsync(id, ct);
         if (existing is null && (req.Type is null || !Types.Contains(req.Type)))
             return Error.Validation("invalid_type", "type is required to create a channel.");
@@ -55,6 +57,15 @@ public sealed class ChannelSettingsService(IChannelSettingsStore store)
         return await store.UpsertAsync(id, req, ct) is { } saved
             ? ToDto(saved)
             : Error.Conflict("channel_id_conflict", "Channel id is already in use.");
+    }
+
+    /// <summary><c>assistant.buttons</c> (TASK-752, §23.2): true | false | відсутнє; будь-який інший тип (рядок, число, null, об'єкт) - помилка.</summary>
+    private static bool AssistantButtonsValid(string json)
+    {
+        using var d = System.Text.Json.JsonDocument.Parse(json);
+        if (!d.RootElement.TryGetProperty("assistant", out var assistant) || assistant.ValueKind != System.Text.Json.JsonValueKind.Object) return true;
+        return !assistant.TryGetProperty("buttons", out var buttons)
+            || buttons.ValueKind is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False;
     }
 
     private static bool IsJsonObject(string json)

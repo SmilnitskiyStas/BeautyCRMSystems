@@ -2,7 +2,7 @@
 name: resolve-known-issue
 description: >-
   Record a fixed bug with root cause and a concrete prevention rule. Use after fixing any real defect (not a typo).
-x-generated-from: skills/workflow/resolve-known-issue/SKILL.md
+x-generated-from: .claude/skills/resolve-known-issue/SKILL.md
 ---
 
 ## Мета
@@ -18,7 +18,7 @@ x-generated-from: skills/workflow/resolve-known-issue/SKILL.md
 
 ## Процес
 1. Одразу після підтвердженого фіксу (тести зелені, поведінка коректна) — **не відкладати**, контекст (чому це сталося) забувається за лічені години.
-2. Заповнити чи оновити запис `KI-NNN` у `.claude/docs/known-issues.md` (створюється зі скелета `.claude/templates/known-issues-doc-template.md`, якщо файла ще немає): `Description` (симптом) → `Root cause` (справжня технічна причина) → `Resolution` (що змінено) → `Prevention` (конкретне дієве правило).
+2. Заповнити чи оновити запис `KI-NNN` у `.claude/docs/known-issues.md` (створюється зі скелета `.claude/.claude/templates/known-issues-doc-template.md`, якщо файла ще немає): `Description` (симптом) → `Root cause` (справжня технічна причина) → `Resolution` (що змінено) → `Prevention` (конкретне дієве правило).
 3. **`Prevention` має бути дією, яку хтось реально виконає, а не побажанням:**
    - погано: "бути уважнішим із валідацією env-змінних"
    - добре: "усі env-змінні йдуть через `lib/env.ts` з Zod-схемою — типізована помилка при старті, якщо змінної немає"

@@ -1,12 +1,14 @@
 "use client";
 
-import { useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 import { z } from "zod";
 import { useAuth } from "@/features/beauty-auth/components/auth-provider";
 import { humanizeError } from "@/features/beauty-auth/errors";
 import { canEditSettings } from "@/features/beauty-auth/permissions";
 import { useCancellationSettings, useUpdateCancellationSettings } from "../hooks/use-beauty-admin";
 import type { CancellationSettings } from "../types";
+import { AiSettingsSection } from "./ai-settings-section";
+import { ReminderSettingsSection } from "./reminder-settings-section";
 import { Card, PageHeader, PrimaryButton, QueryState } from "./ui";
 
 const percent = (msg: string) => z.number(msg).int(msg).min(0, msg).max(100, msg);
@@ -149,14 +151,14 @@ function CancellationForm({ initial, canEdit }: { initial: CancellationSettings;
   const w = draft.windowHours || "N";
 
   return (
-    <form onSubmit={onSubmit} noValidate className="flex flex-col gap-6">
+    <form onSubmit={onSubmit} noValidate data-testid="cancellation-form" className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2 lg:gap-x-10">
       {!canEdit ? (
-        <p role="note" className="rounded-xl bg-(--tint) px-3.5 py-2.5 text-sm">
+        <p role="note" className="lg:col-span-2 rounded-xl bg-(--tint) px-3.5 py-2.5 text-sm">
           Лише власник може змінювати ці налаштування. Ви бачите поточні значення.
         </p>
       ) : null}
 
-      <div className="grid gap-5 sm:grid-cols-2">
+      <div className="flex flex-col gap-5">
         <NumberField
           label="Вікно скасування, годин до візиту"
           suffix="год"
@@ -166,7 +168,6 @@ function CancellationForm({ initial, canEdit }: { initial: CancellationSettings;
           readOnly={!canEdit}
           onChange={(v) => set("windowHours", v)}
         />
-        <div />
         <NumberField
           label={`Повернення, якщо скасовано за ${w} год або менше`}
           suffix="%"
@@ -211,24 +212,24 @@ function CancellationForm({ initial, canEdit }: { initial: CancellationSettings;
         />
       </fieldset>
 
-      <p className="rounded-xl bg-(--page) px-3.5 py-2.5 text-sm">
+      <p className="rounded-xl bg-(--page) px-3.5 py-2.5 text-sm lg:col-span-2">
         Приклад: оплата 1000 ₴, скасування за {w} год або менше — повернемо{" "}
         <strong>{summary(draft, true)}</strong>; раніше — <strong>{summary(draft, false)}</strong>.
       </p>
 
       {serverError ? (
-        <p role="alert" className="rounded-xl bg-[#FBE4E4] px-3.5 py-2.5 text-sm text-[#8A1F1F]">
+        <p role="alert" className="lg:col-span-2 rounded-xl bg-[#FBE4E4] px-3.5 py-2.5 text-sm text-[#8A1F1F]">
           {serverError}
         </p>
       ) : null}
       {saved ? (
-        <p role="status" className="rounded-xl bg-[#DDF3E6] px-3.5 py-2.5 text-sm text-[#145A32]">
+        <p role="status" className="lg:col-span-2 rounded-xl bg-[#DDF3E6] px-3.5 py-2.5 text-sm text-[#145A32]">
           Налаштування збережено.
         </p>
       ) : null}
 
       {canEdit ? (
-        <div>
+        <div className="lg:col-span-2">
           <PrimaryButton type="submit" disabled={update.isPending}>
             {update.isPending ? "Зберігаємо…" : "Зберегти"}
           </PrimaryButton>
@@ -252,17 +253,28 @@ export function SettingsScreen() {
   const q = useCancellationSettings();
   const canEdit = canEditSettings(user.role);
 
+  // Посилання /beauty/settings#ai (банер в «AI-асистент»): секція з'являється після завантаження, тож прокручуємо вручну.
+  useEffect(() => {
+    if (window.location.hash !== "#ai") return;
+    const t = setTimeout(() => document.getElementById("ai")?.scrollIntoView?.({ block: "start" }), 400);
+    return () => clearTimeout(t);
+  }, []);
+
   return (
     <>
-      <PageHeader title="Налаштування" subtitle="Повернення коштів при скасуванні запису" />
-      <QueryState isPending={q.isPending} isError={q.isError} onRetry={() => q.refetch()}>
-        {q.data ? (
-          <Card className="max-w-3xl">
-            <h2 className="mb-4 text-lg font-semibold">Повернення коштів</h2>
-            <CancellationForm initial={q.data} canEdit={canEdit} />
-          </Card>
-        ) : null}
-      </QueryState>
+      <PageHeader title="Налаштування" subtitle="Повернення коштів, нагадування клієнтам та ШІ-асистент" />
+      <div data-testid="settings-layout" className="grid grid-cols-1 items-start gap-6">
+        <QueryState isPending={q.isPending} isError={q.isError} onRetry={() => q.refetch()}>
+          {q.data ? (
+            <Card>
+              <h2 className="mb-4 text-lg font-semibold">Повернення коштів</h2>
+              <CancellationForm initial={q.data} canEdit={canEdit} />
+            </Card>
+          ) : null}
+        </QueryState>
+        <ReminderSettingsSection />
+        <AiSettingsSection />
+      </div>
     </>
   );
 }

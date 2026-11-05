@@ -1,8 +1,8 @@
 ---
 name: define-positioning-and-audience
 description: >-
-  Define Positioning And Audience — Use during the discovery phase — positioning, IA, content model.
-x-generated-from: skills/product-design/define-positioning-and-audience/SKILL.md
+  State positioning, audience, and differentiation from the spec without inventing facts. Use at the start of discovery.
+x-generated-from: .claude/skills/define-positioning-and-audience/SKILL.md
 ---
 
 ## Purpose

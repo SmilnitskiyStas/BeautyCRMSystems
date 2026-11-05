@@ -1,8 +1,8 @@
 ---
 name: plan-seo-map
 description: >-
-  Plan SEO Map — Use during the discovery phase — positioning, IA, content model.
-x-generated-from: skills/product-design/plan-seo-map/SKILL.md
+  Assign target keywords and intent to each planned page. Use when planning information architecture with SEO in mind.
+x-generated-from: .claude/skills/plan-seo-map/SKILL.md
 ---
 
 ## Purpose

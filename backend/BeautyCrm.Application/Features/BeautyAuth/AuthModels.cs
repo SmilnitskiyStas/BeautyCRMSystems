@@ -17,6 +17,19 @@ public static class BeautyModules
 {
     public static readonly IReadOnlyList<string> All =
         ["beauty_booking", "beauty_catalog", "beauty_clients", "beauty_analytics", "beauty_channels", "beauty_ai"];
+
+    /// <summary>TASK-777 (§26.11.1, ADR-015): кампанії й купони. Не входить у <see cref="All"/> (нікому не вмикається за замовчуванням, без backfill).</summary>
+    public const string Marketing = "beauty_marketing";
+
+    /// <summary>Усі допустимі імена модулів (для валідації списку модулів tenant): <see cref="All"/> + опційні.</summary>
+    public static readonly IReadOnlyList<string> Known = [.. All, Marketing];
+}
+
+public static class UserStates
+{
+    public const string Active = "active";
+    /// <summary>Власник створений control plane і ще не задав пароль (вхід неможливий).</summary>
+    public const string Invited = "invited";
 }
 
 /// <summary>Автентифікований користувач tenant (з claims JWT).</summary>
@@ -34,7 +47,7 @@ public sealed class AuthOptions
 
 // ---------- помилки ----------
 
-public enum AuthErrorKind { Validation, Unauthorized, Forbidden, NotFound, Conflict, Locked }
+public enum AuthErrorKind { Validation, Unauthorized, Forbidden, NotFound, Conflict, Locked, Gone }
 
 public sealed record AuthError(AuthErrorKind Kind, string Code, string Message)
 {
@@ -44,6 +57,7 @@ public sealed record AuthError(AuthErrorKind Kind, string Code, string Message)
     public static AuthError NotFound(string code, string message) => new(AuthErrorKind.NotFound, code, message);
     public static AuthError Conflict(string code, string message) => new(AuthErrorKind.Conflict, code, message);
     public static AuthError Locked(string code, string message) => new(AuthErrorKind.Locked, code, message);
+    public static AuthError Gone(string code, string message) => new(AuthErrorKind.Gone, code, message);
 
     public static readonly AuthError InvalidCredentials = Unauthorized("invalid_credentials", "Invalid credentials.");
     public static readonly AuthError InvalidToken = Unauthorized("invalid_token", "Token is invalid or expired.");
@@ -124,8 +138,8 @@ public sealed record TenantInfo(Guid Id, string Name, string Slug, IReadOnlyList
 }
 
 public sealed record UserRecord(
-    Guid Id, Guid TenantId, string Email, string FullName, string PasswordHash, string Role, Guid? SpecialistId,
-    bool IsActive, int FailedLoginCount, DateTimeOffset? LockoutUntil, DateTimeOffset? LastLoginAt);
+    Guid Id, Guid TenantId, string Email, string FullName, string? PasswordHash, string Role, Guid? SpecialistId,
+    bool IsActive, int FailedLoginCount, DateTimeOffset? LockoutUntil, DateTimeOffset? LastLoginAt, string State = UserStates.Active);
 
 public sealed record InviteRecord(
     Guid Id, string Email, string Role, Guid? SpecialistId, DateTimeOffset ExpiresAt,
@@ -133,7 +147,8 @@ public sealed record InviteRecord(
 
 public sealed record RefreshRecord(Guid Id, Guid UserId, DateTimeOffset ExpiresAt, DateTimeOffset? RevokedAt);
 
-public sealed record NewUser(string Email, string FullName, string PasswordHash, string Role, Guid? SpecialistId);
+/// <summary>ADR-018: PasswordHash = null лише для <see cref="UserStates.Invited"/> (власник, створений control plane).</summary>
+public sealed record NewUser(string Email, string FullName, string? PasswordHash, string Role, Guid? SpecialistId, string State = UserStates.Active);
 
 public sealed record NewInvite(
     string Email, string Role, Guid? SpecialistId, string TokenHash, DateTimeOffset ExpiresAt, Guid? InvitedByUserId);

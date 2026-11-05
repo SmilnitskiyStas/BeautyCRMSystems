@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./.env.dev.local)",
+      "Read(./.env.staging)",
+      "Read(./.env.production)",
+      "Read(./**/.env.local)",
+      "Read(./**/node_modules/**)",
+      "Read(./**/bin/**)",
+      "Read(./**/obj/**)",
+      "Read(./**/.next/**)",
+      "Read(./**/package-lock.json)",
+      "Read(./**/pnpm-lock.yaml)",
+      "Read(./**/yarn.lock)",
+      "Read(./**/Migrations/*.Designer.cs)",
+      "Read(./**/Migrations/*ModelSnapshot.cs)",
+      "Read(./scripts/dev/.state/*.pid)",
+      "Read(./scripts/dev/.state/dev-state.json)"
+    ]
+  }
+}

@@ -15,6 +15,7 @@ public static class AuthResultMapping
             AuthErrorKind.NotFound => c.NotFound(body),
             AuthErrorKind.Conflict => c.Conflict(body),
             AuthErrorKind.Locked => c.StatusCode(StatusCodes.Status423Locked, body),
+            AuthErrorKind.Gone => c.StatusCode(StatusCodes.Status410Gone, body),
             _ => c.UnprocessableEntity(body),
         };
     }

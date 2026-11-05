@@ -46,12 +46,22 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Docker-збірка (frontend/Dockerfile) задає NEXT_OUTPUT=standalone; локально й у CI вихід стандартний.
+  ...(process.env.NEXT_OUTPUT === "standalone" ? { output: "standalone" as const } : {}),
   cacheComponents: true,
   partialPrefetching: true,
   poweredByHeader: false,
   async headers() {
     return [
       { source: "/:path*", headers: securityHeaders },
+      // Запрошення власника (§27.8): токен у фрагменті; без Referer і без кешу.
+      {
+        source: "/invite",
+        headers: [
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "Cache-Control", value: "no-store" },
+        ],
+      },
       // Публічний токен запису в шляху: не віддаємо його у Referer і не кешуємо (узгоджено з §12).
       {
         source: "/book/appointment/:path*",

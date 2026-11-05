@@ -20,6 +20,8 @@ export interface ClientInfo {
   channel: string; // telegram | instagram | ...
   address: string; // channel-specific recipient id
   marketingConsent: boolean;
+  /** Client unsubscribed (STOP) or has contact preference `none`: no review request / winback / campaign (TASK-760). Absent = false. */
+  optedOut?: boolean;
   name?: string;
 }
 
@@ -34,20 +36,56 @@ export interface OutboundMessage {
   kind: "reminder" | "campaign" | "winback" | "review" | "message";
 }
 
+/** Neutral keyboard layout of beauty_messages.actions (§23.4): `{rows: [[{label, data}]]}`; written by .NET and by the worker. */
+export interface ChatActions { rows: { label: string; data: string }[][] }
+
 export interface StoredMessage extends OutboundMessage {
   id: string;
   status: "queued" | "sent" | "failed";
+  /** Keyboard stored with the message (read from the DB on every attempt, so retries never change it). Telegram only. */
+  actions?: ChatActions | null;
 }
 
+/** What the channel returned for a delivered message (Telegram `result.message_id`); mocks return nothing. */
+export interface SendReceipt { externalMessageId?: string | null }
+
+export type CampaignStatus = "draft" | "scheduled" | "sending" | "done" | "cancelled";
+
+/** Campaign as the worker needs it (§26.8). Contains the shared coupon code: never log it. */
 export interface CampaignInfo {
   id: string;
   tenantId: string;
-  text: string;
-  /** Allowed sending window, local hours [from, to). */
-  allowedFromHour: number;
-  allowedToHour: number;
-  utcOffsetMinutes: number;
+  status: CampaignStatus;
+  type: "promo" | "news";
+  promotion?: { discountType: "percent" | "fixed"; discountValue: number; startsAt?: Date; endsAt?: Date; isActive: boolean; serviceNames: string[] };
+  couponMode: "none" | "personal" | "shared";
+  sharedCode?: string;
+  couponValidFrom?: Date;
+  couponValidTo?: Date;
+  template: string;
+  locationId?: string;
+  scheduledAt: Date | null;
 }
+
+export interface CampaignRecipientRef { recipientId: string; clientId: string }
+
+/** Settings of one `enqueueCampaignMessage` call (from env in main.ts). */
+export interface CampaignEnqueueOptions {
+  dailyLimit: number;
+  clientIntervalDays: number;
+  favoriteServicesDays: number;
+  /** Used when neither the client's last visit nor the campaign gives a venue. */
+  defaultTimezone: string;
+  currencyLabel: string;
+}
+
+/** `queued | deferred_window | deferred_limit | skipped:{code}`; `not_pending` = another poller owns / has handled the row. */
+export type CampaignEnqueueResult = "queued" | "deferred_window" | "deferred_limit" | "deferred_disabled" | "not_pending" | `skipped:${string}`;
+
+/** Winback enqueue (M6): same checks as a campaign recipient (Telegram, consent, window, frequency, daily limit), all under one lock. */
+export type WinbackEnqueueResult =
+  | { result: "queued"; message: StoredMessage }
+  | { result: "duplicate" | "deferred_window" | "deferred_limit" | "deferred_disabled" | `skipped:${string}` };
 
 export interface LapsedClient extends ClientInfo {
   lastVisitAt: Date;
@@ -58,13 +96,40 @@ export interface BeautyDataPort {
   getAppointment(id: string): Promise<AppointmentInfo | null>;
   getClient(id: string): Promise<ClientInfo | null>;
   getCampaign(id: string): Promise<CampaignInfo | null>;
-  /** Segment members; implementation may pre-filter, the job re-checks consent. */
-  listCampaignAudience(campaignId: string): Promise<ClientInfo[]>;
-  listLapsedClients(now: Date, inactiveDays: number): Promise<LapsedClient[]>;
+  /** `pending` recipients of the confirmed (frozen) audience, `ORDER BY id`, after the optional cursor. */
+  listCampaignAudience(campaignId: string, limit: number, afterId?: string): Promise<CampaignRecipientRef[]>;
+  /** Campaign ids: `scheduled` with `scheduled_at <= now`, and `sending`. */
+  listDueCampaigns(now: Date): Promise<string[]>;
+  /** CAS `scheduled -> sending` (+ `started_at`). true = this call started it. */
+  startCampaign(id: string, now: Date): Promise<boolean>;
+  /** `sending -> done` (+ `finished_at`) when no `pending|queued` recipients are left. true = finished now. */
+  finishCampaignIfDrained(id: string, now: Date): Promise<boolean>;
+  /** One transaction per recipient: all checks of §26.8 + coupon + message + keyboard + recipient `queued`. */
+  enqueueCampaignMessage(recipientId: string, now: Date, opts: CampaignEnqueueOptions): Promise<CampaignEnqueueResult>;
+  /** Right before delivery: why a campaign message must not be sent (cancelled campaign / consent withdrawn), else null. */
+  campaignSendGuard(messageId: string): Promise<"campaign_cancelled" | "consent_withdrawn" | null>;
+  /** Winback message in one transaction under the tenant's `marketing-daily` lock (frequency + daily limit + insert are atomic). */
+  enqueueWinbackMessage(msg: OutboundMessage, now: Date, opts: CampaignEnqueueOptions): Promise<WinbackEnqueueResult>;
+  /** The current tenant has the `beauty_marketing` module (kill switch together with the WORKER_* flags). */
+  isMarketingEnabled(): Promise<boolean>;
+  /** `minIntervalDays` (default 7): clients with a marketing message queued/sent within it are left out (§26.5 frequency). */
+  listLapsedClients(now: Date, inactiveDays: number, minIntervalDays?: number): Promise<LapsedClient[]>;
   /** Create message row, or return the existing one for the same key. */
   upsertMessage(msg: OutboundMessage): Promise<{ message: StoredMessage; created: boolean }>;
   getMessage(id: string): Promise<StoredMessage | null>;
-  setMessageStatus(id: string, status: StoredMessage["status"]): Promise<void>;
+  /** `externalMessageId` (provider message id) is written in the same UPDATE when given; null/undefined keeps the stored value. */
+  setMessageStatus(id: string, status: StoredMessage["status"], externalMessageId?: string | null): Promise<void>;
+  /**
+   * Compare-and-swap claim before delivery: `pending` -> `sending` in one conditional UPDATE. true = this worker owns the send;
+   * false = the row is not pending any more (the .NET sweeper or another worker took it, or it is sent/failed/draft): skip it.
+   * A failed attempt returns the row to `pending` (recordSendFailure); a stuck `sending` is reaped by the backend after 5 minutes.
+   */
+  claimForSend(id: string): Promise<boolean>;
+  /**
+   * Marketing variant of `claimForSend` (L5): under the tenant's `marketing-daily` lock counts sent/sending marketing messages
+   * since `since` and, below `limit`, performs the same CAS. `limit` = over the daily limit (row stays pending); `lost` = not pending.
+   */
+  claimMarketingForSend(id: string, limit: number, since: Date): Promise<"claimed" | "lost" | "limit">;
   /** Marketing (campaign/winback) messages of the current tenant sent since `since` (daily limit). */
   countMarketingSentSince(since: Date): Promise<number>;
   /** Persist a failed attempt (attempts/last_error); `final` => status "failed", otherwise stays queued ("pending"). */
@@ -73,7 +138,7 @@ export interface BeautyDataPort {
 
 /** Channel delivery (Telegram/Instagram adapters, other agent). Throws on failure. */
 export interface ChannelSenderPort {
-  send(msg: StoredMessage): Promise<void>;
+  send(msg: StoredMessage): Promise<void | SendReceipt>;
 }
 
 /** Idempotency claims, e.g. Redis SET NX or DB unique index. */
@@ -118,4 +183,8 @@ export interface BeautyDeps {
   now: () => Date;
   /** Marketing messages per tenant per rolling 24 h; default DEFAULT_MARKETING_DAILY_LIMIT. */
   marketingDailyLimit?: number;
+  /** WORKER_MARKETING_CLIENT_INTERVAL_DAYS (default 7). */
+  marketingClientIntervalDays?: number;
+  /** Campaign sending settings; defaults in `beauty-campaign.ts`. */
+  campaign?: Partial<Omit<CampaignEnqueueOptions, "dailyLimit" | "clientIntervalDays">> & { batch?: number };
 }

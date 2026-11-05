@@ -21,6 +21,7 @@ public static class ResultMapping
             ErrorKind.NotFound => c.NotFound(body),
             ErrorKind.Conflict => c.Conflict(body),
             ErrorKind.Forbidden => c.StatusCode(StatusCodes.Status403Forbidden, body),
+            ErrorKind.TooManyRequests => c.StatusCode(StatusCodes.Status429TooManyRequests, body),
             ErrorKind.PaymentFailed => c.StatusCode(StatusCodes.Status402PaymentRequired, body),
             _ => c.UnprocessableEntity(body),
         };

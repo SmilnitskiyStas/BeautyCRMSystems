@@ -17,6 +17,8 @@ const BY_CODE: Record<string, string> = {
   idempotency_key_reused: "Дані змінились після спроби запису. Підтвердіть запис ще раз.",
   idempotency_conflict: "Запис уже створюється. Зачекайте кілька секунд і перевірте ще раз.",
   invalid_request: "Не вдалося обробити запит. Перевірте дані й спробуйте ще раз.",
+  coupon_invalid: "Код не підходить: він недійсний, використаний або вже не діє.",
+  invalid_coupon_format: "Перевірте код: від 4 до 20 літер і цифр.",
   payment_failed: "Не вдалося провести платіж. Спробуйте ще раз або оберіть оплату в закладі.",
   refund_failed: "Не вдалося повернути кошти. Зверніться до закладу.",
   already_cancelled: "Запис уже скасовано.",
@@ -47,6 +49,10 @@ export function humanizeBookingError(e: unknown, fallback = "Щось пішло
   if (e instanceof TypeError) return BY_CODE.api_unreachable;
   return fallback;
 }
+
+/** ADR-018 D2: tenant призупинено (403 + `{code:"tenant_suspended"}`). Інші 403 сюди не потрапляють. */
+export const isTenantSuspended = (e: unknown): boolean =>
+  e instanceof BookingApiError && e.status === 403 && e.code === "tenant_suspended";
 
 /** Слот зайнятий/недоступний: UI скидає вибір часу й оновлює слоти. */
 export const isSlotLost = (e: unknown): boolean =>

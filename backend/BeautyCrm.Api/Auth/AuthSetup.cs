@@ -1,6 +1,8 @@
 using System.Security.Claims;
 using System.Threading.RateLimiting;
+using BeautyCrm.Api.Auth.ControlPlane;
 using BeautyCrm.Api.Infrastructure;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using BeautyCrm.Application.Features.BeautyAuth;
 using BeautyCrm.Application.Features.BeautyStaff;
 using Microsoft.AspNetCore.Authentication;
@@ -19,9 +21,13 @@ public static class AuthPolicies
     /// <summary>лише owner.</summary>
     public const string Owner = "Owner";
     public const string PlatformOperator = "PlatformOperator";
+    /// <summary>ControlPlaneHmac (ADR-018): лише для /api/control/*.</summary>
+    public const string ControlPlane = "ControlPlane";
     public const string RateLimit = "auth";
     /// <summary>Ширший ліміт на IP для refresh (клієнти за одним NAT оновлюють токени регулярно); доповнюється RefreshThrottle.</summary>
     public const string RefreshRateLimit = "auth-refresh";
+    /// <summary>Публічні inspect/accept запрошення власника (§27.8): 10/хв на IP, окремий лічильник від логіну.</summary>
+    public const string InviteRateLimit = "auth-invite";
 }
 
 public static class AuthSetup
@@ -61,7 +67,10 @@ public static class AuthSetup
                     RoleClaimType = JwtTokenIssuer.RoleClaim,
                 };
             })
-            .AddScheme<AuthenticationSchemeOptions, PlatformKeyHandler>(PlatformKeyHandler.Scheme, _ => { });
+            .AddScheme<AuthenticationSchemeOptions, PlatformKeyHandler>(PlatformKeyHandler.Scheme, _ => { })
+            .AddScheme<AuthenticationSchemeOptions, ControlPlaneHmacHandler>(ControlPlaneHmacHandler.Scheme, _ => { }); // ADR-018, /api/control
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddControlPlaneHmac();
 
         services.AddAuthorization(o =>
         {
@@ -73,10 +82,15 @@ public static class AuthSetup
             o.AddPolicy(AuthPolicies.PlatformOperator, p => p
                 .AddAuthenticationSchemes(PlatformKeyHandler.Scheme)
                 .RequireRole(Roles.PlatformOperator));
+            // /api/control/*: лише підпис ControlPlaneHmac; X-Platform-Key і JWT цю політику не задовольняють.
+            o.AddPolicy(AuthPolicies.ControlPlane, p => p
+                .AddAuthenticationSchemes(ControlPlaneHmacHandler.Scheme)
+                .RequireClaim(ControlPlaneHmacHandler.KidClaim));
         });
 
         var permit = config.GetValue("Auth:RateLimit:PermitLimit", 10);
         var refreshPermit = config.GetValue("Auth:RateLimit:RefreshPermitLimit", 120);
+        var invitePermit = config.GetValue("Auth:RateLimit:InvitePermitLimit", 10);
         var window = TimeSpan.FromSeconds(config.GetValue("Auth:RateLimit:WindowSeconds", 60));
         services.AddRateLimiter(o =>
         {
@@ -94,13 +108,18 @@ public static class AuthSetup
             o.AddPolicy(AuthPolicies.RefreshRateLimit, http => RateLimitPartition.GetFixedWindowLimiter(
                 "refresh:" + (http.Connection.RemoteIpAddress?.ToString() ?? "unknown"),
                 _ => new FixedWindowRateLimiterOptions { PermitLimit = refreshPermit, Window = window, QueueLimit = 0 }));
+            o.AddPolicy(AuthPolicies.InviteRateLimit, http => RateLimitPartition.GetFixedWindowLimiter(
+                "invite:" + (http.Connection.RemoteIpAddress?.ToString() ?? "unknown"),
+                _ => new FixedWindowRateLimiterOptions { PermitLimit = invitePermit, Window = window, QueueLimit = 0 }));
         });
+        services.AddSingleton(new OwnerInviteThrottle(config.GetValue("Auth:RateLimit:InvitePerTokenPermit", 5), window));
         services.AddSingleton(new RefreshThrottle(
             config.GetValue("Auth:RateLimit:RefreshPerTokenPermit", 5),
             config.GetValue("Auth:RateLimit:RefreshPerTenantPermit", 600), window));
         services.AddSingleton(new AbsenceThrottle(
             config.GetValue("Staff:AbsenceRateLimit:PermitLimit", 20),
             TimeSpan.FromSeconds(config.GetValue("Staff:AbsenceRateLimit:WindowSeconds", 60))));
+        services.AddSingleton(new ServiceCostThrottle(config.GetValue("ServiceCosts:WritePerUserPerMinute", ServiceCostThrottle.Default)));
         services.AddSingleton(config.GetSection("Staff").Get<StaffOptions>() ?? new StaffOptions());
         services.AddScoped<ActiveSpecialistFilter>();
         return services;

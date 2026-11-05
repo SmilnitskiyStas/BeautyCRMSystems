@@ -1,8 +1,8 @@
 ---
 name: manual-test-checklist
 description: >-
-  Manual Test Checklist — Use when writing or running tests.
-x-generated-from: skills/qa/manual-test-checklist/SKILL.md
+  Produce a manual test checklist for what automation cannot cover. Use at release or for exploratory verification.
+x-generated-from: .claude/skills/manual-test-checklist/SKILL.md
 ---
 
 # Manual Test Checklist

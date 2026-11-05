@@ -27,6 +27,46 @@ public static class SlotCalculator
             .ToList();
     }
 
+    /// <summary>
+    /// Інтервали на кожен день тижня за одне розбирання JSON (індекс = <see cref="DayOfWeek"/>). Некоректний або порожній
+    /// JSON дає порожні дні. Спільний помічник для обчислення доступних хвилин (аналітика, §19.4).
+    /// </summary>
+    public static IReadOnlyList<(TimeOnly From, TimeOnly To)>[] WeeklyIntervals(string? workingHoursJson)
+    {
+        var week = new IReadOnlyList<(TimeOnly From, TimeOnly To)>[7];
+        for (var d = 0; d < 7; d++)
+        {
+            try { week[d] = IntervalsFor(workingHoursJson, (DayOfWeek)d); }
+            catch (Exception ex) when (ex is JsonException or FormatException or KeyNotFoundException or InvalidOperationException)
+            { week[d] = []; }
+        }
+        return week;
+    }
+
+    /// <summary>
+    /// Сумарна довжина (хвилини настінного часу) попарних перетинів інтервалів <paramref name="a"/> і <paramref name="b"/>.
+    /// <paramref name="b"/> = null — обмеження немає (повертається сума довжин <paramref name="a"/>).
+    /// </summary>
+    public static int OverlapMinutes(IReadOnlyList<(TimeOnly From, TimeOnly To)> a, IReadOnlyList<(TimeOnly From, TimeOnly To)>? b)
+    {
+        var total = 0;
+        foreach (var x in a)
+        {
+            if (b is null)
+            {
+                if (x.To > x.From) total += (int)(x.To - x.From).TotalMinutes;
+                continue;
+            }
+            foreach (var y in b)
+            {
+                var from = x.From > y.From ? x.From : y.From;
+                var to = x.To < y.To ? x.To : y.To;
+                if (to > from) total += (int)(to - from).TotalMinutes;
+            }
+        }
+        return total;
+    }
+
     /// <summary>Чи є в графіку бодай один робочий інтервал (майстер без графіка не бронюється).</summary>
     public static bool HasWorkingHours(string? workingHoursJson)
     {

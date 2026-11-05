@@ -1,6 +1,7 @@
 ---
 name: beauty-worker-jobs
 description: BullMQ-джоби Beauty CRM — нагадування, outbox, кампанії, відгуки. Використовуй при фонових задачах.
+x-generated-from: project:stacks/beauty/beauty-worker-jobs
 ---
 
 - Джоби в `worker/src/jobs/beauty-*`: нагадування (за 1 і 2 год), outbox повідомлень (ретраї ×3), кампанії по сегментах, «давно не були», запит відгуку після візиту.

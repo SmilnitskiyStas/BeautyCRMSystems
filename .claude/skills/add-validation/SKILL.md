@@ -2,7 +2,7 @@
 name: add-validation
 description: >-
   Validate at the request boundary. Use when adding input validation to an API endpoint, server action, or form — schema at the edge, business rules in the service, one shared schema, consent booleans never pre-checked.
-x-generated-from: skills/shared/add-validation/SKILL.md
+x-generated-from: .claude/skills/add-validation/SKILL.md
 ---
 
 # Add Validation

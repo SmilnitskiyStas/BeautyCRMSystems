@@ -1,0 +1,15 @@
+# Copy to .ai/hooks.config.yaml in the project this library is generated into.
+# Not committed to the agent library itself — project-owned runtime state,
+# read at hook-execution time only (see .ai/README.md, hooks/README.md).
+# Every key is optional; a hook with no matching key just allows everything.
+
+# path-deny-list — glob patterns an agent may never Write/Edit/MultiEdit directly.
+deny_paths:
+  - .claude/**
+  - .codex/**
+
+# dependency-gate — packages pre-approved for install/upgrade without a human gate.
+approved_packages: []
+
+# task-log-sync — where task logs are expected to land after an edit.
+task_log_dir: .ai/logs/tasks

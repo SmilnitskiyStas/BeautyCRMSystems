@@ -2,7 +2,7 @@
 name: context-loader
 description: >-
   Decide the minimum-sufficient set of files an agent must read before starting a task. Use at the start of any task to build a context package.
-x-generated-from: skills/workflow/context-loader/SKILL.md
+x-generated-from: .claude/skills/context-loader/SKILL.md
 ---
 
 ## Purpose

@@ -1,8 +1,8 @@
 ---
 name: sensitive-data-review
 description: >-
-  Sensitive Data Review — Use during a security review.
-x-generated-from: skills/security/sensitive-data-review/SKILL.md
+  Review collection, storage, logging, and exposure of personal or sensitive data. Use when a change touches PII or credentials.
+x-generated-from: .claude/skills/sensitive-data-review/SKILL.md
 ---
 
 ## Заборонено логувати (розділ безпеки проєктного спеку)

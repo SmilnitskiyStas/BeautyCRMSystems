@@ -1,8 +1,8 @@
 ---
 name: create-component-visual-spec
 description: >-
-  Create Component Visual Spec — Use when producing the design foundation — tokens, specs, theme, motion.
-x-generated-from: skills/ui-ux-design/create-component-visual-spec/SKILL.md
+  Specify a component's variants, states, spacing and tokens so it can be implemented without guessing. Use when designing UI components.
+x-generated-from: .claude/skills/create-component-visual-spec/SKILL.md
 ---
 
 ## Purpose

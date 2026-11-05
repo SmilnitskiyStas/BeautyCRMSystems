@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Application.Features.BeautyCommon;
+using BeautyCrm.Application.Features.BeautyCoupons;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeautyCrm.Application.Features.BeautyPublicBooking;
@@ -10,9 +11,10 @@ namespace BeautyCrm.Application.Features.BeautyPublicBooking;
 /// Логування свідомо немає: тут проходять ім'я й телефон клієнта.
 /// </summary>
 public sealed partial class PublicBookingService(
-    IPublicBookingStore pub, IBookingStore store, BookingService booking, CancellationService cancellation,
+    IPublicBookingStore pub, IBookingStore store, CancellationService cancellation,
     CancellationSettingsService settings, PublicTenantResolver tenant, PublicTokenService tokens,
-    ICaptchaVerifier captcha, PublicBookingOptions options, TimeProvider clock)
+    ICaptchaVerifier captcha, PublicBookingOptions options, TimeProvider clock, OnlineBookingCore core,
+    CouponService? coupons = null)
 {
     /// <summary>Єдина відповідь на неіснуючий/чужий/зіпсований токен (розрізнити причини ззовні неможливо).</summary>
     public static readonly Error TokenNotFound = Error.NotFound("not_found", "Not found.");
@@ -45,14 +47,26 @@ public sealed partial class PublicBookingService(
         return Result<IReadOnlyList<PublicServiceDto>>.Ok(list);
     }
 
-    public async Task<Result<IReadOnlyList<FreeSlot>>> GetSlotsAsync(
-        Guid locationId, Guid? specialistId, Guid serviceId, DateOnly date, CancellationToken ct)
+    /// <summary>
+    /// Публічна перевірка загального коду (§26.11.4): будь-яка причина (невідомий, прострочений, вичерпаний, персональний) - однакове
+    /// 404 coupon_invalid. Ліміт PublicCheckPerIpPer10Min -> 429. Клієнта немає, тож already_used тут не перевіряється.
+    /// </summary>
+    public async Task<Result<PublicCouponCheckDto>> CheckCouponAsync(string? code, Guid locationId, Guid serviceId, string? remoteIp, CancellationToken ct)
     {
-        var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
-        if (date < today.AddDays(-1) || date > today.AddDays(options.MaxDaysAhead))
-            return Error.Validation("invalid_date", $"date must be within {options.MaxDaysAhead} days ahead.");
-        return await booking.GetSlotsAsync(locationId, specialistId, serviceId, date, ct);
+        if (coupons is null || string.IsNullOrWhiteSpace(code)) return Error.NotFound(CouponService.Invalid, "The code is not valid.");
+        var r = await coupons.CheckAsync(new CouponUse(CouponScope.Public, code, RateKey: remoteIp ?? "unknown"), locationId, serviceId, null, ct);
+        if (r.IsOk) return new PublicCouponCheckDto(r.Value!.Outcome, r.Value.PriceOriginal, r.Value.PriceFinal);
+        return r.Error!.Kind switch
+        {
+            ErrorKind.TooManyRequests => r.Error,
+            ErrorKind.Conflict => Error.NotFound(CouponService.Invalid, "The code is not valid."),
+            _ => r.Error, // location_not_found / service_not_found - публічні довідники
+        };
     }
+
+    public Task<Result<IReadOnlyList<FreeSlot>>> GetSlotsAsync(
+        Guid locationId, Guid? specialistId, Guid serviceId, DateOnly date, CancellationToken ct) =>
+        core.GetSlotsAsync(locationId, specialistId, serviceId, date, ct);
 
     // ---------- створення ----------
 
@@ -79,10 +93,7 @@ public sealed partial class PublicBookingService(
         var startsAt = req.StartsAt.Value;
         var now = clock.GetUtcNow();
         // Лише слоти, які віддає /slots: сітка 15 хв (UTC-ticks) і горизонт запису.
-        if (startsAt.UtcTicks % TimeSpan.FromMinutes(SlotCalculator.StepMinutes).Ticks != 0)
-            return Error.Validation("invalid_start", "startsAt must be one of the offered slots.");
-        if (startsAt > now.AddDays(options.MaxDaysAhead))
-            return Error.Validation("invalid_start", $"startsAt must be within {options.MaxDaysAhead} days ahead.");
+        if (core.ValidateStart(startsAt, now) is { } startError) return startError;
         var reminder = req.Reminder ?? "none";
         var payment = req.PaymentMethod;
         if (!BookingValues.Reminders.Contains(reminder)) return Error.Validation("invalid_reminder", "Reminder must be none, 1h or 2h.");
@@ -91,7 +102,8 @@ public sealed partial class PublicBookingService(
 
         var keyHash = PublicTokenService.Hash("idem:" + ctx.IdempotencyKey);
         var requestHash = PublicTokenService.Hash(string.Join('|', req.LocationId, req.SpecialistId, req.ServiceId,
-            startsAt.UtcTicks, phone, name, reminder, payment));
+            startsAt.UtcTicks, phone, name, reminder, payment)
+            + (string.IsNullOrWhiteSpace(req.CouponCode) ? "" : "|c:" + CouponCodes.Hash(req.CouponCode))); // купон входить у відбиток запиту (хеш, не код)
 
         // Ідемпотентність: той самий ключ і те саме тіло -> той самий результат без повторного списання.
         if (await pub.FindByIdempotencyKeyAsync(keyHash, ct) is { } hit)
@@ -109,33 +121,15 @@ public sealed partial class PublicBookingService(
         var id = Guid.NewGuid();
         var token = tokens.Create(tenantId, id);
         var createRequest = new CreateAppointmentRequest(req.LocationId.Value, req.SpecialistId.Value, req.ServiceId.Value, startsAt,
-            new ClientInput(null, name, phone, null, req.Client?.MarketingConsent == true), reminder, payment, "online");
+            new ClientInput(null, name, phone, null, false /* §26 (TASK-777): client.marketingConsent приймається й ігнорується */), reminder, payment, "online");
         var publicOptions = new PublicCreateOptions(id, PublicTokenService.Hash(token), keyHash, requestHash);
 
-        // Паралельні повтори одного ключа можуть взаємно відкотитися (unique-ключ, exclusion слоту, deadlock):
-        // чекаємо коміт переможця й повторюємо його відповідь; якщо переможця немає — пробуємо створити знову.
-        Result<AppointmentDto> created = default!;
-        for (var attempt = 0; attempt < 3; attempt++)
-        {
-            created = await booking.CreateAsync(createRequest, ct, publicOptions);
-            if (created.Error is not { Kind: ErrorKind.Conflict } conflict) break;
-            var polls = conflict.Code == "idempotency_conflict" ? 5 : 1;
-            for (var i = 0; i < polls; i++)
-            {
-                if (await pub.FindByIdempotencyKeyAsync(keyHash, ct) is { } raced)
-                    return await ReplayAsync(tenantId, raced, requestHash, ct);
-                if (i + 1 < polls) await Task.Delay(100, ct);
-            }
-            if (conflict.Code != "idempotency_conflict") break;
-        }
-        // Публічний API не розкриває ПРИЧИНУ недоступності майстра (лікарняний/відпустка/послуга не призначена): внутрішній
-        // specialist_unavailable віддається як звичайний зайнятий слот (той самий код, статус і тіло). Різниця — лише у staff API.
-        // Те саме для закритого дня закладу (вихідний/закриття, §17) і часу поза годинами закладу (§18.1): причина не розкривається.
-        if (created.Error is { Code: "specialist_unavailable" or "location_closed" or "outside_location_hours" })
-            return Error.Conflict("slot_unavailable", "The slot overlaps another appointment.");
-        if (!created.IsOk) return created.Error!;
+        var couponUse = string.IsNullOrWhiteSpace(req.CouponCode) ? null : new CouponUse(CouponScope.Public, req.CouponCode, RateKey: ctx.RemoteIp ?? "unknown");
+        var outcome = await core.CreateAsync(createRequest, publicOptions, ct, couponUse);
+        if (outcome.Replay is { } raced) return await ReplayAsync(tenantId, raced, requestHash, ct);
+        if (outcome.Error is not null) return outcome.Error;
 
-        return new PublicCreateResult(new PublicBookingCreatedDto(token, await ToPublicAsync(created.Value!, ct)), false);
+        return new PublicCreateResult(new PublicBookingCreatedDto(token, await ToPublicAsync(outcome.Appointment!, ct)), false);
     }
 
     private async Task<Result<PublicCreateResult>> ReplayAsync(Guid tenantId, IdempotencyHit hit, string requestHash, CancellationToken ct)
@@ -180,7 +174,8 @@ public sealed partial class PublicBookingService(
         a.LocationId, a.LocationName, a.SpecialistId, a.SpecialistName, a.ServiceId, a.ServiceName,
         a.StartsAt, a.EndsAt, a.DurationMinutes, a.Status, a.PriceOriginal, a.PriceFinal, a.PromotionId,
         a.ReminderOption, a.PaymentMethod, (await store.GetPaymentAsync(a.Id, ct))?.Status,
-        a.Cancellation ?? await settings.GetTermsAsync(ct));
+        a.Cancellation ?? await settings.GetTermsAsync(ct),
+        a.Reminders is { } r ? new PublicRemindersDto(r.Method, r.OffsetsMinutes) : null, a.Coupon is { Outcome: CouponOutcomes.Applied });
 }
 
 public static class PublicBookingServiceExtensions
@@ -190,6 +185,7 @@ public static class PublicBookingServiceExtensions
         services.AddSingleton(options);
         services.AddSingleton<PublicTokenService>();
         services.AddScoped<PublicTenantResolver>();
+        services.AddScoped<OnlineBookingCore>();
         services.AddScoped<PublicBookingService>();
         services.AddSingleton<ICaptchaVerifier, RejectAllCaptchaVerifier>(); // провайдера підключає окрема реєстрація
         return services;

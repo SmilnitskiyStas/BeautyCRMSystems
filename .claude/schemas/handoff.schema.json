@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SmilnitskiyStas/AI_agent_only/schemas/handoff.schema.json",
+  "title": "Handoff",
+  "description": "Transfer of a task between agents (§27). A blocker handoff always has `to: project-manager`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "from", "to", "status", "next_expected_action"],
+  "properties": {
+    "task_id": { "type": "string", "pattern": "^TASK-[0-9]{3,}$" },
+    "from": { "type": "string", "pattern": "^[a-z][a-z0-9-]*[a-z0-9]$" },
+    "to": { "type": "string", "pattern": "^[a-z][a-z0-9-]*[a-z0-9]$" },
+    "status": {
+      "enum": ["completed", "blocked", "partial", "needs_review", "needs_clarification"]
+    },
+    "reason": { "type": "string" },
+    "completed": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "What is actually done."
+    },
+    "artifacts": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Artifact ids produced or updated."
+    },
+    "open_questions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "blockers": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "next_expected_action": {
+      "type": "string",
+      "description": "One sentence: what the receiver should do next."
+    }
+  }
+}

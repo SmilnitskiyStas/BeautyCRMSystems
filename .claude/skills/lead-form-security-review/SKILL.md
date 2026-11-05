@@ -1,8 +1,8 @@
 ---
 name: lead-form-security-review
 description: >-
-  Lead Form Security Review — Use during a security review.
-x-generated-from: skills/security/lead-form-security-review/SKILL.md
+  Audit public form handling: server validation, rate limiting, spam and abuse protection. Use when reviewing any public input endpoint.
+x-generated-from: .claude/skills/lead-form-security-review/SKILL.md
 ---
 
 # Lead Form Security Review

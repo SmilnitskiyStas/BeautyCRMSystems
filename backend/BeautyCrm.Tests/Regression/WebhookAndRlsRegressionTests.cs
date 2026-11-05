@@ -168,8 +168,13 @@ public sealed class WebhookAndRlsRegressionTests : IClassFixture<AuthApiFixture>
         // жодна очікувана таблиця не загубилась (і нова таблиця з tenant_id автоматично потрапляє в перевірку нижче)
         Assert.Empty(ExpectedTenantTables.Except(tables));
 
+        // ADR-018 §4/§6 (TASK-816): платформні таблиці control plane свідомо БЕЗ tenant RLS (доступ лише з platform/auth-шляху,
+        // tenant_id - лише посилання на реєстр). Виняток вузький і явний; зміна переліку = рішення security-reviewer/ADR.
+        string[] platformTablesWithoutTenantRls = ["platform_audit_log", "platform_owner_invites"];
+        Assert.Empty(platformTablesWithoutTenantRls.Except(tables)); // виняток не застаріває мовчки
+
         var bad = new List<string>();
-        foreach (var t in tables)
+        foreach (var t in tables.Except(platformTablesWithoutTenantRls))
         {
             await using var q = new NpgsqlCommand(
                 "SELECT c.relrowsecurity, c.relforcerowsecurity, (SELECT count(*) FROM pg_policies p WHERE p.schemaname='public' AND p.tablename=@t) " +

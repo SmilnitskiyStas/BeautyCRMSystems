@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SmilnitskiyStas/AI_agent_only/schemas/context-package.schema.json",
+  "title": "Context Package",
+  "description": "The minimum-sufficient context the context-manager assembles for one task (§11-13). References source-of-truth rather than copying whole files.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "goal", "include", "excluded"],
+  "properties": {
+    "task_id": { "type": "string", "pattern": "^TASK-[0-9]{3,}$" },
+    "goal": { "type": "string", "minLength": 8 },
+    "context_level": {
+      "enum": ["small", "medium", "larger_curated"],
+      "description": "small=cheap task, medium=standard, larger_curated=architecture task (§12)."
+    },
+    "include": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rules": { "type": "array", "items": { "type": "string" } },
+        "requirements": { "type": "array", "items": { "type": "string" } },
+        "architecture": { "type": "array", "items": { "type": "string" } },
+        "decisions": { "type": "array", "items": { "type": "string" } },
+        "code": { "type": "array", "items": { "type": "string" } },
+        "contracts": { "type": "array", "items": { "type": "string" } },
+        "known_issues": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "description": "Pointers the agent reads on demand instead of inlined content (§13).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "purpose"],
+        "properties": {
+          "path": { "type": "string" },
+          "symbol": { "type": "string" },
+          "anchor": { "type": "string" },
+          "purpose": { "type": "string" }
+        }
+      }
+    },
+    "excluded": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Explicitly out of scope for this task — named so the agent does not go looking."
+    },
+    "open_questions": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

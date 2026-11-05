@@ -21,8 +21,9 @@ export function ServiceTimeStep() {
       dateOptions(location?.timezone ?? "UTC", DAYS_AHEAD, new Date(), {
         closedWeekdays: location?.closedWeekdays,
         closures: location?.closures,
+        workingHours: location?.workingHours,
       }),
-    [location?.timezone, location?.closedWeekdays, location?.closures],
+    [location?.timezone, location?.closedWeekdays, location?.closures, location?.workingHours],
   );
   const firstOpen = days.find((d) => !d.closed);
   const [chosen, setDate] = useState<string | null>(null);

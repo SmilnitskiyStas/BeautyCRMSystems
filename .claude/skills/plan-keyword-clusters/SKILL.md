@@ -1,8 +1,8 @@
 ---
 name: plan-keyword-clusters
 description: >-
-  Plan Keyword Clusters — Use when implementing technical SEO or planning content strategy.
-x-generated-from: skills/seo/plan-keyword-clusters/SKILL.md
+  Build keyword clusters per locale mapped to pages. Use when planning content or SEO strategy.
+x-generated-from: .claude/skills/plan-keyword-clusters/SKILL.md
 ---
 
 ## Purpose

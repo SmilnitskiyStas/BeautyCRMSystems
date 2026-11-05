@@ -76,15 +76,12 @@ public sealed class UserAdminService(IAuthStore store, AuthOptions options, Time
 }
 
 /// <summary>Операції оператора платформи: tenant + власник, модулі, статус. Публічної самореєстрації немає.</summary>
-public sealed partial class PlatformTenantService(IAuthStore store, IPasswordHasher hasher, AuthOptions options, TimeProvider clock)
+public sealed class PlatformTenantService(IAuthStore store, IPasswordHasher hasher, AuthOptions options, TimeProvider clock)
 {
-    [GeneratedRegex("^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")]
-    private static partial Regex SlugPattern();
-
     public async Task<AuthResult<TenantCreatedDto>> CreateTenantAsync(CreateTenantRequest req, CancellationToken ct)
     {
-        var slug = req.Slug.Trim().ToLowerInvariant();
-        if (!SlugPattern().IsMatch(slug)) return AuthError.Validation("invalid_slug", "Slug: 3-64 chars, a-z, 0-9, hyphen.");
+        var slug = TenantRules.NormalizeSlug(req.Slug);
+        if (slug is null) return AuthError.Validation("invalid_slug", "Slug: 3-64 chars, a-z, 0-9, hyphen.");
         var modules = NormalizeModules(req.Modules) ?? BeautyModules.All;
         if (req.Modules is not null && NormalizeModules(req.Modules) is null)
             return AuthError.Validation("invalid_modules", "Unknown module name.");
@@ -112,12 +109,7 @@ public sealed partial class PlatformTenantService(IAuthStore store, IPasswordHas
     }
 
     /// <summary>null = містить невідомий модуль.</summary>
-    private static IReadOnlyList<string>? NormalizeModules(IReadOnlyList<string>? modules)
-    {
-        if (modules is null) return null;
-        var list = modules.Select(m => m.Trim().ToLowerInvariant()).Distinct().ToList();
-        return list.All(m => BeautyModules.All.Contains(m)) ? list : null;
-    }
+    private static IReadOnlyList<string>? NormalizeModules(IReadOnlyList<string>? modules) => TenantRules.NormalizeModules(modules);
 }
 
 /// <summary>Обмеження доступу спеціаліста: лише власні записи. Чужі записи недоступні (404, без витоку існування).</summary>

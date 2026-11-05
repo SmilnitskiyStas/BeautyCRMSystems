@@ -19,6 +19,12 @@
     <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
   </ItemGroup>
 
+  <!-- TASK-802: закріплення безпечних версій транзитивних пакетів (тягне xunit 2.5.3 -> NETStandard.Library 1.6.1; High: GHSA-7jgj-8wvc-jh57, GHSA-cmhx-cq75-c4mj). Лише тестовий проєкт; зняти після оновлення xunit. -->
+  <ItemGroup>
+    <PackageReference Include="System.Net.Http" Version="4.3.4" />
+    <PackageReference Include="System.Text.RegularExpressions" Version="4.3.1" />
+  </ItemGroup>
+
   <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>

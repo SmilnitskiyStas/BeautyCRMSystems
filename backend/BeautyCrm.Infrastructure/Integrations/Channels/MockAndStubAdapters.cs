@@ -34,11 +34,14 @@ public class MockChannelAdapter(string channel, IChannelCredentialsProvider? cre
         return Task.FromResult(list);
     }
 
-    public Task SendAsync(OutboundMessage msg, CancellationToken ct)
+    /// <summary>Test hook: емулює канал з інлайн-кнопками (Actions записуються в <see cref="Sent"/>; розмітка не рендериться). За замовчуванням false.</summary>
+    public bool SupportsActions { get; set; }
+
+    public Task<ChannelSendReceipt> SendAsync(OutboundMessage msg, CancellationToken ct)
     {
         if (FailNextSends > 0) { FailNextSends--; throw new TransientChannelException("mock transient failure"); }
         _sent.Enqueue(msg);
-        return Task.CompletedTask;
+        return Task.FromResult(new ChannelSendReceipt(null));
     }
 }
 
@@ -52,7 +55,7 @@ public class NotImplementedChannelAdapter(string channel) : IChannelAdapter
     public bool VerifySignature(WebhookRequest req, string body) => false; // fail closed
     public Task<IReadOnlyList<InboundMessage>> ParseInboundAsync(string body) =>
         throw new NotSupportedException($"Channel '{Channel}' is not implemented yet");
-    public Task SendAsync(OutboundMessage msg, CancellationToken ct) =>
+    public Task<ChannelSendReceipt> SendAsync(OutboundMessage msg, CancellationToken ct) =>
         throw new PermanentChannelException($"Channel '{Channel}' is not implemented yet");
 }
 

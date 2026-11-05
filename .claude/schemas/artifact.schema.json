@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SmilnitskiyStas/AI_agent_only/schemas/artifact.schema.json",
+  "title": "Artifact",
+  "description": "A shared, versioned deliverable exchanged between agents via the artifact convention (§22-23). Stored under .ai/artifacts/<kind>/ in the project — runtime state, not committed to this library. This schema validates the artifact's metadata header.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "type", "version", "created_by", "status"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9-]*[A-Z0-9]$",
+      "description": "Stable uppercase id, e.g. API-CONTRACT-REFUND-V1."
+    },
+    "type": {
+      "enum": [
+        "API_CONTRACT",
+        "DATA_SCHEMA",
+        "UI_SPEC",
+        "RESEARCH_REPORT",
+        "REQUIREMENTS",
+        "ARCHITECTURE_DECISION",
+        "TEST_PLAN",
+        "SECURITY_FINDINGS",
+        "CONTEXT_PACKAGE"
+      ]
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "created_by": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*[a-z0-9]$",
+      "description": "Agent id."
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^TASK-[0-9]{3,}$"
+    },
+    "status": {
+      "enum": ["draft", "review", "accepted", "superseded", "deprecated"]
+    },
+    "consumers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Agent ids or task ids expected to consume this artifact."
+    },
+    "source_files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Repo-relative paths this artifact is derived from or authoritative for."
+    },
+    "supersedes": {
+      "type": "string",
+      "description": "Artifact id this version replaces."
+    }
+  }
+}

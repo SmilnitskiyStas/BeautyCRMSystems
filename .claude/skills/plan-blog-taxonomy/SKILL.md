@@ -1,8 +1,8 @@
 ---
 name: plan-blog-taxonomy
 description: >-
-  Plan Blog Taxonomy — Use when implementing technical SEO or planning content strategy.
-x-generated-from: skills/seo/plan-blog-taxonomy/SKILL.md
+  Define blog categories, tags and topic clusters. Use when planning a content structure.
+x-generated-from: .claude/skills/plan-blog-taxonomy/SKILL.md
 ---
 
 ## Категорії (з блог-таксономії проєктної специфікації)

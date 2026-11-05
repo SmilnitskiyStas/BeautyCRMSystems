@@ -36,6 +36,7 @@ public sealed class AuthApiFixture : IAsyncLifetime
             b.UseSetting("ConnectionStrings:Default", Db.AppConnectionString);
             b.UseSetting("Auth:JwtSigningKey", Convert.ToBase64String(Enumerable.Range(1, 48).Select(i => (byte)i).ToArray()));
             b.UseSetting("Auth:PlatformKey", PlatformKey);
+            b.UseSetting("Auth:PlatformKeyEnabled", "true"); // ADR-018: поза Development вимкнено за замовчуванням
             b.UseSetting("Auth:BcryptWorkFactor", "4");
             b.UseSetting("Auth:RateLimit:PermitLimit", permitLimit.ToString());
             b.UseSetting("Beauty:AllowTenantHeader", "true");

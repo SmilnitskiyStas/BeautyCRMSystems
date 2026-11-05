@@ -1,6 +1,7 @@
 ---
 name: beauty-booking-ui
 description: Публічний mobile-first потік онлайн-запису Beauty CRM. Використовуй при клієнтському UI запису.
+x-generated-from: project:stacks/beauty/beauty-booking-ui
 ---
 
 - Потік: заклад → майстер (або «будь-який») → послуга й час → оформлення → підтвердження.

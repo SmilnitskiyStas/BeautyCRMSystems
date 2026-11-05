@@ -1,8 +1,8 @@
 ---
 name: create-server-action
 description: >-
-  Create Server Action — Use when implementing a light backend colocated with the frontend.
-x-generated-from: skills/fullstack/create-server-action/SKILL.md
+  Implement a server action / route handler with boundary validation and typed results. Use for form intake or small server mutations in a colocated backend.
+x-generated-from: .claude/skills/create-server-action/SKILL.md
 ---
 
 ## Pattern

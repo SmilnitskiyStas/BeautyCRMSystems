@@ -1,6 +1,7 @@
 ---
 name: beauty-admin-ui
 description: Адмін-інтерфейс Beauty CRM (Next.js) — екрани, календар, AI-віджет, доступність. Використовуй при фронтенді адмінки.
+x-generated-from: project:stacks/beauty/beauty-admin-ui
 ---
 
 - Структура `frontend/features/beauty-*`: `types.ts`, `api/`, `hooks/`, `components/`. React Query для серверного стану, Zustand лише для UI.

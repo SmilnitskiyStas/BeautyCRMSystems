@@ -1,8 +1,8 @@
 ---
 name: create-service-layer
 description: >-
-  Create Service Layer — Use when implementing a standalone backend service.
-x-generated-from: skills/backend/create-service-layer/SKILL.md
+  Implement business logic in a service layer isolated from routing and persistence. Use when a feature needs orchestration, rules, or transactions.
+x-generated-from: .claude/skills/create-service-layer/SKILL.md
 ---
 
 ## Interface / контракт

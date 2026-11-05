@@ -72,10 +72,10 @@ export class LoggerNotificationLog implements NotificationLogPort {
 /**
  * QueuePort for the DB-driven outbox: the table IS the queue. A message row with status 'pending' is the
  * outbox entry and beauty_reminders is the reminder schedule, so these enqueues are intentionally no-ops.
- * Campaigns have no table yet -> fail loudly instead of silently dropping.
+ * Campaigns are DB-driven too (TASK-780).
  */
 export class PgQueuePort implements QueuePort {
   async enqueueOutbox(): Promise<void> { /* row already inserted with status 'pending' */ }
   async enqueueReminder(): Promise<void> { /* beauty_reminders.scheduled_at is polled */ }
-  async enqueueCampaign(): Promise<void> { throw new Error("Campaigns are not supported by the DB schema yet (no campaigns table)"); }
+  async enqueueCampaign(): Promise<void> { /* beauty_campaigns / beauty_campaign_recipients are polled (pollCampaigns) */ }
 }
