@@ -12,6 +12,10 @@ import { DEFAULT_CLIENT_INTERVAL_DAYS, DEFAULT_MARKETING_DAILY_LIMIT } from "./j
 import { DEFAULT_CAMPAIGN_BATCH, DEFAULT_FAVORITE_SERVICES_DAYS } from "./jobs/beauty-campaign";
 import { DEFAULT_MIN_LEAD_MINUTES } from "./jobs/beauty-reminder";
 import type { BeautyDeps } from "./ports";
+import { loadFeedbackConfig } from "./feedback/delivery";
+import { PgFeedbackStore } from "./feedback/feedback-store";
+import { pollFeedback } from "./feedback/poller";
+import { NONCE_CLEANUP_EVERY_MS, purgeControlPlaneNonces } from "./maintenance/nonce-cleanup";
 import { Scheduler } from "./scheduler/scheduler";
 import { pollCampaigns, pollOutbox, pollReminders, pollReviews, pollWinback, type PollContext } from "./scheduler/pollers";
 
@@ -59,7 +63,19 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
     reminderButtonsEnabled: /^true$/i.test(env.WORKER_REMINDER_BUTTONS_ENABLED ?? ""),
     reminderMinLeadMinutes: Number.isFinite(lead) && lead >= 0 && env.WORKER_REMINDER_MIN_LEAD_MINUTES ? lead : DEFAULT_MIN_LEAD_MINUTES,
   };
+  // TASK-821: feedback -> ShelfGuard. Not started unless SHELFGUARD_FEEDBACK_ENABLED=true with a valid config (rows stay pending).
+  const fb = loadFeedbackConfig(env);
+  const feedbackTasks = fb.enabled
+    ? [{
+        name: "beauty.feedback", everyMs: 30_000,
+        run: () => pollFeedback({ store: new PgFeedbackStore(db), tenants: ctx.tenants, logger: consoleLogger, config: fb.config }),
+      }]
+    : [];
+  if (!fb.enabled && fb.reason === "misconfigured") consoleLogger.error("feedback delivery disabled: invalid SHELFGUARD_* configuration");
   const scheduler = new Scheduler([
+    ...feedbackTasks,
+    // TASK-826 (L1): replay-protection nonces older than 15 min are useless (signature window 300 s).
+    { name: "platform.nonce-cleanup", everyMs: NONCE_CLEANUP_EVERY_MS, run: () => purgeControlPlaneNonces(db.pool, now()) },
     { name: "beauty.reminders", everyMs: 1 * MIN, run: () => pollReminders(ctx) },
     { name: "beauty.outbox", everyMs: 30_000, run: () => pollOutbox(ctx) },
     { name: "beauty.reviews", everyMs: 10 * MIN, run: () => pollReviews(ctx) },

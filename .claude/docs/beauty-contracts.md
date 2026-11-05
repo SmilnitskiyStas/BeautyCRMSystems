@@ -3268,7 +3268,7 @@ ADR-015 §1.1:
 
 ## §27. Control plane ShelfGuard: provisioning, призупинення, модулі, запрошення власника, заявки (v0.30, 2026-11-04)
 
-Джерело: ADR-018 (accepted, 2026-11-04; D1–D5). Розділ деталізує DTO; при розбіжності з ADR-018 діє ADR, зміна — новим ADR. Пункти з позначкою **[уточнення §27]** — деталі контракту, яких немає в ADR (не суперечать йому). Відкрито: **Q4** (вхідний ендпоінт лідів ShelfGuard, §27.9), **Q2b** (worker/канали призупиненого tenant), **Q5** (технічні факти, звіряються в TASK-816/818), **Q8** (юридичний текст примітки форми, §27.8).
+Джерело: ADR-018 (accepted, 2026-11-04; D1–D5). Розділ деталізує DTO; при розбіжності з ADR-018 діє ADR, зміна — новим ADR. Пункти з позначкою **[уточнення §27]** — деталі контракту, яких немає в ADR (не суперечать йому). Q4 (доставка заявок) закрито, див. §27.9. Відкрито: **Q2b** (worker/канали призупиненого tenant), **Q5** (технічні факти, звіряються в TASK-816/818), **Q8** (юридичний текст примітки форми, §27.8).
 
 ### 27.1 Загальне
 - Формат помилок чинний: `{ "code": "..." }`. Тіла — `application/json; charset=utf-8`, ліміт 64 KB (`413` не віддається для control plane: завеликий запит → `401 control_auth_failed`, причина `body_too_large`).
@@ -3363,7 +3363,7 @@ BCRM-HMAC-SHA256-v1
 - URL: `{PublicAppUrl}/invite#t={token}` — токен у фрагменті. Сторінка `/invite`: `Referrer-Policy: no-referrer`, `noindex`; frontend читає фрагмент і одразу прибирає його з адреси (`history.replaceState`) **[уточнення §27]**.
 - **`POST /api/auth/invite/inspect`** `{ "token": "…" }` → `200 { "tenantName": "Salon X", "email": "o***@x.test", "expiresAt": "…" }`. Маска email: перший символ локальної частини + `***` + `@домен` **[уточнення §27]**.
 - **`POST /api/auth/invite/accept`** `{ "token": "…", "password": "…" }` → `200`, тіло тієї самої форми, що `POST /api/auth/login` (одразу вхід, refresh-токен — як у login). Погашення атомарне (`UPDATE … WHERE token_hash=$1 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > now() RETURNING …`) в одній транзакції з встановленням пароля й `state=active`; аудит `owner_invite.accepted`.
-- Помилки обох: `410 invite_invalid` (невідомий / прострочений / використаний / відкликаний — один код), `403 tenant_suspended`, `422` за чинною політикою пароля (лише accept), `429 rate_limited` (10/хв на IP).
+- Порядок перевірок accept: спершу `422 weak_password` (політика пароля від токена не залежить, тому токен не споживається), далі формат токена, погашення; `410 invite_invalid` (невідомий / прострочений / використаний / відкликаний — один код), `403 tenant_suspended`. `422 weak_password` повертається до споживання токена, тож запрошення лишається чинним. Inspect: `410 | 403 tenant_suspended`, `429 rate_limited` (10/хв на IP, обидва ендпоінти).
 - Токен і пароль не логуються; `Cache-Control: no-store`.
 
 ### 27.9 Заявки «співпраця / покращити / не працює»
@@ -3373,20 +3373,23 @@ BCRM-HMAC-SHA256-v1
 ```
 - `type`: `cooperation | improvement | bug`; `severity`: `low | normal | high | critical` — має сенс для `bug`; не передано → `normal` (для будь-якого типу).
 - `pageUrl?` ≤ 500 — лише шлях сторінки без query і фрагмента (frontend шле `location.pathname`) **[уточнення §27]**; інакше `422 invalid_page_url` **[уточнення §27: код]**.
-- `202 { "id": "uuid" }` — заявка записана в `beauty_platform_feedback` (`delivery_status=pending`) і подія outbox `platform_feedback.submitted` в одній транзакції. `202` і тоді, коли `ShelfGuard:Outbound` не налаштовано (fail closed: заявка чекає).
-- Помилки: `422 invalid_type | invalid_severity | invalid_message | invalid_page_url`, `429 rate_limited` + `Retry-After` (5/год на користувача, 30/добу на tenant), `403` для призупиненого tenant (чинний механізм).
+- `202 { "id": "uuid" }` — заявка записана в `beauty_platform_feedback` (`delivery_status=pending`) і подія outbox `platform_feedback.submitted` в одній транзакції. `202` і тоді, коли worker-доставка вимкнена (`SHELFGUARD_FEEDBACK_ENABLED` ≠ `true` або конфіг невалідний; fail closed: заявка лишається `pending`).
+- Помилки: `422 invalid_type | invalid_severity | invalid_message | invalid_page_url`, `429 rate_limited` + `Retry-After` (5/год на користувача, 30/добу на tenant), `403 tenant_suspended` (tenant не `active`), `403 user_inactive` (користувач неактивний; обидва до будь-якого запису).
 - Форма показує примітку, що заявка йде провайдеру; текст — Q8 (до закриття — плейсхолдер, TASK-823). Логи без тексту заявки, email маскований.
 
-**Доставка Beauty→ShelfGuard (worker)** — `POST {ShelfGuard:BaseUrl}{ShelfGuard:LeadsPath}`, підпис §27.2 ключем напрямку Beauty→ShelfGuard `ShelfGuard:Outbound:Keys:{kid}` (окремий від вхідного). Тіло (зафіксовано цим контрактом):
+**Доставка Beauty→ShelfGuard (worker, TASK-821; Q4 закрито)** — `POST {SHELFGUARD_BASE_URL}/api/integrations/beauty/feedback`
+(шлях `FEEDBACK_PATH` у `worker/src/feedback/delivery.ts`; якщо base URL має path-префікс, він додається перед шляхом). Підпис — `ControlPlaneHmac` v1 (§27.2, `worker/src/feedback/hmac.ts`) ключем напрямку Beauty→ShelfGuard (окремий від вхідного). Тіло — плоский JSON (`application/json; charset=utf-8`):
 ```json
-{ "source": "beauty", "feedbackId": "uuid", "type": "bug", "severity": "high", "message": "...", "pageUrl": "/beauty/calendar",
-  "tenant": { "externalRef": "sg-123", "tenantId": "uuid", "slug": "salon-x", "name": "Salon X" },
-  "user": { "userId": "uuid", "role": "admin", "fullName": "...", "email": "..." },
-  "createdAt": "2026-11-04T10:00:00Z" }
+{ "sourceTenantRef": "sg-123", "tenantName": "Salon X", "type": "bug", "message": "...", "feedbackId": "uuid",
+  "severity": "high", "contact": "owner@x.test", "userRole": "admin", "pageUrl": "/beauty/calendar" }
 ```
-- `source` — завжди `"beauty"` (D3). `feedbackId` — ключ ідемпотентності в ShelfGuard. `pageUrl` — `null`, якщо не передано. `tenant.externalRef` — `null` для tenant, створених поза ShelfGuard. `user.role` — `owner | admin | specialist`. `severity` — завжди заповнене (після дефолту).
-- Повтори: експоненційна затримка до 24 год, потім `delivery_status=failed` + алерт у лог; успіх → `delivered`, `delivered_at`, `external_lead_id` (якщо ShelfGuard його поверне).
-- **ВІДКРИТО — Q4 (блокує TASK-829, TASK-821):** шлях `ShelfGuard:LeadsPath`, автентифікація вхідного ендпоінта лідів у `feat/beauty-leads-telegram`, форма відповіді (поле id ліда), коди «дубль `feedbackId`» і «невалідне тіло», відповідність `type`/`severity` полям LandingLead. До закриття Q4 пропозиція для worker (не контракт ShelfGuard): `2xx` → delivered; дубль `feedbackId` → delivered; `408 | 429 | 5xx | мережа` → повтор; інші `4xx` → `failed` без повторів.
+- Поля: `sourceTenantRef` — `tenants.external_ref`, а якщо він `NULL` (tenant створено не в ShelfGuard) — uuid tenant; `tenantName`; `type` (`cooperation | improvement | bug`); `message`; `feedbackId` — ключ ідемпотентності на боці ShelfGuard; `severity` — завжди заповнене (після дефолту `normal`); `contact?` — email автора (лише якщо є); `userRole?` — `owner | admin | specialist`; `pageUrl?` — лише якщо передано. Необов'язкові поля відсутні в тілі, а не `null`.
+- Env воркера: `SHELFGUARD_FEEDBACK_ENABLED` (лише `true`, без регістру, вмикає доставку; інакше вимкнено), `SHELFGUARD_BASE_URL` (http/https, без query і fragment), `SHELFGUARD_FEEDBACK_KEY_ID` (`[a-z0-9-]{3,32}`), `SHELFGUARD_FEEDBACK_SECRET` (base64, ≥ 32 байти). Вимкнено або невалідна конфігурація — рядки лишаються `pending`, воркер не стартує доставку (для невалідної логується помилка конфігурації).
+- Результат відповіді ShelfGuard:
+  - `201` або `200` (повтор із тим самим `feedbackId`, replayed) → `delivered`, `delivered_at`; `external_lead_id` — з поля `leadId` або `id` тіла відповіді, якщо воно є (рядок ≤ 64 символів, інакше `null`);
+  - `401`, `422` та інші `4xx` (крім `408`, `429`) → `failed` без повторів, `last_error=http_<код>`;
+  - `429` (з `Retry-After`, якщо є), `408`, `5xx`, мережа, таймаут (10 с) → повтор.
+- Повтори: backoff `60с × 2^(n−1)`, потім ±20% jitter, верхня межа 4 год; максимум 12 спроб, після цього `delivery_status=failed` з `last_error=max_attempts:<код>` і алерт у лог. Наступна спроба — `next_attempt_at`. Бізнес-текст заявки, email і секрети в логах і `last_error` не потрапляють.
 
 ### 27.10 Аудит (`platform_audit_log`, append-only)
 Дії: `tenant.created | tenant.create_replayed | tenant.suspended | tenant.resumed | tenant.modules_changed | owner_invite.issued | owner_invite.revoked | owner_invite.accepted | control_auth.failed` (агрегація ≤ 1 запис/хв на IP+причину). Поля: `actor_type` (`shelfguard_admin | platform_key | owner | system`), `actor_id`, `actor_display`, `key_id`, `request_id`, `ip`, `details`. `details` без секретів, токенів, паролів, тексту заявок; email → `user_id`. Noop фіксується з `details.noop=true` **[уточнення §27]**.
@@ -3402,9 +3405,10 @@ BCRM-HMAC-SHA256-v1
 | `invalid_slug`, `unknown_module`, `invalid_email`, `invalid_name`, `invalid_external_ref`, `password_not_allowed` | 422 | create (і `unknown_module` у modules) |
 | `external_ref_conflict`, `tenant_slug_taken` | 409 | create |
 | `owner_already_active` | 409 | owner-invite |
-| `tenant_suspended` | 409 / 403 | 409 — owner-invite; 403 — invite inspect/accept, публічний запис і віджет |
+| `tenant_suspended` | 409 / 403 | 409 — owner-invite; 403 — invite inspect/accept, публічний запис і віджет, feedback |
+| `user_inactive` | 403 | feedback (користувач неактивний) |
 | `invite_invalid` | 410 | invite inspect/accept |
 | `invalid_type`, `invalid_severity`, `invalid_message`, `invalid_page_url` | 422 | feedback |
 
 ### 27.12 Споживачі
-TASK-817 (схема HMAC, вектор), TASK-818 (§27.3–§27.5, §27.7), TASK-819 (§27.8), TASK-820 (§27.9 API), TASK-821 (доставка, після Q4), TASK-822/823 (frontend invite / форма заявки), TASK-831 (§27.6), TASK-834 (UI `tenant_suspended`); ShelfGuard — TASK-827 (клієнт v1, вектор), TASK-829 (вхідні ліди, Q4), TASK-832 (`setModules`).
+TASK-817 (схема HMAC, вектор), TASK-818 (§27.3–§27.5, §27.7), TASK-819 (§27.8), TASK-820 (§27.9 API), TASK-821 (доставка заявок), TASK-822/823 (frontend invite / форма заявки), TASK-831 (§27.6), TASK-834 (UI `tenant_suspended`); ShelfGuard — TASK-827 (клієнт v1, вектор), TASK-829 (вхідні ліди), TASK-832 (`setModules`).

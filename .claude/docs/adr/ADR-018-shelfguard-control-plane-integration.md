@@ -184,20 +184,19 @@ Rate limit групи: 60 запитів/хв на `kid` (`429 rate_limited`, `R
 → `202 { id }`. Помилки: `422 invalid_type | invalid_severity | invalid_message`, `429 rate_limited` (5/год на користувача, 30/добу на tenant).
 `severity` має сенс для `bug`. Для інших типів сервер ставить `normal`, якщо поле не передали.
 
-Доставка: worker бере подію outbox `platform_feedback.submitted` і робить `POST {ShelfGuard:BaseUrl}{ShelfGuard:LeadsPath}`
-з тим самим форматом підпису §3.1, але з власним ключем `ShelfGuard:Outbound:Keys:{kid}` (ключ напрямку Beauty→ShelfGuard; у ShelfGuard —
-вхідний). Тіло:
+Доставка (worker, TASK-821; Q4 вирішено, шлях і формат зафіксовані в `beauty-contracts.md` §27.9): worker бере рядок
+`beauty_platform_feedback` з `delivery_status=pending` і робить `POST {SHELFGUARD_BASE_URL}/api/integrations/beauty/feedback`
+з підписом `ControlPlaneHmac` v1 (§3.1) ключем напрямку Beauty→ShelfGuard `SHELFGUARD_FEEDBACK_KEY_ID` / `SHELFGUARD_FEEDBACK_SECRET`
+(окремий від вхідного). Тіло — плоский JSON:
 
 ```json
-{ "source": "beauty", "feedbackId": "uuid", "type": "bug", "severity": "high", "message": "...", "pageUrl": "/admin/calendar",
-  "tenant": { "externalRef": "sg-123", "tenantId": "uuid", "slug": "salon-x", "name": "Salon X" },
-  "user": { "userId": "uuid", "role": "admin", "fullName": "...", "email": "..." },
-  "createdAt": "2026-11-04T10:00:00Z" }
+{ "sourceTenantRef": "sg-123", "tenantName": "Salon X", "type": "bug", "message": "...", "feedbackId": "uuid",
+  "severity": "high", "contact": "owner@x.test", "userRole": "admin", "pageUrl": "/admin/calendar" }
 ```
 
-`feedbackId` — ключ ідемпотентності на боці ShelfGuard. Повтори йдуть з експоненційною затримкою (до 24 год), після вичерпання
-статус `failed` і алерт у лог. `tenant.externalRef` може бути `null` для tenant, створених поза ShelfGuard.
-Відповідність `type`/`severity` полям LandingLead ShelfGuard — Q4.
+`feedbackId` — ключ ідемпотентності на боці ShelfGuard. `sourceTenantRef` — `tenants.external_ref`, а якщо він `NULL`, uuid tenant.
+Відповіді: `201`/`200` (replayed) — delivered; `401`, `422`, інші `4xx` — failed без повторів; `429`, `408`, `5xx`, мережа — повтор
+з backoff 60с×2^n (до 4 год, ±20% jitter), максимум 12 спроб, потім `failed` і алерт у лог.
 
 ### 4. Модель даних (міграції Beauty)
 
@@ -205,7 +204,7 @@ Rate limit групи: 60 запитів/хв на `kid` (`429 rate_limited`, `R
 
 | Зміна | Деталі | RLS |
 |---|---|---|
-| Реєстр tenant: `external_ref text NULL`, `external_source text NULL` (`'shelfguard'`), `suspended_at timestamptz NULL`, `suspended_reason text NULL` | `UNIQUE (external_source, external_ref) WHERE external_ref IS NOT NULL`; CHECK формату `external_ref` | платформна таблиця, як і зараз |
+| Реєстр tenant: `external_ref text NULL`, `external_source text NULL` (`'shelfguard'`), `suspended_at timestamptz NULL`, `suspended_reason text NULL` | `UNIQUE (external_source, external_ref) WHERE external_ref IS NOT NULL`; CHECK формату `external_ref` | `tenants` має FORCE RLS: `tenant_self` (за `app.tenant_id`) для запису і SELECT-політика `tenants_control_lookup` (за транзакційним `app.tenant_external_ref`, лише `external_source='shelfguard'`) для пошуку за `external_ref` |
 | Користувачі: `password_hash` стає NULL-able, стан `invited` | CHECK: `password_hash IS NOT NULL OR state = 'invited'`; login для `invited` → `401` | без змін (tenant RLS) |
 | `platform_owner_invites` | `id uuid PK, tenant_id uuid FK, user_id uuid FK, token_hash bytea UNIQUE, expires_at, used_at NULL, revoked_at NULL, created_at, created_by_actor text`; частковий унікальний індекс «одне активне на user_id» | платформна (без tenant RLS), доступ лише через platform/auth-шлях |
 | `platform_audit_log` | `id bigserial, occurred_at, action` (`tenant.created, tenant.create_replayed, tenant.suspended, tenant.resumed, tenant.modules_changed, owner_invite.issued, owner_invite.revoked, owner_invite.accepted, control_auth.failed`), `tenant_id NULL, actor_type` (`shelfguard_admin, platform_key, owner, system`), `actor_id, actor_display, key_id, request_id, ip inet, details jsonb` | платформна; у ролі застосунку відкликано `UPDATE/DELETE` (append-only) |
@@ -228,13 +227,14 @@ Rate limit групи: 60 запитів/хв на `kid` (`429 rate_limited`, `R
 - **Аудит:** кожна control-plane мутація (зокрема noop і replay створення), видача, відкликання й погашення запрошення, невдала автентифікація
   (з агрегацією: не більше 1 запису/хв на IP+причину) записуються з актором, `kid` і `request_id`.
 - **Invite:** high-entropy токен, хеш у БД, одноразовий, TTL, фрагмент URL, rate limit, єдиний код помилки.
-- **Fail closed:** немає валідних ключів — група вимкнена. `ShelfGuard:Outbound` не налаштовано — feedback приймається (`202`) і чекає в outbox.
+- **Fail closed:** немає валідних ключів — група вимкнена. Доставка заявок вимкнена (`SHELFGUARD_FEEDBACK_ENABLED` не `true` або конфіг невалідний) — feedback приймається (`202`) і чекає зі статусом `pending`.
 
 ### 6. Наслідки для RLS
 
 - Control-plane операції — **платформні**: вони працюють з реєстром tenant, `platform_owner_invites`, `platform_audit_log`, `control_plane_nonces`.
-  Це таблиці без tenant RLS, і запити йдуть поза tenant-контекстом (`app.tenant_id` не встановлено).
-- Єдина tenant-таблиця, яку зачіпає control plane, — таблиця користувачів: створення owner під час provisioning і встановлення пароля під час accept.
+  `platform_owner_invites`, `platform_audit_log`, `control_plane_nonces` — таблиці без tenant RLS. `tenants` — з FORCE RLS (§4): пошук за `external_ref`
+  іде через SELECT-політику `tenants_control_lookup` (транзакційний `app.tenant_external_ref`), інші операції з реєстром — після встановлення `app.tenant_id`.
+- Tenant-таблиці, які зачіпає control plane: `users` (створення owner під час provisioning і встановлення пароля під час accept) та `tenants` (статус, модулі).
   Для цього транзакція після визначення `tenant_id` (з реєстру або з запрошення) встановлює `set_config('app.tenant_id', $tenant, true)`,
   тобто **transaction-local**, і працює під звичайною роллю застосунку з RLS. Це той самий механізм, що має вже використовувати `/api/platform/tenants`;
   backend-developer підтверджує це й використовує його повторно (Q5).
@@ -291,8 +291,7 @@ ADR прийнято власником 2026-11-04 («ADR-018 прийнято»
 - **Q2b (пропозиція, потребує підтвердження).** Поведінка призупиненого tenant для worker і каналів. Пропозиція: вхідні повідомлення каналів приймати
   й зберігати без AI-відповідей, нагадування й кампанії не надсилати. Не блокує TASK-818/834. Блокує лише окрему реалізацію поведінки worker і каналів:
   у поточному DAG задачі для неї немає, її додають після підтвердження. До того часу поведінка worker для призупиненого tenant лишається чинною (не перевірено, що вона робить).
-- **Q4 (блокує TASK-829, а через неї TASK-821; частково TASK-815 — розділ тіла доставки заявки).** Контракт вхідного ендпоінта лідів ShelfGuard у `feat/beauty-leads-telegram`:
-  шлях, наявна автентифікація, значення типу й критичності LandingLead, відповідність `cooperation|improvement|bug` і `low|normal|high|critical`.
+- **Q4 — вирішено.** Доставка заявок Beauty→ShelfGuard: шлях `POST /api/integrations/beauty/feedback`, підпис `ControlPlaneHmac` v1 (ключ напрямку Beauty→ShelfGuard), плоске тіло з `type` і `severity` як рядками, відповіді й повторні спроби за `beauty-contracts.md` §27.9 (worker `worker/src/feedback/`). Відповідність полів LandingLead ShelfGuard — на боці ShelfGuard (TASK-829).
 - **Q5 (технічне; закривається звіркою з кодом на початку TASK-816 і TASK-818, рішення власника не потрібне).** Не перевірено:
   - назви таблиць реєстру tenant і користувачів;
   - механізм встановлення `app.tenant_id` у чинному provisioning;

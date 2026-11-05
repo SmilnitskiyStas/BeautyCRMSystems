@@ -15,7 +15,7 @@ namespace BeautyCrm.Api.Auth.ControlPlane;
 /// </summary>
 public sealed class ControlPlaneHmacHandler(
     IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory loggerFactory, UrlEncoder encoder,
-    ControlPlaneInboundOptions keys, ControlPlaneRateLimiter limiter, TimeProvider time)
+    ControlPlaneInboundOptions keys, ControlPlaneRateLimiter limiter, TimeProvider time, ControlPlaneFailureAudit failures)
     : AuthenticationHandler<AuthenticationSchemeOptions>(options, loggerFactory, encoder)
 {
     public const string Scheme = "ControlPlaneHmac";
@@ -43,31 +43,31 @@ public sealed class ControlPlaneHmacHandler(
     private async Task<AuthenticateResult> VerifyAsync()
     {
         var req = Request;
-        if (!keys.Enabled) return Reject("disabled");
+        if (!keys.Enabled) return await RejectAsync("disabled");
 
         var kid = Single(ControlPlaneSignature.KeyIdHeader);
         var timestamp = Single(ControlPlaneSignature.TimestampHeader);
         var nonce = Single(ControlPlaneSignature.NonceHeader);
         var signature = Single(ControlPlaneSignature.SignatureHeader);
-        if (kid is null || timestamp is null || nonce is null || signature is null) return Reject("missing_header");
+        if (kid is null || timestamp is null || nonce is null || signature is null) return await RejectAsync("missing_header");
         if (!ControlPlaneSignature.KidFormat.IsMatch(kid) || !ControlPlaneSignature.TimestampFormat.IsMatch(timestamp)
             || !ControlPlaneSignature.NonceFormat.IsMatch(nonce) || !ControlPlaneSignature.SignatureFormat.IsMatch(signature)
             || !ControlPlaneSignature.IsAllowedMethod(req.Method))
-            return Reject("missing_header");
+            return await RejectAsync("missing_header");
 
         // kid уже у валідному форматі: його безпечно писати в лог.
-        if (!keys.TryGetKey(kid, out var key)) return Reject("unknown_key");
+        if (!keys.TryGetKey(kid, out var key)) return await RejectAsync("unknown_key");
 
         var skew = time.GetUtcNow().ToUnixTimeSeconds() - long.Parse(timestamp, System.Globalization.CultureInfo.InvariantCulture);
-        if (Math.Abs(skew) > ControlPlaneSignature.WindowSeconds) return Reject("timestamp_skew", kid);
+        if (Math.Abs(skew) > ControlPlaneSignature.WindowSeconds) return await RejectAsync("timestamp_skew", kid);
 
         var body = await ReadBodyAsync();
-        if (body is null) return Reject("body_too_large", kid);
+        if (body is null) return await RejectAsync("body_too_large", kid);
 
         var path = req.PathBase.Add(req.Path).Value ?? "/";
         var canonical = ControlPlaneSignature.Canonical(kid, timestamp, nonce, req.Method, path, query: "", body);
         var expected = ControlPlaneSignature.Sign(key.Secret, canonical);
-        if (!ControlPlaneSignature.SignaturesEqual(expected, signature)) return Reject("bad_signature", kid);
+        if (!ControlPlaneSignature.SignaturesEqual(expected, signature)) return await RejectAsync("bad_signature", kid);
 
         // Підпис валідний: тільки тепер nonce потрапляє в БД (невалідні запити не можуть її наповнювати).
         bool fresh;
@@ -81,7 +81,7 @@ public sealed class ControlPlaneHmacHandler(
             Logger.LogError(ex, "Control plane auth rejected: nonce store failure (kid {Kid})", kid);
             return AuthenticateResult.Fail("nonce_store_error"); // fail closed, відповідь 401 як в усіх
         }
-        if (!fresh) return Reject("nonce_replayed", kid);
+        if (!fresh) return await RejectAsync("nonce_replayed", kid);
 
         if (!limiter.TryAcquire(kid, out var retryAfter))
         {
@@ -118,10 +118,25 @@ public sealed class ControlPlaneHmacHandler(
         return ms.Length > limit ? null : ms.ToArray();
     }
 
-    private AuthenticateResult Reject(string reason, string? kid = null)
+    private async Task<AuthenticateResult> RejectAsync(string reason, string? kid = null)
     {
         // Лише причина, kid (формат перевірено) і IP; жодних значень підпису/секрету/тіла.
-        Logger.LogWarning("Control plane auth failed: {Reason} (kid {Kid}, ip {Ip})", reason, kid ?? "-", Context.Connection.RemoteIpAddress);
+        var ip = Context.Connection.RemoteIpAddress;
+        Logger.LogWarning("Control plane auth failed: {Reason} (kid {Kid}, ip {Ip})", reason, kid ?? "-", ip);
+
+        // M2 (TASK-826): аудит control_auth.failed, <= 1 запис/хв на (IP, причина). Збій запису не змінює відповідь 401.
+        if (failures.TryAcquire(ip, reason, out var suppressed))
+        {
+            try
+            {
+                var db = Context.RequestServices.GetRequiredService<BeautyCrm.Infrastructure.Data.BeautyDbContext>();
+                await failures.RecordAsync(db, ip, reason, kid, suppressed, CancellationToken.None);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Logger.LogError(ex, "Control plane auth failure audit write failed ({Reason})", reason);
+            }
+        }
         return AuthenticateResult.Fail(reason);
     }
 

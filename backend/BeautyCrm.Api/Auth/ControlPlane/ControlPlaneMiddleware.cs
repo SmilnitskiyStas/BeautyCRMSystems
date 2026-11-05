@@ -55,11 +55,13 @@ public static class ControlPlaneExtensions
         services.AddSingleton(sp => ControlPlaneInboundOptions.From(
             sp.GetRequiredService<IConfiguration>(), sp.GetRequiredService<ILoggerFactory>().CreateLogger("BeautyCrm.ControlPlane")));
         services.AddSingleton(sp => new ControlPlaneRateLimiter(sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new ControlPlaneFailureAudit(sp.GetRequiredService<TimeProvider>()));
         services.AddScoped<IControlPlaneNonceStore, EfControlPlaneNonceStore>();
         services.AddSingleton(sp =>
         {
             var o = new BeautyCrm.Application.Features.BeautyControlPlane.ControlPlaneOptions();
             sp.GetRequiredService<IConfiguration>().GetSection("ControlPlane").Bind(o); // PublicAppUrl, InviteTtlHours
+            o.AllowHttp = sp.GetRequiredService<IHostEnvironment>().IsDevelopment(); // L2: http лише в Development, не з конфігу
             return o;
         });
         return services;

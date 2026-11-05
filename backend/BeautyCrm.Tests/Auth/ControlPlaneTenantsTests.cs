@@ -415,19 +415,28 @@ public sealed class ControlPlaneTenantsTests(AuthApiFixture fx) : IClassFixture<
     }
 
     [SkippableFact]
-    public async Task suspended_tenant_non_module_staff_endpoints_behavior_is_recorded()
+    public async Task suspended_tenant_with_valid_token_gets_403_tenant_suspended_on_non_module_endpoints_and_resume_restores()
     {
         NeedDb();
         using var h = Build();
         var (seed, ext) = await ActiveTenantWithRefAsync();
         var owner = await fx.LoginAsync(seed.Slug, seed.OwnerEmail);
+        string[] urls = ["/api/auth/me", "/api/users", "/api/invites"];
+        foreach (var u in urls)
+            Assert.Equal(HttpStatusCode.OK, (await fx.Send(HttpMethod.Get, u, bearer: owner.AccessToken, client: h.Client)).StatusCode);
+
         await h.Client.SendAsync(Signed(HttpMethod.Post, $"/api/control/v1/tenants/{ext}/suspend", new { reason = "x", actor = Actor }));
-        // ФАКТИЧНА поведінка (відхилення від §27.5 "staff API tenant -> 403"): ендпоінти без [RequireModule] (/api/auth/me, /api/users, /api/invites)
-        // не перевіряють статус tenant і працюють із ще чинним access-токеном до його спливу (AccessTokenMinutes).
-        var me = await fx.Send(HttpMethod.Get, "/api/auth/me", bearer: owner.AccessToken, client: h.Client);
-        var users = await fx.Send(HttpMethod.Get, "/api/users", bearer: owner.AccessToken, client: h.Client);
-        Assert.Equal(HttpStatusCode.OK, me.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, users.StatusCode);
+        // M3 (TASK-826): глобальний TenantActiveFilter - чинний access-токен не дає доступу до /api/auth/me, /api/users, /api/invites.
+        foreach (var u in urls)
+        {
+            var r = await fx.Send(HttpMethod.Get, u, bearer: owner.AccessToken, client: h.Client);
+            Assert.Equal(HttpStatusCode.Forbidden, r.StatusCode);
+            Assert.Equal("tenant_suspended", await Code(r));
+        }
+
+        await h.Client.SendAsync(Signed(HttpMethod.Post, $"/api/control/v1/tenants/{ext}/resume", new { actor = Actor }));
+        foreach (var u in urls)
+            Assert.Equal(HttpStatusCode.OK, (await fx.Send(HttpMethod.Get, u, bearer: owner.AccessToken, client: h.Client)).StatusCode);
     }
 
     [SkippableFact]

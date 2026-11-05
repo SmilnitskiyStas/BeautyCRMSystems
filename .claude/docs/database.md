@@ -520,11 +520,17 @@ name            VARCHAR NOT NULL
 slug            VARCHAR NOT NULL UNIQUE (3-64, a-z0-9-)
 modules         TEXT[] (array of feature flags)
 status          VARCHAR (CHECK IN ('active','suspended'))
+external_ref    VARCHAR(64) NULL (CHECK `^[A-Za-z0-9_-]{1,64}$`; ShelfGuard enterprise id, ADR-018)
+external_source VARCHAR(16) NULL (CHECK IN ('shelfguard'); set together with external_ref)
+suspended_at    TIMESTAMPTZ NULL (only while status='suspended')
+suspended_reason VARCHAR(500) NULL
 created_at      TIMESTAMPTZ NOT NULL
 updated_at      TIMESTAMPTZ NOT NULL
+
+UNIQUE (external_source, external_ref) WHERE external_ref IS NOT NULL  -- ux_tenants_external_ref
 ```
 
-**No RLS** (public read for login lookup). Suspended tenant → `403 module_disabled` on any module access.
+**RLS:** ENABLE + FORCE RLS. Policies: `tenant_self` (`app.tenant_id`), `tenants_login_lookup` (SELECT by `app.tenant_slug`), `tenants_control_lookup` (SELECT by `app.tenant_external_ref`, only `external_source='shelfguard'`; see §3). Suspended tenant → `403 module_disabled` on staff module access; public booking/widget → `403 tenant_suspended` (ADR-018).
 
 #### users
 ```sql
@@ -535,11 +541,13 @@ full_name       VARCHAR NOT NULL
 role            VARCHAR NOT NULL (CHECK IN ('owner','admin','specialist'))
 specialist_id   UUID (nullable, FK beauty_specialists, composite FK (tenant_id, specialist_id))
 is_active       BOOLEAN DEFAULT true
-password_hash   VARCHAR NOT NULL (bcrypt, workfactor 12)
+password_hash   VARCHAR NULL (bcrypt, workfactor 12; NULL only while state='invited')
+state           VARCHAR NOT NULL DEFAULT 'active' (CHECK IN ('active','invited'))
 created_at      TIMESTAMPTZ NOT NULL
 updated_at      TIMESTAMPTZ NOT NULL
 
 UNIQUE (tenant_id, email) DEFERRABLE INITIALLY DEFERRED
+CHECK (password_hash IS NOT NULL OR state = 'invited')  -- ADR-018, platform_control_plane
 ```
 
 **Deactivation (TASK-696):** owner never auto-disabled; specialist deactivation → user.is_active=false (except owner), refresh tokens revoked, pending invites revoked.

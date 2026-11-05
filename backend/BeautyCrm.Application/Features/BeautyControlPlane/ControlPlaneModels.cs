@@ -7,6 +7,11 @@ public sealed class ControlPlaneOptions
 {
     public string? PublicAppUrl { get; set; }
     public int InviteTtlHours { get; set; } = 72;
+    /// <summary>
+    /// TASK-826 (L2): http-схема для PublicAppUrl лише в Development (виставляє Api за IHostEnvironment, не з конфігу).
+    /// Інакше токен запрошення у посиланні пішов би відкритим каналом.
+    /// </summary>
+    public bool AllowHttp { get; set; }
 }
 
 // ---------- запити (усі поля nullable: валідація й коди помилок - у сервісі, не в model binding) ----------

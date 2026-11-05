@@ -533,6 +533,55 @@ public sealed class ControlPlaneHmacTests(AuthApiFixture fx) : IClassFixture<Aut
         Assert.DoesNotContain(PlatformKey, joined);
     }
 
+    private async Task<List<(string Reason, string? Kid, string? KeyId, string Actor, string Details)>> FailedAudit()
+    {
+        await using var c = new NpgsqlConnection(fx.Db.AdminConnectionString);
+        await c.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT details->>'reason', details->>'kid', key_id, actor_type, details::text FROM platform_audit_log WHERE action = 'control_auth.failed' ORDER BY id", c);
+        await using var rd = await cmd.ExecuteReaderAsync();
+        var rows = new List<(string, string?, string?, string, string)>();
+        while (await rd.ReadAsync())
+            rows.Add((rd.GetString(0), rd.IsDBNull(1) ? null : rd.GetString(1), rd.IsDBNull(2) ? null : rd.GetString(2), rd.GetString(3), rd.GetString(4)));
+        return rows;
+    }
+
+    [SkippableFact]
+    public async Task failed_auth_is_audited_at_most_once_per_minute_per_ip_and_reason_without_secrets()
+    {
+        NeedDb();
+        var (f, clock, _) = Build();
+        using var _f = f;
+        var c = f.CreateClient();
+        var body = Encoding.UTF8.GetBytes("{\"x\":1}");
+        var before = (await FailedAudit()).Count;
+
+        HttpRequestMessage BadSig() => Signed(HttpMethod.Post, Probe, Kid, clock.Unix, body, signBody: Encoding.UTF8.GetBytes("{\"x\":2}"));
+        for (var i = 0; i < 3; i++) Assert.Equal(HttpStatusCode.Unauthorized, (await c.SendAsync(BadSig())).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await c.SendAsync(new HttpRequestMessage(HttpMethod.Get, Probe))).StatusCode); // missing_header, інша причина
+
+        var rows = (await FailedAudit()).Skip(before).ToList();
+        Assert.Equal(2, rows.Count);
+        var bad = Assert.Single(rows, r => r.Reason == "bad_signature");
+        Assert.Equal(Kid, bad.Kid);
+        Assert.Equal(Kid, bad.KeyId);
+        Assert.Equal("system", bad.Actor);
+        Assert.Contains(rows, r => r.Reason == "missing_header" && r.Kid is null);
+
+        // нове вікно: наступна невдача пишеться й несе кількість пропущених (2)
+        clock.Unix += 61;
+        Assert.Equal(HttpStatusCode.Unauthorized, (await c.SendAsync(BadSig())).StatusCode);
+        var after = (await FailedAudit()).Skip(before).Where(r => r.Reason == "bad_signature").ToList();
+        Assert.Equal(2, after.Count);
+        Assert.Contains("\"suppressed\": 2", after[1].Details);
+
+        // без PII і секретів
+        var all = string.Join("\n", (await FailedAudit()).Skip(before).Select(r => r.Details));
+        Assert.DoesNotContain(HmacVector.Load().SecretBase64, all);
+        Assert.DoesNotContain("v1=", all);
+        Assert.DoesNotContain("{\"x\"", all);
+    }
+
     [SkippableFact]
     public async Task body_limit_64KB_boundary()
     {

@@ -226,10 +226,17 @@ public sealed partial class ControlPlaneService(IControlPlaneStore store, Contro
     private string InviteBaseUrl()
     {
         var url = options.PublicAppUrl?.Trim().TrimEnd('/');
-        if (string.IsNullOrEmpty(url) || !Uri.TryCreate(url, UriKind.Absolute, out var u) || (u.Scheme != Uri.UriSchemeHttps && u.Scheme != Uri.UriSchemeHttp))
-            throw new InvalidOperationException("ControlPlane:PublicAppUrl must be an absolute http(s) URL to issue owner invites.");
-        return url;
+        if (!IsAllowedPublicAppUrl(url, options.AllowHttp))
+            throw new InvalidOperationException(options.AllowHttp
+                ? "ControlPlane:PublicAppUrl must be an absolute http(s) URL to issue owner invites."
+                : "ControlPlane:PublicAppUrl must be an absolute https URL to issue owner invites (http is allowed only in Development).");
+        return url!;
     }
+
+    /// <summary>L2: https завжди; http лише коли <paramref name="allowHttp"/> (Development).</summary>
+    public static bool IsAllowedPublicAppUrl(string? url, bool allowHttp) =>
+        !string.IsNullOrEmpty(url) && Uri.TryCreate(url, UriKind.Absolute, out var u)
+        && (u.Scheme == Uri.UriSchemeHttps || (allowHttp && u.Scheme == Uri.UriSchemeHttp));
 
     private static string InviteUrl(string baseUrl, string token) => $"{baseUrl}/invite#t={token}";
 }

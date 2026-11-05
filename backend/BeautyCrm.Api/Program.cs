@@ -13,7 +13,8 @@ using Microsoft.AspNetCore.Mvc;
 var builder = WebApplication.CreateBuilder(args);
 
 // Application має бути зареєстровано разом з Data/Channels/Ai: вони реалізують порти одне одного.
-builder.Services.AddControllers().ConfigureApiBehaviorOptions(o =>
+builder.Services.AddControllers(o => o.Filters.Add<BeautyCrm.Api.Tenancy.TenantActiveFilter>()) // призупинений tenant: 403 навіть з чинним токеном (M3)
+    .ConfigureApiBehaviorOptions(o =>
 {
     // Помилки валідації на межі API -> 422 (контракт beauty-contracts.md §3).
     o.InvalidModelStateResponseFactory = ctx => new UnprocessableEntityObjectResult(new ApiError(
