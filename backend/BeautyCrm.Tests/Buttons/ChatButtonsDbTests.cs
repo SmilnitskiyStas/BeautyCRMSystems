@@ -641,8 +641,9 @@ public sealed class ChatButtonsDbTests : IClassFixture<PostgresRlsFixture>
 
         var results = await Task.WhenAll(ExecuteAsync(e, r1, i1), ExecuteAsync(e, r2, i2));
 
-        Assert.Equal(1, results.Count(r => r.Code == ButtonResultCodes.Confirmed));
-        Assert.Equal(1, results.Count(r => r.Code == ButtonResultCodes.Used));
+        var codes = string.Join(",", results.Select(r => r.Code));
+        Assert.True(results.Count(r => r.Code == ButtonResultCodes.Confirmed) == 1, "коди результатів: " + codes);
+        Assert.True(results.Count(r => r.Code == ButtonResultCodes.Used) == 1, "коди результатів: " + codes);
         Assert.Single(await h.AppointmentsAsync(s));
         Assert.Single((await h.ActionsAsync(s)).Where(a => a.ToolName == "confirm_booking"));
     }
