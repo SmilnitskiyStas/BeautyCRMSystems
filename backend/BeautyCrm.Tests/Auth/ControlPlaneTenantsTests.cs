@@ -367,7 +367,7 @@ public sealed class ControlPlaneTenantsTests(AuthApiFixture fx) : IClassFixture<
         Assert.Equal("неоплата", await Q<string>("SELECT suspended_reason FROM tenants WHERE id = @t", ("t", seed.TenantId)));
         Assert.Equal(0, await Q<int>("SELECT count(*)::int FROM refresh_tokens WHERE tenant_id = @t AND revoked_at IS NULL", ("t", seed.TenantId)));
 
-        // вхід 401, refresh 401, API 403 (module_disabled - чинний код), публічний запис 403 tenant_suspended
+        // вхід 401, refresh 401, API 403 (tenant_suspended - чинний код), публічний запис 403 tenant_suspended
         var login = await fx.Send(HttpMethod.Post, "/api/auth/login", new { tenant = seed.Slug, email = seed.OwnerEmail, password = Password }, client: h.Client);
         Assert.Equal(HttpStatusCode.Unauthorized, login.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await fx.Send(HttpMethod.Post, "/api/auth/refresh", new { refreshToken = owner.RefreshToken }, client: h.Client)).StatusCode);
@@ -595,6 +595,94 @@ public sealed class ControlPlaneTenantsTests(AuthApiFixture fx) : IClassFixture<
         Assert.Equal(HttpStatusCode.Conflict, active.StatusCode);
         Assert.Equal("owner_already_active", await Code(active));
         Assert.Equal(0, await Q<int>("SELECT count(*)::int FROM platform_owner_invites WHERE tenant_id = @t", ("t", seed.TenantId)));
+    }
+
+    // ---------- TASK-825: наскрізний сценарій одним тестом ----------
+
+    [SkippableFact]
+    public async Task e2e_create_invite_accept_feedback_suspend_resume_modules_and_negatives()
+    {
+        NeedDb();
+        using var h = Build();
+        var c = await CreateViaControlAsync(h);
+        var ext = c.ExternalRef;
+
+        // 1) повтор create -> 200 replayed без нового запрошення
+        var replay = await h.Client.SendAsync(Signed(HttpMethod.Post, "/api/control/v1/tenants",
+            CreateBody(ext, c.Slug)));
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        Assert.Equal("true", replay.Headers.GetValues("Idempotent-Replayed").Single());
+        Assert.Equal(JsonValueKind.Null, (await J(replay)).GetProperty("invite").ValueKind);
+
+        // 2) GET: owner invited
+        var get = await J(await h.Client.SendAsync(Signed(HttpMethod.Get, $"/api/control/v1/tenants/{ext}")));
+        Assert.Equal("invited", get.GetProperty("owner").GetProperty("state").GetString());
+
+        // 3) inspect -> accept -> access-токен власника
+        var ins = await h.Client.PostAsync("/api/auth/invite/inspect", System.Net.Http.Json.JsonContent.Create(new { token = c.Token }));
+        Assert.Equal(HttpStatusCode.OK, ins.StatusCode);
+        var acc = await h.Client.PostAsync("/api/auth/invite/accept", System.Net.Http.Json.JsonContent.Create(new { token = c.Token, password = Password }));
+        Assert.Equal(HttpStatusCode.OK, acc.StatusCode);
+        var access = (await J(acc)).GetProperty("accessToken").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, (await fx.Send(HttpMethod.Post, "/api/auth/login",
+            new { tenant = c.Slug, email = c.Email, password = Password }, client: h.Client)).StatusCode);
+
+        // 6a) заявка власника: 202 і рядок pending (доставку воркером перевіряє worker/feedback + ShelfGuard interop-тест)
+        var fb = await fx.Send(HttpMethod.Post, "/api/beauty/feedback",
+            new { type = "bug", message = "Не відкривається календар майстра", pageUrl = "/beauty/calendar" }, bearer: access, client: h.Client);
+        Assert.Equal(HttpStatusCode.Accepted, fb.StatusCode);
+        Assert.Equal(1, await Q<int>("SELECT count(*)::int FROM beauty_platform_feedback WHERE tenant_id = @t AND delivery_status = 'pending' AND type = 'bug'", ("t", c.TenantId)));
+
+        // 5) modules PUT
+        var mods = await h.Client.SendAsync(Signed(HttpMethod.Put, $"/api/control/v1/tenants/{ext}/modules",
+            new { modules = new[] { "beauty_booking" }, actor = Actor }));
+        Assert.Equal(HttpStatusCode.OK, mods.StatusCode);
+        Assert.Equal(["beauty_booking"], (await J(mods)).GetProperty("modules").EnumerateArray().Select(x => x.GetString()).ToArray());
+
+        // 4) suspend: login 401, access 403 tenant_suspended (на staff API, не лише на не-модульних), публічний запис 403, feedback 403
+        await h.Client.SendAsync(Signed(HttpMethod.Post, $"/api/control/v1/tenants/{ext}/suspend", new { reason = "e2e", actor = Actor }));
+        Assert.Equal(HttpStatusCode.Unauthorized, (await fx.Send(HttpMethod.Post, "/api/auth/login",
+            new { tenant = c.Slug, email = c.Email, password = Password }, client: h.Client)).StatusCode);
+        foreach (var url in new[] { "/api/auth/me", "/api/beauty/appointments", "/api/beauty/clients" })
+        {
+            var r = await fx.Send(HttpMethod.Get, url, bearer: access, client: h.Client);
+            Assert.Equal(HttpStatusCode.Forbidden, r.StatusCode);
+            Assert.Equal("tenant_suspended", await Code(r)); // §27.5 / завдання: 403 tenant_suspended
+        }
+        var pub = await h.Client.GetAsync($"/api/public/{c.Slug}/locations");
+        Assert.Equal(HttpStatusCode.Forbidden, pub.StatusCode);
+        Assert.Equal("tenant_suspended", await Code(pub));
+        var fb2 = await fx.Send(HttpMethod.Post, "/api/beauty/feedback",
+            new { type = "improvement", message = "Додайте експорт у CSV, будь ласка" }, bearer: access, client: h.Client);
+        Assert.Equal(HttpStatusCode.Forbidden, fb2.StatusCode);
+
+        // resume -> вхід і публічний каталог працюють, access-токен чинний (сесія не відкликана access-ом)
+        await h.Client.SendAsync(Signed(HttpMethod.Post, $"/api/control/v1/tenants/{ext}/resume", new { actor = Actor }));
+        Assert.Equal(HttpStatusCode.OK, (await fx.Send(HttpMethod.Post, "/api/auth/login",
+            new { tenant = c.Slug, email = c.Email, password = Password }, client: h.Client)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await h.Client.GetAsync($"/api/public/{c.Slug}/locations")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await fx.Send(HttpMethod.Get, "/api/auth/me", bearer: access, client: h.Client)).StatusCode);
+
+        // 7) негативи: поганий підпис, старий timestamp, replay nonce, query
+        var path = $"/api/control/v1/tenants/{ext}";
+        var bad = Signed(HttpMethod.Get, path);
+        bad.Headers.Remove(ControlPlaneSignature.SignatureHeader);
+        bad.Headers.Add(ControlPlaneSignature.SignatureHeader, "v1=" + new string('A', 43));
+        var old = Signed(HttpMethod.Get, path, ts: DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 301);
+        foreach (var req in new[] { bad, old })
+        {
+            var r = await h.Client.SendAsync(req);
+            Assert.Equal(HttpStatusCode.Unauthorized, r.StatusCode);
+            Assert.Equal("control_auth_failed", await Code(r));
+        }
+        var n = "N" + Guid.NewGuid().ToString("N");
+        Assert.Equal(HttpStatusCode.OK, (await h.Client.SendAsync(Signed(HttpMethod.Get, path, nonce: n))).StatusCode);
+        var rep = await h.Client.SendAsync(Signed(HttpMethod.Get, path, nonce: n));
+        Assert.Equal(HttpStatusCode.Unauthorized, rep.StatusCode);
+        Assert.Equal("control_auth_failed", await Code(rep));
+        var q = await h.Client.SendAsync(Signed(HttpMethod.Get, path + "?x=1"));
+        Assert.Equal(HttpStatusCode.BadRequest, q.StatusCode);
+        Assert.Equal("query_not_allowed", await Code(q));
     }
 
     // ---------- автентифікація, replay, cross-tenant ----------
