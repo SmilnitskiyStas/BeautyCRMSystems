@@ -30,12 +30,12 @@ public sealed record ChatProposal(
     Guid Id, Guid ConversationId, Guid? ClientId, Guid LocationId, Guid SpecialistId, Guid ServiceId, DateTimeOffset StartsAt,
     int DurationMinutes, decimal PriceOriginal, decimal PriceFinal, Guid? PromotionId, string Status, string TokenHash,
     Guid? SummaryMessageId, DateTimeOffset ExpiresAt, Guid? AppointmentId, string? FailureCode, DateTimeOffset CreatedAt,
-    DateTimeOffset? DecidedAt, Guid? CouponId = null, Guid? CampaignId = null);
+    DateTimeOffset? DecidedAt, Guid? CouponId = null, Guid? CampaignId = null, Guid? FlowId = null);
 
 public sealed record NewChatProposal(
     Guid Id, Guid ConversationId, Guid? ClientId, Guid LocationId, Guid SpecialistId, Guid ServiceId, DateTimeOffset StartsAt,
     int DurationMinutes, decimal PriceOriginal, decimal PriceFinal, Guid? PromotionId, string TokenHash,
-    DateTimeOffset ExpiresAt, DateTimeOffset CreatedAt, Guid? CouponId = null, Guid? CampaignId = null);
+    DateTimeOffset ExpiresAt, DateTimeOffset CreatedAt, Guid? CouponId = null, Guid? CampaignId = null, Guid? FlowId = null);
 
 public sealed record ChatConversationRef(Guid Id, Guid? ClientId);
 
@@ -74,7 +74,7 @@ public interface IChatBookingStore
 // ---- вхід / вихід сервісу ----
 
 public sealed record ChatPrepareRequest(Guid ConversationId, Guid LocationId, Guid ServiceId, Guid SpecialistId, DateTimeOffset StartsAt,
-    Guid? CouponId = null, Guid? CampaignId = null); // §26.6: купон із пропозиції розмови (offer_coupon_id), який передає КОД конвеєра, не модель
+    Guid? CouponId = null, Guid? CampaignId = null, Guid? FlowId = null); // §28.8: FlowId -> proposal.flow_id (потік запису кнопками). §26.6: купон із пропозиції розмови (offer_coupon_id), який передає КОД конвеєра, не модель
 
 /// <summary>Дані для канонічного підсумку (T-summary формує КОД, не LLM). Без id і токена.</summary>
 public sealed record ChatSummary(

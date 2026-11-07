@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using BeautyCrm.Application.Features.BeautyChatFlow;
 using BeautyCrm.Application.Features.BeautyCommon;
 using BeautyCrm.Infrastructure.Data;
 using BeautyCrm.Infrastructure.Data.Entities;
@@ -16,8 +17,11 @@ namespace BeautyCrm.Infrastructure.Integrations.Channels.Buttons;
 /// </summary>
 public sealed class ChatKeyboardService(
     BeautyDbContext db, ChatButtonsOptions opts, TimeProvider clock, ILogger<ChatKeyboardService> log,
-    BeautyCrm.Infrastructure.Data.Beauty.MarketingModuleGate? marketingModule = null)
+    BeautyCrm.Infrastructure.Data.Beauty.MarketingModuleGate? marketingModule = null, ChatFlowOptions? flowOpts = null)
 {
+    /// <summary>ChatFlow:Enabled (§28.1); без реєстрації опцій потік вимкнено.</summary>
+    private bool FlowOn => flowOpts is { Enabled: true };
+
     /// <summary>Marketing:Enabled І модуль beauty_marketing tenant-а (TASK-790, L4).</summary>
     private async Task<bool> MarketingOnAsync(CancellationToken ct) =>
         opts.MarketingEnabled && (marketingModule is null || await marketingModule.IsEnabledAsync(ct));
@@ -38,7 +42,7 @@ public sealed class ChatKeyboardService(
             || (req.Kind == KeyboardKinds.BookingConfirm && req.ProposalId is null)
             || (req.Kind is KeyboardKinds.AppointmentActions or KeyboardKinds.CancelConfirm or KeyboardKinds.ReminderChoice && req.AppointmentId is null)
             || (req.Kind == KeyboardKinds.CampaignOffer) != (req.CampaignRecipientId is not null)
-            || !MarketingOptionsValid(req))
+            || !MarketingOptionsValid(req) || !FlowOptionsValid(req))
         {
             log.LogWarning("keyboard_invalid conversation={Conversation} kind={Kind}", req.ConversationId, req.Kind);
             return Error.Validation("keyboard_invalid", "Keyboard is invalid.");
@@ -51,6 +55,19 @@ public sealed class ChatKeyboardService(
                 && m.Direction == MessageDirection.Outbound, ct))
             return Error.NotFound("message_not_found", "Message not found.");
 
+        DateTimeOffset? flowExpires = null;
+        if (req.FlowId is { } fid)
+        {
+            // клавіатура кроку прив'язується до АКТИВНОГО потоку цієї розмови тієї самої версії; її TTL = термін потоку (§28.6)
+            var flow = await db.ChatBookingFlows.AsNoTracking().Where(f => f.Id == fid && f.ConversationId == req.ConversationId)
+                .Select(f => new { f.Status, f.Version, f.Step, f.ExpiresAt }).FirstOrDefaultAsync(ct);
+            if (flow is null || flow.Status != FlowStatuses.Active || flow.Version != req.FlowVersion || KeyboardKinds.StepOf(req.Kind) != flow.Step)
+            {
+                log.LogWarning("keyboard_invalid conversation={Conversation} kind={Kind}", req.ConversationId, req.Kind);
+                return Error.Validation("keyboard_invalid", "Flow keyboard does not match the active flow.");
+            }
+            flowExpires = flow.ExpiresAt;
+        }
         DateTimeOffset? proposalExpires = null;
         if (req.ProposalId is { } pid)
         {
@@ -79,6 +96,7 @@ public sealed class ChatKeyboardService(
         {
             KeyboardKinds.MarketingConsent => now.AddHours(opts.MarketingConsentTtlHours),
             KeyboardKinds.CampaignOffer => now.AddDays(ChatButtonsOptions.CampaignOfferDefaultTtlDays),
+            _ when KeyboardKinds.IsFlow(req.Kind) => flowExpires!.Value,
             KeyboardKinds.SlotPick => now.AddMinutes(opts.SlotPickTtlMinutes),
             KeyboardKinds.AppointmentList => now.AddMinutes(opts.ListTtlMinutes),
             KeyboardKinds.CancelConfirm => now.AddMinutes(opts.CancelConfirmTtlMinutes),
@@ -93,7 +111,9 @@ public sealed class ChatKeyboardService(
         var revoked = new List<Guid>();
         if (KeyboardKinds.ReplacesPrevious(req.Kind))
         {
-            revoked = await db.ChatKeyboards.Where(k => k.ConversationId == req.ConversationId && k.Kind == req.Kind && k.Status == KeyboardStatuses.Active)
+            // одна активна клавіатура потоку на розмову: нова flow_* відкликає будь-яку іншу flow_* (§28.5)
+            var group = KeyboardKinds.IsFlow(req.Kind) ? KeyboardKinds.FlowKinds : [req.Kind];
+            revoked = await db.ChatKeyboards.Where(k => k.ConversationId == req.ConversationId && group.Contains(k.Kind) && k.Status == KeyboardStatuses.Active)
                 .Select(k => k.Id).ToListAsync(ct);
             if (revoked.Count > 0)
                 await db.ChatKeyboards.Where(k => revoked.Contains(k.Id) && k.Status == KeyboardStatuses.Active)
@@ -105,7 +125,7 @@ public sealed class ChatKeyboardService(
             Id = Guid.NewGuid(), ConversationId = req.ConversationId, MessageId = req.MessageId, Kind = req.Kind, Token = NewToken(),
             Options = KeyboardJson.Serialize(req.Options.Select(o => o with { Label = ChatKeyboardLayout.SanitizeLabel(o.Label) }).ToList()),
             ProposalId = req.ProposalId, AppointmentId = req.AppointmentId, CampaignRecipientId = req.CampaignRecipientId,
-            Status = KeyboardStatuses.Active, ExpiresAt = expires,
+            FlowId = req.FlowId, FlowVersion = req.FlowVersion, Status = KeyboardStatuses.Active, ExpiresAt = expires,
         };
         db.ChatKeyboards.Add(entity);
         await db.SaveChangesAsync(ct);
@@ -113,6 +133,29 @@ public sealed class ChatKeyboardService(
         db.Entry(entity).State = EntityState.Detached;
         log.LogInformation("chat_keyboard_created conversation={Conversation} keyboard={Keyboard} kind={Kind}", req.ConversationId, entity.Id, req.Kind);
         return new CreatedKeyboard(entity.Id, entity.Token, expires, revoked);
+    }
+
+    /// <summary>§28.5 «Валідація при створенні»: flow_* потребує flow_id і версії, інші види їх не мають; опції відповідають виду й кроку.</summary>
+    private static bool FlowOptionsValid(NewKeyboard req)
+    {
+        if (!KeyboardKinds.IsFlow(req.Kind)) return req.FlowId is null && req.FlowVersion is null && req.Options.All(o => o.Date is null && o.Nav is null);
+        if (req.FlowId is null || req.FlowVersion is null || req.ProposalId is not null || req.AppointmentId is not null || req.CampaignRecipientId is not null) return false;
+        var step = KeyboardKinds.StepOf(req.Kind)!;
+        foreach (var o in req.Options)
+        {
+            var ok = o.Verb switch
+            {
+                ButtonVerbs.FlowService => o.ServiceId is not null,
+                ButtonVerbs.FlowSpecialist => o.SpecialistId is not null,
+                ButtonVerbs.FlowLocation => o.LocationId is not null,
+                ButtonVerbs.FlowDay => o.Date is not null,
+                ButtonVerbs.FlowTime => o.StartsAt is not null,
+                ButtonVerbs.FlowNav => o.Nav is not null && FlowNav.AllowedFor(step, o.Nav),
+                _ => false,
+            };
+            if (!ok) return false;
+        }
+        return true;
     }
 
     internal static readonly string[] ConsentLevels = ["full", "selective", "none"];
@@ -202,7 +245,7 @@ public sealed class ChatKeyboardService(
 
         // 4. збіг розмови (клавіатуру чужої розмови не розкриваємо й не чіпаємо)
         if (k.ConversationId != conversationId) return Done(CallbackOutcome.ForeignConversation, addr);
-        var info = new KeyboardInfo(k.Id, k.Kind, k.Status, k.MessageId, k.ProposalId, k.AppointmentId, k.ExpiresAt, k.UsedAt, k.UsedByMessageId, k.CampaignRecipientId);
+        var info = new KeyboardInfo(k.Id, k.Kind, k.Status, k.MessageId, k.ProposalId, k.AppointmentId, k.ExpiresAt, k.UsedAt, k.UsedByMessageId, k.CampaignRecipientId, k.FlowId, k.FlowVersion);
 
         // 5. повідомлення клавіатури відправлене; якщо відомий external_message_id - збіг із message_ref
         var msg = await db.Messages.AsNoTracking().Where(m => m.Id == k.MessageId && m.ConversationId == conversationId)
@@ -239,16 +282,36 @@ public sealed class ChatKeyboardService(
         var replay = k.Status == KeyboardStatuses.Used && inboundMessageId is { } inbound && k.UsedByMessageId == inbound;
         if (k.Status == KeyboardStatuses.Used && !replay) return Done(CallbackOutcome.Used, addr, info, option, pos);
         if (k.Status == KeyboardStatuses.Revoked) return Done(CallbackOutcome.Revoked, addr, info, option, pos);
-        if (k.Status == KeyboardStatuses.Expired) return Done(CallbackOutcome.Expired, addr, info, option, pos);
+        var isFlowKb = KeyboardKinds.IsFlow(k.Kind);
+        if (k.Status == KeyboardStatuses.Expired) return Done(isFlowKb ? CallbackOutcome.FlowExpired : CallbackOutcome.Expired, addr, info, option, pos);
         if (!replay && now >= k.ExpiresAt)
         {
             await db.ChatKeyboards.Where(x => x.Id == k.Id && x.Status == KeyboardStatuses.Active)
                 .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, KeyboardStatuses.Expired).SetProperty(x => x.UpdatedAt, now), ct);
-            return Done(CallbackOutcome.Expired, addr, info with { Status = KeyboardStatuses.Expired }, option, pos);
+            if (isFlowKb) await ExpireFlowAsync(k.FlowId, conversationId, now, ct);
+            return Done(isFlowKb ? CallbackOutcome.FlowExpired : CallbackOutcome.Expired, addr, info with { Status = KeyboardStatuses.Expired }, option, pos);
         }
 
-        // вимкнені кнопки: стара клавіатура -> Stale + прибирання
-        if (!buttonsOn) return Done(CallbackOutcome.Disabled, addr, info, option, pos);
+        // вимкнені кнопки (або потік ChatFlow:Enabled=false для flow_*): стара клавіатура -> Stale + прибирання
+        if (!buttonsOn || (isFlowKb && !FlowOn)) return Done(CallbackOutcome.Disabled, addr, info, option, pos);
+
+        // §28.6 8a-8c (лише flow_*): потік активний, версія й крок збігаються, термін не вийшов
+        if (isFlowKb && !replay)
+        {
+            var flow = k.FlowId is { } flowId
+                ? await db.ChatBookingFlows.AsNoTracking().Where(f => f.Id == flowId && f.ConversationId == conversationId)
+                    .Select(f => new { f.Status, f.Version, f.Step, f.ExpiresAt }).FirstOrDefaultAsync(ct)
+                : null;
+            if (flow is null) return Done(CallbackOutcome.FlowNotActive, addr, info, option, pos);
+            if (flow.Status == FlowStatuses.Expired) return Done(CallbackOutcome.FlowExpired, addr, info, option, pos);
+            if (flow.Status != FlowStatuses.Active) return Done(CallbackOutcome.FlowNotActive, addr, info, option, pos);
+            if (k.FlowVersion != flow.Version || KeyboardKinds.StepOf(k.Kind) != flow.Step) return Done(CallbackOutcome.StaleStep, addr, info, option, pos);
+            if (now >= flow.ExpiresAt)
+            {
+                await ExpireFlowAsync(k.FlowId, conversationId, now, ct);
+                return Done(CallbackOutcome.FlowExpired, addr, info with { Status = KeyboardStatuses.Expired }, option, pos);
+            }
+        }
         // §26.2: Marketing:Enabled=false -> mc / co як застарілі (T-action-stale); відписка (i:mkoff) діє вище
         if (addr.Verb is ButtonVerbs.MarketingConsent or ButtonVerbs.CampaignOffer && !await MarketingOnAsync(ct))
             return Done(CallbackOutcome.Disabled, addr, info, option, pos);
@@ -257,6 +320,17 @@ public sealed class ChatKeyboardService(
         if (handoff && !ButtonVerbs.AllowedInHandoff(addr.Verb)) return Done(CallbackOutcome.HandoffBlocked, addr, info, option, pos);
 
         return Done(CallbackOutcome.Valid, addr, info, option, pos, replay);
+    }
+
+    /// <summary>Потік протермінований: <c>active -> expired</c> і його клавіатури <c>active -> expired</c> (умовні UPDATE, ідемпотентно).</summary>
+    private async Task ExpireFlowAsync(Guid? flowId, Guid conversationId, DateTimeOffset now, CancellationToken ct)
+    {
+        if (flowId is not { } fid) return;
+        await db.ChatBookingFlows.Where(f => f.Id == fid && f.ConversationId == conversationId && f.Status == FlowStatuses.Active)
+            .ExecuteUpdateAsync(s => s.SetProperty(f => f.Status, FlowStatuses.Expired).SetProperty(f => f.FinishedAt, (DateTimeOffset?)now)
+                .SetProperty(f => f.Version, f => f.Version + 1).SetProperty(f => f.UpdatedAt, now), ct);
+        await db.ChatKeyboards.Where(x => x.FlowId == fid && x.Status == KeyboardStatuses.Active)
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, KeyboardStatuses.Expired).SetProperty(x => x.UpdatedAt, now), ct);
     }
 
     /// <summary>Кнопки каналу не вимкнено (<c>settings.assistant.buttons=false</c>); порожні/зіпсовані налаштування - дозволено.</summary>
@@ -284,7 +358,7 @@ public sealed class ChatKeyboardService(
                        join m in db.Messages.AsNoTracking() on kb.MessageId equals m.Id
                        where kb.ConversationId == conversationId && m.ConversationId == conversationId && m.ExternalMessageId == messageRef
                        select kb).FirstOrDefaultAsync(ct);
-        return k is null ? null : new KeyboardInfo(k.Id, k.Kind, k.Status, k.MessageId, k.ProposalId, k.AppointmentId, k.ExpiresAt, k.UsedAt, k.UsedByMessageId, k.CampaignRecipientId);
+        return k is null ? null : new KeyboardInfo(k.Id, k.Kind, k.Status, k.MessageId, k.ProposalId, k.AppointmentId, k.ExpiresAt, k.UsedAt, k.UsedByMessageId, k.CampaignRecipientId, k.FlowId, k.FlowVersion);
     }
 
     private Task<bool> RecipientBelongsAsync(Guid recipientId, Guid conversationId, Guid? clientId, CancellationToken ct) =>

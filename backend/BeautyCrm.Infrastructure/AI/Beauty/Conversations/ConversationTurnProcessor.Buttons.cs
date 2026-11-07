@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BeautyCrm.Application.Features.BeautyChatBooking;
+using BeautyCrm.Application.Features.BeautyChatFlow;
 using BeautyCrm.Application.Features.BeautyReminders;
 using BeautyCrm.Infrastructure.Data;
 using BeautyCrm.Infrastructure.Data.Beauty;
@@ -73,6 +74,7 @@ public sealed partial class ConversationTurnProcessor
         {
             try
             {
+                if (spec.PreWork is not null) await spec.PreWork(ct); // TASK-838: CAS клавіатури й потоку першими
                 // §25.5.3: дії над номером клієнта виконуються ПЕРЕД вставкою відповідей (текст залежить від результату), у цій самій транзакції
                 var replies = spec.Replies;
                 var composedPrompt = spec.Prompt;
@@ -131,7 +133,10 @@ public sealed partial class ConversationTurnProcessor
 
                 // §23.6 «Відкликання»: вхід у handoff гасить booking_confirm/slot_pick; знято питання про нагадування - гасне reminder_choice.
                 if (spec.RevokeAiKeyboards || spec.HandoffReason is not null)
+                {
+                    await CancelFlowOnHandoffAsync(t, clear, ct);
                     clear.AddRange(await Keyboards.RevokeActiveAsync(conv.Id, [KeyboardKinds.BookingConfirm, KeyboardKinds.SlotPick], ct));
+                }
                 if (spec.RevokeReminderKeyboard || !await db.Conversations.AnyAsync(c => c.Id == conv.Id && c.PendingPrompt != null, ct))
                     clear.AddRange(await Keyboards.RevokeActiveAsync(conv.Id, [KeyboardKinds.ReminderChoice], ct));
                 await UpdateReplyKeyboardStateAsync(conv.Id, spec.OpenReplyKeyboard, created, now, ct);
@@ -155,6 +160,14 @@ public sealed partial class ConversationTurnProcessor
                 await tx.RollbackAsync(CancellationToken.None);
                 db.ChangeTracker.Clear();
                 await SetStatusAsync(t.Batch, Processed, ct);
+                return;
+            }
+            catch (FlowCasLostException)
+            {
+                // Програно подвійний CAS: переможець уже відповів, друге натискання тихо processed.
+                await tx.RollbackAsync(CancellationToken.None);
+                db.ChangeTracker.Clear();
+                await CommitManyAsync(t, new CommitSpec([]) { CallbackInboundId = spec.CallbackInboundId }, ct);
                 return;
             }
             catch (SummaryNotShownException)
@@ -191,7 +204,8 @@ public sealed partial class ConversationTurnProcessor
         if (plan.IsStateless) json = ChatKeyboardLayout.ToActionsJson(plan.Render(null));
         else
         {
-            var r = await Keyboards.CreateAsync(new NewKeyboard(conv.Id, messageId, plan.Kind!, plan.Options, plan.ExpiresAt, plan.ProposalId, plan.AppointmentId), ct);
+            var r = await Keyboards.CreateAsync(new NewKeyboard(conv.Id, messageId, plan.Kind!, plan.Options, plan.ExpiresAt, plan.ProposalId, plan.AppointmentId,
+                FlowId: plan.FlowId, FlowVersion: plan.FlowVersion), ct);
             if (!r.IsOk) return; // CreateAsync уже залогував keyboard_invalid; повідомлення піде без кнопок
             clear.AddRange(r.Value!.Revoked);
             json = ChatKeyboardLayout.ToActionsJson(plan.Render(r.Value));
@@ -228,6 +242,12 @@ public sealed partial class ConversationTurnProcessor
                 return;
             case ChatCommand.Book:
                 if (!t.AutoReplies) { await SetStatusAsync(t.Batch, Processed, ct); return; }
+                if (FlowAvailable(conv))
+                {
+                    if (await RecentTemplateAsync(conv.Id, "Оберіть послугу:", TimeSpan.FromSeconds(30), t.Now, ct) || !await PassTemplateGateAsync(t, ct)) { if (t.Batch.Any(m => m.Status == Received)) await SetStatusAsync(t.Batch, Processed, ct); return; }
+                    await StartFlowAsync(t, null, FlowOrigins.Command, ct);
+                    return;
+                }
                 if (await IdenticalRecentAsync(t, ChatTemplates.BookStart, ct) || !await PassTemplateGateAsync(t, ct)) return;
                 await CommitAsync(t, new Reply(ChatTemplates.BookStart, MessageSenderType.System), null, null, ct);
                 return;
@@ -384,6 +404,9 @@ public sealed partial class ConversationTurnProcessor
                 await CommitManyAsync(t, CbSpec(t, res, notice) with { InboundStatus = Held, Hold = true, RevokeAiKeyboards = true }, ct);
                 return;
             }
+            case CallbackOutcome.FlowExpired:
+                await HandleFlowExpiredAsync(t, res, ct);
+                return;
             case CallbackOutcome.Used when res.Quiet:
                 await CommitManyAsync(t, CbSpec(t, res), ct);
                 return;
@@ -416,6 +439,12 @@ public sealed partial class ConversationTurnProcessor
             if (verb == ButtonVerbs.Human)
                 spec = spec with { HandoffReason = "human_requested", Journal = [HandoffRecord(t, "human_requested", "button")], RevokeAiKeyboards = true };
             await CommitManyAsync(t, spec, ct);
+            return;
+        }
+
+        if (ButtonVerbs.IsFlow(verb))
+        {
+            await HandleFlowCallbackAsync(t, res, ct);
             return;
         }
 
@@ -463,6 +492,18 @@ public sealed partial class ConversationTurnProcessor
             limiter.RecordTemplate(conv.Id);
         }
 
+        // §28.8: пропозиція з потоку підтверджується/відхиляється лише з активного потоку на confirm
+        FlowProposal? flowProposal = null;
+        if (verb is ButtonVerbs.ConfirmBooking or ButtonVerbs.DeclineBooking or ButtonVerbs.OtherTime && kb?.ProposalId is { } gateId)
+        {
+            var (fp, ok) = await FlowProposalGateAsync(t, gateId, ct);
+            if (!ok)
+            {
+                await CommitManyAsync(t, CbSpec(t, res, await StaleReplyAsync(t, kb.Kind, ct)), ct);
+                return;
+            }
+            flowProposal = fp;
+        }
         var name = SafeProfileName(signals.SenderName(conv.Id));
         var result = await ButtonActions.ExecuteAsync(
             new ButtonActionContext(conv.Id, t.Batch[0].Id, res, name is null ? null : new TelegramProfile(name, null, null)), ct);
@@ -471,6 +512,7 @@ public sealed partial class ConversationTurnProcessor
             && result.Code is ButtonResultCodes.ProposalNotActive or ButtonResultCodes.Expired or ButtonResultCodes.Stale)
             await RevokeProposalKeyboardsAsync(t, proposalId, ct);
 
+        if (flowProposal is not null && await ApplyFlowProposalOutcomeAsync(t, res, result, flowProposal, ct)) return;
         await ApplyActionResultAsync(t, res, result, ct);
     }
 
@@ -559,7 +601,10 @@ public sealed partial class ConversationTurnProcessor
             case ButtonResultCodes.MyList or ButtonResultCodes.MyEmpty:
                 await Commit(CbSpec(t, res, MyListReply(r.Appointments ?? [], buttons)));
                 return;
-            case ButtonResultCodes.BookStart: await Commit(CbSpec(t, res, Sys(ChatTemplates.BookStart))); return;
+            case ButtonResultCodes.BookStart:
+                if (FlowAvailable(conv) && t.AutoReplies) { await StartFlowAsync(t, res, FlowOrigins.Button, ct); return; }
+                await Commit(CbSpec(t, res, Sys(ChatTemplates.BookStart)));
+                return;
             case ButtonResultCodes.Help: await Commit(CbSpec(t, res, Sys(ChatTemplates.Help, buttons ? KeyboardBuilder.HumanOnly() : null))); return;
             case ButtonResultCodes.Stop:
             {

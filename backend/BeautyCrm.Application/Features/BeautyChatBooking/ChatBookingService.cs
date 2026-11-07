@@ -1,3 +1,4 @@
+using BeautyCrm.Application.Features.BeautyChatFlow;
 using System.Security.Cryptography;
 using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Application.Features.BeautyCommon;
@@ -60,7 +61,7 @@ public sealed class ChatBookingService(
         var proposal = await chat.CreateProposalAsync(new NewChatProposal(
             Guid.NewGuid(), conversation.Id, conversation.ClientId, req.LocationId, req.SpecialistId, req.ServiceId, req.StartsAt.ToUniversalTime(),
             service.DurationMinutes, quote.Original, quote.Final, quote.PromotionId, PublicTokenService.Hash(token),
-            now.AddMinutes(options.ProposalTtlMinutes), now, appliedCoupon, appliedCoupon is null ? null : req.CampaignId ?? candidate?.CampaignId), ct);
+            now.AddMinutes(options.ProposalTtlMinutes), now, appliedCoupon, appliedCoupon is null ? null : req.CampaignId ?? candidate?.CampaignId, req.FlowId), ct);
 
         var local = TimeZoneInfo.ConvertTime(req.StartsAt, TimeZoneInfo.FindSystemTimeZoneById(location.Timezone));
         var summary = new ChatSummary(service.Name, specialist.Name, location.Name, location.Address, DateOnly.FromDateTime(local.DateTime),
@@ -70,6 +71,8 @@ public sealed class ChatBookingService(
     }
 
     // ---------- допоміжні переходи для конвеєра (TASK-728) ----------
+
+    public Task<ChatProposal?> GetProposalAsync(Guid conversationId, Guid proposalId, CancellationToken ct) => chat.GetProposalAsync(conversationId, proposalId, ct);
 
     public Task<ChatProposal?> FindActiveAsync(Guid conversationId, CancellationToken ct) => chat.FindActiveProposalAsync(conversationId, ct);
 
@@ -219,6 +222,7 @@ public static class ChatBookingServiceExtensions
     {
         services.AddSingleton(options ?? new ChatBookingOptions());
         services.AddScoped<ChatBookingService>();
+        services.AddBeautyChatFlowApplication(); // TASK-838 (ADR-020): автомат запису кнопками, вмикається ChatFlow:Enabled
         return services;
     }
 }

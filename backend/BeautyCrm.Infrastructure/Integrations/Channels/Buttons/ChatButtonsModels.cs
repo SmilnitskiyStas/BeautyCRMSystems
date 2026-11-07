@@ -65,12 +65,39 @@ public static class KeyboardKinds
     public const string MarketingConsent = "marketing_consent";
     /// <summary>TASK-781 (§26.9.1): кнопка розсилки <c>co</c> (+ <c>i:mkoff</c>); прив'язана до campaign_recipient_id.</summary>
     public const string CampaignOffer = "campaign_offer";
+    // TASK-838 (ADR-020, §28.5): кроки потоку запису кнопками; одна активна клавіатура потоку на розмову (нова відкликає всі flow_*)
+    public const string FlowService = "flow_service";
+    public const string FlowSpecialist = "flow_specialist";
+    public const string FlowLastLocation = "flow_last_location";
+    public const string FlowLocation = "flow_location";
+    public const string FlowTime = "flow_time";
+    public const string FlowDay = "flow_day";
+
+    public static readonly IReadOnlyList<string> FlowKinds =
+        [FlowService, FlowSpecialist, FlowLastLocation, FlowLocation, FlowTime, FlowDay];
+
+    public static bool IsFlow(string? kind) => kind is not null && kind.StartsWith("flow_", StringComparison.Ordinal);
+
+    /// <summary>Вид клавіатури кроку потоку (<c>FlowSteps</c>); null - крок без клавіатури (confirm має booking_confirm).</summary>
+    public static string? ForStep(string step) => step switch
+    {
+        "service" => FlowService, "specialist" => FlowSpecialist, "last_location" => FlowLastLocation,
+        "location" => FlowLocation, "time" => FlowTime, "day" => FlowDay, _ => null,
+    };
+
+    /// <summary>Крок потоку, якому відповідає вид клавіатури (§28.6 8b).</summary>
+    public static string? StepOf(string kind) => kind switch
+    {
+        FlowService => "service", FlowSpecialist => "specialist", FlowLastLocation => "last_location",
+        FlowLocation => "location", FlowTime => "time", FlowDay => "day", _ => null,
+    };
 
     public static readonly IReadOnlyList<string> All =
-        [BookingConfirm, SlotPick, ReminderChoice, AppointmentList, AppointmentActions, CancelConfirm, MarketingConsent, CampaignOffer];
+        [BookingConfirm, SlotPick, ReminderChoice, AppointmentList, AppointmentActions, CancelConfirm, MarketingConsent, CampaignOffer,
+         FlowService, FlowSpecialist, FlowLastLocation, FlowLocation, FlowTime, FlowDay];
 
     /// <summary>Нова клавіатура цього виду відкликає попередню активну в розмові (§23.6 «Відкликання»); одна активна appointment_list на розмову (TASK-759, M3); actions не відкликаються (прив'язані до запису).</summary>
-    public static bool ReplacesPrevious(string kind) => kind is BookingConfirm or SlotPick or ReminderChoice or CancelConfirm or AppointmentList or MarketingConsent;
+    public static bool ReplacesPrevious(string kind) => kind is BookingConfirm or SlotPick or ReminderChoice or CancelConfirm or AppointmentList or MarketingConsent || IsFlow(kind);
 }
 
 public static class KeyboardStatuses
@@ -109,6 +136,15 @@ public static class ButtonVerbs
     public const string MarketingMenu = "i:mkt";
     /// <summary>TASK-781: «Не надсилати акції»; діє завжди (маркетинг/кнопки вимкнені, handoff).</summary>
     public const string MarketingOff = "i:mkoff";
+    // TASK-838 (§28.5): станові verb потоку; index обов'язковий; кожне натискання споживає клавіатуру (її замінює клавіатура наступного кроку)
+    public const string FlowService = "fs";
+    public const string FlowSpecialist = "fp";
+    public const string FlowLocation = "fl";
+    public const string FlowDay = "fd";
+    public const string FlowTime = "ft";
+    public const string FlowNav = "fn";
+
+    public static bool IsFlow(string? verb) => verb is FlowService or FlowSpecialist or FlowLocation or FlowDay or FlowTime or FlowNav;
 
     public static readonly IReadOnlySet<string> Stateless = new HashSet<string>(StringComparer.Ordinal) { Book, My, Help, Human, Stop, Phone, MarketingMenu, MarketingOff };
 
@@ -122,6 +158,12 @@ public static class ButtonVerbs
         [KeyboardKinds.CancelConfirm] = [CancelYes, CancelNo],
         [KeyboardKinds.MarketingConsent] = [MarketingConsent],
         [KeyboardKinds.CampaignOffer] = [CampaignOffer],
+        [KeyboardKinds.FlowService] = [FlowService, FlowNav],
+        [KeyboardKinds.FlowSpecialist] = [FlowSpecialist, FlowNav],
+        [KeyboardKinds.FlowLastLocation] = [FlowLocation, FlowNav],
+        [KeyboardKinds.FlowLocation] = [FlowLocation, FlowNav],
+        [KeyboardKinds.FlowTime] = [FlowTime, FlowNav],
+        [KeyboardKinds.FlowDay] = [FlowDay, FlowNav],
     };
 
     /// <summary>Verb дозволений для виду клавіатури (стан), безстанові кнопки (рядок «Записатися» тощо) дозволені в options будь-якого виду.</summary>
@@ -130,10 +172,10 @@ public static class ButtonVerbs
 
     /// <summary>Чи потрібен index: sp, rc, а також ac/ar у переліку записів (§23.5).</summary>
     public static bool NeedsIndex(string kind, string verb) =>
-        verb is SlotPick or ReminderChoice or MarketingConsent || (kind == KeyboardKinds.AppointmentList && verb is CancelAsk or Reschedule);
+        verb is SlotPick or ReminderChoice or MarketingConsent || IsFlow(verb) || (kind == KeyboardKinds.AppointmentList && verb is CancelAsk or Reschedule);
 
     /// <summary>Дії, що споживають клавіатуру (CAS active -> used).</summary>
-    public static bool Consuming(string verb) => verb is ConfirmBooking or DeclineBooking or OtherTime or SlotPick or ReminderChoice or CancelYes or CancelNo or MarketingConsent;
+    public static bool Consuming(string verb) => verb is ConfirmBooking or DeclineBooking or OtherTime or SlotPick or ReminderChoice or CancelYes or CancelNo or MarketingConsent || IsFlow(verb);
 
     /// <summary>Дозволені під час handoff (§23.6, §25.5.6, §26.9.1): i:stop, i:my, i:phone, rc, aa, ac, cy, cn, mc, i:mkt, i:mkoff. <c>co</c> заблоковано.</summary>
     public static bool AllowedInHandoff(string verb) =>
@@ -145,6 +187,8 @@ public readonly record struct CallbackAddress(string Verb, string? Token, int? I
 {
     private static readonly Regex Stateful = new(@"^(by|bn|bo|sp|rc|ac|aa|ar|cy|cn|mc|co):([A-Za-z0-9_-]{22})(?::([0-9]))?\z",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    /// <summary>§28.5: <c>^(fl|fs|fp|fd|ft|fn):{token22}:[0-9]$</c> - index обов'язковий.</summary>
+    private static readonly Regex FlowRx = new(@"^(fl|fs|fp|fd|ft|fn):([A-Za-z0-9_-]{22}):([0-9])\z", RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex StatelessRx = new(@"^i:(book|my|help|human|stop|phone|mkt|mkoff)\z", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     public bool IsStateless => Token is null;
@@ -154,6 +198,7 @@ public readonly record struct CallbackAddress(string Verb, string? Token, int? I
         address = default;
         if (string.IsNullOrEmpty(data) || Encoding.UTF8.GetByteCount(data) > 28) return false;
         if (StatelessRx.Match(data) is { Success: true } s) { address = new CallbackAddress("i:" + s.Groups[1].Value, null, null); return true; }
+        if (FlowRx.Match(data) is { Success: true } f) { address = new CallbackAddress(f.Groups[1].Value, f.Groups[2].Value, int.Parse(f.Groups[3].Value)); return true; }
         if (Stateful.Match(data) is not { Success: true } m) return false;
         address = new CallbackAddress(m.Groups[1].Value, m.Groups[2].Value, m.Groups[3].Success ? int.Parse(m.Groups[3].Value) : null);
         return true;
@@ -171,7 +216,7 @@ public readonly record struct CallbackAddress(string Verb, string? Token, int? I
 public sealed record KeyboardOption(
     string Verb, string Label, Guid? LocationId = null, Guid? ServiceId = null, Guid? SpecialistId = null,
     DateTimeOffset? StartsAt = null, string? Method = null, IReadOnlyList<short>? Offsets = null, Guid? AppointmentId = null,
-    string? Level = null, string? TextVersion = null);
+    string? Level = null, string? TextVersion = null, string? Date = null, string? Nav = null);
 
 public static class KeyboardJson
 {
@@ -293,6 +338,12 @@ public enum CallbackOutcome
     Valid, Stateless, InvalidFormat, UnknownToken, ForeignConversation, RefMismatch, InvalidOption, Used, Revoked, Expired, HandoffBlocked,
     /// <summary>Адитивно: <c>ChatButtons:Enabled=false</c> - стара кнопка -> T-action-stale + прибирання.</summary>
     Disabled,
+    /// <summary>§28.6 8a: потік клавіатури не <c>active</c> (завершений, витіснений, видалений).</summary>
+    FlowNotActive,
+    /// <summary>§28.6 8b: версія клавіатури не збігається з версією потоку або крок не відповідає виду.</summary>
+    StaleStep,
+    /// <summary>§28.6 8a/8c: потік протермінований (або протермінована клавіатура потоку) -> T-flow-expired.</summary>
+    FlowExpired,
 }
 
 /// <summary>Узагальнення для відповіді: Valid (дія), Stale (T-action-stale), Used, Expired, Mismatch (підозріле), Handoff.</summary>
@@ -301,7 +352,7 @@ public enum CallbackClass { Valid, Stale, Used, Expired, Mismatch, Handoff }
 /// <param name="Id">Клавіатура, знайдена за токеном і ПЕРЕВІРЕНА як належна цій розмові (інакше null).</param>
 public sealed record KeyboardInfo(
     Guid Id, string Kind, string Status, Guid MessageId, Guid? ProposalId, Guid? AppointmentId, DateTimeOffset ExpiresAt,
-    DateTimeOffset? UsedAt, Guid? UsedByMessageId, Guid? CampaignRecipientId = null);
+    DateTimeOffset? UsedAt, Guid? UsedByMessageId, Guid? CampaignRecipientId = null, Guid? FlowId = null, int? FlowVersion = null);
 
 /// <param name="Verb">Verb із callback_data (порожньо при invalid_format).</param>
 /// <param name="Option">Обрана опція з БД (для безстанових - null).</param>
@@ -335,6 +386,9 @@ public sealed record CallbackResolution(
         CallbackOutcome.Revoked => "revoked",
         CallbackOutcome.Expired => "expired",
         CallbackOutcome.HandoffBlocked => "handoff_blocked",
+        CallbackOutcome.FlowNotActive => "flow_not_active",
+        CallbackOutcome.StaleStep => "stale_step",
+        CallbackOutcome.FlowExpired => "flow_expired",
         _ => "buttons_disabled",
     };
 
@@ -342,7 +396,7 @@ public sealed record CallbackResolution(
     {
         CallbackOutcome.Valid or CallbackOutcome.Stateless => CallbackClass.Valid,
         CallbackOutcome.Used => CallbackClass.Used,
-        CallbackOutcome.Expired => CallbackClass.Expired,
+        CallbackOutcome.Expired or CallbackOutcome.FlowExpired => CallbackClass.Expired,
         CallbackOutcome.ForeignConversation or CallbackOutcome.RefMismatch => CallbackClass.Mismatch,
         CallbackOutcome.HandoffBlocked => CallbackClass.Handoff,
         _ => CallbackClass.Stale,
@@ -364,7 +418,7 @@ public sealed record CallbackResolution(
 /// appointment_actions - початок візиту, reminder_choice - 24 год.</param>
 public sealed record NewKeyboard(
     Guid ConversationId, Guid MessageId, string Kind, IReadOnlyList<KeyboardOption> Options, DateTimeOffset? ExpiresAt = null,
-    Guid? ProposalId = null, Guid? AppointmentId = null, Guid? CampaignRecipientId = null);
+    Guid? ProposalId = null, Guid? AppointmentId = null, Guid? CampaignRecipientId = null, Guid? FlowId = null, int? FlowVersion = null);
 
 /// <param name="Token">22 символи base64url (128 біт CSPRNG). Лише для побудови callback_data; не логувати, не віддавати API.</param>
 /// <param name="Revoked">Попередні активні клавіатури, відкликані цією (їхню розмітку треба прибрати).</param>

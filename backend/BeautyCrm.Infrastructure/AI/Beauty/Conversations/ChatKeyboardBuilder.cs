@@ -1,3 +1,4 @@
+using BeautyCrm.Application.Features.BeautyChatFlow;
 using BeautyCrm.Application.Features.BeautyReminders;
 using BeautyCrm.Infrastructure.Integrations.Channels.Buttons;
 
@@ -15,6 +16,10 @@ public sealed record KeyboardPlan(
     string? Kind, IReadOnlyList<KeyboardOption> Options, IReadOnlyList<IReadOnlyList<PlannedButton>> Rows,
     Guid? ProposalId = null, Guid? AppointmentId = null, DateTimeOffset? ExpiresAt = null, int MaxPerRow = 3)
 {
+    /// <summary>Крок потоку запису (flow_*): потік і його версія, до яких прив'язується клавіатура (§28.5).</summary>
+    public Guid? FlowId { get; init; }
+    public int? FlowVersion { get; init; }
+
     public bool IsStateless => Kind is null;
 
     /// <summary>Розкладка з `callback_data` (для станових - з токеном створеної клавіатури).</summary>
@@ -195,6 +200,52 @@ public sealed class ChatKeyboardBuilder(ChatButtonsOptions opts)
         var options = MarketingKeyboards.ConsentOptions(textVersion);
         return new KeyboardPlan(KeyboardKinds.MarketingConsent, options,
             options.Select((o, i) => (IReadOnlyList<PlannedButton>)[new PlannedButton(o.Label, ButtonVerbs.MarketingConsent, i)]).ToList(), MaxPerRow: 1);
+    }
+
+    /// <summary>
+    /// Клавіатура кроку потоку запису (TASK-838, §28.5): опції (id/дата/час - з БД) + навігація, розкладка за §28.12.
+    /// Списки (послуга/спеціаліст/заклад) - по одній кнопці в рядку; слоти й дати - по 3; навігація - окремі рядки. ≤ 10 кнопок, ≤ 6 рядків.
+    /// </summary>
+    public KeyboardPlan FlowStep(FlowView v, Guid flowId, int version, DateTimeOffset expiresAt, DateTimeOffset now)
+    {
+        var kind = KeyboardKinds.ForStep(v.Step)!;
+        var options = new List<KeyboardOption>();
+        var items = new List<PlannedButton>();
+        foreach (var i in v.Items)
+        {
+            string label;
+            switch (i.Verb)
+            {
+                case FlowVerbs.Time:
+                    label = FlowTemplates.SlotLabel(i.StartsAt!.Value, v.Names.Timezone, now);
+                    break;
+                case FlowVerbs.Day:
+                    label = FlowTemplates.DayLabel(DateOnly.ParseExact(i.Date!, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture));
+                    break;
+                default:
+                    label = v.Step == FlowSteps.LastLocation
+                        ? ChatKeyboardLayout.SanitizeLabel("Так, у «" + ChatKeyboardLayout.SanitizeLabel(i.Label, 22) + "»")
+                        : ChatKeyboardLayout.SanitizeLabel(i.Label);
+                    break;
+            }
+            items.Add(new PlannedButton(label, i.Verb, options.Count));
+            options.Add(new KeyboardOption(i.Verb, label, LocationId: i.LocationId, ServiceId: i.ServiceId, SpecialistId: i.SpecialistId,
+                StartsAt: i.StartsAt, Date: i.Date));
+        }
+        var navButtons = new List<PlannedButton>();
+        foreach (var nav in v.Nav)
+        {
+            var label = FlowTemplates.NavLabel(nav, nav == FlowNav.More && v.MoreIsRestart);
+            navButtons.Add(new PlannedButton(label, ButtonVerbs.FlowNav, options.Count));
+            options.Add(new KeyboardOption(ButtonVerbs.FlowNav, label, Nav: nav));
+        }
+        var rows = new List<IReadOnlyList<PlannedButton>>();
+        var grid = v.Step is FlowSteps.Time or FlowSteps.Day;
+        if (grid) rows.AddRange(items.Chunk(3).Select(c => (IReadOnlyList<PlannedButton>)c.ToList()));
+        else rows.AddRange(items.Select(b => (IReadOnlyList<PlannedButton>)[b]));
+        // навігація: до 3 у рядку; на last_location - [Інший заклад][Назад] в одному рядку
+        rows.AddRange(navButtons.Chunk(grid || v.Step == FlowSteps.LastLocation ? 2 : 3).Select(c => (IReadOnlyList<PlannedButton>)c.ToList()));
+        return new KeyboardPlan(kind, options, rows, ExpiresAt: expiresAt) { FlowId = flowId, FlowVersion = version };
     }
 
     /// <summary>[👤 Передати адміністратору] (T-help, помилка підготовки запису).</summary>

@@ -984,12 +984,13 @@ public class BeautyDbContext : DbContext
                     "skipped_steps <@ ARRAY['last_location','location','specialist']::varchar[]");
                 t.HasCheckConstraint("ck_beauty_chat_booking_flows_finished", "(status = 'active') = (finished_at IS NULL)");
                 t.HasCheckConstraint("ck_beauty_chat_booking_flows_cancel", "(status = 'cancelled') = (cancel_reason IS NOT NULL)");
+                // TASK-838: порядок кроків «послуга → спеціаліст → заклад → час» (Q6, §28.10): вибір зростає зі кроком
                 t.HasCheckConstraint("ck_beauty_chat_booking_flows_step_location",
-                    "step NOT IN ('service', 'specialist', 'time', 'day', 'confirm') OR location_id IS NOT NULL");
+                    "step NOT IN ('time', 'day', 'confirm') OR location_id IS NOT NULL");
                 t.HasCheckConstraint("ck_beauty_chat_booking_flows_step_service",
-                    "step NOT IN ('specialist', 'time', 'day', 'confirm') OR service_id IS NOT NULL");
+                    "step NOT IN ('specialist', 'last_location', 'location', 'time', 'day', 'confirm') OR service_id IS NOT NULL");
                 t.HasCheckConstraint("ck_beauty_chat_booking_flows_step_specialist",
-                    "step NOT IN ('time', 'day', 'confirm') OR specialist_id IS NOT NULL");
+                    "step NOT IN ('last_location', 'location', 'time', 'day', 'confirm') OR specialist_id IS NOT NULL");
                 t.HasCheckConstraint("ck_beauty_chat_booking_flows_step_confirm", "step <> 'confirm' OR proposal_id IS NOT NULL");
                 t.HasCheckConstraint("ck_beauty_chat_booking_flows_step_last_location",
                     "step <> 'last_location' OR suggested_last_location_id IS NOT NULL");

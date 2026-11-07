@@ -133,6 +133,8 @@ public sealed partial class ConversationTurnProcessor(
         public bool RevokeReminderKeyboard { get; init; }
         /// <summary>Тіло вхідних пакета замінюється (номер телефону не лишається в БД, §25.5.2).</summary>
         public string? RedactInboundBody { get; init; }
+        /// <summary>TASK-838: робота на самому початку транзакції (CAS клавіатури й потоку); FlowCasLostException відкочує хід.</summary>
+        public Func<CancellationToken, Task>? PreWork { get; init; }
     }
 
     // ---------------------------------------------------------------- запуск
@@ -616,6 +618,7 @@ public sealed partial class ConversationTurnProcessor(
             else if (ChatConfirmationText.IsNo(single.Body))
             {
                 await Booking.DeclineAsync(conv.Id, active.Id, ct);
+                await FlowProposalTextEndedAsync(t, active.Id, "declined", ct);
                 await RevokeProposalKeyboardsAsync(t, active.Id, ct);
                 await CommitAsync(t, new Reply(ChatTemplates.Declined, MessageSenderType.System), null, null, ct);
                 return true;
@@ -624,6 +627,7 @@ public sealed partial class ConversationTurnProcessor(
 
         // Будь-що інше (інший текст, пакет > 1, «Так» не першим, suggest): активна пропозиція втрачає чинність, нове «Так» - лише на новий підсумок.
         await Booking.SupersedeAsync(conv.Id, ct);
+        await FlowProposalTextEndedAsync(t, active.Id, "superseded", ct);
         await RevokeProposalKeyboardsAsync(t, active.Id, ct);
         return false;
     }
@@ -654,6 +658,7 @@ public sealed partial class ConversationTurnProcessor(
         if (r.IsOk)
         {
             var confirmed = r.Value!;
+            await FlowProposalTextEndedAsync(t, proposalId, "completed", ct);
             if (confirmed.AlreadyConfirmed)
                 await CommitAsync(t, new Reply(IsCancelled(confirmed.Appointment) ? ChatTemplates.AppointmentCancelled : ChatTemplates.AlreadyConfirmed,
                     MessageSenderType.System), null, null, ct);

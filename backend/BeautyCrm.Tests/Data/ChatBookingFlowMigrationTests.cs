@@ -100,20 +100,25 @@ public sealed class ChatBookingFlowMigrationTests
             }
 
             // ---- flow: дефолти, одна активна на розмову, CAS, CHECK кроків і залежностей ----
-            var flow = await Id(conn, $"INSERT INTO beauty_chat_booking_flows (tenant_id, conversation_id, step, expires_at) VALUES ('{tenantA}', '{conv}', 'location', now() + interval '30 minutes') RETURNING id");
+            var spec = await Id(conn, $"INSERT INTO beauty_specialists (tenant_id, full_name, is_active) VALUES ('{tenantA}', 'S', true) RETURNING id");
+            // TASK-838: перший крок - послуга (без жодного вибору); вибір зростає зі кроком (§28.10)
+            var flow = await Id(conn, $"INSERT INTO beauty_chat_booking_flows (tenant_id, conversation_id, step, expires_at) VALUES ('{tenantA}', '{conv}', 'service', now() + interval '30 minutes') RETURNING id");
             Assert.Equal(1L, await Scalar(conn, $"SELECT count(*) FROM beauty_chat_booking_flows WHERE id = '{flow}' AND status = 'active' AND version = 0 AND origin = 'button' AND skipped_steps = '{{}}' AND suggested_last_location_id IS NULL AND preferred_time IS NULL"));
-            var dup = await Assert.ThrowsAsync<PostgresException>(() => Exec(conn, $"INSERT INTO beauty_chat_booking_flows (tenant_id, conversation_id, step, expires_at) VALUES ('{tenantA}', '{conv}', 'location', now() + interval '30 minutes')"));
+            var dup = await Assert.ThrowsAsync<PostgresException>(() => Exec(conn, $"INSERT INTO beauty_chat_booking_flows (tenant_id, conversation_id, step, expires_at) VALUES ('{tenantA}', '{conv}', 'service', now() + interval '30 minutes')"));
             Assert.Equal("ux_beauty_chat_booking_flows_active", dup.ConstraintName);
             foreach (var step in new[] { "last_location", "location", "service", "specialist", "time", "day", "confirm" })
                 Assert.Contains(step, await Text(conn, "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'ck_beauty_chat_booking_flows_step'"));
             var badStep = await Assert.ThrowsAsync<PostgresException>(() => Exec(conn, $"UPDATE beauty_chat_booking_flows SET step = 'pay' WHERE id = '{flow}'"));
             Assert.Equal("ck_beauty_chat_booking_flows_step", badStep.ConstraintName);
             // залежності кроків від вибору
-            var needLoc = await Assert.ThrowsAsync<PostgresException>(() => Exec(conn, $"UPDATE beauty_chat_booking_flows SET step = 'service' WHERE id = '{flow}'"));
-            Assert.Equal("ck_beauty_chat_booking_flows_step_location", needLoc.ConstraintName);
-            await Exec(conn, $"UPDATE beauty_chat_booking_flows SET location_id = '{locA}' WHERE id = '{flow}'");
             var needSvc = await Assert.ThrowsAsync<PostgresException>(() => Exec(conn, $"UPDATE beauty_chat_booking_flows SET step = 'specialist' WHERE id = '{flow}'"));
             Assert.Equal("ck_beauty_chat_booking_flows_step_service", needSvc.ConstraintName);
+            await Exec(conn, $"UPDATE beauty_chat_booking_flows SET service_id = '{svc}' WHERE id = '{flow}'");
+            var needSpec = await Assert.ThrowsAsync<PostgresException>(() => Exec(conn, $"UPDATE beauty_chat_booking_flows SET step = 'location' WHERE id = '{flow}'"));
+            Assert.Equal("ck_beauty_chat_booking_flows_step_specialist", needSpec.ConstraintName);
+            await Exec(conn, $"UPDATE beauty_chat_booking_flows SET specialist_id = '{spec}' WHERE id = '{flow}'");
+            var needLoc = await Assert.ThrowsAsync<PostgresException>(() => Exec(conn, $"UPDATE beauty_chat_booking_flows SET step = 'time' WHERE id = '{flow}'"));
+            Assert.Equal("ck_beauty_chat_booking_flows_step_location", needLoc.ConstraintName);
             var needLast = await Assert.ThrowsAsync<PostgresException>(() => Exec(conn, $"UPDATE beauty_chat_booking_flows SET step = 'last_location' WHERE id = '{flow}'"));
             Assert.Equal("ck_beauty_chat_booking_flows_step_last_location", needLast.ConstraintName);
             var badSkip = await Assert.ThrowsAsync<PostgresException>(() => Exec(conn, $"UPDATE beauty_chat_booking_flows SET skipped_steps = '{{service}}' WHERE id = '{flow}'"));
@@ -149,7 +154,7 @@ public sealed class ChatBookingFlowMigrationTests
             await Exec(conn, "UPDATE beauty_chat_keyboards SET status = 'expired'");
             await Exec(conn, $"UPDATE beauty_chat_booking_flows SET status = 'completed', finished_at = now() WHERE id = '{flow}'");
             // завершена flow не блокує нову активну
-            var flow2 = await Id(conn, $"INSERT INTO beauty_chat_booking_flows (tenant_id, conversation_id, step, expires_at) VALUES ('{tenantA}', '{conv}', 'location', now() + interval '30 minutes') RETURNING id");
+            var flow2 = await Id(conn, $"INSERT INTO beauty_chat_booking_flows (tenant_id, conversation_id, step, expires_at) VALUES ('{tenantA}', '{conv}', 'service', now() + interval '30 minutes') RETURNING id");
             await Exec(conn, $"DELETE FROM beauty_chat_booking_flows WHERE id = '{flow}'");
             Assert.Equal(1L, await Scalar(conn, "SELECT count(*) FROM beauty_chat_keyboards WHERE flow_id IS NULL AND flow_version = 1 AND status = 'expired'"));
 
@@ -160,9 +165,9 @@ public sealed class ChatBookingFlowMigrationTests
             // ---- RLS: tenant B не бачить і не пише чужого; без app.tenant_id - fail-closed ----
             await Exec(conn, $"SELECT set_config('app.tenant_id', '{tenantB}', false)");
             Assert.Equal(0L, await Scalar(conn, "SELECT count(*) FROM beauty_chat_booking_flows"));
-            await Assert.ThrowsAsync<PostgresException>(() => Exec(conn, $"INSERT INTO beauty_chat_booking_flows (tenant_id, conversation_id, step, expires_at) VALUES ('{tenantA}', '{conv}', 'location', now())"));
+            await Assert.ThrowsAsync<PostgresException>(() => Exec(conn, $"INSERT INTO beauty_chat_booking_flows (tenant_id, conversation_id, step, expires_at) VALUES ('{tenantA}', '{conv}', 'service', now())"));
             // композитний FK: tenant B не може послатися на розмову tenant A
-            await Assert.ThrowsAsync<PostgresException>(() => Exec(conn, $"INSERT INTO beauty_chat_booking_flows (tenant_id, conversation_id, step, expires_at) VALUES ('{tenantB}', '{conv}', 'location', now())"));
+            await Assert.ThrowsAsync<PostgresException>(() => Exec(conn, $"INSERT INTO beauty_chat_booking_flows (tenant_id, conversation_id, step, expires_at) VALUES ('{tenantB}', '{conv}', 'service', now())"));
             await Exec(conn, "SELECT set_config('app.tenant_id', '', false)");
             Assert.Equal(0L, await Scalar(conn, "SELECT count(*) FROM beauty_chat_booking_flows"));
             await Exec(conn, $"SELECT set_config('app.tenant_id', '{tenantA}', false)");

@@ -29,7 +29,7 @@ public sealed class EfChatBookingStore(BeautyDbContext db, MarketingConsentServi
             Id = p.Id, ConversationId = p.ConversationId, ClientId = p.ClientId, LocationId = p.LocationId, SpecialistId = p.SpecialistId,
             ServiceId = p.ServiceId, StartsAt = p.StartsAt.ToUniversalTime(), DurationMinutes = p.DurationMinutes,
             PriceOriginal = p.PriceOriginal, PriceFinal = p.PriceFinal, PromotionId = p.PromotionId, Status = ChatProposalStatus.Prepared,
-            ConfirmationTokenHash = p.TokenHash, ExpiresAt = p.ExpiresAt.ToUniversalTime(), CouponId = p.CouponId, CampaignId = p.CampaignId,
+            ConfirmationTokenHash = p.TokenHash, ExpiresAt = p.ExpiresAt.ToUniversalTime(), CouponId = p.CouponId, CampaignId = p.CampaignId, FlowId = p.FlowId,
         });
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
@@ -112,12 +112,12 @@ public sealed class EfChatBookingStore(BeautyDbContext db, MarketingConsentServi
     private static ChatProposal? Map(ChatBookingProposal? x) => x is null ? null : new ChatProposal(
         x.Id, x.ConversationId, x.ClientId, x.LocationId, x.SpecialistId, x.ServiceId, x.StartsAt, x.DurationMinutes, x.PriceOriginal,
         x.PriceFinal, x.PromotionId, x.Status, x.ConfirmationTokenHash, x.SummaryMessageId, x.ExpiresAt, x.AppointmentId, x.FailureCode,
-        x.CreatedAt, x.DecidedAt, x.CouponId, x.CampaignId);
+        x.CreatedAt, x.DecidedAt, x.CouponId, x.CampaignId, x.FlowId);
 }
 
 public static class ChatBookingDataExtensions
 {
     /// <summary>Порт запису з чату. Потребує AddBeautyData.</summary>
     public static IServiceCollection AddBeautyChatBookingData(this IServiceCollection services) =>
-        services.AddScoped<IChatBookingStore, EfChatBookingStore>();
+        services.AddScoped<IChatBookingStore, EfChatBookingStore>().AddBeautyChatFlowData();
 }

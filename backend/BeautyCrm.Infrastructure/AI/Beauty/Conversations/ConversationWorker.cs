@@ -197,6 +197,13 @@ public sealed class ConversationWorker(
         // TASK-753 (§23.4): протермінувати клавіатури й прибрати розмітку (повтор до 3 разів); збій не ламає прохід.
         try
         {
+            // TASK-838 (§28.10): потоки запису - протермінувати (клавіатури гаснуть за своїм expires_at, повідомлення клієнту немає) і прибрати завершені (retention)
+            if (sp.GetService<BeautyCrm.Application.Features.BeautyChatFlow.IChatFlowStore>() is { } flows
+                && sp.GetService<BeautyCrm.Application.Features.BeautyChatFlow.ChatFlowOptions>() is { } flowOpts)
+            {
+                await flows.ExpireDueAsync(now, 100, ct);
+                await flows.DeleteFinishedBeforeAsync(now.AddDays(-flowOpts.FinishedRetentionDays), 200, ct);
+            }
             await sp.GetRequiredService<KeyboardMarkupCleaner>().SweepAsync(50, ct);
         }
         catch (Exception ex) when (ex is not (OperationCanceledException or TenantMismatchException or TenantScopeMissingException))
