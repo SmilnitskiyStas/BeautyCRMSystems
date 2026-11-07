@@ -822,6 +822,7 @@ Telegram ──webhook (прод; X-Telegram-Bot-Api-Secret-Token)──┐
 - Функція `beauty_list_tenants()` (`SECURITY DEFINER`, `SET search_path`, повертає лише `tenant_id` активних tenants; `EXECUTE` лише runtime-ролям API й воркера; `REVOKE` від `PUBLIC`). Gate §21.11 п. 2.
 - RLS ENABLE+FORCE `tenant_isolation` на 2 нових таблицях; `DO`-блок перевірки FORCE на них і на `beauty_conversations`/`beauty_messages`; GRANT SELECT/INSERT/UPDATE/DELETE runtime-ролі на нові таблиці. `worker/src/testing/schema.sql` синхронізувати (schema-drift тест).
 - `AiActionRecord` адитивно отримує `ConversationId?`, журнал пише `beauty_ai_actions.conversation_id`.
+- **Зміна (ADR-020, §28.10):** `beauty_chat_booking_proposals.flow_id uuid NULL` (композитний FK на нову `beauty_chat_booking_flows`); пропозицію потоку створює лише код (`ft`).
 
 ### 21.5 Конвеєр ходу (детермінований, у коді; ADR-011 §2.3)
 Під lease розмови, пакет = усі `received` вхідні повідомлення за `(sent_at, external_message_id)`. Порядок кроків:
@@ -839,6 +840,7 @@ Telegram ──webhook (прод; X-Telegram-Bot-Api-Secret-Token)──┐
   - `suggest`: відповідь зберігається `draft` з `conversation_id` і дією журналу `draft_reply` (`drafted`), клієнту нічого не надсилається; `prepare_booking` → пропозиція не створюється, журнал `drafted`.
   - `confirm` і `auto`: однакова поведінка в чаті; запис лише після «Так».
   - **Зміна** до ADR-005: `draft_reply` у `confirm` для каналу чату не потребує підтвердження людини.
+- **Зміна (ADR-020, §28.7):** за `FlowAvailable` (§28.1) між кроками 4a і 5 діє крок **4f** (код, 0 LLM): точний текстовий збіг із підписом кнопки поточного кроку потоку, повідомлення `kind=location` (замість T-text-only), «Обрати зі списку». На кроці 8 модель отримує блок «СТАН ЗАПИСУ», а після її відповіді код повторно надсилає поточний крок окремим повідомленням. У `suggest` потік недоступний.
 
 ### 21.6 Запис: двоетапне підтвердження
 - **Етап 1 — tool `prepare_booking`** (модель): `{locationId, serviceId, specialistId, startsAt}`, де `startsAt` — ISO-8601 з offset рівно як у результаті `find_slots`.
@@ -876,6 +878,7 @@ Telegram ──webhook (прод; X-Telegram-Bot-Api-Secret-Token)──┐
   
   Повторне «Так» на `confirmed` → T-already-confirmed без нового запису.
 - Журнал: `prepare_booking` (`done`, target `proposal:{id}`), `confirm_booking` (`done`, target `appointment:{id}`, `revertible=true` — менеджер може скасувати через `/ai/actions/{id}/revert`), `conversation_id` заповнено.
+- **Зміна (ADR-020, §28.8):** за `FlowAvailable` етап 1 виконує код: `ft` → `ChatBookingService.PrepareAsync(…, FlowId)`. `prepare_booking` моделі діє лише без потоку. Інваріант: підсумок з'являється лише після явного вибору слота клієнтом. Для пропозиції з `flow_id` результати етапу 2 `slot_unavailable` / `price_changed` / `expired` обробляє код (§28.8), а не наступний хід LLM.
 
 ### 21.7 Tools scope `ClientChat` (новий `AiScope`; `Client`/`Manager` без змін)
 | Tool | Вхід | Вихід (без внутрішніх полів клієнтів) |
@@ -890,6 +893,8 @@ Telegram ──webhook (прод; X-Telegram-Bot-Api-Secret-Token)──┐
 
 Не входять: `create_appointment`, `get_client_context`, `draft_reply`, `find_free_slots`, `get_prices`, `suggest_promotion`, `build_audience`, тож їх виклик дає `tool_not_allowed_in_client_scope`. Схеми не мають `tenantId`/`clientId`/`conversationId`, зайві поля ігноруються, id шукаються під RLS. Невідомий id → `not_found` без розкриття існування.
 
+**Зміна (ADR-020, §28.7):** за `FlowAvailable` додається tool `start_booking_flow` `{locationId?, serviceId?, specialistId?, date?, preferredTime?}` → `{status:"flow_started", step}` / `{status:"flow_unavailable", reason}`. `prepare_booking` тоді поза scope (`tool_not_allowed_in_client_scope`), окрім аварійного `ChatFlow:LlmPrepareWhenFlow=true`.
+
 ### 21.8 Handoff, недоступний ШІ, ліміти, мова
 - **Handoff:**
   - тригери: `HandoffRules` (`complaint|payment|human_requested`), `request_handoff`, `ai_unavailable` (ключ, квота, частота, провайдер — §20.3), ≥ 3 помилки tools за хід, `booking_limit_reached`/`booking_failed`, прохання скасувати чи перенести запис;
@@ -903,7 +908,8 @@ Telegram ──webhook (прод; X-Telegram-Bot-Api-Secret-Token)──┐
   - додано: «Ціни, знижки, слоти й акції — лише з результатів tools; не обіцяй того, чого в них немає»;
   - додано: «Запис створює система лише після відповіді клієнта «Так» на показаний системою підсумок; ніколи не кажи, що запис створено»;
   - додано: «Не проси телефон, email чи інші персональні дані»;
-  - додано: «Скасування й перенесення записів — через адміністратора (request_handoff)».
+  - додано: «Скасування й перенесення записів — через адміністратора (request_handoff)»;
+  - **Зміна (ADR-020, §28.7):** за `FlowAvailable` — правила «лише з наявних даних (tools або СТАН ЗАПИСУ)» і «щоб записати — виклич start_booking_flow, не перелічуй слоти текстом».
   
   Шаблони коду в V1 лише українською.
 - **Шаблони** (`ChatTemplates`, текст правиться копірайтером без зміни контракту):
@@ -1331,6 +1337,8 @@ Mock-провайдер ШІ зі сценаріями (послідовніст
 
 Sweeper не бере `held`. Історія LLM включає `held` як повідомлення клієнта. Відповіді менеджера мають позначку `[відповідь адміністратора]`, текст проходить `AiTextNormalizer`.
 
+**Зміна (ADR-020, §28.3):** вхід у handoff (будь-який тригер) у тій самій транзакції переводить активний потік запису в `cancelled` (`cancel_reason=handoff`) і відкликає його `flow_*` і `booking_confirm`. Під час паузи `f*` → `handoff_blocked`, повідомлення-локація → `held` без відповіді, координати відкидаються.
+
 ### 22.9 «ФАКТИ ЗАКЛАДУ» і guard
 - **Блок `ChatContextBuilder`** (після «ДАНІ ЗАКЛАДУ НА ЦЕЙ ХІД», до додатку компанії), формує код:
   ```
@@ -1554,6 +1562,8 @@ Inbox API (§22.6.5) реалізовано без міграцій. Код: `In
 
 Канал (`settingsJson`, адитивно): `{"assistant": {"enabled": true, "buttons": true|false}}`. Відсутнє `buttons` = `true` (діє лише за `assistant.enabled=true`). Воркер читає ту саму ознаку.
 
+**Зміна (ADR-020):** ключі `ChatFlow:*` і `settingsJson.assistant.bookingFlow` — §28.2.
+
 ### 23.3 Схема (міграція `beauty_chat_buttons`, адитивна)
 - **`beauty_messages`:**
   - CHECK `ck_beauty_messages_kind` → `text|command|unsupported|callback` (надмножина, без backfill);
@@ -1578,6 +1588,7 @@ Inbox API (§22.6.5) реалізовано без міграцій. Код: `In
 - **GRANT** (runbook; у міграції не виконується): API-роль SELECT/INSERT/UPDATE на `beauty_chat_keyboards`; роль воркера SELECT/INSERT на `beauty_chat_keyboards`, UPDATE `beauty_messages.external_message_id`.
 - `worker/src/testing/schema.sql` синхронізувати (schema-drift).
 - `options` (код пише, код читає; модель і клієнт їх не бачать): елемент `{verb, label, ...}`; для `sp` — `locationId, serviceId, specialistId, startsAt`; для `rc` — `method, offsets`; для `ac|ar` — `appointmentId`.
+- **Зміна (ADR-020, §28.10):** CHECK `kind` клавіатур + `flow_last_location|flow_location|flow_service|flow_specialist|flow_time|flow_day`; колонки `flow_id`, `flow_version`; `options` для `f*` — §28.5. `ck_beauty_messages_kind` + `location` (без колонок координат).
 
 ### 23.4 Транспорт Telegram
 - **Парсер `callback_query`** (той самий `ParseInboundAsync` для webhook і polling):
@@ -1596,6 +1607,7 @@ Inbox API (§22.6.5) реалізовано без міграцій. Код: `In
   
   Лог `telegram_commands_synced|telegram_commands_failed channel={id} error={тип}`; токен і URL не логуються.
 - **Webhook (runbook):** `setWebhook` з `allowed_updates=["message","callback_query"]` і `secret_token`. Попередній `allowed_updates=["message"]` зберігається в Telegram, тож webhook треба перереєструвати.
+- **Зміна (ADR-020, §28.5, §28.9):** парсер `message.location` → `kind=location`, `body="[локація]"`, координати лише в пам'яті процесу (`ConversationSignals`, TTL), переслане → `unsupported`; reply-кнопка `requestLocation` → `request_location`; regex нових verb `fl|fs|fp|fd|ft|fn`. `setMyCommands` без змін.
 
 ### 23.5 `callback_data` і перевірки
 - **Формат** (regex, ≤ 28 байт):
@@ -1639,6 +1651,7 @@ Inbox API (§22.6.5) реалізовано без міграцій. Код: `In
 | `rate_limited` | T-rate-limited (раз на хвилину), вхідне `skipped` | без змін |
 
 - Натискання ніколи не викликає LLM і не рахується в ліміти LLM (`chat_llm_usage`).
+- **Зміна (ADR-020, §28.5–§28.6):** verb потоку `fl|fs|fp|fd|ft|fn` з обов'язковим index; для `kind=flow_*` перевірки 8a–8d між п. 7 і п. 8; п. 10 — подвійний CAS (клавіатура + версія потоку); нові `result` `flow_not_active|stale_step|flow_expired|option_unavailable`.
 
 ### 23.6 Конвеєр (`ConversationTurnProcessor`)
 - **Сегменти.** Пакет під lease ділиться за `created_at`: кожен `callback` — окремий сегмент; суміжні `text|command|unsupported` — один сегмент (поведінка §21.5 без змін). Сегменти обробляються послідовно в тому самому запуску. Тож текст, вставлений до натискання, встигає зробити пропозицію `superseded`.
@@ -1670,6 +1683,7 @@ Inbox API (§22.6.5) реалізовано без міграцій. Код: `In
 - **Слоти:** хід без `prepare_booking`, але з успішним `find_slots` (останній виклик, `slots>0`) → `slot_pick` з ≤ `SlotButtons` слотів (з `preferredTime` — найближчі до нього, інакше перші за часом) на повідомленні моделі + рядок коду «Оберіть час кнопкою нижче або напишіть свій.». Результат `find_slots` фіксує `ClientChatToolbox` у `ChatTurnState` (код, не модель).
 - Текстове «Так» (§21.6), `ReminderChoiceParser` (§22.7) і всі наявні кроки — без змін; кожен успішний текстовий шлях відкликає відповідну клавіатуру й прибирає кнопки.
 - Історія LLM: `kind=callback` не включається (як команди).
+- **Зміна (ADR-020, §28.3, §28.6, §28.7):** за `FlowAvailable` `slot_pick` з результату `find_slots` не створюється (пункт «Слоти» — лише без потоку). Відкликання: одна активна `flow_*` на розмову (усі `flow_*` — одна група `ReplacesPrevious`); вхід у handoff скасовує потік і відкликає `flow_*`; таймаут потоку протерміновує `flow_*`. `f*` під час handoff → `handoff_blocked`, у `suggest` → `processed` без шаблону.
 
 ### 23.7 Дії
 1. **`by`** (див. ADR-013 §2.3): пропозиція `shown`, `id = keyboard.proposal_id`, `summary_message_id = keyboard.message_id`, інакше `proposal_not_active` → T-action-stale. `now >= expires_at` → `expired`. Далі `ChatBookingService.ConfirmAsync(conv, proposalId, clientConfirmed: true, profile)` і мапінг результатів як у TASK-728 (T-confirmed / T-slot-taken / T-price-changed / T-limit + handoff / T-in-progress / T-handoff). Журнал `confirm_booking` payload + `via: "button"` (текстом — `"text"`). T-confirmed: + рядок/меню нагадування (§22.7). Клавіатура: `reminder_choice`, якщо `ReminderChoiceNeeded`, інакше `appointment_actions` [Скасувати візит].
@@ -1699,6 +1713,8 @@ Inbox API (§22.6.5) реалізовано без міграцій. Код: `In
 | інший `/…` | T-text-only (без змін) |
 
 10. **Нагадування з кнопками** (воркер, §22.5 + TASK-751): якщо `WORKER_REMINDER_BUTTONS_ENABLED=true`, канал `assistant.enabled=true` і `buttons≠false`, то в транзакції `enqueueReminderMessage` створюється `beauty_chat_keyboards` (`kind=appointment_actions`, `appointment_id`, `expires_at = starts_at`, токен `crypto.randomBytes(16)` → base64url) і `actions`: [✅ Підтверджую візит] (`aa`) [❌ Скасувати візит] (`ac`) / [🔕 Більше не нагадувати] (`i:stop`). Текст нагадування не змінюється (текстова інструкція лишається).
+
+**Зміна (ADR-020, §28.3, §28.8):** за `FlowAvailable` `/book`, `/zapys`, `/zapis`, `i:book` стартують потік (крок `service`) замість T-book-start. `bo` на пропозиції з `flow_id` повертає потік у `time` з курсором `starts_at` замість T-other-time. `by|bn` на такій пропозиції додатково перевіряють стан потоку (§28.8).
 
 ### 23.8 Клавіатури й шаблони
 - **Розкладка:** ≤ 10 кнопок, ≤ 3 у рядку (зі слотами з іменем майстра — 2), ≤ 6 рядків. Підпис ≤ 32 кодові точки; назви з БД санітизуються як у TASK-735 (один рядок, без керівних символів) і обрізаються. Емодзі — не більше одного на початку підпису. Без markdown/HTML, без `parse_mode`. `callback_data` перевіряється на ≤ 64 байти UTF-8 перед вставкою (інакше клавіатура не додається, лог `keyboard_invalid`).
@@ -1733,6 +1749,7 @@ Inbox API (§22.6.5) реалізовано без міграцій. Код: `In
   - Рядок слотів: «Оберіть час кнопкою нижче або напишіть свій.»
 - **`ChatRules` +:** «Кнопки під повідомленнями додає система. Не вигадуй кнопок, не описуй їх і не проси їх натискати.»
 - **Вихідний guard:** текст моделі ніколи не розбирається як розмітка; рядки, схожі на `callback_data`, і JSON лишаються текстом, `actions` = NULL.
+- **Зміна (ADR-020, §28.5, §28.12):** розкладки `flow_*` (зокрема `flow_last_location`) і шаблони T-flow-*, T-location-retry, T-location-unused.
 
 ### 23.9 Інші канали
 - `IChannelAdapter.SupportsActions` (Telegram `true`, решта `false`). Для каналу без підтримки `ChatKeyboardBuilder` не викликається, записів `beauty_chat_keyboards` немає, шаблони мають текстовий варіант («Відповідайте «Так» або «Ні»», «Відповідайте цифрою 1–4»).
@@ -1750,6 +1767,7 @@ Inbox API (§22.6.5) реалізовано без міграцій. Код: `In
   - inbox — натискання як «чип» «Клієнт натиснув: {підпис}», кнопки вихідного як неактивні чипи під бульбашкою;
   - деталі запису й «найближчі записи» в inbox — бейдж «Клієнт підтвердив візит {час}»; скасований клієнтом — наявне «скасував клієнт» (§16) з причиною;
   - налаштування каналу — перемикач «Кнопки в Telegram» (за `assistant.enabled`) і дія «Оновити меню команд».
+- **Зміна (ADR-020, §28.11):** inbox `kind=location` (`body="[локація]"`, координат немає, чип «Клієнт поділився локацією»); канал `settingsJson.assistant.bookingFlow`; staff `LocationDto.latitude/longitude`.
 
 ### 23.11 Безпека (вимоги до реалізації)
 - Дані дії лише з БД (`options`, пропозиція, запис). З `callback_data` беруться тільки verb, токен, index.
@@ -1760,6 +1778,7 @@ Inbox API (§22.6.5) реалізовано без міграцій. Код: `In
 - **Логи:** `chat_callback conversation={id} keyboard={id|-} kind={k|-} verb={v|-} result={code}`, `chat_keyboard_created conversation={id} keyboard={id} kind={k}`, `telegram_ack_failed|telegram_clear_failed|telegram_commands_failed channel={id} error={тип}`, `client_cancel appointment={id} conversation={id} result={code}`. Заборонено: `callback_data`, токен, `callback_query.id`, chat id, імена, підписи, тексти, URL з токеном бота.
 - **Метрики:** лічильники за `result`/`kind` з цих логів (окремої інфраструктури немає).
 - `beauty_messages.actions` і `beauty_chat_keyboards.token` не віддаються жодним API.
+- **Зміна (ADR-020, §28.9, §28.14):** координати клієнта не зберігаються (лише пам'ять процесу) і не логуються; відстані й порядок за відстанню відсутні в збережених `body`/`actions`/`options`, логах, API й LLM.
 
 ### 23.12 Поетапність
 - **V1:** §23.2–§23.11.
@@ -1776,6 +1795,7 @@ Inbox API (§22.6.5) реалізовано без міграцій. Код: `In
   - Instagram quick replies;
   - налаштування tenant «скасування в чаті»;
   - сповіщення персоналу про скасування.
+- **Зміна (ADR-020):** «керований запис кнопками без LLM» і «Інший день» перенесено у V1 (за `ChatFlow:Enabled`, §28). Порядок кроків: послуга → спеціаліст → заклад («Так, у …» / список) → час → підтвердження.
 
 ### 23.13 Тестові сценарії
 Fake Telegram (HTTP: `getUpdates`, `sendMessage` з `result.message_id`, `answerCallbackQuery`, `editMessageReplyMarkup`, `setMyCommands`), mock ШІ з лічильником викликів, реальна БД (RLS, CAS).
@@ -1800,6 +1820,8 @@ Fake Telegram (HTTP: `getUpdates`, `sendMessage` з `result.message_id`, `answer
 19. **ПД у логах:** сканер (API, воркер) за сценаріями 1–18: немає `callback_data`, токенів, chat id, імен, текстів, URL `bot…`.
 20. **RLS/схема:** `beauty_chat_keyboards` недоступна з іншого tenant (API-роль і роль воркера); `DO`-блок; CHECK `kind`/`actions`/`callback_*`; schema-drift зелений.
 21. **Регрес:** текстове «Так», `ReminderChoiceParser`, §21.10, §22.12 проходять; склеєний підсумок без кнопок — як у TASK-733.
+
+**Зміна (ADR-020):** сценарії потоку — §28.15; сценарії 13 і 21 перевіряються також з `ChatFlow:Enabled=false` (регрес).
 
 ### 23.14 Ризики
 - Спам натисканнями: частотний ліміт, CAS, шаблони без LLM, throttling T-action-stale.
@@ -2345,6 +2367,7 @@ ADR-014 §1.1:
   - Telegram: `reply_markup: {keyboard: [[{text, request_contact}]], one_time_keyboard, resize_keyboard, input_field_placeholder}` / `{remove_keyboard: true}`. Без `parse_mode`.
   - Для reply-keyboard рядків `beauty_chat_keyboards` немає (натискання = звичайне `message`).
   - Instagram і mock-и `Reply`/`RemoveReply` ігнорують. Воркер (TASK-751) невідому розкладку шле як текст, тож змін воркера немає (текст питання має інструкцію «напишіть номер»).
+  - **Зміна (ADR-020, §28.9):** кнопка `Reply` адитивно має `RequestLocation` (взаємовиключно з `RequestContact`); JSON `{"label":"📍 Поділитись локацією","requestLocation":true}` → Telegram `request_location: true`. Ліміти розкладки без змін. Воркер повторно відправляє `requestLocation` як reply-розкладку (TASK-841).
 - **`i:phone`:** regex безстанових дій `^i:(book|my|help|human|stop|phone)$` (`TelegramAdapter.IsValidCallbackData`, `ChatKeyboardLayout`, `ResolveCallbackAsync` → `Stateless`).
 - **Inbox (адитивно):** `messages[].contactVerdict?` для `kind=contact`; `messages[].buttons` включає підписи reply-keyboard.
 - **Логи:** без номера, `user_id`, імен контакту й chat id.
@@ -3412,3 +3435,366 @@ BCRM-HMAC-SHA256-v1
 
 ### 27.12 Споживачі
 TASK-817 (схема HMAC, вектор), TASK-818 (§27.3–§27.5, §27.7), TASK-819 (§27.8), TASK-820 (§27.9 API), TASK-821 (доставка заявок), TASK-822/823 (frontend invite / форма заявки), TASK-831 (§27.6), TASK-834 (UI `tenant_suspended`); ShelfGuard — TASK-827 (клієнт v1, вектор), TASK-829 (вхідні ліди), TASK-832 (`setModules`).
+
+## §28. Керований запис кнопками в Telegram без ШІ на кроках (v0.31, 2026-11-07)
+
+Джерело: **ADR-020** (accepted 2026-11-07, ревізія рішення 5: локацію клієнта не зберігаємо). При розбіжності діє ADR, а зміна ADR потребує нового ADR. Розділ адитивний, окрім місць **«Зміна»** в §21.4–§21.8, §22.8, §23.2–§23.13, §25.4. §22.7 не змінюється: `/forget` немає. Позначка *(можна змінити)* — припущення архітектора або дефолт відкритого питання ADR-020 §5 (Q1–Q7), який змінюють правкою контракту. Позначка **[уточнення §28]** — деталь, якої немає в ADR і яка йому не суперечить.
+- **Зміна §18 (рішення продукту «без координат»):** у закладу з'являються необов'язкові `latitude/longitude` (§28.10). Їх вводить адміністратор, зовнішнього геокодування немає.
+- Вирішено: Q6 (2026-11-07): порядок «послуга → спеціаліст → заклад → час → підтвердження»; «Так, у «{останній заклад}»» — на початку кроку закладу кожного нового запису; останній заклад = заклад найпізнішого нескасованого запису.
+- Відкрито: юридичний gate ADR-010 §7.3 (текст T-flow-geo-offer, ввімкнення поза dev), Q1–Q5 і Q7 ADR-020 (у контракті — дефолти).
+
+### 28.1 Доступність потоку
+- **`FlowAvailable`** (обчислює код на кожен хід і натискання) = `ChatFlow:Enabled` ∧ `ChatAssistant:Enabled` ∧ `settings.assistant.enabled=true` ∧ `ButtonsAvailable` (TASK-753: `ChatButtons:Enabled` ∧ адаптер `SupportsActions` ∧ `assistant.buttons≠false`) ∧ `assistant.bookingFlow≠false` ∧ режим ≠ `suggest` (Q1, *можна змінити*).
+- `FlowAvailable=false` → поведінка §21/§23 без змін (`prepare_booking` моделі, `slot_pick`, T-book-start, T-other-time). Натискання наявних `flow_*` → `Disabled` → T-action-stale, розмітку прибрано (як L10, TASK-759). Активні потоки доживають до таймауту через sweeper.
+- **Межа LLM ↔ код:** кроки потоку, підсумок і запис робить лише код. `ChatBookingFlowService` і `ConversationTurnProcessor.Flow.cs` не залежать від `BeautyAssistant`/`IAiClient` (DI-тест). Модель може лише стартувати потік (`start_booking_flow`, §28.7).
+
+### 28.2 Конфігурація
+| Ключ | За замовч. | Призначення |
+|---|---|---|
+| `ChatFlow:Enabled` | `false` | Глобальний вимикач (§28.1) |
+| `ChatFlow:OfferLastLocation` | `true` | «Так, у «{останній заклад}»» на початку кроку закладу (після спеціаліста) |
+| `ChatFlow:IdleTimeoutMinutes` | `30` (5..240) | Таймаут бездіяльності потоку (Q5) |
+| `ChatFlow:PageSize` | `5` (3..5) | Елементів на сторінці `location`/`service`/`specialist` |
+| `ChatFlow:DayPageSize` | `6` (3..6) | Дат на сторінці `day` |
+| `ChatFlow:MaxScanDays` | `14` (1..`MaxDaysAhead`) | Вікно сканування слотів/днів за одне натискання |
+| `ChatFlow:ResendStepAfterLlm` | `true` | Повторити поточний крок після відповіді моделі (Q4) |
+| `ChatFlow:LlmPrepareWhenFlow` | `false` | Аварійно повернути `prepare_booking` моделі за потоку |
+| `ChatFlow:GeoEnabled` | `false` | Кнопка «Поділитись локацією». Поза Development — лише після юридичного gate (runbook; перевірки на старті немає) *(можна змінити)* |
+| `ChatFlow:TransientLocationTtlSeconds` | `300` (30..900) | Час життя координат у пам'яті між ingest і ходом |
+| `ChatFlow:FinishedRetentionDays` | `30` (1..365) | Sweeper видаляє завершені потоки, старші за це **[уточнення §28]** |
+
+- Значення поза діапазоном → помилка валідації options на старті (як інші `ChatButtons:*`).
+- `ChatButtons:SlotButtons` (6) — розмір сторінки `time`. `PublicBooking:MaxDaysAhead` — верхня межа дат.
+- **Канал** (`settingsJson`, адитивно): `{"assistant": {"enabled": true, "buttons": true, "bookingFlow": true|false}}`. Відсутнє `bookingFlow` = `true`. Валідація: bool або відсутнє, інакше `422 invalid_settings`.
+
+### 28.3 Автомат станів
+**Статуси потоку:** `active` → `completed | cancelled | expired | superseded` (термінальні, `finished_at` заповнено).
+**Порядок кроків** (Q6 вирішено 2026-11-07): `service` → `specialist` → крок закладу (`last_location`, потім за потреби `location`) → `time` (↔ `day`) → `confirm`.
+**Кроки (`step`):** `service | specialist | last_location | location | time | day | confirm`.
+
+**Старт** (`/book`, `/zapys`, `/zapis`, `i:book`, «📅 Почати знову» = `i:book`, `start_booking_flow`):
+1. попередній `active` потік → `superseded`, його `flow_*` → `revoked`, його пропозиція `prepared|shown` → `superseded` (+ `booking_confirm` `revoked`);
+2. новий рядок (`origin` = `command|button|llm`), `expires_at = now + IdleTimeoutMinutes`. Заклад останнього запису (§28.4) обчислюється одразу й фіксується в `suggested_last_location_id` (NULL, якщо його немає або `OfferLastLocation=false`);
+3. канал з `beauty_channels.location_id` → `location_id` задано зі старту: послуги й майстри фільтруються цим закладом, крок закладу пропускається (`last_location`, `location` у `skipped_steps`) *(можна змінити)*;
+4. застосування префілу LLM (§28.7) і перший невирішений крок: без префілу → `service`. Далі автопропуск, але не далі за `time`.
+
+**Вхід у крок закладу** (після `fp`, автопропуску спеціаліста або `other_specialist`): опції = заклади пари «послуга + майстер» (§28.4).
+- Рівно одна опція → автопропуск: `location_id` = вона, `last_location` і `location` у `skipped_steps`, рядок «Обрано: заклад «{назва}», {адреса}», далі `time`.
+- ≥ 2 опції і `suggested_last_location_id` ∈ опцій → `last_location` (на початку кроку закладу **кожного** нового запису, Q6б).
+- Інакше → `location`.
+
+Повтор `/book`/`i:book` у межах `IdenticalTemplateThrottleSeconds` (30 с, TASK-759) → вхідне `processed` без відповіді, активний потік не змінюється. Старт рахується в `MaxTemplateRepliesPerConversationPerMinute` (як інформаційні команди).
+
+**Переходи** (кожен успішний: `version+1`, `expires_at = now + idle`, `updated_at`, нова клавіатура кроку, попередня `flow_*` → `used`/`revoked`):
+
+| Крок | Подія | Новий крок | Ефект |
+|---|---|---|---|
+| `service` | `fs` | `specialist` (автопропуск → крок закладу) | `service_id` |
+| `specialist` | `fp` | крок закладу (вище) | `specialist_id` |
+| `last_location` | `fl` («✅ Так, у «…»», текст «так») | `time` | `location_id` = опція, `cursor_at=NULL` |
+| `last_location` | `fn:other_location` («Інший заклад», текст «інший»/«ні») | `location` | — |
+| `location` | `fl` | `time` | `location_id`, `cursor_at=NULL`; reply-клавіатура гео прибирається (§28.9) |
+| `location` | повідомлення-локація | `location` | транзієнтне пересортування (§28.9) |
+| `location` | текст «Обрати зі списку» (відкрита гео-клавіатура) | `location` | `removeReply`, список без змін |
+| `time` | `ft` | `confirm` | `PrepareAsync(FlowId)` → T-summary + `booking_confirm`, `proposal_id` |
+| `time` | `fn:more` | `time` | `cursor_at` = `startsAt` останнього показаного слота |
+| `time` | `fn:other_day` | `day` | `list_cursor=NULL` |
+| `time` | `fn:other_specialist` | `specialist` | `specialist_id`, `location_id` (якщо не з каналу), `cursor_at`, `day`, `preferred_time` і позначки `skipped` кроків закладу скидаються; після `fp` — знову вхід у крок закладу |
+| `day` | `fd` | `time` | `day` = дата, `cursor_at=NULL`, `preferred_time=NULL` |
+| `day` | `fn:more` | `day` | `list_cursor` = остання показана дата |
+| `confirm` | `by` / текст «Так» | `completed` / див. §28.8 | `ConfirmAsync` |
+| `confirm` | `bn` / текст «Ні» | `cancelled` (`declined`) | пропозиція `rejected`, T-declined |
+| `confirm` | `bo` | `time` | пропозиція `rejected`, `cursor_at = proposal.starts_at` |
+| `confirm` | інший вільний текст | `time` | пропозиція `superseded`, `cursor_at` без змін, хід LLM, потім повтор кроку `time` |
+| будь-який, крім `confirm` | `fn:cancel` («✖ Скасувати») | `cancelled` (`client`) | T-flow-cancelled |
+| будь-який `active` | вхід у handoff | `cancelled` (`handoff`) | `flow_*` і `booking_confirm` → `revoked` |
+| будь-який `active` | `now ≥ expires_at` | `expired` | ліниво або sweeper; `flow_*` → `expired`, розмітка прибирається; без повідомлення |
+| будь-який `active` | новий старт | `superseded` | п. 1 старту |
+
+**`fn:back`** («⬅ Назад») повертає на найближчий попередній крок, де клієнт реально обирав (не з `skipped_steps` і не префіл). Ланцюг: `day → time → location → last_location → specialist → service`:
+- `time → location`, якщо `location` показували; інакше `time → last_location`, якщо показували його; інакше далі по ланцюгу;
+- `location → last_location` лише якщо `last_location` у цьому потоці показували (`suggested_last_location_id ∈` опцій і крок не пропущено);
+- `last_location → specialist` (якщо не пропущено), інакше `service`.
+
+Повернення на крок X очищає вибір X і всіх наступних, курсори та їхні позначки `skipped`. Повернення на `last_location` знову показує ту саму пропозицію. Якщо попереднього кроку немає (`service`), кнопка «Назад» не показується. На `confirm` «Назад» немає (його роль виконує `bo`).
+
+**Автопропуск** (рядок «Обрано: …» на початку повідомлення наступного кроку, крок у `skipped_steps`):
+- `specialist`: рівно один придатний майстер для послуги → «Обрано: спеціаліст {ім'я}»;
+- крок закладу: рівно один заклад для пари «послуга + майстер» → «Обрано: заклад «{назва}», {адреса}» (`last_location` не показується);
+- пропуск ланцюжковий (спеціаліст і заклад разом);
+- **`service` не пропускається ніколи**, навіть з однією опцією. `time`/`day` не пропускаються ніколи.
+
+**Нуль опцій:**
+- `service` на старті → T-flow-no-services + [👤 Адміністратор] (`i:human`), потік `cancelled` (`no_services`);
+- `specialist` / крок закладу (опції зникли між кроками: гонка, деактивація) → повернення на попередній крок зі свіжими даними + рядок «Цей варіант уже недоступний» (результат `option_unavailable`). Якщо порожнім став і `service` → T-flow-no-services;
+- `time` → T-flow-no-slots (§28.8);
+- `day` → T-flow-no-days + [⬅ Назад] [✖ Скасувати].
+
+**Префіл від LLM, що не узгоджується:** майстер не виконує префільну послугу → `specialist_id` відкидається; префільний заклад не має пари «послуга + майстер» → `location_id` відкидається (крок закладу проходить звичайно). Відкидання тихе, без рядка клієнту *(можна змінити)*.
+
+**Інваріант «не одразу підсумок»:** `step='confirm'` встановлюється лише переходом `time --ft--> confirm` (кнопка або точний текст підпису слота). Жоден префіл, tool чи текст не створює пропозицію потоку в обхід `ft`.
+
+**`cancel_reason`** ∈ `client | declined | handoff | no_services`.
+
+### 28.4 Опції кроків (`IChatFlowCatalog`, під RLS tenant каналу, без LLM)
+| Крок | Джерело опцій | Порядок | Сторінка |
+|---|---|---|---|
+| `service` | `ListBookableServicesAsync(specialistId?, locationId?)`: активні послуги, які виконує ≥ 1 придатний майстер у ≥ 1 активному закладі, де для послуги є ціна (заклад або мережа). За префілу майстра — лише його послуги; за закладу каналу — лише в цьому закладі | категорія, назва, `id` | `PageSize` |
+| `specialist` | `ListSpecialistsForServiceAsync(serviceId, locationId?)`: придатні майстри з призначенням на послугу хоча б в одному активному закладі з ціною (за закладу каналу — у ньому) | ім'я, `id` | `PageSize` |
+| `last_location` | `suggested_last_location_id`, якщо він ∈ опцій `location` для поточної пари | — | [✅ Так, у «{назва}»] / [Інший заклад] |
+| `location` | `ListLocationsForAsync(serviceId, specialistId)`: активні заклади, де майстер придатний (активний зв'язок, робочі години), призначений на послугу і для послуги є ціна | `name`, `id`; гео — §28.9 | `PageSize` |
+| `time` | `OnlineBookingCore.GetSlotsAsync(location, specialist, service, date)` по днях від нижньої межі L | `startsAt` | `SlotButtons` |
+| `day` | дати, де `GetSlotsAsync` дає ≥ 1 слот | дата | `DayPageSize` |
+
+- **Заклад останнього запису** (`GetLastAppointmentLocationAsync(clientId)`): `location_id` нескасованого запису `conversation.client_id` (`status ∈ pending|confirmed|completed`; майбутній теж рахується) з найпізнішим `starts_at` (Q6в вирішено). `client_id IS NULL` → немає. Обчислюється один раз на старті й фіксується в `suggested_last_location_id`. Чи показувати його, вирішується на вході в крок закладу (належність до опцій пари). Пропозиції (`beauty_chat_booking_proposals`) не використовуються: без клієнта підтверджених записів немає. Індекс — лише якщо план запиту покаже потребу (кандидат `beauty_appointments (tenant_id, client_id, starts_at DESC)`, TASK-836).
+- **Курсори** (у рядку потоку, не в `options`):
+  - списки: `list_cursor` = `id` останнього показаного елемента. Наступна сторінка — елементи, чий ключ сортування `(…, id)` більший за ключ цього елемента (ключ перераховується з БД). Елемент зник → наступна сторінка від початку. На останній сторінці `list_cursor=NULL`, а кнопка «Ще» стає «↩ На початок» (`fn:more` з `list_cursor=NULL` = сторінка 1);
+  - `day`: `list_cursor` = остання показана дата `YYYY-MM-DD`. Перша сторінка: від завтра відносно локальної дати `cursor_at`, якщо його задано, інакше від сьогодні (§28.8);
+  - `time`: нижня межа L = `cursor_at` (строго `>`), інакше (`≥`): `day` + `preferred_time` − 60 хв, якщо обидва задані *(можна змінити)*; початок `day` (локальна північ закладу), якщо задано лише `day`; інакше `now`. Не раніше `now`.
+- **Обмеження навантаження:** одне натискання сканує дні [дата(L) … дата(L) + `MaxScanDays` − 1], обрізані до `MaxDaysAhead`. На сторінці `time` можуть бути слоти кількох днів.
+- Ціни й тривалості на кнопках у V1 не показуються (Q2). «Будь-який спеціаліст» у V1 немає (Q3).
+
+### 28.5 Callback: формати, `options`, розкладки
+- **Regex** (`TelegramAdapter.IsValidCallbackData`, `CallbackAddress`, `ButtonVerbs`, `ChatKeyboardLayout`):
+  - станові (без змін, §26.9.1): `^(by|bn|bo|sp|rc|ac|aa|ar|cy|cn|mc|co):[A-Za-z0-9_-]{22}(:[0-9])?$`;
+  - **станові потоку (нові, index обов'язковий):** `^(fl|fs|fp|fd|ft|fn):[A-Za-z0-9_-]{22}:[0-9]$` (27 байт);
+  - безстанові без змін: `^i:(book|my|help|human|stop|phone|mkt|mkoff)$`.
+- **Verb ↔ kind** (усі споживають клавіатуру):
+
+| Verb | Kind | Дія |
+|---|---|---|
+| `fs` | `flow_service` | обрати послугу → `specialist` |
+| `fp` | `flow_specialist` | обрати спеціаліста → крок закладу |
+| `fl` | `flow_last_location`, `flow_location` | обрати заклад → `time` |
+| `fd` | `flow_day` | обрати дату |
+| `ft` | `flow_time` | обрати слот → `PrepareAsync` |
+| `fn` | будь-який `flow_*` | навігація `options[i].nav` |
+
+- **`options[i]`** (пише й читає лише код; ≤ 10 елементів; index = позиція в масиві):
+  - `{verb:"fl", label, locationId}`, `{verb:"fs", label, serviceId}`, `{verb:"fp", label, specialistId}`;
+  - `{verb:"fd", label, date:"YYYY-MM-DD"}`;
+  - `{verb:"ft", label, startsAt}` (ISO 8601 з offset закладу; заклад, послуга й майстер беруться з рядка потоку, не з `options`);
+  - `{verb:"fn", label, nav}`, де `nav ∈ other_location | more | back | other_day | other_specialist | cancel`.
+  
+  Валідація при створенні: `nav` — лише з цього переліку, дозволений для `kind` (`other_location` — лише `flow_last_location`; `other_day|other_specialist` — лише `flow_time`); id — uuid. Невалідний план → клавіатура не створюється, лог `keyboard_invalid`.
+- **Клавіатура потоку:** `flow_id`, `flow_version` = версія потоку **після** переходу, `expires_at = flow.expires_at`. Усі `flow_*` входять у `KeyboardKinds.ReplacesPrevious` як одна група: на розмову одна активна `flow_*`.
+- **Розкладки** (обмеження §23.8: ≤ 10 кнопок, ≤ 6 рядків, ≤ 3 у рядку, підпис ≤ 32 кодові точки, санітизація назв, ≤ 1 емодзі на початку):
+
+| Kind | Розкладка |
+|---|---|
+| `flow_last_location` | [✅ Так, у «{назва}»] / [Інший заклад] |
+| `flow_location`, `flow_service`, `flow_specialist` | ≤ `PageSize` рядків по одній кнопці; рядок навігації: [Ще ➡] або [↩ На початок] (якщо сторінок > 1), [⬅ Назад] (якщо є куди), [✖ Скасувати] |
+| `flow_time` | ≤ 6 слотів по 3 у рядку; далі [Ще час ➡] [Інший день] / [Інший спеціаліст] (лише якщо майстрів > 1) [⬅ Назад]; [✖ Скасувати] — якщо лишилось місце в межах 10 кнопок |
+| `flow_day` | ≤ 6 дат по 3 у рядку; [Ще дні ➡] (якщо є дати до `MaxDaysAhead`) [⬅ Назад] [✖ Скасувати] |
+
+- **Підписи:**
+  - заклад: `{назва}`, з гео — §28.9; спеціаліст: `{ім'я}`; послуга: `{назва}`;
+  - слот: «14:30», якщо дата слота = сьогодні в зоні закладу; «пт 14:30» — у межах 6 днів; інакше «31.10 14:30»;
+  - дата: «пт 31.10»;
+  - обрізання назв зі збереженням унікальності. Однакові підписи на одній клавіатурі отримують суфікс « (2)», « (3)» за порядком сортування **[уточнення §28]**.
+
+### 28.6 Перевірки натискання й результати
+Порядок: §23.5 п. 1–7 без змін → **8a–8d** (лише для `kind LIKE 'flow\_%'`) → §23.5 п. 8 (handoff) → п. 9 (домен) → п. 10 (CAS).
+- **8a.** `keyboard.flow_id` = id потоку `active` цієї розмови → інакше: потік `expired` → `flow_expired`, решта → `flow_not_active`.
+- **8b.** `keyboard.flow_version = flow.version` і `kind` відповідає `flow.step` (`flow_last_location↔last_location`, `flow_location↔location`, `flow_service↔service`, `flow_specialist↔specialist`, `flow_time↔time`, `flow_day↔day`) → інакше `stale_step`.
+- **8c.** `now < flow.expires_at` → інакше потік → `expired` (його клавіатури теж), результат `flow_expired`.
+- **8d.** Повторна перевірка опції під RLS:
+  - `fs`: послуга активна й має ≥ 1 придатного майстра в активному закладі з ціною (за префільного майстра чи закладу каналу — з ними);
+  - `fp`: майстер придатний для послуги хоча б в одному активному закладі (за закладу каналу — у ньому);
+  - `fl`: заклад активний і ∈ `ListLocationsForAsync(service, specialist)`;
+  - `fd`: дата ∈ [сьогодні, `MaxDaysAhead`];
+  - `ft`: `PrepareAsync` (`slot_not_offered|invalid_start` → `option_unavailable`);
+  - `fn`: `nav` дозволений для кроку.
+  
+  Невдача → `option_unavailable`.
+- **CAS (п. 10).** Одна транзакція:
+  - `UPDATE beauty_chat_keyboards SET status='used', … WHERE id=@k AND status='active' AND expires_at>now()`;
+  - `UPDATE beauty_chat_booking_flows SET …, version=version+1, expires_at=now()+@idle, updated_at=now() WHERE id=@f AND version=@v AND status='active'`;
+  - нове вихідне повідомлення + нова клавіатура + вхідне `processed`.
+  
+  Будь-який UPDATE дав 0 рядків → відкат, результат `used` (клавіатура) або `stale_step` (потік). Переможець один.
+- **Expired-клавіатура `flow_*`** (§23.5 п. 7 `expired`) → відповідь як `flow_expired`.
+- **Результат → відповідь** (ключ `cb-reply:{inboundId}`; доповнення таблиці §23.5):
+
+| `result` | Відповідь | Клавіатура |
+|---|---|---|
+| `ok` | повідомлення наступного кроку | стара `used` + прибрати; нова `flow_*` |
+| `flow_not_active`, `stale_step` | T-action-stale (раз на 10 хв) | прибрати натиснуту |
+| `flow_expired` | T-flow-expired + [📅 Почати знову] (`i:book`), раз на 10 хв | прибрати |
+| `option_unavailable` | «Цей варіант уже недоступний.» + поточний (або попередній, §28.3) крок зі свіжими даними | стара `revoked`, нова версія |
+| `handoff_blocked` | T-action-handoff (раз на 10 хв), вхідне `held` | `flow_*` уже відкликано входом у handoff |
+| `rate_limited` | як §23.5 | без змін |
+
+- **Ліміти:** натискання `f*` і текстовий вибір (§28.7) рахуються в `ChatButtons:MaxCallbacksPerConversationPerMinute`. Повідомлення кроків — результати дій: під `MaxTemplateRepliesPerConversationPerMinute` вони не підпадають. Старт командою чи `i:book` — підпадає (§28.3).
+- **Handoff:** усі `f*` заблоковані (`handoff_blocked`). **`suggest`:** `f*` → `processed` без відповіді.
+- Натискання не викликає LLM і не пише `chat_llm_usage`.
+
+### 28.7 Конвеєр, текстовий вибір і ШІ
+- **Місце в кроках §21.5:** 4 (команди; `kind=location` → крок 4f, а не T-text-only) → 4a (`pending_prompt`, §22.7/§25.5) → **4f (потік, код)** → 5 (текстове «Так»/«Ні», §21.6) → 6 → 7 → 8.
+- **Крок 4f** (лише `FlowAvailable`, є `active` потік, ai_state не handoff, пакет = рівно 1 вхідне повідомлення):
+  - `kind=location` → §28.9;
+  - `kind=text`, крок ≠ `confirm`: нормалізація (NFKC, lowercase, trim, без емодзі й маркерів `➡⬅✖↩✅📅📍`, стиснуті пробіли). Збіг **рівно з одним** підписом активної `flow_*` поточної версії → обробка як натискання цієї опції: ті самі 8a–8d і CAS, журнал/лог `via=text`, `body` вхідного без змін. На `last_location` збігом вважаються також `так` → опція «Так, у …» і `інший`, `інший заклад`, `ні` → `other_location`. Текст «обрати зі списку» за відкритої гео-клавіатури → §28.9 «відмова»;
+  - збігу немає або їх кілька → хід іде далі (5…8). Нумерованих відповідей немає.
+- **Крок 8 за активного потоку:**
+  - у контекст додається блок **«СТАН ЗАПИСУ»** (код, дані, не інструкції; назви санітизуються як підписи; обгортка `WrapToolResult`): `крок: …; заклад: …; послуга: …; спеціаліст: …; день: …`. Лише назви: без id, токенів, координат і відстаней;
+  - після відповіді моделі (`ResendStepAfterLlm=true`) код окремим повідомленням (ключ `ai-reply:{conv}:{lastInbound}:f`, `sender_type=system`) повторно надсилає поточний крок: «Продовжимо: {текст кроку}» + нова `flow_*` (`version+1`, стара `revoked`, `expires_at` оновлено). Кнопки під текстом моделі не ставляться ніколи. Для `confirm` (пропозиція щойно `superseded`) повторюється крок `time`;
+  - модель викликала `start_booking_flow` → повідомлення кроку того самого суфікса `:f` (одне на хід).
+- **Tools `ClientChat` за `FlowAvailable`:** `list_locations`, `list_services`, `list_specialists`, `find_slots`, `get_active_promotions`, `request_handoff`, **`start_booking_flow`**. `prepare_booking` → `tool_not_allowed_in_client_scope` (окрім `LlmPrepareWhenFlow=true`). Без `FlowAvailable` — набір §21.7 без змін, а `start_booking_flow` → `tool_not_allowed_in_client_scope`.
+- **`start_booking_flow`:**
+  - вхід `{locationId?: uuid, serviceId?: uuid, specialistId?: uuid, date?: "YYYY-MM-DD", preferredTime?: "HH:mm"}`, зайві поля ігноруються;
+  - кожен id перевіряється під RLS і на придатність (як 8d); `date` ∈ [сьогодні, `MaxDaysAhead`] у зоні закладу (за відомого закладу), `preferredTime` — `HH:mm` у сітці 15 хв. Невалідне тихо відкидається;
+  - старт за §28.3 (`origin=llm`) у порядку `service → specialist → крок закладу → time`, зупинка на першому невирішеному кроці (з автопропуском), не далі за `time`. Валідний `locationId` (заклад має пару «послуга + майстер», якщо обидва відомі) пропускає крок закладу без «Так, у …». Префіл `date`/`preferredTime` → `day`/`preferred_time`;
+  - вихід моделі: `{status:"flow_started", step:"service|specialist|last_location|location|time"}` або `{status:"flow_unavailable", reason:"no_services"}` (потік `cancelled`, T-flow-no-services надсилає код). Без id і токенів;
+  - повторний виклик у тому самому ході повертає той самий результат без нового потоку;
+  - журнал `beauty_ai_actions`: `start_booking_flow` (`done`, target `flow:{id}`, payload `{step, prefilled:["location"|"service"|"specialist"|"date"|"time"]}`).
+- **`slot_pick`** з результату `find_slots` за `FlowAvailable` не створюється (§23.6 «Слоти» — лише без потоку).
+- **`ChatRules` +** (за `FlowAvailable`):
+  - «Називай лише заклади, послуги, спеціалістів, ціни й час, які є в результатах tools або в блоці СТАН ЗАПИСУ; якщо даних немає — скажи, що не знаєш, і запропонуй адміністратора.»
+  - «Щоб записати клієнта, виклич start_booking_flow; не перелічуй слоти текстом як варіанти для запису — їх покаже система кнопками.»
+- Історія LLM: `kind=location` не включається; повідомлення кроків (`system`) включаються як `assistant` лише текстом, без кнопок.
+
+### 28.8 Підтвердження, «Інший час / день / спеціаліст»
+- **`ft`:** `ChatBookingService.PrepareAsync({conv, locationId, serviceId, specialistId, startsAt, FlowId})` (адитивний `FlowId` → `proposal.flow_id`). Успіх → T-summary (§23.8, текст лише з коду) + `booking_confirm` на тому самому повідомленні (ключ `cb-reply:{inboundId}`), потік → `confirm`, `proposal_id`. Журнал `prepare_booking` (`done`, payload `{via:"flow"}`). `slot_not_offered|invalid_start` → `option_unavailable` (свіжий `time`). Інші помилки → T-fallback + [👤 Адміністратор], потік лишається на `time` (нова версія).
+- **`by` / текст «Так» на пропозиції з `flow_id`:** перевірки §23.7 п. 1, а також потік `active`, `step='confirm'`, `flow.proposal_id = proposal.id`, інакше `proposal_not_active` → T-action-stale. Далі `ConfirmAsync` і мапінг:
+  - `confirmed` → T-confirmed (§23.7: нагадування / `appointment_actions`), потік `completed`;
+  - `slot_unavailable|slot_in_past|invalid_start` → T-slot-taken + крок `time` того самого майстра й закладу від `now` (`cursor_at=NULL`, `day=NULL`) в одній відповіді (два повідомлення, ключ `…:f` для кроку);
+  - `price_changed` → T-price-changed + повторний `PrepareAsync` того самого слота кодом → нове T-summary (крок `confirm`, нова пропозиція). Невдача → крок `time` *(можна змінити)*;
+  - `expired` (TTL пропозиції) → T-expired + крок `time` від `now`;
+  - `booking_limit_reached` / інше → як §21.6 (T-limit / handoff). Handoff скасовує потік (`handoff`).
+- **`bn` / «Ні»** → `DeclineAsync` + T-declined, потік `cancelled` (`declined`).
+- **`bo` на пропозиції з `flow_id`:** пропозиція `rejected`; потік → `time`, `cursor_at = proposal.starts_at`, той самий майстер і заклад; наступні `SlotButtons` слотів з переходом через дні в межах `MaxScanDays`. Замість T-other-time — повідомлення кроку з рядком «Добре, цей час не бронюю. Ось наступний вільний час:». `bo` без `flow_id` — як §23.7 п. 2.
+- **Слотів немає** (на `time` від L у вікні) → T-flow-no-slots + [Інший день] [Інший спеціаліст] (лише якщо для послуги > 1 придатного майстра; за закладу каналу — у ньому) [⬅ Назад] (клавіатура `flow_time` без слотів).
+- **`fn:other_day`** → `day` від завтра відносно `cursor_at` (якщо задано), інакше від сьогодні. **`fd`** → `time` з L = початок дня. **`fn:other_specialist`** → `specialist` для тієї самої послуги; заклад скидається (крім закладу каналу), після `fp` — знову крок закладу з «Так, у …», якщо підходить.
+
+### 28.9 Геолокація: транзієнтно, без збереження
+- **Коли пропонуємо:** крок `location` ∧ `GeoEnabled` ∧ 2 ≤ кількість опцій `location` ≤ 8 ∧ ≥ 1 опція з координатами ∧ адаптер підтримує reply-клавіатуру ∧ `pending_prompt ≠ phone_request` ∧ `reply_keyboard_open_at IS NULL`. Поріг 8 потрібен, щоб усі заклади вмістились в `options` однієї клавіатури (див. «Збереження») **[уточнення §28]**. На `last_location` гео не пропонуємо.
+- **Повідомлення кроку** (одна транзакція, два вихідних): (1) T-flow-location + `flow_location`; (2) T-flow-geo-offer (ключ `…:g`) з `actions.reply` [📍 Поділитись локацією] (`requestLocation:true`) / [Обрати зі списку], `oneTime`, `resize`; `reply_keyboard_open_at=now`.
+- **Парсер `message.location`** (приватний чат, не бот):
+  - `InboundMessage.Kind=location`, `Text="[локація]"`. У БД пишеться лише рядок `beauty_messages` з `kind=location` і `body="[локація]"`, **без координат**;
+  - координати округлюються до 4 знаків і кладуться в пам'ять процесу `ConversationSignals` за ключем `(conversationId, inboundMessageId)` з TTL `TransientLocationTtlSeconds`; читання видаляє запис. Не логуються;
+  - переслане (`forward_origin|forward_from|forward_date`) або координати поза діапазоном → `unsupported`, координати відкидаються;
+  - `live_period` ігнорується (лише перша точка; `edited_message` не обробляється); `venue` → його `location` *(можна змінити)*;
+  - ключ дедуплікації — як у `message`.
+- **Обробка (крок 4f, 0 LLM):**
+  - крок `location` і координати є в пам'яті → відстань haversine (`GeoDistance`, R = 6371 км) до опцій з координатами. Порядок: з координатами за відстанню (рівність → назва, `id`), далі без координат за назвою. Відповідь: «Обрано» не додається, T-flow-location-near + `flow_location` (версія +1) + `removeReply`, `reply_keyboard_open_at=NULL`. Координати відкидаються одразу після сортування. Лог `result=geo_sorted`;
+  - координат у пам'яті немає (рестарт, інший інстанс, sweeper, TTL) → T-location-retry + той самий список (нова версія) + `removeReply`, `result=geo_missing`;
+  - потоку немає або крок ≠ `location` → T-location-unused (раз на 10 хв), `result=geo_unused`;
+  - handoff → вхідне `held`, відповіді немає; `suggest` → `processed` без відповіді. Координати відкидаються в обох випадках;
+  - **відмова:** «Обрати зі списку» → T-flow-geo-declined + `removeReply`, список не змінюється (стара `flow_location` лишається чинною). Натискання закладу за відкритої гео-клавіатури → перед повідомленням наступного кроку окреме коротке «Обрано: заклад «{назва}»» з `removeReply` (ключ `…:r`), а рядок «Обрано» в наступному кроці не дублюється *(можна змінити)*.
+- **Збереження без похідної локації** (виконання ADR-020 §2.7–§2.8, Q7):
+  - `options` клавіатури пересортованого кроку містять **усі** опції `location` у порядку назви (тому ≤ 8), плюс `fn:more`, `fn:back`/`fn:cancel` (≤ 10). Підписи — без відстані;
+  - `beauty_messages.actions` (збережена розкладка) — перша сторінка в порядку назви, без відстаней; `body` — текст T-flow-location-near без переліку закладів;
+  - **inline-відправка** після коміту бере розкладку з пам'яті (`ActionsOverride` для цього `messageId`, не зберігається): ≤ `PageSize` найближчих кнопок з index їхніх опцій у збережених `options`, підписи «Центр · 1,2 км» (0,1 км; ≥ 100 км — ціле число км), далі рядок [Усі заклади ➡] (`fn:more`) [⬅ Назад] [✖ Скасувати]. Показ відстані — дефолт Q7 *(можна змінити: лише порядок, без чисел)*;
+  - inline-відправка не вдалася → `pending` → воркер шле збережену версію (порядок назви, без відстаней). Це прийнятно;
+  - `fn:more` з пересортованого кроку → звичайний список з початку + рядок «Сортування за відстанню скинуто.»;
+  - у рядку потоку, журналі, логах, `last_error`, API й LLM немає координат, відстаней, порядку за відстанню чи назви найближчого закладу.
+
+### 28.10 Схема (міграція `beauty_chat_booking_flow`, адитивна, без backfill)
+- **`beauty_chat_booking_flows`** (нова):
+  - `id uuid`, `tenant_id`, AK `(tenant_id, id)`; `conversation_id` NOT NULL (композитний FK RESTRICT);
+  - `status varchar(16) NOT NULL DEFAULT 'active'` CHECK ∈ `active|completed|cancelled|expired|superseded`;
+  - `step varchar(16) NOT NULL` CHECK ∈ `last_location|location|service|specialist|time|day|confirm`;
+  - `version int NOT NULL DEFAULT 0`;
+  - `location_id`, `service_id`, `specialist_id` NULL (композитні FK RESTRICT); `suggested_last_location_id uuid NULL` (FK RESTRICT; NULL = крок `last_location` не показували; замінює `offered_last_location` з ADR-020 §2.4 **[уточнення §28]**);
+  - `day date NULL` (локальна дата закладу), `preferred_time time NULL` (префіл LLM) **[уточнення §28]**, `cursor_at timestamptz NULL`, `list_cursor varchar(64) NULL`;
+  - `skipped_steps varchar(16)[] NOT NULL DEFAULT '{}'` CHECK `skipped_steps <@ ARRAY['specialist','last_location','location']::varchar[]` (`service` не пропускається);
+  - `proposal_id uuid NULL` (FK `beauty_chat_booking_proposals` RESTRICT);
+  - `origin varchar(16) NOT NULL` CHECK ∈ `button|command|llm|text`; `cancel_reason varchar(32) NULL` CHECK ∈ `client|declined|handoff|no_services`;
+  - `created_at`, `updated_at`, `expires_at timestamptz NOT NULL`, `finished_at timestamptz NULL`;
+  - CHECK: `(status='active') = (finished_at IS NULL)`; `(status='cancelled') = (cancel_reason IS NOT NULL)`; `step IN ('specialist','last_location','location','time','day','confirm') ⇒ service_id IS NOT NULL`; `step IN ('last_location','location','time','day','confirm') ⇒ specialist_id IS NOT NULL`; `step IN ('time','day','confirm') ⇒ location_id IS NOT NULL`; `step='confirm' ⇒ proposal_id IS NOT NULL`; `step='last_location' ⇒ suggested_last_location_id IS NOT NULL`;
+  - частковий UNIQUE `(tenant_id, conversation_id) WHERE status='active'`; індекси `(tenant_id, expires_at) WHERE status='active'`, `(tenant_id, finished_at) WHERE status<>'active'` (retention), на кожен FK;
+  - **координат, відстаней і порядку закладів немає.**
+- **`beauty_chat_keyboards`:**
+  - CHECK `kind` + `flow_last_location|flow_location|flow_service|flow_specialist|flow_time|flow_day` (надмножина; `varchar(24)`);
+  - `flow_id uuid NULL` (композитний FK `(tenant_id, flow_id)`; при видаленні потоку retention — `ON DELETE SET NULL (flow_id)` PG16 або видалення клавіатур; рішення `database-engineer`), `flow_version int NULL`;
+  - CHECK (з урахуванням retention, **[уточнення §28]** до ADR-020 §2.4 «⇔»): `kind NOT LIKE 'flow\_%' ⇒ flow_id IS NULL AND flow_version IS NULL`; `kind LIKE 'flow\_%' ⇒ flow_version IS NOT NULL AND (flow_id IS NOT NULL OR status<>'active')`;
+  - індекс `(tenant_id, flow_id)`.
+- **`beauty_chat_booking_proposals`:** `flow_id uuid NULL` (композитний FK, та сама поведінка видалення), індекс.
+- **`beauty_messages`:** CHECK `ck_beauty_messages_kind` → `text|command|unsupported|callback|contact|location`. **Нових колонок немає.**
+- **`beauty_locations`:** `latitude numeric(9,6) NULL`, `longitude numeric(9,6) NULL`; CHECK `(latitude IS NULL) = (longitude IS NULL)`, `latitude BETWEEN -90 AND 90`, `longitude BETWEEN -180 AND 180`.
+- **RLS** ENABLE+FORCE `tenant_isolation` (USING + WITH CHECK) на `beauty_chat_booking_flows`; `DO`-блок перевіряє FORCE на ній і на `beauty_chat_keyboards`, `beauty_messages`, `beauty_locations`, `beauty_chat_booking_proposals`.
+- **GRANT** (runbook): API-роль SELECT/INSERT/UPDATE/DELETE на `beauty_chat_booking_flows`. Воркеру нових прав не треба (потоків не читає). `worker/src/testing/schema.sql` синхронізувати.
+- **Down:** клавіатури `flow_*` → `revoked` і потім видаляються або `kind` переписується на `slot_pick` — рішення `database-engineer`, CHECK має повернутися до попереднього набору. `kind=location` → `unsupported`; колонки й таблиця видаляються. Координати закладів втрачаються: на staging/prod — human gate і експорт (runbook).
+
+### 28.11 API і DTO (адитивно; `/api/beauty`, помилка `{code, message}`)
+- **Заклад (staff):**
+  - `POST /locations` і `PUT /locations/{id}` (owner/admin, як зараз): `LocationRequest` + `latitude?: number|null`, `longitude?: number|null`;
+  - семантика PUT: обидва поля відсутні в JSON → координати не змінюються (сумісність зі старими клієнтами); обидва `null` → очистити; обидва числа → задати. Задано лише одне, нечислове значення, NaN/Infinity, поза діапазоном → `422 invalid_coordinates`, зміни немає. Значення округлюються до 6 знаків;
+  - `LocationDto` (усі staff-ролі, `GET /locations`, відповіді PUT/POST) + `latitude: number|null`, `longitude: number|null`;
+  - публічні `PublicLocationDto` і `GET /api/public/{slug}/locations` **не змінюються**; `list_locations` (tool) координат не віддає.
+- **Канал:** `PUT /channels/{id}` — `settingsJson.assistant.bookingFlow` (bool або відсутнє, інакше `422 invalid_settings`).
+- **Inbox** (§22.6.5 / §23.10): `messages[].kind` може бути `location`, `body="[локація]"`, координат немає; `lastMessagePreview` = `body`. `messages[].buttons` для збережених `flow_*` — підписи зі збереженої розкладки (без відстаней).
+- **Frontend (TASK-842):**
+  - форма закладу: «Широта», «Довгота» (необов'язкові, пара, десятковий дріб з крапкою або комою → число, підказка «скопіюйте з Google Maps: правий клік → координати»), помилка `invalid_coordinates`;
+  - inbox: чип «Клієнт поділився локацією»;
+  - налаштування каналу: перемикач «Запис кнопками» (видимий за `assistant.enabled` і `buttons≠false`).
+
+### 28.12 Шаблони (`ChatTemplates`, українською; копірайтер править без зміни контракту; T-flow-geo-offer — після юридичного gate)
+- **T-flow-last-location** (початок кроку закладу, після спеціаліста): «{Обрано-рядки, якщо були}» / «Записати вас у «{заклад}», {адреса}, як минулого разу?»
+- **T-flow-location-near:** «Найближчі до вас заклади — кнопками нижче.» (у `body` без переліку, §28.9).
+- **T-flow-service:** «Оберіть послугу:» (перший крок потоку)
+- **T-flow-specialist:** «Оберіть спеціаліста для «{послуга}»:»
+- **T-flow-location** (після спеціаліста; лише заклади, де {спеціаліст} виконує «{послуга}»): «Оберіть заклад, де {спеціаліст} виконує «{послуга}»:» + рядки «{назва} — {адреса}» для показаних опцій (без гео).
+- **T-flow-time:** «Вільний час, {спеціаліст}, {заклад}:»
+- **T-flow-day:** «Оберіть день:»
+- **Рядки:** «Обрано: заклад «{назва}», {адреса}» / «Обрано: спеціаліст {ім'я}»; «Цей варіант уже недоступний.»; «У цьому закладі цієї послуги немає.»; «Цей спеціаліст не працює в цьому закладі.»; «Сортування за відстанню скинуто.»; «Продовжимо: …» (повтор кроку).
+- **T-flow-no-services:** «Зараз немає послуг для онлайн-запису. Можу передати ваше питання адміністратору.» + [👤 Адміністратор].
+- **T-flow-no-slots:** «У {спеціаліст} немає вільного часу найближчими днями.»
+- **T-flow-no-days:** «Найближчим часом вільних днів немає.»
+- **T-flow-expired:** «Запис перервано через тривалу паузу. Почнемо знову?» + [📅 Почати знову] (`i:book`).
+- **T-flow-cancelled:** «Добре, запис не створюю. Записатися — /book.»
+- **T-flow-geo-offer:** «Можете поділитися локацією, щоб я показав найближчі заклади. Локацію використаю лише зараз для сортування й не зберігаю.» Клавіатура [📍 Поділитись локацією] / [Обрати зі списку].
+- **T-flow-geo-declined:** «Добре, оберіть заклад зі списку вище.»
+- **T-location-retry:** «Не вдалося використати локацію — оберіть заклад зі списку.»
+- **T-location-unused:** «Дякую! Щоб записатися — /book.»
+- Варіанта «без кнопок» немає: без кнопок потоку немає (§28.1).
+
+### 28.13 Коди
+| Код | Де | Наслідок |
+|---|---|---|
+| `flow_not_active`, `stale_step` | callback/текст `f*` (8a, 8b, CAS) | T-action-stale |
+| `flow_expired` | 8a/8c, expired-клавіатура `flow_*` | T-flow-expired |
+| `option_unavailable` | 8d, `ft` (`slot_not_offered|invalid_start`) | рядок + свіжий крок |
+| `handoff_blocked`, `rate_limited`, `used`, `revoked`, `invalid_option`, … | §23.5 без змін | §23.5 |
+| `proposal_not_active` | `by|bn|bo` на пропозиції потоку не в `confirm` | T-action-stale |
+| `tool_not_allowed_in_client_scope` | `prepare_booking` за `FlowAvailable`; `start_booking_flow` без нього | результат tool |
+| `flow_started`, `flow_unavailable` (`reason: no_services`) | результат `start_booking_flow` | — |
+| `422 invalid_coordinates` | `POST/PUT /locations` | — |
+| `422 invalid_settings` | `PUT /channels/{id}` (`bookingFlow`) | — |
+| `geo_sorted`, `geo_missing`, `geo_unused`, `geo_declined` | лише лог `chat_flow … result=` | — |
+
+### 28.14 Логи, метрики, безпека
+- **Лог:** `chat_flow conversation={id} flow={id} from={step} to={step} via={button|text|llm|command|location|system} result={code} skipped={steps}`. Заборонено: токени, `callback_data`, chat id, імена, назви, підписи, тексти, координати, відстані, порядок закладів.
+- **Метрики** (з логів і `chat_llm_usage`): потоки started/completed/expired/cancelled/superseded; відтік за кроками; частка «Так, у …» на `last_location`; запити LLM на завершений запис (ціль 0 без вільного тексту); базова лінія до вмикання (TASK-843).
+- **Безпека:**
+  - дані дії — лише з `options`, рядка потоку й БД під RLS; з `callback_data` беруться лише verb, токен, index;
+  - «Так, у …» — лише з записів `conversation.client_id` власного чату;
+  - блок СТАН ЗАПИСУ і підписи санітизуються; префіл LLM перевіряється, а підсумок недосяжний без `ft` клієнта;
+  - координати клієнта — лише в пам'яті (TTL, видалення при читанні), не в БД, WAL, бекапах, логах, API, журналі ШІ й LLM;
+  - Sweeper (`ConversationWorker.SweepTenantAsync`): потоки `active` з `expires_at ≤ now` → `expired` (+ клавіатури, прибирання розмітки); видалення завершених старших за `FinishedRetentionDays` (пакети по 500).
+
+### 28.15 Тестові сценарії (TASK-843; fake Telegram, mock ШІ з лічильником, реальна БД)
+1. **Повний потік** `/book → service → specialist → last_location «Так» → time → ft → by` → запис `confirmed`, `source=telegram`; 0 викликів mock-LLM, 0 `chat_llm_usage`; потік `completed`. Перше повідомлення потоку — `flow_service`.
+2. **`last_location`:** постійний клієнт → «Так, у …» після вибору спеціаліста, у кожному новому потоці; новий клієнт / лише скасовані записи / заклад деактивовано / останній заклад не входить у заклади пари «послуга + майстер» → одразу `location`; найпізніший нескасований (зокрема майбутній) запис визначає заклад; «Інший заклад» → список; «Назад» з `location` → `last_location`, з `last_location` → `specialist`; `OfferLastLocation=false`.
+3. **Автопропуск:** єдиний спеціаліст для послуги → «Обрано: спеціаліст …»; єдиний заклад пари → «Обрано: заклад …» без «Так, у …»; обидва разом; канал з `location_id`; одна послуга → крок `service` усе одно показано; «Назад» перескакує пропущені.
+4. **Фільтри:** послуги tenant-wide (лише з придатним майстром і ціною; за префілу майстра — лише його); спеціалісти лише з призначенням на послугу; заклади лише ті, де обраний майстер виконує обрану послугу (майстер у двох закладах, послуга лише в одному → автопропуск); `other_specialist` → інший набір закладів.
+5. **Пагінація:** 7 послуг → дві сторінки, «↩ На початок»; вставка запису іншого клієнта між сторінками `time` → без дублів і пропусків; повтор того самого натискання → `used`/`stale_step`, без ефекту.
+6. **Інший час/день/спеціаліст:** `bo` → слоти після `starts_at`; немає слотів → T-flow-no-slots (без «Інший спеціаліст», якщо майстер один); `fd` → слоти дня; `MaxScanDays`.
+7. **Підтвердження:** `slot_unavailable` на `by` → T-slot-taken + свіжий `time`; `price_changed` → новий підсумок кодом; TTL пропозиції → T-expired + `time`; `bn` → `cancelled`.
+8. **Інваріант і префіл:** `start_booking_flow` з повним префілом → крок `time`, пропозиції немає; лише `serviceId` → крок `specialist`; майстер, що не виконує послугу, / заклад без пари → тихо відкинуто; `prepare_booking` за потоку → `tool_not_allowed_in_client_scope`; `slot_pick` не створюється.
+9. **Старі кнопки й гонки:** натискання попереднього кроку → T-action-stale; два натискання поточного (один пакет, два інстанси) → один перехід; текст + кнопка однієї опції.
+10. **Підробка:** чужий токен/розмова/tenant, index поза `options`, `fn` з `nav` не для кроку, `fl` на закладі, деактивованому після показу → `option_unavailable`.
+11. **Текстовий вибір:** точний підпис → як натискання (`via=text`); «так»/«інший» на `last_location`; неоднозначний/відсутній збіг → хід LLM.
+12. **Вільний текст у потоці:** СТАН ЗАПИСУ без id і координат; повтор кроку окремим повідомленням; текст на T-summary → пропозиція `superseded`, крок `time`.
+13. **Гео:** сортування з відстанями inline; збережені `actions`/`body`/`options` — у порядку назви, без відстаней; заклади без координат у кінці; відмова; переслана локація → `unsupported`; поза кроком → T-location-unused; рестарт між ingest і ходом → T-location-retry; > 8 закладів → гео не пропонується; «Усі заклади» скидає сортування.
+14. **Координати ніде:** після сценарію 13 пошук у `beauty_messages`, потоках, клавіатурах, `beauty_ai_actions`, логах (сканер) — немає ні координат, ні відстаней.
+15. **Таймаут:** 31 хв без дій → натискання → T-flow-expired; sweeper → `expired`, розмітку прибрано, повідомлення клієнту немає.
+16. **Handoff і режими:** вхід у handoff скасовує потік (`handoff`) і відкликає `flow_*`; `f*` у handoff → T-action-handoff, `held`; `suggest` → потоку немає, `/book` як §23.
+17. **Вимикачі:** `ChatFlow:Enabled=false`, `bookingFlow=false`, канал без кнопок (Instagram) → шлях §21/§23 без змін (регрес TASK-753).
+18. **Ліміти:** `f*` у межах `MaxCallbacksPerConversationPerMinute`; кроки не обмежуються лімітом шаблонів; повтор `/book` за 30 с — без відповіді.
+19. **API:** `PUT /locations` з парою, з одним полем, поза діапазоном, без полів (координати збережено), `null` (очищено); specialist → `403`; чужий заклад → `404`; публічний DTO без координат; `bookingFlow: "yes"` → `422 invalid_settings`.
+20. **Схема/RLS:** FORCE, крос-tenant для `beauty_chat_booking_flows`, partial UNIQUE (два активні потоки неможливі), CHECK-и кроків і `flow_*`, retention з SET NULL, schema-drift зелений.
+
+### 28.16 Поетапність і споживачі
+- **V1** (за `ChatFlow:Enabled`): §28.1–§28.14. **Пізніше:** «Будь-який спеціаліст» (Q3), ціна на кнопці майстра (Q2, після ADR-017), потік у `suggest` (Q1), «Продовжити» після таймауту (Q5), потік в Instagram.
+- Споживачі: TASK-836 (§28.10), TASK-837 (§28.5 regex, §28.9 парсер і пам'ять), TASK-838 (§28.3, §28.4, §28.8), TASK-839 (§28.11 API), TASK-840 (§28.6, §28.7, §28.9 обробка, §28.12), TASK-841 (повторна відправка `requestLocation`, нові `kind`), TASK-842 (§28.11 frontend), TASK-843 (§28.15), TASK-844 (§28.14, §28.9), TASK-845 (runbook §28.2, GRANT, відкат).
