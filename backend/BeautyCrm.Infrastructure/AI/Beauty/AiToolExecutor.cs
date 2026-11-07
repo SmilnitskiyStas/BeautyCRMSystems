@@ -85,9 +85,25 @@ public static class AiToolCatalog
             "\"reason\":{\"type\":\"string\",\"enum\":[\"complaint\",\"unclear\",\"human_requested\",\"medical\",\"policy_unknown\",\"other\"]}", "\"reason\""),
     };
 
-    public static IReadOnlyList<AiToolDefinition> For(AiScope scope) => scope switch
+    /// <summary>TASK-840 (§28.7): запуск запису кнопками. Схема без tenant/conversation/client; усі поля необов'язкові, id перевіряє код.</summary>
+    public static readonly AiToolDefinition StartBookingFlow = T(ClientChatToolNames.StartBookingFlow,
+        "Запустити запис кнопками: КНОПКИ й кроки (послуга, майстер, заклад, час, підтвердження) показує система, запису НЕ створює. " +
+        "Виклич, коли клієнт хоче записатися. Передай лише те, що клієнт назвав і що є в даних закладу (id з каталогу або tools); невідоме не вгадуй. " +
+        "date - локальна дата закладу, preferredTime - бажаний час із кроком 15 хв.",
+        $"\"locationId\":{{{Uuid}}},\"serviceId\":{{{Uuid}}},\"specialistId\":{{{Uuid}}},\"date\":{{{Str},\"description\":\"YYYY-MM-DD, локальна дата закладу\"}}," +
+        $"\"preferredTime\":{{{Str},\"description\":\"HH:mm, бажаний час (хвилини кратні 15)\"}}", "");
+
+    /// <summary>
+    /// Набір ClientChat за доступності потоку (§28.7): <c>prepare_booking</c> зникає (окрім <paramref name="llmPrepare"/>), з'являється
+    /// <c>start_booking_flow</c>. Без потоку - набір §21.7 без змін.
+    /// </summary>
+    public static IReadOnlyList<AiToolDefinition> ClientChatFor(bool flowAvailable, bool llmPrepare = false) =>
+        !flowAvailable ? ClientChat
+            : ClientChat.Where(t => llmPrepare || t.Name != ClientChatToolNames.PrepareBooking).Append(StartBookingFlow).ToList();
+
+    public static IReadOnlyList<AiToolDefinition> For(AiScope scope, bool flowAvailable = false, bool llmPrepare = false) => scope switch
     {
-        AiScope.ClientChat => ClientChat,
+        AiScope.ClientChat => ClientChatFor(flowAvailable, llmPrepare),
         AiScope.Manager => All,
         _ => All.Where(t => !AiToolNames.ManagerOnly.Contains(t.Name)).ToList(),
     };

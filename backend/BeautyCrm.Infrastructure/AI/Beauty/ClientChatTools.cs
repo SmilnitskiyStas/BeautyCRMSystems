@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using BeautyCrm.Application.Features.BeautyChatFlow;
 
 namespace BeautyCrm.Infrastructure.AI.Beauty;
 
@@ -17,7 +18,20 @@ public sealed class ChatTurnState
     public int ToolErrors { get; set; }
     /// <summary>Остання відповідь find_slots цього ходу з вільними слотами (те, що побачила модель). Для коду-fallback при вичерпанні ітерацій (TASK-735).</summary>
     public ChatOfferedSlots? LastSlots { get; set; }
+
+    /// <summary>TASK-840 (§28.7): потік запису доступний у цьому ході (задає конвеєр); null - tools потоку недоступні, діє набір §21.7.</summary>
+    public ChatFlowTurnInfo? Flow { get; init; }
+
+    /// <summary>Результат start_booking_flow цього ходу (повторний виклик у ході віддає той самий результат); збереження потоку робить конвеєр у транзакції відповіді.</summary>
+    public ChatFlowStart? FlowStart { get; set; }
 }
+
+/// <param name="Context">Розмова/клієнт/заклад каналу для кроків потоку (з довіреного контексту ходу, не від моделі).</param>
+/// <param name="LlmPrepare">ChatFlow:LlmPrepareWhenFlow: аварійно повертає prepare_booking моделі за потоку.</param>
+public sealed record ChatFlowTurnInfo(FlowContext Context, bool LlmPrepare);
+
+/// <summary>Потік, обчислений start_booking_flow (ще НЕ збережений) і те, що побачила модель.</summary>
+public sealed record ChatFlowStart(FlowResult Result, string ResultJson);
 
 /// <param name="Date">Локальна дата закладу, яку шукали.</param>
 /// <param name="Labels">Локальні години HH:mm слотів, показаних моделі (за зростанням, унікальні).</param>
@@ -38,8 +52,10 @@ public sealed record ChatOfferedSlot(Guid SpecialistId, DateTimeOffset StartsAt)
 /// <param name="ToolErrors">Кількість відхилених/помилкових tool-викликів за хід (конвеєр: >= 3 = handoff).</param>
 /// <param name="DraftOnly">suggest: відповідь не надсилається клієнту, лише чернетка.</param>
 /// <param name="LastSlots">TASK-753: останній успішний find_slots цього ходу зі слотами (null - не було або слотів 0); джерело кнопок `slot_pick`.</param>
+/// <param name="FlowStart">TASK-840: потік, який стартувала модель (start_booking_flow); null - не стартувала.</param>
 public sealed record ChatTurnOutcome(
-    ChatPreparedBooking? Prepared, string? ModelHandoffReason, int ToolErrors, bool DraftOnly, ChatOfferedSlots? LastSlots = null);
+    ChatPreparedBooking? Prepared, string? ModelHandoffReason, int ToolErrors, bool DraftOnly, ChatOfferedSlots? LastSlots = null,
+    ChatFlowStart? FlowStart = null);
 
 public static class ClientChatToolNames
 {
@@ -49,12 +65,14 @@ public static class ClientChatToolNames
     public const string FindSlots = "find_slots";
     public const string PrepareBooking = "prepare_booking";
     public const string RequestHandoff = "request_handoff";
+    /// <summary>TASK-840 (§28.7): лише за FlowAvailable; без нього - tool_not_allowed_in_client_scope.</summary>
+    public const string StartBookingFlow = "start_booking_flow";
     // get_active_promotions спільний з іншими scope: AiToolNames.GetActivePromotions
 
     /// <summary>Єдиний список дозволених у ClientChat. Усе інше (відоме чи ні) недоступне, навіть за явного виклику моделі.</summary>
     public static readonly string[] Allowed =
     [
-        ListLocations, ListServices, ListSpecialists, FindSlots, AiToolNames.GetActivePromotions, PrepareBooking, RequestHandoff,
+        ListLocations, ListServices, ListSpecialists, FindSlots, AiToolNames.GetActivePromotions, PrepareBooking, RequestHandoff, StartBookingFlow,
     ];
 
     /// <summary>Tools інших scope і ім'я, яке модель могла б «вгадати» (confirm_booking не tool моделі): відповідь tool_not_allowed_in_client_scope.</summary>
@@ -76,7 +94,8 @@ public static class ClientChatToolNames
 /// Підсумок для клієнта формує код (<see cref="ChatSummaryText"/>); токен підтвердження до цього шару не доходить.
 /// </summary>
 public sealed partial class ClientChatToolbox(
-    IClientChatPort port, IGetActivePromotionsPort promos, IAiActionJournal journal, TimeProvider time, ChatPromptOptions options)
+    IClientChatPort port, IGetActivePromotionsPort promos, IAiActionJournal journal, TimeProvider time, ChatPromptOptions options,
+    ChatBookingFlowService? flows = null)
 {
     private const int MaxServices = 100;
     private const int MaxSlots = 20;
@@ -93,6 +112,11 @@ public sealed partial class ClientChatToolbox(
             return await RejectAsync(ctx, tool, ClientChatToolNames.KnownForbidden.Contains(tool) ? "tool_not_allowed_in_client_scope" : "unknown_tool", ct);
         if (input.ValueKind is not JsonValueKind.Object and not JsonValueKind.Undefined and not JsonValueKind.Null)
             return await RejectAsync(ctx, tool, "invalid_arguments", ct);
+        // §28.7: за потоку prepare_booking недоступний моделі (окрім ChatFlow:LlmPrepareWhenFlow); start_booking_flow - лише за потоку.
+        var flow = ctx.Turn.Flow;
+        if ((tool == ClientChatToolNames.StartBookingFlow && (flow is null || flows is null))
+            || (tool == ClientChatToolNames.PrepareBooking && flow is { LlmPrepare: false }))
+            return await RejectAsync(ctx, tool, "tool_not_allowed_in_client_scope", ct);
 
         return tool switch
         {
@@ -102,6 +126,7 @@ public sealed partial class ClientChatToolbox(
             ClientChatToolNames.FindSlots => await FindSlotsAsync(ctx, input, ct),
             AiToolNames.GetActivePromotions => await PromotionsAsync(ctx, ct),
             ClientChatToolNames.PrepareBooking => await PrepareAsync(ctx, input, ct),
+            ClientChatToolNames.StartBookingFlow => await StartFlowAsync(ctx, input, ct),
             _ => await HandoffAsync(ctx, input, ct),
         };
     }
@@ -262,6 +287,49 @@ public sealed partial class ClientChatToolbox(
             },
             note = "Запис ще НЕ створено. Підсумок покаже система; попроси клієнта відповісти «Так».",
         }), false, AiActionStatus.Done);
+    }
+
+    // ---- запис кнопками (TASK-840, §28.7) ----
+
+    /// <summary>
+    /// Стартує потік запису кнопками. Усе, що передала модель, перевіряє КОД під RLS (<see cref="ChatBookingFlowService.StartAsync"/>), невалідне тихо
+    /// відкидається; префіл не заходить далі кроку <c>time</c>, підсумок недосяжний без вибору слота клієнтом. Потік лише ОБЧИСЛЮЄТЬСЯ тут;
+    /// збереження, повідомлення кроку й клавіатуру робить конвеєр в одній транзакції з відповіддю. Моделі повертається статус без id і токенів.
+    /// </summary>
+    private async Task<AiToolResult> StartFlowAsync(AiToolContext ctx, JsonElement i, CancellationToken ct)
+    {
+        const string tool = ClientChatToolNames.StartBookingFlow;
+        var turn = ctx.Turn!;
+        if (turn.FlowStart is { } done) return new AiToolResult(done.ResultJson, false, AiActionStatus.Done); // повтор у ході - той самий результат
+        var prefill = ParsePrefill(i);
+        var result = await flows!.StartAsync(turn.Flow!.Context, FlowOrigins.Llm, prefill, ct);
+        var next = result.Next!;
+        var json = next.Status == FlowStatuses.Active
+            ? Json(new { status = "flow_started", step = next.Step })
+            : Json(new { status = "flow_unavailable", reason = "no_services" });
+        turn.FlowStart = new ChatFlowStart(result, json);
+
+        var prefilled = new List<string>();
+        if (prefill.LocationId is not null && next.LocationId == prefill.LocationId) prefilled.Add("location");
+        if (prefill.ServiceId is not null && next.ServiceId == prefill.ServiceId) prefilled.Add("service");
+        if (prefill.SpecialistId is not null && next.SpecialistId == prefill.SpecialistId) prefilled.Add("specialist");
+        if (prefill.Day is not null && next.Day == prefill.Day) prefilled.Add("date");
+        if (prefill.PreferredTime is not null && next.Day is not null && next.PreferredTime == prefill.PreferredTime) prefilled.Add("time");
+        await LogAsync(ctx, tool, $"flow:{next.Id}", AiActionStatus.Done, JsonSerializer.Serialize(new { step = next.Step, prefilled }), ct);
+        return new AiToolResult(json, false, AiActionStatus.Done);
+    }
+
+    /// <summary>Синтаксичний розбір префілу: нечинне значення (не GUID, не дата, час поза сіткою 15 хв) - просто відсутнє. Зайві поля ігноруються.</summary>
+    public static FlowPrefill ParsePrefill(JsonElement i)
+    {
+        if (i.ValueKind != JsonValueKind.Object) return new FlowPrefill();
+        Guid? Id(string name) => i.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String && Guid.TryParse(p.GetString(), out var g) ? g : null;
+        DateOnly? day = i.TryGetProperty("date", out var d) && d.ValueKind == JsonValueKind.String
+            && DateOnly.TryParseExact(d.GetString(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedDay) ? parsedDay : null;
+        TimeOnly? time = i.TryGetProperty("preferredTime", out var t) && t.ValueKind == JsonValueKind.String
+            && TimeOnly.TryParseExact(t.GetString(), ["HH:mm", "H:mm"], CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedTime)
+            && parsedTime.Minute % 15 == 0 ? parsedTime : null;
+        return new FlowPrefill(Id("serviceId"), Id("specialistId"), Id("locationId"), day, time);
     }
 
     private async Task<AiToolResult> HandoffAsync(AiToolContext ctx, JsonElement i, CancellationToken ct)

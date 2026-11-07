@@ -14,10 +14,12 @@ namespace BeautyCrm.Infrastructure.AI.Beauty;
 /// Лише код конвеєра (TASK-735): попередня спроба цього ходу не дала тексту для клієнта; модель отримує службову підказку відповісти
 /// коротким текстом. Не береться з тексту клієнта.
 /// </param>
+/// <param name="Flow">TASK-840 (§28.7): запис кнопками доступний (задає лише конвеєр): набір tools із start_booking_flow, без prepare_booking.</param>
+/// <param name="FlowStateBlock">Готовий блок «СТАН ЗАПИСУ» (формує код з БД, лише назви); додається до службового блоку ходу.</param>
 public sealed record AssistantRequest(
     Guid TenantId, Guid? ClientId, string ClientMessage, AiMode? Mode = null, AiScope Scope = AiScope.Client,
     Guid? ConversationId = null, IReadOnlyList<ChatHistoryItem>? History = null, Guid? DefaultLocationId = null,
-    bool RetryEmptyReply = false);
+    bool RetryEmptyReply = false, ChatFlowTurnInfo? Flow = null, string? FlowStateBlock = null);
 
 /// <param name="Chat">Підсумок ходу ClientChat (підсумок запису від коду, handoff моделі, помилки tools, чернетка); null в інших scope.</param>
 /// <param name="LlmCalls">Скільки запитів до провайдера зроблено за хід (облік ліміту розмови, M2).</param>
@@ -88,19 +90,22 @@ public sealed class BeautyAssistant
             await LogAsync(req, "injection_suspected", target, AiActionStatus.Flagged, mode, "{}", ct);
 
         // Tenant, розмова й клієнт - лише з запиту (контекст ходу). Стан ходу ClientChat збирається виконавцем tools.
-        var turn = chat ? new ChatTurnState() : null;
+        var flow = chat ? req.Flow : null;
+        var turn = chat ? new ChatTurnState { Flow = flow } : null;
         var ctx = new AiToolContext(req.TenantId, req.ClientId, mode, req.Scope, req.ConversationId, req.DefaultLocationId, turn);
 
         var messages = ChatHistory.Build(req.History, _chatOptions);
         ChatHistory.AddUser(messages, PromptInjectionGuard.Wrap(clientText));
-        var defs = AiToolCatalog.For(req.Scope);
+        var defs = AiToolCatalog.For(req.Scope, flow is not null, flow?.LlmPrepare ?? false);
         // Службовий блок ходу (дата/час закладу, каталог): формує код з довіреного порту, поза <client_message>.
         string? turnContext = null;
         if (chat && _chatContext is not null)
             turnContext = await _chatContext.BuildAsync(req.TenantId, req.DefaultLocationId, ct, req.ClientId, req.ConversationId);
+        if (chat && flow is not null && !string.IsNullOrWhiteSpace(req.FlowStateBlock)) // §28.7: СТАН ЗАПИСУ - дані коду, не інструкції
+            turnContext = turnContext is null ? req.FlowStateBlock : $"{turnContext}\n{req.FlowStateBlock}";
         if (chat && req.RetryEmptyReply)
             turnContext = turnContext is null ? RetryHint : $"{turnContext}\n{RetryHint}";
-        var system = PromptComposer.Compose(mode, tenantSettings?.PromptAddendum, req.Scope, turnContext);
+        var system = PromptComposer.Compose(mode, tenantSettings?.PromptAddendum, req.Scope, turnContext, flow is not null);
         string? lastText = null;
         var finished = false; // модель закінчила текстом (без нових tool-викликів) або хід завершено handoff
         var calls = 0;
@@ -128,6 +133,8 @@ public sealed class BeautyAssistant
 
                 // request_handoff завершує хід: далі клієнту піде шаблон передачі, а не текст моделі.
                 if (turn?.HandoffReason is not null) { finished = true; break; }
+                // start_booking_flow теж завершує хід (економія запиту LLM): повідомлення кроку й кнопки формує код, а не модель (§28.7).
+                if (turn?.FlowStart is not null) { finished = true; break; }
             }
         }
         catch (Exception ex) when (ex is AiUnavailableException or AiProviderException)
@@ -158,7 +165,7 @@ public sealed class BeautyAssistant
     }
 
     private static ChatTurnOutcome? Outcome(ChatTurnState? turn, AiMode mode) =>
-        turn is null ? null : new ChatTurnOutcome(turn.Prepared, turn.HandoffReason, turn.ToolErrors, mode == AiMode.Suggest, turn.LastSlots);
+        turn is null ? null : new ChatTurnOutcome(turn.Prepared, turn.HandoffReason, turn.ToolErrors, mode == AiMode.Suggest, turn.LastSlots, turn.FlowStart);
 
     private Task LogAsync(AssistantRequest req, string action, string target, string status, AiMode mode, string payload, CancellationToken ct) =>
         _journal.AppendAsync(new AiActionRecord(Guid.NewGuid(), req.TenantId, action, target, _time.GetUtcNow(), status, false, mode, payload,

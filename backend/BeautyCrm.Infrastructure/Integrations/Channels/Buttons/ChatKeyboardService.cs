@@ -293,7 +293,7 @@ public sealed class ChatKeyboardService(
         }
 
         // вимкнені кнопки (або потік ChatFlow:Enabled=false для flow_*): стара клавіатура -> Stale + прибирання
-        if (!buttonsOn || (isFlowKb && !FlowOn)) return Done(CallbackOutcome.Disabled, addr, info, option, pos);
+        if (!buttonsOn || (isFlowKb && (!FlowOn || !ChannelFlowAllowed(conv.ChannelSettings)))) return Done(CallbackOutcome.Disabled, addr, info, option, pos);
 
         // §28.6 8a-8c (лише flow_*): потік активний, версія й крок збігаються, термін не вийшов
         if (isFlowKb && !replay)
@@ -342,6 +342,23 @@ public sealed class ChatKeyboardService(
             using var doc = System.Text.Json.JsonDocument.Parse(settings);
             return !(doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object && doc.RootElement.TryGetProperty("assistant", out var a)
                      && a.ValueKind == System.Text.Json.JsonValueKind.Object && a.TryGetProperty("buttons", out var b)
+                     && b.ValueKind == System.Text.Json.JsonValueKind.False);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>TASK-840 (§28.1): запис кнопками не вимкнено на каналі (<c>settings.assistant.bookingFlow=false</c>); відсутнє/зіпсоване - дозволено.</summary>
+    internal static bool ChannelFlowAllowed(string? settings)
+    {
+        if (string.IsNullOrWhiteSpace(settings)) return true;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(settings);
+            return !(doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object && doc.RootElement.TryGetProperty("assistant", out var a)
+                     && a.ValueKind == System.Text.Json.JsonValueKind.Object && a.TryGetProperty("bookingFlow", out var b)
                      && b.ValueKind == System.Text.Json.JsonValueKind.False);
         }
         catch (System.Text.Json.JsonException)
