@@ -60,7 +60,7 @@ public sealed class ConversationSignals(TimeProvider? clock = null)
     public void StoreLocation(Guid conversationId, Guid inboundMessageId, double latitude, double longitude, TimeSpan ttl)
     {
         var now = _clock.GetUtcNow();
-        if (_locations.Count >= MaxTransient) PruneLocations(now);
+        PruneLocations(now); // L1: протерміновані координати чистяться на кожному Store/Take, не лише при заповненні
         if (_locations.Count >= MaxTransient) return; // межа пам'яті: координат бракуватиме -> T-location-retry
         _locations[(conversationId, inboundMessageId)] = (latitude, longitude, now + ttl);
     }
@@ -68,8 +68,10 @@ public sealed class ConversationSignals(TimeProvider? clock = null)
     /// <summary>Забирає й видаляє координати; null - немає (не було, TTL минув, уже прочитані, інший процес).</summary>
     public TransientPoint? TakeLocation(Guid conversationId, Guid inboundMessageId)
     {
+        var now = _clock.GetUtcNow();
+        PruneLocations(now);
         if (!_locations.TryRemove((conversationId, inboundMessageId), out var v)) return null;
-        return v.Expires > _clock.GetUtcNow() ? new TransientPoint(v.Lat, v.Lon) : null;
+        return v.Expires > now ? new TransientPoint(v.Lat, v.Lon) : null;
     }
 
     /// <summary>Лише для тестів і діагностики: скільки записів у пам'яті (без значень).</summary>

@@ -71,6 +71,14 @@ public sealed partial class ConversationTurnProcessor
             await SetStatusAsync(t.Batch, Processed, ct);
             return true;
         }
+        // M1 (§28.6): геолокація рахується в ліміті натискань; понад ліміт - T-rate-limited не частіше разу на хвилину, решта тиша
+        if (!CallbackLimiter.TryAcquire(conv.Id))
+        {
+            Reply? limited = !await RecentTemplateAsync(conv.Id, ChatTemplates.RateLimited, TimeSpan.FromMinutes(1), t.Now, ct)
+                ? new Reply(ChatTemplates.RateLimited, MessageSenderType.System) : null;
+            await CommitManyAsync(t, new CommitSpec(limited is null ? [] : [limited]) { InboundStatus = Skipped }, ct);
+            return true;
+        }
         var flow = await Flows.GetActiveAsync(conv.Id, ct);
         if (flow is null || flow.Step != FlowSteps.Location || t.Now >= flow.ExpiresAt)
         {

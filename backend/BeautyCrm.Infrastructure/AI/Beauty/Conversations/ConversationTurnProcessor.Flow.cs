@@ -54,7 +54,15 @@ public sealed partial class ConversationTurnProcessor
                 if (consume && res is { Keyboard: { } kb, Replay: false } && !await Keyboards.TryConsumeAsync(kb.Id, res.OptionPosition, t.Batch[0].Id, c))
                     throw new FlowCasLostException();
                 if (before is null && r is { IsNew: true })
+                {
                     t.ToClear.AddRange(await Keyboards.RevokeActiveAsync(t.Conv.Id, KeyboardKinds.FlowKinds, c));
+                    // L2: новий потік витісняє попередній; пропозиція попереднього (крок confirm) стає superseded, її booking_confirm відкликається
+                    if (await Flows.GetActiveAsync(t.Conv.Id, c) is { ProposalId: { } oldProposal })
+                    {
+                        await Booking.SupersedeAsync(t.Conv.Id, c);
+                        t.ToClear.AddRange(await Keyboards.RevokeForProposalAsync(t.Conv.Id, oldProposal, c));
+                    }
+                }
                 if (r is not null && !await Flows.PersistAsync(r, before, c)) throw new FlowCasLostException();
             },
         };

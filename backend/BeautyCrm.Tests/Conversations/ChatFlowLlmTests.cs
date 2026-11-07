@@ -383,6 +383,31 @@ public sealed class ChatFlowLlmTests : IClassFixture<PostgresRlsFixture>
         Assert.Empty(await h.AppointmentsAsync(s));
     }
 
+    [SkippableFact]
+    public async Task l2_starting_a_new_flow_supersedes_the_previous_flows_proposal_and_revokes_its_confirm_keyboard()
+    {
+        var h = H(); var s = await h.SeedAsync();
+        await h.SayAsync(s, "/book", kind: InboundKinds.Command);
+        await Press(h, s, Last(h), "Стрижка");
+        var time = Last(h);
+        await h.PressAsync(s, Kb(time).First(b => b.Data.StartsWith("ft:", StringComparison.Ordinal)).Data, Ref(time));
+        Assert.StartsWith("Підсумок запису:", Last(h).Text);
+        Assert.NotEqual("superseded", Assert.Single(await h.ProposalsAsync(s)).Status);
+
+        h.Clock.Advance(TimeSpan.FromSeconds(40)); // повторний /book не раніше ніж через 30 с
+        await h.SayAsync(s, "/book", kind: InboundKinds.Command);
+
+        Assert.Equal("superseded", Assert.Single(await h.ProposalsAsync(s)).Status);
+        var flows = await FlowsAsync(s);
+        Assert.Equal(2, flows.Count);
+        Assert.Equal("superseded", flows[0].Status);
+        Assert.Equal("active", flows[1].Status);
+        await using var ctx = _db.CreateContext(s.TenantId);
+        var confirm = await ctx.ChatKeyboards.AsNoTracking().Where(k => k.Kind == "booking_confirm").ToListAsync();
+        Assert.NotEmpty(confirm);
+        Assert.DoesNotContain(confirm, k => k.Status == "active");
+    }
+
     // ---------------------------------------------------------------- текстовий вибір кроку (4f)
 
     [SkippableFact]

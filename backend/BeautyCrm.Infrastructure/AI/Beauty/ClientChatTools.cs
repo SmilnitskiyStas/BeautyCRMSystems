@@ -31,7 +31,8 @@ public sealed class ChatTurnState
 public sealed record ChatFlowTurnInfo(FlowContext Context, bool LlmPrepare);
 
 /// <summary>Потік, обчислений start_booking_flow (ще НЕ збережений) і те, що побачила модель.</summary>
-public sealed record ChatFlowStart(FlowResult Result, string ResultJson);
+/// <param name="LogPayload">Payload запису журналу: пише конвеєр у транзакції відповіді (після збереження потоку), не tool.</param>
+public sealed record ChatFlowStart(FlowResult Result, string ResultJson, string? LogPayload = null);
 
 /// <param name="Date">Локальна дата закладу, яку шукали.</param>
 /// <param name="Labels">Локальні години HH:mm слотів, показаних моделі (за зростанням, унікальні).</param>
@@ -298,7 +299,6 @@ public sealed partial class ClientChatToolbox(
     /// </summary>
     private async Task<AiToolResult> StartFlowAsync(AiToolContext ctx, JsonElement i, CancellationToken ct)
     {
-        const string tool = ClientChatToolNames.StartBookingFlow;
         var turn = ctx.Turn!;
         if (turn.FlowStart is { } done) return new AiToolResult(done.ResultJson, false, AiActionStatus.Done); // повтор у ході - той самий результат
         var prefill = ParsePrefill(i);
@@ -307,7 +307,6 @@ public sealed partial class ClientChatToolbox(
         var json = next.Status == FlowStatuses.Active
             ? Json(new { status = "flow_started", step = next.Step })
             : Json(new { status = "flow_unavailable", reason = "no_services" });
-        turn.FlowStart = new ChatFlowStart(result, json);
 
         var prefilled = new List<string>();
         if (prefill.LocationId is not null && next.LocationId == prefill.LocationId) prefilled.Add("location");
@@ -315,7 +314,8 @@ public sealed partial class ClientChatToolbox(
         if (prefill.SpecialistId is not null && next.SpecialistId == prefill.SpecialistId) prefilled.Add("specialist");
         if (prefill.Day is not null && next.Day == prefill.Day) prefilled.Add("date");
         if (prefill.PreferredTime is not null && next.Day is not null && next.PreferredTime == prefill.PreferredTime) prefilled.Add("time");
-        await LogAsync(ctx, tool, $"flow:{next.Id}", AiActionStatus.Done, JsonSerializer.Serialize(new { step = next.Step, prefilled }), ct);
+        // L3: журнал пише конвеєр у транзакції відповіді (разом зі збереженням потоку), щоб запис не вказував на неіснуючий потік
+        turn.FlowStart = new ChatFlowStart(result, json, JsonSerializer.Serialize(new { step = next.Step, prefilled }));
         return new AiToolResult(json, false, AiActionStatus.Done);
     }
 

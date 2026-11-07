@@ -18,7 +18,7 @@ public sealed partial class ConversationTurnProcessor
     private sealed record FlowModelContext(ChatFlowTurnInfo Info, string? StateBlock);
 
     /// <summary>Доповнення відповіді моделі: повідомлення кроку (з клавіатурою) і його збереження в транзакції відповіді (<see cref="CommitSpec.PreWork"/>).</summary>
-    private sealed record FlowTail(IReadOnlyList<Reply> Replies, Func<CancellationToken, Task> PreWork);
+    private sealed record FlowTail(IReadOnlyList<Reply> Replies, Func<CancellationToken, Task> PreWork, AiActionRecord? Journal = null);
 
     /// <summary>За FlowAvailable: набір tools потоку для моделі і блок СТАН ЗАПИСУ (якщо є активний потік). Інакше null - хід як у §21.</summary>
     private async Task<FlowModelContext?> FlowModelContextAsync(Turn t, CancellationToken ct)
@@ -80,7 +80,11 @@ public sealed partial class ConversationTurnProcessor
                 ? new Reply(FlowTemplates.NoServices, MessageSenderType.System, Keyboard: KeyboardBuilder.HumanOnly(), KeySuffix: ":f")
                 : FlowReply(r, t.Now, ":f");
             FlowLog(t, r.Next, "llm", cancelled ? "no_services" : "started");
-            return new FlowTail([reply], FlowSpec(t, null, null, r, [reply]).PreWork!);
+            var record = started.LogPayload is { } payload
+                ? new AiActionRecord(Guid.NewGuid(), t.Conv.TenantId, ClientChatToolNames.StartBookingFlow, $"flow:{r.Next.Id}", t.Now,
+                    AiActionStatus.Done, false, t.Mode, payload, t.Conv.Id)
+                : null;
+            return new FlowTail([reply], FlowSpec(t, null, null, r, [reply]).PreWork!, record);
         }
         if (FlowOpts is not { ResendStepAfterLlm: true }) return null;
         var flow = await ActiveFlowAsync(t, ct);

@@ -165,6 +165,33 @@ public sealed class ChatGeoTransportUnitTests
         clock.Advance(TimeSpan.FromSeconds(301));
         Assert.Null(signals.TakeLocation(conv, msg)); // TTL минув
     }
+
+    [Fact]
+    public void l1_expired_coordinates_are_pruned_on_every_store_and_take_not_only_when_full()
+    {
+        var clock = new TestClock();
+        var signals = new ConversationSignals(clock);
+        var conv = Guid.NewGuid();
+        signals.StoreLocation(conv, Guid.NewGuid(), 50.1, 30.1, TimeSpan.FromSeconds(60));
+        signals.StoreLocation(conv, Guid.NewGuid(), 50.2, 30.2, TimeSpan.FromSeconds(60));
+        Assert.Equal(2, signals.TransientLocationCount);
+        clock.Advance(TimeSpan.FromSeconds(61));
+        Assert.Null(signals.TakeLocation(conv, Guid.NewGuid())); // читання чужого ключа теж чистить протерміноване
+        Assert.Equal(0, signals.TransientLocationCount);
+
+        signals.StoreLocation(conv, Guid.NewGuid(), 50.3, 30.3, TimeSpan.FromSeconds(60));
+        clock.Advance(TimeSpan.FromSeconds(61));
+        signals.StoreLocation(conv, Guid.NewGuid(), 50.4, 30.4, TimeSpan.FromSeconds(60));
+        Assert.Equal(1, signals.TransientLocationCount); // Store чистить протерміноване
+    }
+
+    [Fact]
+    public void l6_flow_rules_are_covered_by_the_system_prompt_canary()
+    {
+        var leak = "Ось: Блок «СТАН ЗАПИСУ» — це дані про крок, який клієнт зараз проходить; не змінюй його, не вигадуй у ньому іншого.";
+        Assert.Equal(BeautyCrm.Infrastructure.AI.Beauty.ChatOutputGuard.FlagSystemPrompt,
+            BeautyCrm.Infrastructure.AI.Beauty.ChatOutputGuard.FindLeak(leak, null));
+    }
 }
 
 /// <summary>
@@ -290,6 +317,23 @@ public sealed class ChatGeoTransportTests : IClassFixture<PostgresRlsFixture>
                 if ((long)(await q.ExecuteScalarAsync())! > 0) hits.Add($"{t}:{needle}");
             }
         return hits;
+    }
+
+    // ---------------------------------------------------------------- M1: ліміт геолокації
+
+    [SkippableFact]
+    public async Task m1_location_messages_count_in_the_callback_limit_and_over_limit_gives_one_rate_limited_per_minute()
+    {
+        var cfg = new Dictionary<string, string?>(GeoOn) { ["ChatButtons:MaxCallbacksPerConversationPerMinute"] = "5" };
+        var h = H(cfg); var s = await SeedLocationsAsync(h, FourLocations);
+        await ToLocationStepAsync(h, s);
+
+        for (var i = 0; i < 8; i++) await SendLocationAsync(h, s, ClientLat, ClientLon);
+
+        Assert.Equal(1, h.Bot.Messages.Count(m => m.Text == ChatTemplates.RateLimited));
+        var near = h.Bot.Messages.Count(m => m.Text == FlowTemplates.LocationNear);
+        Assert.InRange(near, 1, 4); // решта понад ліміт - без ReshowAsync і без вихідних
+        Assert.Empty(h.Ai.Calls);
     }
 
     // ---------------------------------------------------------------- пропозиція

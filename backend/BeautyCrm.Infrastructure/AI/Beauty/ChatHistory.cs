@@ -174,7 +174,7 @@ public static partial class ChatOutputGuard
     private static readonly Lazy<string[]> MarkerSkeletons = new(() => Markers.Select(m => Squash(AiTextNormalizer.Skeleton(m))).ToArray());
 
     private static readonly Lazy<HashSet<string>> SystemGrams = new(() => Grams(
-        string.Join('\n', PromptComposer.Core, PromptComposer.ChatRules, PromptComposer.Reminder, PromptInjectionGuard.SystemPrompt,
+        string.Join('\n', PromptComposer.Core, PromptComposer.ChatRules, PromptComposer.FlowRules, PromptComposer.Reminder, PromptInjectionGuard.SystemPrompt,
             PromptComposer.AddendumOpen, PromptComposer.AddendumClose), SystemGramWords).ToHashSet(StringComparer.Ordinal));
 
     private static string Squash(string s) => string.Join(' ', WordRx().Matches(s).Select(m => m.Value));

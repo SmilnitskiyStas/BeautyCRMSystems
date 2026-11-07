@@ -196,8 +196,9 @@ public sealed partial class ConversationTurnProcessor(
         var stale = batch.Where(m => now - m.SentAt > opts.MaxInboundAge).ToList();
         if (stale.Count > 0)
         {
+            DiscardLocations(stale); // L1: ранні виходи не лишають координати в пам'яті
             await SetStatusAsync(stale, Skipped, ct);
-            batch = batch.Except(stale).ToList();
+            batch =batch.Except(stale).ToList();
             if (batch.Count == 0) return false;
         }
 
@@ -216,6 +217,7 @@ public sealed partial class ConversationTurnProcessor(
         var existingKey = isCallback ? CallbackKey(batch[0].Id) : ReplyKey(conv.Id, batch[^1].Id);
         if (await db.Messages.AnyAsync(m => m.IdempotencyKey == existingKey || m.IdempotencyKey == existingKey + ":s" || m.IdempotencyKey == existingKey + ":f", ct))
         {
+            DiscardLocations(batch);
             await SetStatusAsync(batch, Processed, ct);
             return false;
         }
@@ -224,6 +226,7 @@ public sealed partial class ConversationTurnProcessor(
         var channel = conv.Channel!;
         if (!channel.IsActive || channel.Type != ChannelType.Telegram || !ChannelAssistantEnabled(channel.Settings))
         {
+            DiscardLocations(batch);
             await SetStatusAsync(batch, Skipped, ct);
             return false;
         }
@@ -614,7 +617,9 @@ public sealed partial class ConversationTurnProcessor(
             return t.AutoReplies && single is not null && ChatConfirmationText.IsYes(single.Body) && await RepeatYesAsync(t, ct);
         }
 
-        if (t.AutoReplies && single is not null && active.Status == ChatProposalStatus.Shown
+        // L2 (§28.8): пропозиція з потоку підтверджується текстом лише з активного потоку на confirm, що вказує на неї; інакше - як «інше» (втрачає чинність)
+        var flowOk = active.FlowId is null || (await FlowProposalGateAsync(t, active.Id, ct)).Ok;
+        if (flowOk && t.AutoReplies && single is not null && active.Status == ChatProposalStatus.Shown
             && await IsFirstAfterSummaryAsync(conv.Id, active, single, ct))
         {
             if (ChatConfirmationText.IsYes(single.Body))
@@ -964,7 +969,9 @@ public sealed partial class ConversationTurnProcessor(
             if (text is not null) replies.Add(new Reply(text, MessageSenderType.Ai));
             else if (started is null) replies.Add(new Reply(noText ? ChatTemplates.Clarify : ChatTemplates.Fallback, MessageSenderType.System));
             if (tail is not null) replies.AddRange(tail.Replies);
-            await CommitManyAsync(t, new CommitSpec(replies) { Journal = extra, PreWork = tail?.PreWork }, ct);
+            // L3: запис start_booking_flow - у Journal транзакції відповіді, разом зі збереженням потоку
+            IEnumerable<AiActionRecord> journal = tail?.Journal is { } fj ? extra.Append(fj) : extra;
+            await CommitManyAsync(t, new CommitSpec(replies) { Journal = journal, PreWork = tail?.PreWork }, ct);
             return false;
         }
         // Підсумок запису - канонічний текст КОДУ; текст моделі лише вступ (його обрізаємо, підсумок - ніколи; разом ≤ 4096 UTF-16).
