@@ -45,6 +45,16 @@ public sealed record InboundMessage(
     /// <summary>Telegram message_id повідомлення з кнопками (beauty_messages.callback_message_ref).</summary>
     public string? CallbackMessageRef { get; init; }
 
+    /// <summary>beauty_messages.id щойно збереженого повідомлення (заповнює сховище); ключ транзієнтних даних у пам'яті процесу.</summary>
+    public Guid? MessageId { get; init; }
+
+    /// <summary>
+    /// TASK-837 (ADR-020, §28.9): координати kind=location, округлені до 4 знаків. ЛИШЕ в пам'яті процесу: сховище їх не пише, логи й
+    /// ToString не друкують, у <see cref="Text"/> їх немає. Адаптер залишає значення, лише якщо вони валідні й повідомлення не переслане.
+    /// </summary>
+    public double? TransientLatitude { get; init; }
+    public double? TransientLongitude { get; init; }
+
     /// <summary>Callback, який не зберігається (група, бот, inline_message_id, chat.id != from.id, без data): лише ack.</summary>
     public bool AckOnly { get; init; }
 
@@ -71,7 +81,7 @@ public sealed record InboundMessage(
     }
 }
 
-/// <summary>beauty_messages.kind (CHECK: text|command|unsupported|callback|contact). Тип медіа видно з тіла-плейсхолдера: [sticker], [voice], [photo]...</summary>
+/// <summary>beauty_messages.kind (CHECK: text|command|unsupported|callback|contact|location). Тип медіа видно з тіла-плейсхолдера: [sticker], [voice], [photo]...</summary>
 public static class InboundKinds
 {
     public const string Text = "text";
@@ -82,6 +92,9 @@ public static class InboundKinds
     /// <summary>TASK-768 (§25.4): картка контакту (request_contact). Тіло завжди <see cref="ContactBody"/>.</summary>
     public const string Contact = "contact";
     public const string ContactBody = "[контакт]";
+    /// <summary>TASK-837 (§28.9): геолокація клієнта. Тіло завжди <see cref="LocationBody"/>, координат у БД немає.</summary>
+    public const string Location = "location";
+    public const string LocationBody = "[локація]";
     /// <summary>Тіло повідомлення, яке клієнт написав номером (підставляє конвеєр, TASK-770).</summary>
     public const string PhoneTextBody = "[номер телефону]";
 }
@@ -202,7 +215,7 @@ public sealed record ChatActionLayout(IReadOnlyList<IReadOnlyList<ChatActionButt
 public sealed record ChatActionButton(string Label, string Data);
 
 /// <summary>Кнопка reply-клавіатури (§25.4). Натискання = звичайне message (текст кнопки або contact), не callback_query.</summary>
-public sealed record ChatReplyButton(string Label, bool RequestContact = false);
+public sealed record ChatReplyButton(string Label, bool RequestContact = false, bool RequestLocation = false);
 
 /// <summary>
 /// Reply-клавіатура (§25.4): ≤ 2 рядки, ≤ 4 кнопки, підпис ≤ 32 кодові точки, Placeholder ≤ 64. Кнопка request_contact -
@@ -215,6 +228,13 @@ public sealed record ChatReplyKeyboard(
     public const string ShareContactLabel = "📱 Поділитися контактом";
     public const string DeclineLabel = "Не треба";
     public const string DefaultPlaceholder = "+380XXXXXXXXX";
+    /// <summary>TASK-837 (§28.9): підписи гео-клавіатури кроку закладу.</summary>
+    public const string ShareLocationLabel = "📍 Поділитись локацією";
+    public const string DeclineLocationLabel = "Обрати зі списку";
+
+    /// <summary>[📍 Поділитись локацією] / [Обрати зі списку], one_time + resize (§28.9). Окремим повідомленням: Telegram не дозволяє inline і reply разом.</summary>
+    public static ChatReplyKeyboard LocationRequest() => new(
+        [[new ChatReplyButton(ShareLocationLabel, RequestLocation: true)], [new ChatReplyButton(DeclineLocationLabel)]], OneTime: true, Resize: true);
 
     /// <summary>Типова клавіатура питання про телефон: [📱 Поділитися контактом] / [Не треба], one_time + resize (§25.6).</summary>
     public static ChatReplyKeyboard ContactRequest(bool withDecline = true) => new(
@@ -236,6 +256,7 @@ public sealed record ChatReplyKeyboard(
             {
                 total++;
                 if (string.IsNullOrWhiteSpace(b.Label) || Cp(b.Label) > MaxLabel || b.Label.Any(char.IsControl)) return false;
+                if (b.RequestContact && b.RequestLocation) return false;
             }
         }
         if (total is 0 or > MaxButtons) return false;
@@ -247,7 +268,8 @@ public sealed record ChatReplyKeyboard(
     {
         reply = new
         {
-            rows = Rows.Select(r => r.Select(b => b.RequestContact ? (object)new { label = b.Label, requestContact = true } : new { label = b.Label })),
+            rows = Rows.Select(r => r.Select(b => b.RequestContact ? (object)new { label = b.Label, requestContact = true }
+                : b.RequestLocation ? (object)new { label = b.Label, requestLocation = true } : new { label = b.Label })),
             oneTime = OneTime, resize = Resize, placeholder = Placeholder,
         },
     }, new System.Text.Json.JsonSerializerOptions
@@ -281,13 +303,15 @@ public sealed record ChatReplyKeyboard(
                 if (b.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
                 string? label = null;
                 var request = false;
+                var requestLocation = false;
                 foreach (var p in b.EnumerateObject())
                 {
                     if (string.Equals(p.Name, "label", StringComparison.OrdinalIgnoreCase) && p.Value.ValueKind == System.Text.Json.JsonValueKind.String) label = p.Value.GetString();
                     else if (string.Equals(p.Name, "requestContact", StringComparison.OrdinalIgnoreCase)) request = p.Value.ValueKind == System.Text.Json.JsonValueKind.True;
+                    else if (string.Equals(p.Name, "requestLocation", StringComparison.OrdinalIgnoreCase)) requestLocation = p.Value.ValueKind == System.Text.Json.JsonValueKind.True;
                 }
                 if (label is null) return null;
-                row.Add(new ChatReplyButton(label, request));
+                row.Add(new ChatReplyButton(label, request, requestLocation));
             }
             if (row.Count > 0) rows.Add(row);
         }

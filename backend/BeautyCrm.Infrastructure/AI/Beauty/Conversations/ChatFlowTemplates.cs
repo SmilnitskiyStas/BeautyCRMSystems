@@ -18,6 +18,17 @@ public static class FlowTemplates
     public const string OtherTime = "Добре, цей час не бронюю. Ось наступний вільний час:";
     public const string StartAgain = "📅 Почати знову";
 
+    // ---- геолокація (§28.9, §28.12): T-flow-geo-offer діє лише після юридичного gate (ADR-010 §7.3), ввімкнення - ChatFlow:GeoEnabled
+    public const string GeoOffer = "Можете поділитися локацією, щоб я показав найближчі заклади. Локацію використаю лише зараз для сортування й не зберігаю.";
+    public const string GeoDeclined = "Добре, оберіть заклад зі списку вище.";
+    public const string LocationRetry = "Не вдалося використати локацію — оберіть заклад зі списку.";
+    public const string LocationUnused = "Дякую! Щоб записатися — /book.";
+    public const string LocationNear = "Найближчі до вас заклади — кнопками нижче.";
+    /// <summary>Коротке повідомлення, що несе remove_keyboard перед пересортованим списком (Telegram: одна розмітка на повідомлення).</summary>
+    public const string LocationThanks = "Дякую! Локацію використано лише для сортування й не збережено.";
+    public const string GeoReset = "Сортування за відстанню скинуто.";
+    public const string AllLocationsLabel = "Усі заклади ➡";
+
     private static readonly string[] Weekdays = ["нд", "пн", "вт", "ср", "чт", "пт", "сб"];
 
     private static string N(string? s) => ChatKeyboardLayout.SanitizeLabel(s, 80);
@@ -40,6 +51,7 @@ public static class FlowTemplates
         var parts = new List<string>();
         if (v.Notice == FlowNotices.Unavailable) parts.Add(Unavailable);
         else if (v.Notice == FlowNotices.OtherTime) parts.Add(OtherTime);
+        else if (v.Notice == FlowNotices.GeoReset) parts.Add(GeoReset);
         if (v.Chosen.Count > 0) parts.Add(ChosenLines(v.Chosen));
         var n = v.Names;
         string head = v.Step switch
@@ -73,6 +85,21 @@ public static class FlowTemplates
         FlowNav.OtherSpecialist => "👤 Інший спеціаліст",
         _ => "",
     };
+
+    /// <summary>«1,2 км» (0,1 км; менше 0,1 → 0,1), від 100 км - ціле число. Лише для inline-відправки, у БД не потрапляє.</summary>
+    public static string Distance(double km) => km >= 100
+        ? Math.Round(km).ToString("0", CultureInfo.InvariantCulture) + " км"
+        : Math.Round(Math.Max(0.1, km), 1).ToString("0.0", CultureInfo.InvariantCulture).Replace('.', ',') + " км";
+
+    /// <summary>«Центр · 1,2 км» ≤ 32 кодових точки: назва скорочується, відстань лишається.</summary>
+    public static string NearLabel(string name, double? km)
+    {
+        if (km is null) return ChatKeyboardLayout.SanitizeLabel(name);
+        var suffix = " · " + Distance(km.Value);
+        var room = ChatKeyboardLayout.MaxLabel - suffix.EnumerateRunes().Count();
+        var shortName = ChatKeyboardLayout.SanitizeLabel(name, room);
+        return shortName.Length == 0 ? Distance(km.Value) : shortName + suffix;
+    }
 
     /// <summary>«14:30» (сьогодні) або «пт 14:30» у зоні закладу.</summary>
     public static string SlotLabel(DateTimeOffset at, string? timezone, DateTimeOffset now)

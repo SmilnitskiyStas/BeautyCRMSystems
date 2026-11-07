@@ -140,7 +140,8 @@ public sealed class OutboundDispatcher(
 /// <summary>Реалізація IChannelMessageRepository над beauty_conversations / beauty_messages.</summary>
 public sealed class EfChannelMessageRepository(
     BeautyDbContext db, ChannelRequestContext context, ChatPhoneOptions? phone = null,
-    InboundUnsubscribeHandler? unsubscribe = null, BeautyCrm.Infrastructure.AI.Beauty.Conversations.ChatAssistantOptions? assistant = null) : IChannelMessageRepository
+    InboundUnsubscribeHandler? unsubscribe = null, BeautyCrm.Infrastructure.AI.Beauty.Conversations.ChatAssistantOptions? assistant = null,
+    ConversationSignals? signals = null) : IChannelMessageRepository
 {
     private const string UniqueViolation = "23505";
 
@@ -175,9 +176,10 @@ public sealed class EfChannelMessageRepository(
                 && BeautyCrm.Infrastructure.AI.Beauty.Conversations.ConversationTurnProcessor.ChannelAssistantEnabled(
                     await db.Channels.AsNoTracking().Where(c => c.Id == channel.ChannelId).Select(c => c.Settings).FirstOrDefaultAsync(ct));
             await using var tx = db.Database.CurrentTransaction is null ? await db.Database.BeginTransactionAsync(ct) : null;
+            var messageId = Guid.NewGuid();
             db.Messages.Add(new Message
             {
-                Id = Guid.NewGuid(), ConversationId = conv.Id, Direction = MessageDirection.Inbound, SenderType = MessageSenderType.Client,
+                Id = messageId, ConversationId = conv.Id, Direction = MessageDirection.Inbound, SenderType = MessageSenderType.Client,
                 Body = isContact ? InboundKinds.ContactBody : m.Text, Kind = m.Kind, ExternalMessageId = m.ExternalMessageId, SentAt = m.ReceivedAt, Status = unsub != InboundUnsubscribeKind.None && !pipelineOn ? "processed" : "received",
                 IdempotencyKey = key,
                 // TASK-750 (§23.4): лише для kind=callback (CHECK ck_beauty_messages_callback_fields); callback_data = null, якщо формат невалідний.
@@ -191,7 +193,7 @@ public sealed class EfChannelMessageRepository(
                 await db.SaveChangesAsync(ct);
                 if (unsub != InboundUnsubscribeKind.None) await unsubscribe!.ApplyAsync(conv.Id, conv.ClientId, m, unsub, ct);
                 if (tx is not null) await tx.CommitAsync(ct);
-                fresh.Add(m with { ConversationId = conv.Id });
+                fresh.Add(m with { ConversationId = conv.Id, MessageId = messageId });
             }
             catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: UniqueViolation })
             {
@@ -215,7 +217,7 @@ public sealed class EfChannelMessageRepository(
         var status = row.Status switch { "pending" or "sending" => OutboxStatus.Pending, "failed" => OutboxStatus.Failed, _ => OutboxStatus.Sent };
         return new OutboxItem(
             new OutboundMessage(messageId, ChannelTypeMap.ToAdapterId(EnumText<ChannelType>.ToDb(row.Type)), row.ExternalChatId, row.Body, row.LastInbound,
-                ChatActionLayout.TryParse(row.Actions)),
+                signals?.TakeActionsOverride(messageId) ?? ChatActionLayout.TryParse(row.Actions)), // §28.9: inline-розкладка з відстанями - лише з пам'яті
             status, row.Attempts);
     }
 

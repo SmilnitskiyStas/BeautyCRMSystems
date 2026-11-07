@@ -96,6 +96,9 @@ public sealed partial class ConversationTurnProcessor(
         /// <summary>Клавіатури, розмітку яких треба прибрати після коміту (відкликані/використані/протерміновані), §23.4.</summary>
         public List<Guid> ToClear { get; } = [];
 
+        /// <summary>TASK-840 (§28.7, крок 4f): хід обробляється як натискання кнопки потоку, але прийшов ТЕКСТОМ (збіг з підписом): ключ відповіді `ai-reply`, тіло вхідного не змінюється.</summary>
+        public bool ViaText { get; set; }
+
         /// <summary>suggest не надсилає клієнту нічого автоматично (§21.5 п. 3).</summary>
         public bool AutoReplies => Mode != AiMode.Suggest;
     }
@@ -211,7 +214,7 @@ public sealed partial class ConversationTurnProcessor(
 
         // Відповідь на цей пакет уже є (повтор після падіння/гонка lease): лише позначити, LLM не викликати.
         var existingKey = isCallback ? CallbackKey(batch[0].Id) : ReplyKey(conv.Id, batch[^1].Id);
-        if (await db.Messages.AnyAsync(m => m.IdempotencyKey == existingKey || m.IdempotencyKey == existingKey + ":s", ct))
+        if (await db.Messages.AnyAsync(m => m.IdempotencyKey == existingKey || m.IdempotencyKey == existingKey + ":s" || m.IdempotencyKey == existingKey + ":f", ct))
         {
             await SetStatusAsync(batch, Processed, ct);
             return false;
@@ -246,6 +249,7 @@ public sealed partial class ConversationTurnProcessor(
             if (conv.AiPausedUntil is null || conv.AiPausedUntil > now || staffReplied)
             {
                 var paused = new Turn(conv, batch, mode, now);
+                DiscardLocations(batch); // §28.9: у handoff координати відкидаються
                 // §25.5.6: відповідь на питання про номер - детермінована дія над власними даними, виконується й під час паузи
                 if (PhoneOn && batch.Count == 1 && await TryPhoneAnswerAsync(paused, batch[0], true, ct)) return false;
                 // §26.9.1-§26.9.2: у handoff дозволені /marketing (меню) і відписка текстом
@@ -271,6 +275,9 @@ public sealed partial class ConversationTurnProcessor(
         }
         if (!PhoneOn) await ClearContactPhonesAsync(batch, ct);
 
+        // 4f (частково, TASK-837): геолокація клієнта на кроці закладу - код без LLM; координати з пам'яті, не з БД (§28.9)
+        if (await TryHandleLocationAsync(t, ct)) return false;
+
         // 4. команди й медіа: шаблон без LLM
         if (texts.Count == 0)
         {
@@ -287,6 +294,12 @@ public sealed partial class ConversationTurnProcessor(
         // 4b. код купона текстом (§26.9.3): до моделі; код маскується в збереженому тілі. 4c. меню «акції» і відписка текстом (§26.9.2)
         if (await HandleCouponCodeAsync(t, texts, ct)) return false;
         if (await HandleMarketingTextAsync(t, texts, ct)) return false;
+
+        // 4f (частково, TASK-837): «Обрати зі списку» за відкритої гео-клавіатури
+        if (await HandleGeoDeclineTextAsync(t, texts, ct)) return false;
+
+        // 4f. запис кнопками (ADR-020, §28.7): текст, що збігається з підписом кнопки поточного кроку, - як натискання (код, без LLM)
+        if (await TryFlowTextChoiceAsync(t, texts, ct)) return false;
 
         // 5. підтвердження запису (до LLM, у коді)
         if (await HandleActiveProposalAsync(t, texts, ct)) return false;
@@ -838,9 +851,11 @@ public sealed partial class ConversationTurnProcessor(
         await RenewLeaseAsync(conv.Id, ct);
         limiter.RecordTurn(conv.Id); // хід клієнта (TASK-735): лічильник «надсилаєте дуже часто» окремо від запитів LLM
         limiter.Record(conv.Id);
+        // §28.7: за FlowAvailable модель бачить start_booking_flow (без prepare_booking) і блок СТАН ЗАПИСУ активного потоку
+        var flowCtx = await FlowModelContextAsync(t, ct);
         var request = new AssistantRequest(
             conv.TenantId, conv.ClientId, last.Body, Mode: null, Scope: AiScope.ClientChat, ConversationId: conv.Id,
-            History: history, DefaultLocationId: conv.Channel!.LocationId);
+            History: history, DefaultLocationId: conv.Channel!.LocationId, Flow: flowCtx?.Info, FlowStateBlock: flowCtx?.StateBlock);
         var result = await assistant.HandleAsync(request, ct);
         await RenewLeaseAsync(conv.Id, ct);
         if (result.LlmCalls > 1) limiter.Record(conv.Id, result.LlmCalls - 1); // ітерації tools теж запити (M2)
@@ -887,7 +902,7 @@ public sealed partial class ConversationTurnProcessor(
         var text = check.Text;
 
         // E. Порожня/службова відповідь моделі (лише UUID, пунктуація): один повтор ходу з підказкою; далі - нейтральне прохання уточнити.
-        var emptyReply = text is null && check.FlagReason is null && result.Chat?.Prepared is null;
+        var emptyReply = text is null && check.FlagReason is null && result.Chat?.Prepared is null && result.Chat?.FlowStart is null;
         if (emptyReply)
         {
             await RenewLeaseAsync(conv.Id, ct);
@@ -936,14 +951,20 @@ public sealed partial class ConversationTurnProcessor(
         if (prepared is null)
         {
             // §23.6 «Слоти»: успішний find_slots без prepare_booking -> slot_pick із ≤ SlotButtons слотів на повідомленні моделі.
-            if (buttons && check.FlagReason is null && await SlotsReplyAsync(t, text, result.Chat?.LastSlots, ct) is { } slotsReply)
+            // За FlowAvailable slot_pick не створюється (§28.7): слоти показує потік кнопками.
+            if (buttons && flowCtx is null && check.FlagReason is null && await SlotsReplyAsync(t, text, result.Chat?.LastSlots, ct) is { } slotsReply)
             {
                 await CommitAsync(t, slotsReply, null, extra, ct);
                 return false;
             }
-            await CommitAsync(t, text is null
-                ? new Reply(noText ? ChatTemplates.Clarify : ChatTemplates.Fallback, MessageSenderType.System)
-                : new Reply(text, MessageSenderType.Ai), null, extra, ct);
+            // §28.7: старт потоку моделлю або повтор поточного кроку відразу після відповіді моделі (окреме повідомлення `…:f`, кнопки лише від коду)
+            var started = result.Chat?.FlowStart;
+            var tail = flowCtx is null ? null : await FlowTailAsync(t, started, ct);
+            var replies = new List<Reply>();
+            if (text is not null) replies.Add(new Reply(text, MessageSenderType.Ai));
+            else if (started is null) replies.Add(new Reply(noText ? ChatTemplates.Clarify : ChatTemplates.Fallback, MessageSenderType.System));
+            if (tail is not null) replies.AddRange(tail.Replies);
+            await CommitManyAsync(t, new CommitSpec(replies) { Journal = extra, PreWork = tail?.PreWork }, ct);
             return false;
         }
         // Підсумок запису - канонічний текст КОДУ; текст моделі лише вступ (його обрізаємо, підсумок - ніколи; разом ≤ 4096 UTF-16).
@@ -1007,7 +1028,7 @@ public sealed partial class ConversationTurnProcessor(
         var older = await db.Messages.AsNoTracking()
             .Where(m => m.ConversationId == t.Conv.Id && !batchIds.Contains(m.Id)
                 // §25.5.8: контакт (kind=contact) не входить в історію LLM; тіла «[номер телефону]» входять як є
-                && ((m.Direction == MessageDirection.Inbound && m.Kind != InboundKinds.Command && m.Kind != InboundKinds.Callback && m.Kind != InboundKinds.Contact && (m.Status == Processed || m.Status == Skipped || m.Status == Held))
+                && ((m.Direction == MessageDirection.Inbound && m.Kind != InboundKinds.Command && m.Kind != InboundKinds.Callback && m.Kind != InboundKinds.Contact && m.Kind != InboundKinds.Location && (m.Status == Processed || m.Status == Skipped || m.Status == Held))
                     || (m.Direction == MessageDirection.Outbound && (m.Status == "sent" || m.Status == "pending" || m.Status == "sending"))))
             .OrderByDescending(m => m.CreatedAt).Take(promptOpts.HistoryMessages).ToListAsync(ct);
         older.Reverse();

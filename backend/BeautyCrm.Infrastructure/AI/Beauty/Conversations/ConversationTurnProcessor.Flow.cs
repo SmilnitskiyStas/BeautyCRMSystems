@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using BeautyCrm.Application.Features.BeautyChatBooking;
 using BeautyCrm.Application.Features.BeautyChatFlow;
@@ -19,25 +21,34 @@ public sealed partial class ConversationTurnProcessor
     private ChatFlowOptions? FlowOpts => services.GetService<ChatFlowOptions>();
     private ChatBookingFlowService Flows => services.GetRequiredService<ChatBookingFlowService>();
 
-    /// <summary>§28.1: ChatFlow:Enabled І кнопки доступні (ChatButtons:Enabled, прапор кнопок каналу, адаптер з actions).</summary>
-    private bool FlowAvailable(Conversation conv) => FlowOpts is { Enabled: true } && ButtonsAvailable(conv);
+    /// <summary>§28.1: ChatFlow:Enabled І кнопки доступні (ChatButtons:Enabled, прапор кнопок каналу, адаптер з actions) І канал не вимкнув запис кнопками.</summary>
+    private bool FlowAvailable(Conversation conv) =>
+        FlowOpts is { Enabled: true } && ButtonsAvailable(conv) && ChatKeyboardService.ChannelFlowAllowed(conv.Channel?.Settings);
+
+    /// <summary>§28.1 для ходу: додатково режим ≠ suggest (потік у suggest не діє, Q1).</summary>
+    private bool FlowAvailable(Turn t) => t.AutoReplies && FlowAvailable(t.Conv);
 
     private static FlowContext FlowCtx(Conversation c) => new(c.Id, c.ClientId, c.Channel?.LocationId);
 
+    /// <summary>Журнал переходу (§28.14): "button" для ходу, що прийшов текстовим збігом з підписом кнопки (4f), логується як via=text.</summary>
     private void FlowLog(Turn t, FlowState? s, string via, string result) =>
         log.LogInformation("chat_flow conversation={Conversation} flow={Flow} step={Step} version={Version} via={Via} result={Result}",
-            t.Conv.Id, s?.Id.ToString() ?? "-", s?.Step ?? "-", s?.Version ?? -1, via, result);
+            t.Conv.Id, s?.Id.ToString() ?? "-", s?.Step ?? "-", s?.Version ?? -1, via == "button" && t.ViaText ? "text" : via, result);
 
-    private Reply FlowReply(FlowResult r, DateTimeOffset now, string suffix = "") =>
-        new(FlowTemplates.StepText(r.View!), MessageSenderType.System,
+    private Reply FlowReply(FlowResult r, DateTimeOffset now, string suffix = "", string? prefix = null) =>
+        new((prefix ?? "") + FlowTemplates.StepText(r.View!), MessageSenderType.System,
             Keyboard: KeyboardBuilder.FlowStep(r.View!, r.Next!.Id, r.Next.Version, r.Next.ExpiresAt, now), KeySuffix: suffix);
 
     /// <summary>Спека ходу потоку: у транзакції СПОЧАТКУ CAS клавіатури (якщо це натискання), далі CAS/створення потоку, далі відповіді з новою клавіатурою.</summary>
-    private CommitSpec FlowSpec(Turn t, CallbackResolution? res, FlowState? before, FlowResult? r, IReadOnlyList<Reply> replies, bool consume = true)
+    private CommitSpec FlowSpec(Turn t, CallbackResolution? res, FlowState? before, FlowResult? r, IReadOnlyList<Reply> replies, bool consume = true, bool geoOffer = true)
     {
+        // TASK-837 (§28.9): крок закладу з координатами -> окреме повідомлення T-flow-geo-offer із reply-клавіатурою (Telegram не дозволяє inline+reply разом)
+        var offer = geoOffer && GeoOfferApplicable(t, r);
+        if (offer) replies = [.. replies, GeoOfferReply()];
         var spec = res is null ? new CommitSpec(replies) : CbSpec(t, res, replies.ToArray());
         return spec with
         {
+            OpenReplyKeyboard = offer,
             PreWork = async c =>
             {
                 if (consume && res is { Keyboard: { } kb, Replay: false } && !await Keyboards.TryConsumeAsync(kb.Id, res.OptionPosition, t.Batch[0].Id, c))
@@ -84,12 +95,16 @@ public sealed partial class ConversationTurnProcessor
             await HandleFlowSlotAsync(t, res, flow, opt, ct);
             return;
         }
-        var r = await Flows.ApplyAsync(flow, FlowCtx(conv), new FlowEvent(res.Verb, opt.ServiceId, opt.SpecialistId, opt.LocationId, opt.Date, opt.StartsAt, opt.Nav), ct);
+        // §28.9: «Усі заклади» з пересортованого кроку - звичайний список із початку з приміткою «Сортування за відстанню скинуто.»
+        var geoReset = flow.Step == FlowSteps.Location && opt is { Verb: ButtonVerbs.FlowNav, Nav: FlowNav.More } && opt.Label == FlowTemplates.AllLocationsLabel;
+        var r = await Flows.ApplyAsync(geoReset ? flow with { ListCursor = null } : flow, FlowCtx(conv),
+            new FlowEvent(res.Verb, opt.ServiceId, opt.SpecialistId, opt.LocationId, opt.Date, opt.StartsAt, opt.Nav), ct);
+        if (geoReset && r is { IsStep: true, View: { } resetView }) r = r with { View = resetView with { Notice = FlowNotices.GeoReset } };
         FlowLog(t, flow, "button", r.Code);
-        await CommitFlowResultAsync(t, res, flow, r, ct);
+        await CommitFlowResultAsync(t, res, flow, r, ct, GeoChosenPrefix(conv, res.Verb, r));
     }
 
-    private async Task CommitFlowResultAsync(Turn t, CallbackResolution res, FlowState flow, FlowResult r, CancellationToken ct)
+    private async Task CommitFlowResultAsync(Turn t, CallbackResolution res, FlowState flow, FlowResult r, CancellationToken ct, Reply? prefix = null)
     {
         switch (r.Code)
         {
@@ -103,7 +118,7 @@ public sealed partial class ConversationTurnProcessor
                 await CommitManyAsync(t, FlowSpec(t, res, flow, r, [new Reply(FlowTemplates.NoServices, MessageSenderType.System, Keyboard: KeyboardBuilder.HumanOnly())]), ct);
                 return;
             default:
-                await CommitManyAsync(t, FlowSpec(t, res, flow, r, [FlowReply(r, t.Now)]), ct);
+                await CommitManyAsync(t, FlowSpec(t, res, flow, r, prefix is null ? [FlowReply(r, t.Now)] : [prefix, FlowReply(r, t.Now)]), ct);
                 return;
         }
     }
@@ -259,5 +274,93 @@ public sealed partial class ConversationTurnProcessor
         var flow = await Flows.GetActiveAsync(t.Conv.Id, ct);
         if (flow is not null) await Flows.FinishAsync(flow.Id, FlowStatuses.Cancelled, FlowCancelReasons.Handoff, ct);
         clear.AddRange(await Keyboards.RevokeActiveAsync(t.Conv.Id, KeyboardKinds.FlowKinds, ct));
+    }
+
+    // ------------------------------------------------------------ активний потік і його клавіатура (4f, СТАН ЗАПИСУ)
+
+    /// <summary>Активний потік розмови; протермінований (термін минув, sweeper ще не встиг) завершується тут і не вважається активним.</summary>
+    private async Task<FlowState?> ActiveFlowAsync(Turn t, CancellationToken ct)
+    {
+        var flow = await Flows.GetActiveAsync(t.Conv.Id, ct);
+        if (flow is null) return null;
+        if (t.Now < flow.ExpiresAt) return flow;
+        await Flows.FinishAsync(flow.Id, FlowStatuses.Expired, null, ct);
+        return null;
+    }
+
+    private sealed record FlowKeyboard(Guid Id, string Kind, string Status, Guid MessageId, DateTimeOffset ExpiresAt, Guid FlowId, int FlowVersion,
+        IReadOnlyList<KeyboardOption> Options);
+
+    /// <summary>Чинна клавіатура кроку: активна, тієї ж версії, що й потік, не протермінована. null - її немає (відкликана, використана).</summary>
+    private async Task<FlowKeyboard?> ActiveFlowKeyboardAsync(FlowState flow, DateTimeOffset now, CancellationToken ct)
+    {
+        var k = await db.ChatKeyboards.AsNoTracking().Where(x => x.FlowId == flow.Id && x.FlowVersion == flow.Version
+                && x.Status == KeyboardStatuses.Active && x.ExpiresAt > now).FirstOrDefaultAsync(ct);
+        if (k is null || KeyboardKinds.StepOf(k.Kind) != flow.Step || KeyboardJson.TryParse(k.Options) is not { Count: > 0 } options) return null;
+        return new FlowKeyboard(k.Id, k.Kind, k.Status, k.MessageId, k.ExpiresAt, flow.Id, flow.Version, options);
+    }
+
+    // ------------------------------------------------------------ крок 4f: текстовий вибір кроку (§28.7)
+
+    /// <summary>
+    /// NFKC, нижній регістр, без емодзі й маркерів кнопок (<c>➡⬅✖↩✅📅📍</c>, усі символи So/Cf, селектори варіантів), стиснуті пробіли.
+    /// </summary>
+    public static string NormalizeChoice(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return "";
+        var sb = new StringBuilder();
+        foreach (var rune in text.Normalize(NormalizationForm.FormKC).ToLowerInvariant().EnumerateRunes())
+        {
+            if (rune.Value is 0xFE0E or 0xFE0F) continue;
+            if (Rune.GetUnicodeCategory(rune) is UnicodeCategory.OtherSymbol or UnicodeCategory.Format or UnicodeCategory.Control && !Rune.IsWhiteSpace(rune)) continue;
+            sb.Append(rune.ToString());
+        }
+        return string.Join(' ', sb.ToString().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    /// <summary>
+    /// Крок 4f (§28.7): текст, що збігається РІВНО з одним підписом чинної клавіатури кроку (на <c>last_location</c> ще «так» і «інший»/«інший заклад»/«ні»),
+    /// обробляється як натискання цієї опції: ті самі перевірки опції під RLS, CAS клавіатури й потоку, 0 викликів LLM. Збігу немає або їх кілька -
+    /// false: хід іде далі (крок 5…8). Нумерованих відповідей немає. Лише для одного повідомлення в пакеті, поза confirm.
+    /// </summary>
+    /// <returns>true - хід завершено тут.</returns>
+    private async Task<bool> TryFlowTextChoiceAsync(Turn t, List<Message> texts, CancellationToken ct)
+    {
+        if (!FlowAvailable(t) || t.Batch.Count != 1 || texts.Count != 1 || t.Conv.AiState == "handoff") return false;
+        var typed = NormalizeChoice(texts[0].Body);
+        if (typed.Length == 0 || typed.Length > 64) return false;
+        var flow = await ActiveFlowAsync(t, ct);
+        if (flow is null || flow.Step == FlowSteps.Confirm) return false;
+        var kb = await ActiveFlowKeyboardAsync(flow, t.Now, ct);
+        if (kb is null) return false;
+
+        var matches = kb.Options.Select((o, i) => (o, i)).Where(x => NormalizeChoice(x.o.Label) == typed).Select(x => x.i).ToList();
+        if (flow.Step == FlowSteps.LastLocation && matches.Count <= 1)
+        {
+            var mapped = typed switch
+            {
+                "так" => kb.Options.ToList().FindIndex(o => o.Verb == ButtonVerbs.FlowLocation),
+                "інший" or "інший заклад" or "ні" => kb.Options.ToList().FindIndex(o => o.Verb == ButtonVerbs.FlowNav && o.Nav == FlowNav.OtherLocation),
+                _ => -1,
+            };
+            if (mapped >= 0) matches = [mapped];
+        }
+        if (matches.Count != 1) return false;
+
+        // §28.6: текстовий вибір рахується в ліміті натискань; понад ліміт - T-rate-limited раз на хвилину, решта тиша
+        if (!CallbackLimiter.TryAcquire(t.Conv.Id))
+        {
+            Reply? limited = !await RecentTemplateAsync(t.Conv.Id, ChatTemplates.RateLimited, TimeSpan.FromMinutes(1), t.Now, ct)
+                ? new Reply(ChatTemplates.RateLimited, MessageSenderType.System) : null;
+            await CommitManyAsync(t, new CommitSpec(limited is null ? [] : [limited]) { InboundStatus = Skipped }, ct);
+            return true;
+        }
+
+        var pos = matches[0];
+        var option = kb.Options[pos];
+        t.ViaText = true;
+        var info = new KeyboardInfo(kb.Id, kb.Kind, kb.Status, kb.MessageId, null, null, kb.ExpiresAt, null, null, null, kb.FlowId, kb.FlowVersion);
+        await HandleFlowCallbackAsync(t, new CallbackResolution(CallbackOutcome.Valid, option.Verb, pos, info, option, pos, false, t.Now), ct);
+        return true;
     }
 }

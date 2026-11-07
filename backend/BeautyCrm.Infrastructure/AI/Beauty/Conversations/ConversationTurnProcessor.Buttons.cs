@@ -209,6 +209,10 @@ public sealed partial class ConversationTurnProcessor
             if (!r.IsOk) return; // CreateAsync уже залогував keyboard_invalid; повідомлення піде без кнопок
             clear.AddRange(r.Value!.Revoked);
             json = ChatKeyboardLayout.ToActionsJson(plan.Render(r.Value));
+            // §28.9: розкладка з відстанями живе лише в пам'яті для inline-відправки цього повідомлення; у `actions` її немає.
+            if (plan.InlineRows is not null)
+                signals.SetActionsOverride(messageId, new ChatActionLayout(plan.RenderInline(r.Value)
+                    .Select(row => (IReadOnlyList<ChatActionButton>)row.Select(b => new ChatActionButton(b.Label, b.Data)).ToList()).ToList()));
         }
         await db.Messages.Where(m => m.Id == messageId).ExecuteUpdateAsync(s => s.SetProperty(m => m.Actions, json), ct);
     }
@@ -331,7 +335,9 @@ public sealed partial class ConversationTurnProcessor
         res.Option?.Label ?? (ButtonVerbs.Stateless.Contains(res.Verb) ? StatelessLabels.BodyLabel(res.Verb) : null);
 
     private CommitSpec CbSpec(Turn t, CallbackResolution res, params Reply?[] replies) =>
-        new(replies.Where(r => r is not null).Select(r => r!).ToList()) { CallbackInboundId = t.Batch[0].Id, CallbackLabel = LabelOf(res) };
+        t.ViaText
+            ? new(replies.Where(r => r is not null).Select(r => r!).ToList()) // 4f: текстовий збіг з кнопкою - ключ відповіді ai-reply, тіло вхідного без змін
+            : new(replies.Where(r => r is not null).Select(r => r!).ToList()) { CallbackInboundId = t.Batch[0].Id, CallbackLabel = LabelOf(res) };
 
     private async Task ResetExpiredHandoffAsync(Conversation conv, DateTimeOffset now, CancellationToken ct)
     {

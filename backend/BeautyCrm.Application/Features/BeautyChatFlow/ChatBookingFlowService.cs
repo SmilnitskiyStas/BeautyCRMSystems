@@ -362,7 +362,8 @@ public sealed class ChatBookingFlowService(
                         names with { Location = last.Name, Address = last.Address, Timezone = last.Timezone });
                 var page = Page(locations, x => x.Id.ToString(), after, opts.PageSize);
                 var items = page.Items.Select(x => new FlowItem(FlowVerbs.Location, x.Name, LocationId: x.Id, Address: x.Address)).ToList();
-                return Done(s with { Step = FlowSteps.Location, ListCursor = page.Cursor }, items, ListNav(page, true), chosen, notice, names, page.MoreIsRestart);
+                return Done(s with { Step = FlowSteps.Location, ListCursor = page.Cursor }, items, ListNav(page, true), chosen, notice, names, page.MoreIsRestart,
+                    allLocations: locations);
             }
             return await RenderTimeResolvedAsync(s, ctx, chosen, notice, ct);
         }
@@ -370,8 +371,8 @@ public sealed class ChatBookingFlowService(
     }
 
     private static Resolved Done(FlowState s, IReadOnlyList<FlowItem> items, IReadOnlyList<string> nav, List<FlowChosen> chosen, string? notice, FlowNames names,
-        bool moreIsRestart = false) =>
-        new(FlowResultCodes.Ok, s, new FlowView(s.Step, items, nav, chosen.ToList(), notice, names, moreIsRestart));
+        bool moreIsRestart = false, IReadOnlyList<FlowLocationItem>? allLocations = null) =>
+        new(FlowResultCodes.Ok, s, new FlowView(s.Step, items, nav, chosen.ToList(), notice, names, moreIsRestart, AllLocations: allLocations));
 
     private static List<string> ListNav<T>(ListPage<T> page, bool canBack)
     {

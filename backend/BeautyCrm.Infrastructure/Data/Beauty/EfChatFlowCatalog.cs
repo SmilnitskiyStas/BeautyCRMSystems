@@ -66,9 +66,9 @@ public sealed class EfChatFlowCatalog(BeautyDbContext db) : IChatFlowCatalog
             .Select(t => t.LocationId).Distinct().ToList();
         if (ids.Count == 0) return [];
         var rows = await db.Locations.AsNoTracking().Where(l => ids.Contains(l.Id))
-            .Select(l => new { l.Id, l.Name, l.Address, l.Timezone }).ToListAsync(ct);
+            .Select(l => new { l.Id, l.Name, l.Address, l.Timezone, l.Latitude, l.Longitude }).ToListAsync(ct);
         return rows.OrderBy(l => l.Name, StringComparer.Ordinal).ThenBy(l => l.Id)
-            .Select(l => new FlowLocationItem(l.Id, l.Name, l.Address, l.Timezone)).ToList();
+            .Select(l => new FlowLocationItem(l.Id, l.Name, l.Address, l.Timezone, (double?)l.Latitude, (double?)l.Longitude)).ToList();
     }
 
     public Task<Guid?> GetLastAppointmentLocationAsync(Guid clientId, CancellationToken ct) =>

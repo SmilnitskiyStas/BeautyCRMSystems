@@ -101,7 +101,11 @@ public sealed record FlowContext(Guid ConversationId, Guid? ClientId, Guid? Chan
 
 public sealed record FlowServiceItem(Guid Id, string Name, string? Category);
 public sealed record FlowSpecialistItem(Guid Id, string Name);
-public sealed record FlowLocationItem(Guid Id, string Name, string? Address, string Timezone);
+/// <param name="Latitude">Координати ЗАКЛАДУ (їх вводить адміністратор, §28.10), не клієнта. null - не задано.</param>
+public sealed record FlowLocationItem(Guid Id, string Name, string? Address, string Timezone, double? Latitude = null, double? Longitude = null)
+{
+    public bool HasCoordinates => Latitude is not null && Longitude is not null;
+}
 
 /// <summary>Назви вибраного для заголовків кроку й рядка «Обрано» (null - вибору ще немає або запис зник).</summary>
 public sealed record FlowNames(string? Service, string? Specialist, string? Location, string? Address, string? Timezone);

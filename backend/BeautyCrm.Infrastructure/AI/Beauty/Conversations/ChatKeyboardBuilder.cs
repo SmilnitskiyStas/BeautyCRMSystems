@@ -20,6 +20,15 @@ public sealed record KeyboardPlan(
     public Guid? FlowId { get; init; }
     public int? FlowVersion { get; init; }
 
+    /// <summary>
+    /// Розкладка ЛИШЕ для inline-відправки (§28.9: заклади за відстанню, підписи з відстанню). Не зберігається в <c>actions</c>; кнопки
+    /// посилаються на ті самі <see cref="Options"/> і токен, що збережена версія. Null - немає.
+    /// </summary>
+    public IReadOnlyList<IReadOnlyList<PlannedButton>>? InlineRows { get; init; }
+
+    public IReadOnlyList<IReadOnlyList<ActionButton>> RenderInline(CreatedKeyboard? keyboard) =>
+        (InlineRows ?? []).Select(row => (IReadOnlyList<ActionButton>)row.Select(b => new ActionButton(b.Label, DataOf(b, keyboard))).ToList()).ToList();
+
     public bool IsStateless => Kind is null;
 
     /// <summary>Розкладка з `callback_data` (для станових - з токеном створеної клавіатури).</summary>
@@ -45,6 +54,12 @@ public sealed record KeyboardPlan(
                 if (ButtonVerbs.NeedsIndex(Kind!, b.Verb) && (b.Option is not { } i || i < 0 || i >= Options.Count || i > 9)) return false;
             }
             else if (IsStateless && !ButtonVerbs.Stateless.Contains(b.Verb)) return false;
+        }
+        if (InlineRows is not null)
+        {
+            foreach (var b in InlineRows.SelectMany(r => r))
+                if (ButtonVerbs.NeedsIndex(Kind ?? "", b.Verb) && (b.Option is not { } i || i < 0 || i >= Options.Count || i > 9)) return false;
+            if (ChatKeyboardLayout.Validate(RenderInline(probe), MaxPerRow) is not null) return false;
         }
         return ChatKeyboardLayout.Validate(Render(probe), MaxPerRow) is null;
     }
@@ -246,6 +261,46 @@ public sealed class ChatKeyboardBuilder(ChatButtonsOptions opts)
         // навігація: до 3 у рядку; на last_location - [Інший заклад][Назад] в одному рядку
         rows.AddRange(navButtons.Chunk(grid || v.Step == FlowSteps.LastLocation ? 2 : 3).Select(c => (IReadOnlyList<PlannedButton>)c.ToList()));
         return new KeyboardPlan(kind, options, rows, ExpiresAt: expiresAt) { FlowId = flowId, FlowVersion = version };
+    }
+
+    /// <summary>
+    /// Крок закладу, пересортований за відстанню до клієнта (§28.9, TASK-837). ЗБЕРЕЖЕНА версія (options, rows) - усі заклади в порядку назви,
+    /// перша сторінка за назвою, без відстаней; INLINE-версія (<see cref="KeyboardPlan.InlineRows"/>) - ≤ PageSize найближчих із відстанню в підписі.
+    /// Координати клієнта сюди приходять лише як аргументи й далі не зберігаються.
+    /// </summary>
+    public KeyboardPlan FlowLocationNear(FlowView v, Guid flowId, int version, DateTimeOffset expiresAt, double clientLat, double clientLon)
+    {
+        var all = v.AllLocations!;
+        var pageSize = Math.Max(1, v.Items.Count);
+        var options = new List<KeyboardOption>();
+        var index = new Dictionary<Guid, int>();
+        foreach (var l in all)
+        {
+            index[l.Id] = options.Count;
+            options.Add(new KeyboardOption(FlowVerbs.Location, ChatKeyboardLayout.SanitizeLabel(l.Name), LocationId: l.Id));
+        }
+        // options ≤ 10 (index однією цифрою): місце під навігацію; «Скасувати» віддаємо першим, коли закладів 8
+        var nav = v.Nav.ToList();
+        while (all.Count + nav.Count > ChatKeyboardLayout.MaxButtons && nav.Remove(FlowNav.Cancel)) { }
+        var navButtons = new List<PlannedButton>();
+        foreach (var n in nav)
+        {
+            var label = n == FlowNav.More ? FlowTemplates.AllLocationsLabel : FlowTemplates.NavLabel(n, false);
+            navButtons.Add(new PlannedButton(label, ButtonVerbs.FlowNav, options.Count));
+            options.Add(new KeyboardOption(ButtonVerbs.FlowNav, label, Nav: n));
+        }
+        var storedRows = new List<IReadOnlyList<PlannedButton>>();
+        for (var i = 0; i < Math.Min(pageSize, all.Count); i++)
+            storedRows.Add([new PlannedButton(options[i].Label, FlowVerbs.Location, i)]);
+        var navRows = navButtons.Chunk(3).Select(c => (IReadOnlyList<PlannedButton>)c.ToList()).ToList();
+        storedRows.AddRange(navRows);
+
+        var inline = new List<IReadOnlyList<PlannedButton>>();
+        foreach (var (loc, km) in GeoDistance.Sort(all, clientLat, clientLon).Take(pageSize))
+            inline.Add([new PlannedButton(FlowTemplates.NearLabel(loc.Name, km), FlowVerbs.Location, index[loc.Id])]);
+        inline.AddRange(navRows);
+        return new KeyboardPlan(KeyboardKinds.FlowLocation, options, storedRows, ExpiresAt: expiresAt)
+        { FlowId = flowId, FlowVersion = version, InlineRows = inline };
     }
 
     /// <summary>[👤 Передати адміністратору] (T-help, помилка підготовки запису).</summary>

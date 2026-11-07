@@ -112,6 +112,8 @@ public sealed class TelegramAdapter(HttpClient http, IChannelCredentialsProvider
             var inbound = new InboundMessage(Channel, $"{chatId}:{m.GetProperty("message_id").GetRawText()}", chatId,
                 from.GetProperty("id").GetRawText(), SenderName(from), text, ts, kind);
             if (kind == InboundKinds.Contact) inbound = inbound with { ContactVerdict = ContactVerdict(m, chat, from, out var phone), ContactPhone = phone };
+            if (kind == InboundKinds.Location && TryTransientPoint(m, out var lat, out var lon))
+                inbound = inbound with { TransientLatitude = lat, TransientLongitude = lon };
             result.Add(inbound);
         }
         return Task.FromResult<IReadOnlyList<InboundMessage>>(result);
@@ -127,13 +129,15 @@ public sealed class TelegramAdapter(HttpClient http, IChannelCredentialsProvider
 
     private static readonly Regex StateCallbackData = new(
         @"^(by|bn|bo|sp|rc|ac|aa|ar|cy|cn|mc|co):[A-Za-z0-9_-]{22}(:[0-9])?\z", RegexOptions.CultureInvariant);
+    /// <summary>§28.5: станові дії потоку запису, index обов'язковий (27 байт).</summary>
+    private static readonly Regex FlowCallbackData = new(@"^(fl|fs|fp|fd|ft|fn):[A-Za-z0-9_-]{22}:[0-9]\z", RegexOptions.CultureInvariant);
     private static readonly Regex StatelessCallbackData = new(@"^i:(book|my|help|human|stop|phone|mkt|mkoff)\z", RegexOptions.CultureInvariant);
     private static readonly Regex QueryIdPattern = new(@"^[A-Za-z0-9_-]{1,64}\z", RegexOptions.CultureInvariant);
 
     /// <summary>Формат callback_data за §23.5: станова дія <c>{verb}:{token22}[:{index}]</c> або безстанова <c>i:{cmd}</c>; &lt;= 64 байти UTF-8.</summary>
     public static bool IsValidCallbackData(string? data) =>
         data is { Length: > 0 and <= 64 } && Encoding.UTF8.GetByteCount(data) <= ChatActionLayout.MaxCallbackDataBytes
-        && (StateCallbackData.IsMatch(data) || StatelessCallbackData.IsMatch(data));
+        && (StateCallbackData.IsMatch(data) || FlowCallbackData.IsMatch(data) || StatelessCallbackData.IsMatch(data));
 
     private static bool TryLong(JsonElement e, string prop, out long value)
     {
@@ -218,6 +222,9 @@ public sealed class TelegramAdapter(HttpClient http, IChannelCredentialsProvider
         // §25.4: контакт - окремий вид з тілом-маркером; сам номер у тіло не потрапляє.
         if (m.TryGetProperty("contact", out var contact) && contact.ValueKind == JsonValueKind.Object)
             return (InboundKinds.ContactBody, InboundKinds.Contact);
+        // §28.9: геолокація - окремий вид з тілом-міткою; координати в тіло не потрапляють. Переслане/невалідне нижче піде як unsupported.
+        if (!ForwardKeys.Any(k => m.TryGetProperty(k, out _)) && TryTransientPoint(m, out _, out _))
+            return (InboundKinds.LocationBody, InboundKinds.Location);
         foreach (var key in MediaKeys)
         {
             if (!m.TryGetProperty(key, out _)) continue;
@@ -227,6 +234,28 @@ public sealed class TelegramAdapter(HttpClient http, IChannelCredentialsProvider
             return ($"[{key}]", InboundKinds.Unsupported);
         }
         return ("[unsupported]", InboundKinds.Unsupported);
+    }
+
+    /// <summary>
+    /// §28.9: <c>message.location</c> (або <c>venue.location</c>) із координатами у допустимому діапазоні, округленими до 4 знаків (~11 м).
+    /// <c>live_period</c> ігнорується (береться лише перша точка). Повідомлення, що не має валідного location, повертає false.
+    /// </summary>
+    internal static bool TryTransientPoint(JsonElement m, out double lat, out double lon)
+    {
+        lat = lon = 0;
+        JsonElement loc;
+        if (m.TryGetProperty("location", out var l) && l.ValueKind == JsonValueKind.Object) loc = l;
+        else if (m.TryGetProperty("venue", out var v) && v.ValueKind == JsonValueKind.Object
+                 && v.TryGetProperty("location", out var vl) && vl.ValueKind == JsonValueKind.Object) loc = vl;
+        else return false;
+        if (!loc.TryGetProperty("latitude", out var la) || la.ValueKind != JsonValueKind.Number || !la.TryGetDouble(out var latitude)
+            || !loc.TryGetProperty("longitude", out var lo) || lo.ValueKind != JsonValueKind.Number || !lo.TryGetDouble(out var longitude)
+            || double.IsNaN(latitude) || double.IsInfinity(latitude) || double.IsNaN(longitude) || double.IsInfinity(longitude)
+            || latitude is < -90 or > 90 || longitude is < -180 or > 180)
+            return false;
+        lat = Math.Round(latitude, 4, MidpointRounding.AwayFromZero);
+        lon = Math.Round(longitude, 4, MidpointRounding.AwayFromZero);
+        return true;
     }
 
     private string Token() =>
@@ -266,7 +295,7 @@ public sealed class TelegramAdapter(HttpClient http, IChannelCredentialsProvider
         {
             var keyboard = r.Rows.Select(row => row.Select(b => b.RequestContact
                 ? (object)new { text = b.Label, request_contact = true }
-                : new { text = b.Label }).ToArray()).ToArray();
+                : b.RequestLocation ? (object)new { text = b.Label, request_location = true } : new { text = b.Label }).ToArray()).ToArray();
             var markup = new Dictionary<string, object> { ["keyboard"] = keyboard, ["one_time_keyboard"] = r.OneTime, ["resize_keyboard"] = r.Resize };
             if (!string.IsNullOrEmpty(r.Placeholder)) markup["input_field_placeholder"] = r.Placeholder;
             return markup;

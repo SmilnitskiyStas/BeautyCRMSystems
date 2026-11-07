@@ -21,6 +21,8 @@ public static class FlowNotices
     public const string Unavailable = "unavailable";
     /// <summary>«Добре, цей час не бронюю. Ось наступний вільний час:» (кнопка «Інший час» на підсумку, §28.8).</summary>
     public const string OtherTime = "other_time";
+    /// <summary>«Сортування за відстанню скинуто.» (§28.9): <c>fn:more</c> із пересортованого кроку закладу.</summary>
+    public const string GeoReset = "geo_reset";
 }
 
 /// <summary>Коди результату переходу.</summary>
@@ -45,10 +47,11 @@ public sealed record FlowChosen(string Kind, string Name, string? Address);
 /// Що показати клієнту на кроці (дані, не текст): вибір, навігація, примітка. Рендер у повідомлення й розкладку - Infrastructure.
 /// </summary>
 /// <param name="Nav">Навігація у порядку показу; <c>more</c> з <paramref name="MoreIsRestart"/> = «↩ На початок».</param>
+/// <param name="AllLocations">Лише крок <c>location</c>: УСІ заклади пари «послуга + майстер» у порядку назви (для гео-пересортування, §28.9). Координати клієнта сюди не потрапляють.</param>
 /// <param name="NoSlots">Крок <c>time</c> без слотів у вікні (T-flow-no-slots), <c>NoDays</c> - крок <c>day</c> без дат.</param>
 public sealed record FlowView(
     string Step, IReadOnlyList<FlowItem> Items, IReadOnlyList<string> Nav, IReadOnlyList<FlowChosen> Chosen, string? Notice, FlowNames Names,
-    bool MoreIsRestart = false, bool NoSlots = false, bool NoDays = false);
+    bool MoreIsRestart = false, bool NoSlots = false, bool NoDays = false, IReadOnlyList<FlowLocationItem>? AllLocations = null);
 
 /// <summary>Подія переходу: verb + посилання з <c>options</c> натиснутої кнопки (не з callback_data).</summary>
 public sealed record FlowEvent(
