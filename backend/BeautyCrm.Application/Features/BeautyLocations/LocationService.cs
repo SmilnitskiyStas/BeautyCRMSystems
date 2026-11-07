@@ -10,10 +10,19 @@ using BeautyCrm.Application.Features.BeautyStaff;
 namespace BeautyCrm.Application.Features.BeautyLocations;
 
 /// <summary>POST/PUT /locations (§16). IsActive: у PUT пропущено = без змін; у POST ігнорується (новий заклад активний).</summary>
-public sealed record LocationRequest(string? Name, string? Address, string? Phone, string? Timezone, bool? IsActive = null);
+/// <remarks>
+/// Latitude/Longitude (§28.11): JsonElement, щоб відрізнити «поле відсутнє» (Undefined: координати не змінюються) від явного
+/// null (очистити пару) і числа (задати пару).
+/// </remarks>
+public sealed record LocationRequest(string? Name, string? Address, string? Phone, string? Timezone, bool? IsActive = null,
+    JsonElement Latitude = default, JsonElement Longitude = default);
 
-/// <summary>Нормалізований (обрізаний, перевірений) вміст запису закладу.</summary>
-public sealed record LocationChange(string Name, string? Address, string? Phone, string Timezone, bool? IsActive);
+/// <summary>
+/// Нормалізований (обрізаний, перевірений) вміст запису закладу. CoordinatesProvided=false: координати не чіпати (PUT без
+/// полів); true: Latitude/Longitude (обидва null = очистити) записати як є.
+/// </summary>
+public sealed record LocationChange(string Name, string? Address, string? Phone, string Timezone, bool? IsActive,
+    decimal? Latitude = null, decimal? Longitude = null, bool CoordinatesProvided = false);
 
 public enum LocationWriteOutcome { Ok, NotFound, NameTaken, HasFutureAppointments, TimezoneLocked }
 
@@ -256,7 +265,25 @@ public sealed partial class LocationService(ILocationStore store, TimeProvider c
         if (phone is { Length: > MaxPhone }) return Error.Validation("invalid_phone", $"Phone is too long (max {MaxPhone}).");
         var tz = req.Timezone?.Trim();
         if (!IsValidTimezone(tz)) return Error.Validation("invalid_timezone", "Timezone must be a valid IANA zone, e.g. Europe/Kyiv.");
-        return new LocationChange(name, address, phone, tz!, req.IsActive);
+        var coords = ParseCoordinates(req.Latitude, req.Longitude);
+        if (!coords.IsOk) return coords.Error!;
+        var (provided, lat, lon) = coords.Value;
+        return new LocationChange(name, address, phone, tz!, req.IsActive, lat, lon, provided);
+    }
+
+    private static readonly Error InvalidCoordinates = Error.Validation("invalid_coordinates",
+        "latitude and longitude must be given together as numbers (latitude -90..90, longitude -180..180) or both null.");
+
+    /// <summary>§28.11: обидва відсутні = без змін; обидва null = очистити; обидва числа в діапазоні = задати (округлення до 6 знаків).</summary>
+    private static Result<(bool, decimal?, decimal?)> ParseCoordinates(JsonElement lat, JsonElement lon)
+    {
+        if (lat.ValueKind == JsonValueKind.Undefined && lon.ValueKind == JsonValueKind.Undefined) return Result<(bool, decimal?, decimal?)>.Ok((false, null, null));
+        if (lat.ValueKind == JsonValueKind.Null && lon.ValueKind == JsonValueKind.Null) return Result<(bool, decimal?, decimal?)>.Ok((true, null, null));
+        if (lat.ValueKind != JsonValueKind.Number || lon.ValueKind != JsonValueKind.Number
+            || !lat.TryGetDecimal(out var la) || !lon.TryGetDecimal(out var lo)
+            || la < -90m || la > 90m || lo < -180m || lo > 180m)
+            return InvalidCoordinates;
+        return Result<(bool, decimal?, decimal?)>.Ok((true, Math.Round(la, 6, MidpointRounding.AwayFromZero), Math.Round(lo, 6, MidpointRounding.AwayFromZero)));
     }
 
     /// <summary>Валідна IANA-зона, яку знає середовище виконання (TimeZoneInfo).</summary>

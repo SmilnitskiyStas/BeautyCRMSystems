@@ -20,7 +20,8 @@ public sealed partial class EfBeautyStore
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await LockLocationNamesAsync(ct);
         if (await NameTakenAsync(change.Name, null, ct)) return new(LocationWriteOutcome.NameTaken);
-        var l = new Location { Id = Guid.NewGuid(), Name = change.Name, Address = change.Address, Phone = change.Phone, Timezone = change.Timezone, IsActive = true };
+        var l = new Location { Id = Guid.NewGuid(), Name = change.Name, Address = change.Address, Phone = change.Phone, Timezone = change.Timezone, IsActive = true,
+            Latitude = change.Latitude, Longitude = change.Longitude };
         db.Locations.Add(l);
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
@@ -52,13 +53,15 @@ public sealed partial class EfBeautyStore
         l.Phone = change.Phone;
         l.Timezone = change.Timezone;
         if (change.IsActive is { } active) l.IsActive = active;
+        if (change.CoordinatesProvided) { l.Latitude = change.Latitude; l.Longitude = change.Longitude; } // §28.11: відсутні в PUT = без змін
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
         return new(LocationWriteOutcome.Ok, ToLocationDto(l));
     }
 
     private static LocationDto ToLocationDto(Location l) =>
-        new(l.Id, l.Name, l.Address, l.Timezone, l.IsActive, l.Phone, l.ClosedWeekdays, WorkingHoursValidator.Parse(l.WorkingHours));
+        new(l.Id, l.Name, l.Address, l.Timezone, l.IsActive, l.Phone, l.ClosedWeekdays, WorkingHoursValidator.Parse(l.WorkingHours),
+            l.Latitude, l.Longitude);
 
     // ---------- вихідні дні закладу (TASK-701, §17) ----------
 

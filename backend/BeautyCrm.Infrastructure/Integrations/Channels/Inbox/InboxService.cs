@@ -65,10 +65,13 @@ public sealed partial class InboxService(
         _ => "Клієнт віджета",
     };
 
+    private const string LocationKind = "location", LocationBody = "[локація]";
+
     /// <summary>Натискання кнопки показується лише текстом-міткою <c>"[кнопка] {підпис}"</c>; сирий callback_data у тілі неможливий (§23.10).</summary>
     private static string InboxBody(Message m) =>
         m.Kind == "callback" && !m.Body.StartsWith(CallbackBody.Prefix, StringComparison.Ordinal) ? CallbackBody.Prefix
         : m.Kind == InboundKinds.Contact ? InboundKinds.ContactBody
+        : m.Kind == LocationKind ? LocationBody // ADR-020 §28.11: координат у БД/API немає, лише мітка
         : CouponCodeMasker.Mask(m.Body); // §25.4: тіло контакту лише маркер; TASK-790 (M1): код купона в API не віддається
 
     private static string Preview(string? body)
@@ -151,7 +154,7 @@ public sealed partial class InboxService(
         SortAll = c.LastMessageAt ?? c.CreatedAt,
         // чернетки (suggest) клієнту не надсилались: у прев'ю не потрапляють
         LastBody = db.Messages.Where(m => m.ConversationId == c.Id && m.Status != "draft")
-            .OrderByDescending(m => m.SentAt).ThenByDescending(m => m.CreatedAt).Select(m => m.Body).FirstOrDefault(),
+            .OrderByDescending(m => m.SentAt).ThenByDescending(m => m.CreatedAt).Select(m => m.Kind == "location" ? "[локація]" : m.Body).FirstOrDefault(),
         LastSender = db.Messages.Where(m => m.ConversationId == c.Id && m.Status != "draft")
             .OrderByDescending(m => m.SentAt).ThenByDescending(m => m.CreatedAt).Select(m => (MessageSenderType?)m.SenderType).FirstOrDefault(),
         Unread = db.Messages.Count(m => m.ConversationId == c.Id && m.Direction == MessageDirection.Inbound

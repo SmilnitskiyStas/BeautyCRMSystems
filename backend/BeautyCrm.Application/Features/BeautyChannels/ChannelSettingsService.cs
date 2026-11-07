@@ -43,6 +43,8 @@ public sealed class ChannelSettingsService(IChannelSettingsStore store)
             return Error.Validation("invalid_settings", "settingsJson must be a JSON object.");
         if (req.SettingsJson is not null && !AssistantButtonsValid(req.SettingsJson)) // §23.10: assistant.buttons - bool або відсутнє
             return Error.Validation("invalid_settings", "settingsJson.assistant.buttons must be a boolean.");
+        if (req.SettingsJson is not null && !AssistantBookingFlowValid(req.SettingsJson)) // §28.2: assistant.bookingFlow - bool або відсутнє
+            return Error.Validation("invalid_settings", "settingsJson.assistant.bookingFlow must be a boolean.");
         var existing = await store.GetAsync(id, ct);
         if (existing is null && (req.Type is null || !Types.Contains(req.Type)))
             return Error.Validation("invalid_type", "type is required to create a channel.");
@@ -66,6 +68,15 @@ public sealed class ChannelSettingsService(IChannelSettingsStore store)
         if (!d.RootElement.TryGetProperty("assistant", out var assistant) || assistant.ValueKind != System.Text.Json.JsonValueKind.Object) return true;
         return !assistant.TryGetProperty("buttons", out var buttons)
             || buttons.ValueKind is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False;
+    }
+
+    /// <summary><c>assistant.bookingFlow</c> (ADR-020, §28.2): true | false | відсутнє; будь-який інший тип - помилка.</summary>
+    private static bool AssistantBookingFlowValid(string json)
+    {
+        using var d = System.Text.Json.JsonDocument.Parse(json);
+        if (!d.RootElement.TryGetProperty("assistant", out var assistant) || assistant.ValueKind != System.Text.Json.JsonValueKind.Object) return true;
+        return !assistant.TryGetProperty("bookingFlow", out var flow)
+            || flow.ValueKind is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False;
     }
 
     private static bool IsJsonObject(string json)
