@@ -191,6 +191,21 @@ const addedNotes: Record<string, ClientNote[]> = {};
 const forbid = () => new BeautyApiError(403, "forbidden_role", "forbidden");
 const notFound = () => new BeautyApiError(404, "not_found", "not found");
 
+/** §28.11 у моку: відсутні поля - без змін; пара null - очистити; пара чисел у межах - задати; інакше 422 invalid_coordinates. */
+function mockCoordinates(
+  input: { latitude?: number | null; longitude?: number | null },
+  current: { latitude?: number | null; longitude?: number | null } | null,
+): { latitude: number | null; longitude: number | null } {
+  const keep = { latitude: current?.latitude ?? null, longitude: current?.longitude ?? null };
+  const { latitude: lat, longitude: lon } = input;
+  if (lat === undefined && lon === undefined) return keep;
+  if (lat == null && lon == null) return { latitude: null, longitude: null };
+  const bad =
+    typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180;
+  if (bad) throw new BeautyApiError(422, "invalid_coordinates", "invalid coordinates");
+  return { latitude: Math.round(lat * 1e6) / 1e6, longitude: Math.round(lon * 1e6) / 1e6 };
+}
+
 /** Правило видимості §13: `note` лише керівнику й автору; інакше поля немає взагалі. */
 function view(a: MockAbsence): Absence {
   const { by, note, ...rest } = a;
@@ -384,6 +399,7 @@ export const mockBeautyApi: BeautyAdminApi = {
       isActive: true,
       closedWeekdays: [],
       workingHours: null,
+      ...mockCoordinates(input, null),
     };
     locations.push(created);
     return wait(created);
@@ -398,7 +414,8 @@ export const mockBeautyApi: BeautyAdminApi = {
     if (locations.some((l) => l.id !== id && l.name.toLowerCase() === name.toLowerCase())) throw new BeautyApiError(409, "location_name_taken", "name taken");
     if (loc.isActive !== false && !input.isActive && hasFutureAt(id)) throw new BeautyApiError(409, "has_future_appointments", "future");
     if (input.timezone.trim() !== loc.timezone && hasFutureAt(id)) throw new BeautyApiError(409, "timezone_locked", "locked");
-    Object.assign(loc, { name, address: input.address.trim() || null, phone: input.phone.trim() || null, timezone: input.timezone.trim(), isActive: input.isActive });
+    const coords = mockCoordinates(input, loc);
+    Object.assign(loc, { name, address: input.address.trim() || null, phone: input.phone.trim() || null, timezone: input.timezone.trim(), isActive: input.isActive, ...coords });
     return wait(loc);
   },
 
@@ -837,8 +854,7 @@ export const mockBeautyApi: BeautyAdminApi = {
   updateChannel: async (id, patch) => {
     const c = findChannel(id);
     const { handoff, ...rest } = patch;
-    Object.assign(c, rest);
-    if (handoff) c.handoff = { ...c.handoff, ...handoff };
+    Object.assign(c, rest);    if (handoff) c.handoff = { ...c.handoff, ...handoff };
     return wait(c);
   },
 

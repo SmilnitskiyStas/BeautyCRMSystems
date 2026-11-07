@@ -10,7 +10,7 @@ import {
   useUpdateChannel,
 } from "../hooks/use-beauty-admin";
 import { humanizeSyncCommandsError } from "@/features/beauty-auth/errors";
-import type { ChannelConfig, ChannelId } from "../types";
+import type { ChannelConfig, ChannelId, ChannelPatch } from "../types";
 import { AI_MODES, buildChannelPreview } from "./channel-preview";
 import {
   Badge,
@@ -70,13 +70,30 @@ function ConnectForm({ channel }: { channel: ChannelConfig }) {
 }
 
 /** §23.10: кнопки в Telegram-чаті й оновлення меню команд бота. Токен бота в UI не показується й не передається. */
-function TelegramButtons({ channel, onToggle }: { channel: ChannelConfig; onToggle: (v: boolean) => void }) {
+function TelegramButtons({ channel, patch }: { channel: ChannelConfig; patch: (p: ChannelPatch) => void }) {
   const sync = useSyncTelegramCommands();
+  const assistantNoteId = useId();
   const noteId = useId();
+  const flowNoteId = useId();
   const assistantOn = channel.assistantEnabled === true;
+  const buttonsOn = assistantOn && channel.buttons !== false;
+  const flowOn = buttonsOn && channel.bookingFlow !== false;
+  const assistantLabel = "ШІ-асистент у каналі";
   const label = "Кнопки в чаті";
+  const flowLabel = "Покроковий запис";
   return (
     <div data-testid="telegram-buttons" className="flex flex-col gap-2.5 border-t border-(--line) pt-3.5">
+      <div className="flex items-center justify-between gap-4">
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-[15px] font-semibold">{assistantLabel}</span>
+          <span id={assistantNoteId} className="text-[13px] leading-snug text-(--muted)">
+            Бот у Telegram відповідає клієнтам і веде запис. Вимкнено — бот не користується ШІ-асистентом у цьому каналі.
+          </span>
+        </span>
+        <span aria-describedby={assistantNoteId}>
+          <Switch label={assistantLabel} checked={assistantOn} onChange={(v) => patch({ assistantEnabled: v })} />
+        </span>
+      </div>
       <div className="flex items-center justify-between gap-4">
         <span className="flex min-w-0 flex-col gap-0.5">
           <span className="text-[15px] font-semibold">{label}</span>
@@ -87,7 +104,20 @@ function TelegramButtons({ channel, onToggle }: { channel: ChannelConfig; onTogg
           </span>
         </span>
         <span aria-describedby={noteId}>
-          <Switch label={label} checked={assistantOn && channel.buttons !== false} disabled={!assistantOn} onChange={onToggle} />
+          <Switch label={label} checked={buttonsOn} disabled={!assistantOn} onChange={(v) => patch({ buttons: v })} />
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-4">
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-[15px] font-semibold">{flowLabel}</span>
+          <span id={flowNoteId} className="text-[13px] leading-snug text-(--muted)">
+            {buttonsOn
+              ? "Клієнт обирає послугу, спеціаліста, заклад і час кнопками, без ШІ на кроках. Вимкнено — запис ведеться у вільній розмові."
+              : "Покроковий запис потребує ввімкненого ШІ-асистента та кнопок у чаті."}
+          </span>
+        </span>
+        <span aria-describedby={flowNoteId}>
+          <Switch label={flowLabel} checked={flowOn} disabled={!buttonsOn} onChange={(v) => patch({ bookingFlow: v })} />
         </span>
       </div>
       <div className="flex flex-wrap items-center gap-3">
@@ -119,7 +149,7 @@ function ChannelSettings({ channel }: { channel: ChannelConfig }) {
   const [greeting, setGreeting] = useState<string | null>(null);
   const modeId = useId();
   const greetingId = useId();
-  const patch = (p: Parameters<typeof update.mutate>[0]["patch"]) => update.mutate({ id: channel.id, patch: p });
+  const patch = (p: ChannelPatch) => update.mutate({ id: channel.id, patch: p });
   const aiActive = channel.connected && channel.ai;
   const mode = AI_MODES.find((m) => m.id === channel.mode) ?? AI_MODES[0];
 
@@ -148,7 +178,7 @@ function ChannelSettings({ channel }: { channel: ChannelConfig }) {
         ))}
       </div>
 
-      {channel.id === "tg" ? <TelegramButtons channel={channel} onToggle={(v) => patch({ buttons: v })} /> : null}
+      {channel.id === "tg" ? <TelegramButtons channel={channel} patch={patch} /> : null}
 
       {aiActive ? (
         <div className="flex flex-col gap-2.5 border-t border-(--line) pt-3.5">

@@ -62,6 +62,36 @@ describe("канал Telegram: кнопки в чаті (§23.10)", () => {
     expect(screen.getByTestId("telegram-buttons")).toHaveTextContent("чат-асистента");
   });
 
+  it("«ШІ-асистент у каналі» вмикається з UI: assistantEnabled=true, далі стають доступні кнопки й покроковий запис", async () => {
+    channels[0].assistantEnabled = false;
+    const user = userEvent.setup();
+    renderScreen();
+    const sw = await screen.findByRole("switch", { name: "ШІ-асистент у каналі" });
+    expect(sw).not.toBeDisabled();
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("switch", { name: "Покроковий запис" })).toBeDisabled();
+    await user.click(sw);
+    await waitFor(() => expect(updateChannel).toHaveBeenCalledWith("tg", { assistantEnabled: true }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Кнопки в чаті" })).not.toBeDisabled());
+    expect(screen.getByRole("switch", { name: "Покроковий запис" })).not.toBeDisabled();
+  });
+
+  it("«Покроковий запис»: за замовчуванням увімкнено, вимкнення пише bookingFlow=false", async () => {
+    const user = userEvent.setup();
+    renderScreen();
+    const sw = await screen.findByRole("switch", { name: "Покроковий запис" });
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    await user.click(sw);
+    await waitFor(() => expect(updateChannel).toHaveBeenCalledWith("tg", { bookingFlow: false }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Покроковий запис" })).toHaveAttribute("aria-checked", "false"));
+  });
+
+  it("вимкнені кнопки блокують покроковий запис", async () => {
+    channels[0].buttons = false;
+    renderScreen();
+    expect(await screen.findByRole("switch", { name: "Покроковий запис" })).toBeDisabled();
+  });
+
   it("блоку кнопок немає в інших каналах", async () => {
     const user = userEvent.setup();
     renderScreen();

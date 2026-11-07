@@ -50,8 +50,8 @@ const HOURS_PECHERSK: WorkingHours = { ...hrs("10:00", "19:00", ["mon", "tue", "
 
 export const DEMO_LOCATIONS: BeautyLocation[] = [
   // Центр: неділя вихідна (§17) - демо різниці між графіком майстра (Нд працює) і вихідним закладу.
-  { id: "c", name: "Центр", address: "вул. Хрещатик, 22, Київ", phone: "+380 44 000 11 22", timezone: DEMO_TZ, isActive: true, closedWeekdays: ["sun"], workingHours: HOURS_CENTER },
-  { id: "p", name: "Поділ", address: "вул. Сагайдачного, 10, Київ", phone: "+380 44 000 33 44", timezone: DEMO_TZ, isActive: true, closedWeekdays: [], workingHours: null },
+  { id: "c", name: "Центр", address: "вул. Хрещатик, 22, Київ", phone: "+380 44 000 11 22", timezone: DEMO_TZ, isActive: true, closedWeekdays: ["sun"], workingHours: HOURS_CENTER, latitude: 50.4474, longitude: 30.5224 },
+  { id: "p", name: "Поділ", address: "вул. Сагайдачного, 10, Київ", phone: "+380 44 000 33 44", timezone: DEMO_TZ, isActive: true, closedWeekdays: [], workingHours: null, latitude: 50.4642, longitude: 30.5167 },
   { id: "k", name: "Печерськ", address: "вул. Лаврська, 5, Київ", phone: null, timezone: DEMO_TZ, isActive: true, closedWeekdays: [], workingHours: HOURS_PECHERSK },
   { id: "l", name: "Лівий берег (закрито)", address: "просп. Мира, 3, Київ", phone: null, timezone: DEMO_TZ, isActive: false, closedWeekdays: [] },
 ];

@@ -147,6 +147,9 @@ interface LocationDto {
   closedWeekdays?: string[] | null;
   /** §18.1: формат §9; `null` = не задано. */
   workingHours?: WorkingHours | null;
+  /** §28.11. */
+  latitude?: number | null;
+  longitude?: number | null;
 }
 /** §17: закриття закладу; `reason` лише керівникам. */
 interface ClosureDto {
@@ -482,7 +485,16 @@ const toLocation = (l: LocationDto): BeautyLocation => ({
   phone: l.phone ?? null,
   timezone: l.timezone,
   isActive: l.isActive,
+  latitude: typeof l.latitude === "number" ? l.latitude : null,
+  longitude: typeof l.longitude === "number" ? l.longitude : null,
 });
+
+/** §28.11: PUT без полів не чіпає координати; обидва `null` очищають; створення - лише якщо задано. */
+const coordsBody = (input: { latitude?: number | null; longitude?: number | null }, forCreate: boolean) => {
+  if (input.latitude === undefined && input.longitude === undefined) return {};
+  if (forCreate && input.latitude == null && input.longitude == null) return {};
+  return { latitude: input.latitude ?? null, longitude: input.longitude ?? null };
+};
 
 const REMINDER_METHODS = ["none", "telegram", "call", "auto"] as const;
 function toReminders(r: NonNullable<AppointmentDto["reminders"]>): AppointmentReminders {
@@ -560,7 +572,7 @@ const TYPE_BY_ID: Record<ChannelId, string> = {
 
 type ChannelSettings = Partial<Pick<ChannelConfig, "inbox" | "booking" | "ai" | "mode" | "greeting" | "handoff">> & {
   /** §23.2: `{ enabled, buttons }`; решту ключів зберігаємо як є (PUT перезаписує `settingsJson` цілком). */
-  assistant?: { enabled?: unknown; buttons?: unknown; [k: string]: unknown };
+  assistant?: { enabled?: unknown; buttons?: unknown; bookingFlow?: unknown; [k: string]: unknown };
   [k: string]: unknown;
 };
 
@@ -592,6 +604,8 @@ function toChannel(id: ChannelId, row?: ChannelDto): ChannelConfig {
     assistantEnabled: assistant?.enabled === true,
     // Відсутнє `buttons` = true (§23.2).
     buttons: assistant?.buttons !== false,
+    // Відсутнє `bookingFlow` = true (§28.2).
+    bookingFlow: assistant?.bookingFlow !== false,
   };
 }
 
@@ -603,7 +617,14 @@ async function loadChannels(): Promise<{ rows: ChannelDto[]; list: ChannelConfig
 
 async function saveChannel(
   id: ChannelId,
-  change: { settings?: ChannelSettings; isActive?: boolean; token?: string; buttons?: boolean },
+  change: {
+    settings?: ChannelSettings;
+    isActive?: boolean;
+    token?: string;
+    buttons?: boolean;
+    assistantEnabled?: boolean;
+    bookingFlow?: boolean;
+  },
 ): Promise<ChannelConfig> {
   const { rows } = await loadChannels();
   const row = rows.find((r) => r.type === TYPE_BY_ID[id]);
@@ -620,9 +641,14 @@ async function saveChannel(
     handoff: current.handoff,
     ...change.settings,
   };
-  if (change.buttons !== undefined) {
+  if (change.buttons !== undefined || change.assistantEnabled !== undefined || change.bookingFlow !== undefined) {
     const prev = raw.assistant && typeof raw.assistant === "object" && !Array.isArray(raw.assistant) ? raw.assistant : {};
-    settings.assistant = { ...prev, buttons: change.buttons };
+    settings.assistant = {
+      ...prev,
+      ...(change.assistantEnabled !== undefined ? { enabled: change.assistantEnabled } : {}),
+      ...(change.buttons !== undefined ? { buttons: change.buttons } : {}),
+      ...(change.bookingFlow !== undefined ? { bookingFlow: change.bookingFlow } : {}),
+    };
   }
   const saved = await send<ChannelDto>("PUT", `/channels/${row?.id ?? crypto.randomUUID()}`, {
     type: TYPE_BY_ID[id],
@@ -760,6 +786,7 @@ export const httpBeautyApi: BeautyAdminApi = {
         address: input.address.trim() || null,
         phone: input.phone.trim() || null,
         timezone: input.timezone.trim(),
+        ...coordsBody(input, true),
       }),
     ),
 
@@ -771,6 +798,7 @@ export const httpBeautyApi: BeautyAdminApi = {
         phone: input.phone.trim() || null,
         timezone: input.timezone.trim(),
         isActive: input.isActive,
+        ...coordsBody(input, false),
       }),
     ),
 
@@ -1301,10 +1329,12 @@ export const httpBeautyApi: BeautyAdminApi = {
   getChannels: async () => (await loadChannels()).list,
 
   updateChannel: (id, patch) => {
-    const { handoff, buttons, ...rest } = patch;
+    const { handoff, buttons, assistantEnabled, bookingFlow, ...rest } = patch;
     return saveChannel(id, {
       settings: { ...rest, ...(handoff ? { handoff: handoff as ChannelConfig["handoff"] } : {}) },
       ...(buttons !== undefined ? { buttons } : {}),
+      ...(assistantEnabled !== undefined ? { assistantEnabled } : {}),
+      ...(bookingFlow !== undefined ? { bookingFlow } : {}),
     });
   },
   syncTelegramCommands: async (id) => {

@@ -24,6 +24,9 @@ export interface BeautyLocation {
   closedWeekdays?: Weekday[];
   /** Години роботи закладу (§18.1, формат §9). `null`/відсутнє = години не задано (обмеження немає). */
   workingHours?: WorkingHours | null;
+  /** §28.11: необов'язкові координати (для сортування закладів за геолокацією клієнта); лише парою. */
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 /** Закриття закладу на дати (§17): повні дні в зоні закладу, включно. `reason` приходить лише керівникам. */
@@ -65,6 +68,9 @@ export interface LocationInput {
   phone: string;
   timezone: string;
   isActive: boolean;
+  /** §28.11: `undefined` = не передавати; `null` пара = очистити (PUT); числа = задати. */
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 /** Хто скасував запис (§16). `name` — лише для staff і лише якщо API його віддав. */
@@ -726,13 +732,15 @@ export interface ChannelConfig {
   assistantEnabled?: boolean;
   /** `settingsJson.assistant.buttons` (§23.2): відсутнє на сервері = `true`. */
   buttons?: boolean;
+  /** `settingsJson.assistant.bookingFlow` (§28.2): відсутнє на сервері = `true`. */
+  bookingFlow?: boolean;
   /** Секрет завжди замаскований (контракт: секрети маскуються). */
   maskedSecret: string | null;
   connectHelp: { field: string; placeholder: string; how: string };
 }
 
 export type ChannelPatch = Partial<
-  Pick<ChannelConfig, "inbox" | "booking" | "ai" | "mode" | "greeting" | "buttons">
+  Pick<ChannelConfig, "inbox" | "booking" | "ai" | "mode" | "greeting" | "buttons" | "assistantEnabled" | "bookingFlow">
 > & { handoff?: Partial<ChannelConfig["handoff"]> };
 
 export interface ConnectChannelInput {

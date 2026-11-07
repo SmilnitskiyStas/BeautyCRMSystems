@@ -25,6 +25,10 @@ describe("inbox: події контакту (§25.8)", () => {
     expect(contactChip({ kind: "contact", body: "[контакт]", contactVerdict: "invalid" })).toBe("Некоректний номер");
     expect(contactChip({ kind: "text", body: "[номер телефону]" })).toBe("Клієнт написав номер");
     expect(contactChip({ kind: "text", body: "Добрий день" })).toBeNull();
+    // §28.9: геолокація - лише факт, без координат.
+    expect(contactChip({ kind: "location", body: "[локація]" })).toBe("Клієнт поділився геолокацією");
+    expect(previewText("[локація]")).toBe("Клієнт поділився геолокацією");
+    expect(isCallbackPreview("[локація]")).toBe(true);
   });
   it("навіть якщо body контакту містить номер, чип його не показує", () => {
     expect(contactChip({ kind: "contact", body: "+380501112233", contactVerdict: "own" })).not.toMatch(/\d/);

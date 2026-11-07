@@ -132,6 +132,8 @@ export function buttonLabels(m: Pick<ConversationMessage, "buttons">): string[] 
 /** Службові тіла §25.4/§25.5.2: номера в повідомленні немає ні в якому вигляді. */
 export const CONTACT_BODY = "[контакт]";
 export const NUMBER_BODY = "[номер телефону]";
+/** §28.9: тіло `kind=location`; координат у повідомленні немає. */
+export const LOCATION_BODY = "[локація]";
 
 /**
  * Подія «клієнт поділився номером» (§25.8): чип замість тіла. Для `kind=contact` тіло НЕ показується ніколи; сам номер
@@ -144,6 +146,8 @@ export function contactChip(m: Pick<ConversationMessage, "kind" | "body" | "cont
     if (m.contactVerdict === "invalid") return "Некоректний номер";
     return "Клієнт поділився контактом";
   }
+  // §28.9: `kind=location`, тіло `[локація]`, координат у повідомленні немає - показуємо лише факт.
+  if (m.kind === "location" || m.body === LOCATION_BODY) return "Клієнт поділився геолокацією";
   return m.body === NUMBER_BODY ? "Клієнт написав номер" : null;
 }
 
@@ -168,13 +172,14 @@ export function marketingChip(m: Pick<ConversationMessage, "kind" | "body" | "pr
 }
 
 /** Превʼю - подія, а не репліка: без префікса відправника. */
-export const isCallbackPreview = (preview: string): boolean => preview.startsWith(CALLBACK_PREFIX) || preview === CONTACT_BODY || preview === NUMBER_BODY || preview === COUPON_BODY;
+export const isCallbackPreview = (preview: string): boolean => preview.startsWith(CALLBACK_PREFIX) || preview === CONTACT_BODY || preview === NUMBER_BODY || preview === COUPON_BODY || preview === LOCATION_BODY;
 
 /** Превʼю в списку розмов: callback `[кнопка] X` -> «Клієнт натиснув: X»; `[контакт]`/`[номер телефону]` -> подія. */
 export function previewText(preview: string): string {
   if (preview === CONTACT_BODY) return "Клієнт поділився контактом";
   if (preview === NUMBER_BODY) return "Клієнт написав номер";
   if (preview === COUPON_BODY) return "Клієнт ввів код";
+  if (preview === LOCATION_BODY) return "Клієнт поділився геолокацією";
   if (preview.startsWith(CALLBACK_PREFIX)) {
     const label = pressedLabelOf({ kind: "callback", body: preview });
     return (label ? marketingChipForLabel(label) : null) ?? pressedText({ kind: "callback", body: preview }) ?? preview;
