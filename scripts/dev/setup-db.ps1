@@ -83,6 +83,7 @@ GRANT SELECT ON beauty_clients, beauty_client_contact_preferences, beauty_conver
 GRANT SELECT, UPDATE ON beauty_reminders TO beautycrm_worker;
 GRANT SELECT, INSERT, UPDATE ON beauty_messages TO beautycrm_worker;
 GRANT SELECT, INSERT ON beauty_call_tasks, beauty_chat_keyboards TO beautycrm_worker;
+-- ADR-020 (TASK-836): beauty_chat_booking_flows, beauty_chat_location_hints - лише app-роль (через ALL TABLES); воркер їх не читає
 -- Маркетинг (§26.3, «Уточнення TASK-780», TASK-791): воркер НЕ пише згоди, акції, послуги акцій і журнал згод
 GRANT SELECT ON tenants, beauty_marketing_consents, beauty_promotions, beauty_promotion_services TO beautycrm_worker;
 GRANT SELECT, UPDATE ON beauty_campaigns, beauty_campaign_recipients TO beautycrm_worker;

@@ -26,7 +26,10 @@ public class ChatBookingProposal : TenantEntity
     public Guid? AppointmentId { get; set; }
     public string? FailureCode { get; set; }
     public DateTimeOffset? DecidedAt { get; set; }
+    /// <summary>TASK-836 (ADR-020 §28.10): потік, що створив пропозицію (NULL для пропозицій від LLM).</summary>
+    public Guid? FlowId { get; set; }
 
+    public ChatBookingFlow? Flow { get; set; }
     public Conversation? Conversation { get; set; }
     public Client? Client { get; set; }
     public Location? Location { get; set; }

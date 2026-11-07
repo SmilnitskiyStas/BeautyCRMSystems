@@ -28,6 +28,9 @@ public class Location : TenantEntity
     public string[] ClosedWeekdays { get; set; } = [];
     /// <summary>Години роботи закладу (TASK-703, §18.1; формат §9, нормалізований JSON). null = не задано, обмеження немає.</summary>
     public string? WorkingHours { get; set; }
+    /// <summary>TASK-836 (ADR-020): координати закладу (дані бізнесу, не ПД); обидва або жодного.</summary>
+    public decimal? Latitude { get; set; }
+    public decimal? Longitude { get; set; }
 }
 
 /// <summary>Конкретні дати закриття закладу (повні дні в зоні закладу, включно; без автоповтору). TASK-701, §17.</summary>

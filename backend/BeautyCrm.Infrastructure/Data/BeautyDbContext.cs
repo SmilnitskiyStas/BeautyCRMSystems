@@ -37,6 +37,7 @@ public class BeautyDbContext : DbContext
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<ChatBookingProposal> ChatBookingProposals => Set<ChatBookingProposal>();
     public DbSet<ChatKeyboard> ChatKeyboards => Set<ChatKeyboard>(); // TASK-749 (§23.3)
+    public DbSet<ChatBookingFlow> ChatBookingFlows => Set<ChatBookingFlow>(); // TASK-836 (ADR-020)
     public DbSet<ChannelPollState> ChannelPollStates => Set<ChannelPollState>();
     public DbSet<AiAction> AiActions => Set<AiAction>();
     public DbSet<Reminder> Reminders => Set<Reminder>();
@@ -121,8 +122,15 @@ public class BeautyDbContext : DbContext
         mb.Entity<Location>(b =>
         {
             Base(b, "beauty_locations", t =>
+            {
                 t.HasCheckConstraint("ck_beauty_locations_closed_weekdays",
-                    "closed_weekdays <@ ARRAY['mon','tue','wed','thu','fri','sat','sun']::text[]"));
+                    "closed_weekdays <@ ARRAY['mon','tue','wed','thu','fri','sat','sun']::text[]");
+                // TASK-836 (ADR-020 §2.4): координати - обидва або жодного, в межах діапазонів
+                t.HasCheckConstraint("ck_beauty_locations_coordinates",
+                    "(latitude IS NULL) = (longitude IS NULL) AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180");
+            });
+            b.Property(x => x.Latitude).HasPrecision(9, 6);
+            b.Property(x => x.Longitude).HasPrecision(9, 6);
             b.Property(x => x.Name).HasMaxLength(200);
             b.Property(x => x.Address).HasMaxLength(500);
             b.Property(x => x.Phone).HasMaxLength(32);
@@ -436,7 +444,7 @@ public class BeautyDbContext : DbContext
                 Check<MessageSenderType>(t, "beauty_messages", "sender_type");
                 // TASK-749 (§23.3): callback - надмножина без backfill
                 // TASK-767 (§25.3): contact - надмножина без backfill
-                t.HasCheckConstraint("ck_beauty_messages_kind", "kind IN ('text', 'command', 'unsupported', 'callback', 'contact')");
+                t.HasCheckConstraint("ck_beauty_messages_kind", "kind IN ('text', 'command', 'unsupported', 'callback', 'contact', 'location')");
                 t.HasCheckConstraint("ck_beauty_messages_contact_verdict", "contact_verdict IS NULL OR contact_verdict IN ('own', 'foreign', 'invalid')");
                 t.HasCheckConstraint("ck_beauty_messages_contact_fields", "kind = 'contact' OR (contact_phone IS NULL AND contact_verdict IS NULL)");
                 t.HasCheckConstraint("ck_beauty_messages_contact_phone",
@@ -913,7 +921,12 @@ public class BeautyDbContext : DbContext
             Base(b, "beauty_chat_keyboards", t =>
             {
                 t.HasCheckConstraint("ck_beauty_chat_keyboards_kind",
-                    "kind IN ('booking_confirm', 'slot_pick', 'reminder_choice', 'appointment_list', 'appointment_actions', 'cancel_confirm', 'marketing_consent', 'campaign_offer')");
+                    "kind IN ('booking_confirm', 'slot_pick', 'reminder_choice', 'appointment_list', 'appointment_actions', 'cancel_confirm', 'marketing_consent', 'campaign_offer', 'flow_last_location', 'flow_location', 'flow_service', 'flow_specialist', 'flow_time', 'flow_day')");
+                // TASK-836 (ADR-020 §28.10): зв'язок з потоком лише для flow_*; flow_id може бути NULL, коли клавіатура вже не active (retention потоку)
+                t.HasCheckConstraint("ck_beauty_chat_keyboards_flow_none",
+                    "kind LIKE 'flow\\_%' OR (flow_id IS NULL AND flow_version IS NULL)");
+                t.HasCheckConstraint("ck_beauty_chat_keyboards_flow_link",
+                    "kind NOT LIKE 'flow\\_%' OR (flow_version IS NOT NULL AND (flow_id IS NOT NULL OR status <> 'active'))");
                 // TASK-776 (§26.3): кнопка кампанії завжди прив'язана до одержувача
                 t.HasCheckConstraint("ck_beauty_chat_keyboards_campaign_recipient", "kind <> 'campaign_offer' OR campaign_recipient_id IS NOT NULL");
                 t.HasCheckConstraint("ck_beauty_chat_keyboards_token", "token ~ '^[A-Za-z0-9_-]{22}$'");
@@ -939,6 +952,9 @@ public class BeautyDbContext : DbContext
             TenantFk(b, x => x.Appointment, x => new { x.TenantId, x.AppointmentId }, DeleteBehavior.Restrict);
             TenantFk(b, x => x.UsedByMessage, x => new { x.TenantId, x.UsedByMessageId }, DeleteBehavior.Restrict);
             TenantFk(b, x => x.CampaignRecipient, x => new { x.TenantId, x.CampaignRecipientId }, DeleteBehavior.Restrict);
+            // ON DELETE SET NULL (flow_id) (PG15+) виставляє міграція вручну: EF для складеного FK обнулив би і tenant_id
+            TenantFk(b, x => x.Flow, x => new { x.TenantId, x.FlowId }, DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.FlowId });
             b.HasIndex(x => new { x.TenantId, x.CampaignRecipientId });
             b.HasIndex(x => new { x.TenantId, x.MessageId }).IsUnique(); // одна клавіатура на повідомлення (і індекс FK)
             b.HasIndex(x => new { x.TenantId, x.Token }).IsUnique();
@@ -950,6 +966,60 @@ public class BeautyDbContext : DbContext
             b.HasIndex(x => new { x.TenantId, x.ProposalId });
             b.HasIndex(x => new { x.TenantId, x.AppointmentId });
             b.HasIndex(x => new { x.TenantId, x.UsedByMessageId });
+        });
+
+        // ---------- TASK-836 (ADR-020 §2.4, контракти §28.10): автомат запису ----------
+        mb.Entity<ChatBookingFlow>(b =>
+        {
+            Base(b, "beauty_chat_booking_flows", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_chat_booking_flows_status", "status IN ('active', 'completed', 'cancelled', 'expired', 'superseded')");
+                t.HasCheckConstraint("ck_beauty_chat_booking_flows_step",
+                    "step IN ('last_location', 'location', 'service', 'specialist', 'time', 'day', 'confirm')");
+                t.HasCheckConstraint("ck_beauty_chat_booking_flows_origin", "origin IN ('button', 'command', 'llm', 'text')");
+                t.HasCheckConstraint("ck_beauty_chat_booking_flows_cancel_reason",
+                    "cancel_reason IS NULL OR cancel_reason IN ('client', 'declined', 'handoff', 'no_services')");
+                t.HasCheckConstraint("ck_beauty_chat_booking_flows_version", "version >= 0");
+                t.HasCheckConstraint("ck_beauty_chat_booking_flows_skipped_steps",
+                    "skipped_steps <@ ARRAY['last_location','location','specialist']::varchar[]");
+                t.HasCheckConstraint("ck_beauty_chat_booking_flows_finished", "(status = 'active') = (finished_at IS NULL)");
+                t.HasCheckConstraint("ck_beauty_chat_booking_flows_cancel", "(status = 'cancelled') = (cancel_reason IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_chat_booking_flows_step_location",
+                    "step NOT IN ('service', 'specialist', 'time', 'day', 'confirm') OR location_id IS NOT NULL");
+                t.HasCheckConstraint("ck_beauty_chat_booking_flows_step_service",
+                    "step NOT IN ('specialist', 'time', 'day', 'confirm') OR service_id IS NOT NULL");
+                t.HasCheckConstraint("ck_beauty_chat_booking_flows_step_specialist",
+                    "step NOT IN ('time', 'day', 'confirm') OR specialist_id IS NOT NULL");
+                t.HasCheckConstraint("ck_beauty_chat_booking_flows_step_confirm", "step <> 'confirm' OR proposal_id IS NOT NULL");
+                t.HasCheckConstraint("ck_beauty_chat_booking_flows_step_last_location",
+                    "step <> 'last_location' OR suggested_last_location_id IS NOT NULL");
+            });
+            b.Property(x => x.Status).HasMaxLength(16).HasDefaultValue("active");
+            b.Property(x => x.Step).HasMaxLength(16);
+            b.Property(x => x.Version).HasDefaultValue(0);
+            b.Property(x => x.Origin).HasMaxLength(16).HasDefaultValue("button");
+            b.Property(x => x.ListCursor).HasMaxLength(64);
+            b.Property(x => x.CancelReason).HasMaxLength(32);
+            b.Property(x => x.SkippedSteps).HasColumnType("character varying(16)[]").HasDefaultValueSql("'{}'");
+            TenantFk(b, x => x.Conversation, x => new { x.TenantId, x.ConversationId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Service, x => new { x.TenantId, x.ServiceId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Specialist, x => new { x.TenantId, x.SpecialistId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Location, x => new { x.TenantId, x.LocationId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.SuggestedLastLocation, x => new { x.TenantId, x.SuggestedLastLocationId }, DeleteBehavior.Restrict);
+            TenantFk(b, x => x.Proposal, x => new { x.TenantId, x.ProposalId }, DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.SuggestedLastLocationId });
+            // одна активна flow на розмову
+            b.HasIndex(x => new { x.TenantId, x.ConversationId }).IsUnique().HasFilter("status = 'active'")
+                .HasDatabaseName("ux_beauty_chat_booking_flows_active");
+            b.HasIndex(x => new { x.TenantId, x.ConversationId, x.CreatedAt }); // FK + історія
+            b.HasIndex(x => new { x.TenantId, x.ExpiresAt }).HasFilter("status = 'active'")
+                .HasDatabaseName("ix_beauty_chat_booking_flows_sweeper");
+            b.HasIndex(x => new { x.TenantId, x.FinishedAt }).HasFilter("status <> 'active'")
+                .HasDatabaseName("ix_beauty_chat_booking_flows_retention");
+            b.HasIndex(x => new { x.TenantId, x.ServiceId });
+            b.HasIndex(x => new { x.TenantId, x.SpecialistId });
+            b.HasIndex(x => new { x.TenantId, x.LocationId });
+            b.HasIndex(x => new { x.TenantId, x.ProposalId });
         });
     }
 
@@ -986,6 +1056,9 @@ public class BeautyDbContext : DbContext
             b.HasIndex(x => new { x.TenantId, x.CampaignId }).HasFilter("campaign_id IS NOT NULL");
             TenantFk(b, x => x.SummaryMessage, x => new { x.TenantId, x.SummaryMessageId }, DeleteBehavior.Restrict);
             TenantFk(b, x => x.Appointment, x => new { x.TenantId, x.AppointmentId }, DeleteBehavior.Restrict);
+            // TASK-836: ON DELETE SET NULL (flow_id) виставляє міграція вручну (як для beauty_chat_keyboards)
+            TenantFk(b, x => x.Flow, x => new { x.TenantId, x.FlowId }, DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.FlowId });
             b.HasIndex(x => new { x.TenantId, x.ConfirmationTokenHash }).IsUnique()
                 .HasDatabaseName("ux_beauty_chat_booking_proposals_token");
             // одна активна пропозиція на розмову
