@@ -176,7 +176,9 @@ public sealed class ChatKeyboardBuilder(ChatButtonsOptions opts)
             var resched = "🕐 Змінити час";
             var reschedAt = options.Count;
             options.Add(new KeyboardOption(ButtonVerbs.Reschedule, resched, AppointmentId: a.Id));
-            rows.Add([new PlannedButton(cancel, ButtonVerbs.CancelAsk, cancelAt), new PlannedButton(resched, ButtonVerbs.Reschedule, reschedAt)]);
+            // Одна кнопка на рядок: у півширини підпис «Скасувати пт 31.10 14:30» обрізається на вузьких екранах.
+            rows.Add([new PlannedButton(cancel, ButtonVerbs.CancelAsk, cancelAt)]);
+            rows.Add([new PlannedButton(resched, ButtonVerbs.Reschedule, reschedAt)]);
         }
         rows.Add([new PlannedButton(StatelessLabels.Book, ButtonVerbs.Book)]);
         return new KeyboardPlan(KeyboardKinds.AppointmentList, options, rows);
