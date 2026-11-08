@@ -5001,3 +5001,346 @@ BEGIN
 END $EF$;
 COMMIT;
 
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    ALTER TABLE beauty_messages DROP CONSTRAINT ck_beauty_messages_kind;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    ALTER TABLE beauty_chat_keyboards DROP CONSTRAINT ck_beauty_chat_keyboards_kind;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    ALTER TABLE beauty_locations ADD latitude numeric(9,6);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    ALTER TABLE beauty_locations ADD longitude numeric(9,6);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    ALTER TABLE beauty_chat_keyboards ADD flow_id uuid;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    ALTER TABLE beauty_chat_keyboards ADD flow_version integer;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    ALTER TABLE beauty_chat_booking_proposals ADD flow_id uuid;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    CREATE TABLE beauty_chat_booking_flows (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        conversation_id uuid NOT NULL,
+        status character varying(16) NOT NULL DEFAULT 'active',
+        step character varying(16) NOT NULL,
+        version integer NOT NULL DEFAULT 0,
+        service_id uuid,
+        specialist_id uuid,
+        location_id uuid,
+        suggested_last_location_id uuid,
+        day date,
+        preferred_time time without time zone,
+        cursor_at timestamp with time zone,
+        list_cursor character varying(64),
+        skipped_steps character varying(16)[] NOT NULL DEFAULT ('{}'),
+        proposal_id uuid,
+        origin character varying(16) NOT NULL DEFAULT 'button',
+        cancel_reason character varying(32),
+        expires_at timestamp with time zone NOT NULL,
+        finished_at timestamp with time zone,
+        tenant_id uuid NOT NULL,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        updated_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_chat_booking_flows PRIMARY KEY (id),
+        CONSTRAINT ak_chat_booking_flows_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT ck_beauty_chat_booking_flows_cancel CHECK ((status = 'cancelled') = (cancel_reason IS NOT NULL)),
+        CONSTRAINT ck_beauty_chat_booking_flows_cancel_reason CHECK (cancel_reason IS NULL OR cancel_reason IN ('client', 'declined', 'handoff', 'no_services')),
+        CONSTRAINT ck_beauty_chat_booking_flows_finished CHECK ((status = 'active') = (finished_at IS NULL)),
+        CONSTRAINT ck_beauty_chat_booking_flows_origin CHECK (origin IN ('button', 'command', 'llm', 'text')),
+        CONSTRAINT ck_beauty_chat_booking_flows_skipped_steps CHECK (skipped_steps <@ ARRAY['last_location','location','specialist']::varchar[]),
+        CONSTRAINT ck_beauty_chat_booking_flows_status CHECK (status IN ('active', 'completed', 'cancelled', 'expired', 'superseded')),
+        CONSTRAINT ck_beauty_chat_booking_flows_step CHECK (step IN ('last_location', 'location', 'service', 'specialist', 'time', 'day', 'confirm')),
+        CONSTRAINT ck_beauty_chat_booking_flows_step_confirm CHECK (step <> 'confirm' OR proposal_id IS NOT NULL),
+        CONSTRAINT ck_beauty_chat_booking_flows_step_last_location CHECK (step <> 'last_location' OR suggested_last_location_id IS NOT NULL),
+        CONSTRAINT ck_beauty_chat_booking_flows_step_location CHECK (step NOT IN ('service', 'specialist', 'time', 'day', 'confirm') OR location_id IS NOT NULL),
+        CONSTRAINT ck_beauty_chat_booking_flows_step_service CHECK (step NOT IN ('specialist', 'time', 'day', 'confirm') OR service_id IS NOT NULL),
+        CONSTRAINT ck_beauty_chat_booking_flows_step_specialist CHECK (step NOT IN ('time', 'day', 'confirm') OR specialist_id IS NOT NULL),
+        CONSTRAINT ck_beauty_chat_booking_flows_version CHECK (version >= 0),
+        CONSTRAINT fk_beauty_chat_booking_flows_beauty_chat_booking_proposals_ten FOREIGN KEY (tenant_id, proposal_id) REFERENCES beauty_chat_booking_proposals (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_chat_booking_flows_beauty_conversations_tenant_id_co FOREIGN KEY (tenant_id, conversation_id) REFERENCES beauty_conversations (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_chat_booking_flows_beauty_locations_tenant_id_locati FOREIGN KEY (tenant_id, location_id) REFERENCES beauty_locations (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_chat_booking_flows_beauty_locations_tenant_id_sugges FOREIGN KEY (tenant_id, suggested_last_location_id) REFERENCES beauty_locations (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_chat_booking_flows_beauty_services_tenant_id_service FOREIGN KEY (tenant_id, service_id) REFERENCES beauty_services (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_chat_booking_flows_beauty_specialists_tenant_id_spec FOREIGN KEY (tenant_id, specialist_id) REFERENCES beauty_specialists (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    ALTER TABLE beauty_messages ADD CONSTRAINT ck_beauty_messages_kind CHECK (kind IN ('text', 'command', 'unsupported', 'callback', 'contact', 'location'));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    ALTER TABLE beauty_locations ADD CONSTRAINT ck_beauty_locations_coordinates CHECK ((latitude IS NULL) = (longitude IS NULL) AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    CREATE INDEX ix_beauty_chat_keyboards_tenant_id_flow_id ON beauty_chat_keyboards (tenant_id, flow_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    ALTER TABLE beauty_chat_keyboards ADD CONSTRAINT ck_beauty_chat_keyboards_flow_link CHECK (kind NOT LIKE 'flow\_%' OR (flow_version IS NOT NULL AND (flow_id IS NOT NULL OR status <> 'active')));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    ALTER TABLE beauty_chat_keyboards ADD CONSTRAINT ck_beauty_chat_keyboards_flow_none CHECK (kind LIKE 'flow\_%' OR (flow_id IS NULL AND flow_version IS NULL));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    ALTER TABLE beauty_chat_keyboards ADD CONSTRAINT ck_beauty_chat_keyboards_kind CHECK (kind IN ('booking_confirm', 'slot_pick', 'reminder_choice', 'appointment_list', 'appointment_actions', 'cancel_confirm', 'marketing_consent', 'campaign_offer', 'flow_last_location', 'flow_location', 'flow_service', 'flow_specialist', 'flow_time', 'flow_day'));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    CREATE INDEX ix_beauty_chat_booking_proposals_tenant_id_flow_id ON beauty_chat_booking_proposals (tenant_id, flow_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    CREATE INDEX ix_beauty_chat_booking_flows_retention ON beauty_chat_booking_flows (tenant_id, finished_at) WHERE status <> 'active';
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    CREATE INDEX ix_beauty_chat_booking_flows_sweeper ON beauty_chat_booking_flows (tenant_id, expires_at) WHERE status = 'active';
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    CREATE INDEX ix_beauty_chat_booking_flows_tenant_id_conversation_id_created ON beauty_chat_booking_flows (tenant_id, conversation_id, created_at);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    CREATE INDEX ix_beauty_chat_booking_flows_tenant_id_location_id ON beauty_chat_booking_flows (tenant_id, location_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    CREATE INDEX ix_beauty_chat_booking_flows_tenant_id_proposal_id ON beauty_chat_booking_flows (tenant_id, proposal_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    CREATE INDEX ix_beauty_chat_booking_flows_tenant_id_service_id ON beauty_chat_booking_flows (tenant_id, service_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    CREATE INDEX ix_beauty_chat_booking_flows_tenant_id_specialist_id ON beauty_chat_booking_flows (tenant_id, specialist_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    CREATE INDEX ix_beauty_chat_booking_flows_tenant_id_suggested_last_location ON beauty_chat_booking_flows (tenant_id, suggested_last_location_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    CREATE UNIQUE INDEX ux_beauty_chat_booking_flows_active ON beauty_chat_booking_flows (tenant_id, conversation_id) WHERE status = 'active';
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+
+    ALTER TABLE beauty_chat_booking_proposals
+        ADD CONSTRAINT fk_beauty_chat_booking_proposals_chat_booking_flows_tenant_id_
+        FOREIGN KEY (tenant_id, flow_id) REFERENCES beauty_chat_booking_flows (tenant_id, id) ON DELETE SET NULL (flow_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+
+    ALTER TABLE beauty_chat_keyboards
+        ADD CONSTRAINT fk_beauty_chat_keyboards_chat_booking_flows_tenant_id_flow_id
+        FOREIGN KEY (tenant_id, flow_id) REFERENCES beauty_chat_booking_flows (tenant_id, id) ON DELETE SET NULL (flow_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    ALTER TABLE beauty_chat_booking_flows ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    ALTER TABLE beauty_chat_booking_flows FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_chat_booking_flows
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+
+    DO $$
+    DECLARE
+        t text;
+    BEGIN
+        FOREACH t IN ARRAY ARRAY['beauty_chat_booking_flows', 'beauty_chat_keyboards', 'beauty_messages', 'beauty_locations', 'beauty_chat_booking_proposals']
+        LOOP
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_class c
+                WHERE c.oid = to_regclass('public.' || t) AND c.relrowsecurity AND c.relforcerowsecurity) THEN
+                RAISE EXCEPTION 'FORCE ROW LEVEL SECURITY is not enabled on %', t;
+            END IF;
+        END LOOP;
+    END
+    $$;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107134706_beauty_chat_booking_flow') THEN
+    INSERT INTO "__EFMigrationsHistory" (migration_id, product_version)
+    VALUES ('20261107134706_beauty_chat_booking_flow', '8.0.11');
+    END IF;
+END $EF$;
+COMMIT;
+
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107145615_beauty_chat_booking_flow_step_checks') THEN
+    ALTER TABLE beauty_chat_booking_flows DROP CONSTRAINT ck_beauty_chat_booking_flows_step_location;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107145615_beauty_chat_booking_flow_step_checks') THEN
+    ALTER TABLE beauty_chat_booking_flows DROP CONSTRAINT ck_beauty_chat_booking_flows_step_service;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107145615_beauty_chat_booking_flow_step_checks') THEN
+    ALTER TABLE beauty_chat_booking_flows DROP CONSTRAINT ck_beauty_chat_booking_flows_step_specialist;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107145615_beauty_chat_booking_flow_step_checks') THEN
+    ALTER TABLE beauty_chat_booking_flows ADD CONSTRAINT ck_beauty_chat_booking_flows_step_location CHECK (step NOT IN ('time', 'day', 'confirm') OR location_id IS NOT NULL);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107145615_beauty_chat_booking_flow_step_checks') THEN
+    ALTER TABLE beauty_chat_booking_flows ADD CONSTRAINT ck_beauty_chat_booking_flows_step_service CHECK (step NOT IN ('specialist', 'last_location', 'location', 'time', 'day', 'confirm') OR service_id IS NOT NULL);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107145615_beauty_chat_booking_flow_step_checks') THEN
+    ALTER TABLE beauty_chat_booking_flows ADD CONSTRAINT ck_beauty_chat_booking_flows_step_specialist CHECK (step NOT IN ('last_location', 'location', 'time', 'day', 'confirm') OR specialist_id IS NOT NULL);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261107145615_beauty_chat_booking_flow_step_checks') THEN
+    INSERT INTO "__EFMigrationsHistory" (migration_id, product_version)
+    VALUES ('20261107145615_beauty_chat_booking_flow_step_checks', '8.0.11');
+    END IF;
+END $EF$;
+COMMIT;
+
