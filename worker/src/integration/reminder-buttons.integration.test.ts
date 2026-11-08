@@ -144,6 +144,7 @@ describe("reminder keyboard (§23.7 p. 10)", () => {
     expect(new Date(k.expires_at).getTime()).toBe(visit().getTime());
     const flat = m.actions.rows.flat() as { label: string; data: string }[];
     expect(flat.map((b) => b.label)).toEqual(["✅ Підтверджую візит", "❌ Скасувати візит", "🔕 Не нагадувати"]);
+    expect(m.actions.rows.map((r: unknown[]) => r.length)).toEqual([1, 1, 1]); // одна кнопка на рядок (вузькі екрани)
     expect(flat.map((b) => b.data)).toEqual([`aa:${k.token}`, `ac:${k.token}`, "i:stop"]);
     for (const b of flat) expect(Buffer.byteLength(b.data, "utf8")).toBeLessThanOrEqual(64);
     expect(k.options.map((o: { verb: string }) => o.verb)).toEqual(["aa", "ac", "i:stop"]);

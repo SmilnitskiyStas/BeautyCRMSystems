@@ -36,7 +36,9 @@ export function buildReminderKeyboard(appointmentId: string) {
   return {
     token,
     actions: { rows: [
-      [{ label: labels.aa, data: `aa:${token}` }, { label: labels.ac, data: `ac:${token}` }],
+      // Одна кнопка на рядок: на вузьких екранах (iPhone 13) підпис у півширини обрізається.
+      [{ label: labels.aa, data: `aa:${token}` }],
+      [{ label: labels.ac, data: `ac:${token}` }],
       [{ label: labels.stop, data: "i:stop" }],
     ] },
     options: [
