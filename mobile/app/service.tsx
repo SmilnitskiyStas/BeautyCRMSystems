@@ -45,7 +45,7 @@ export default function ServiceScreen() {
           right={formatPrice(s.priceFinal)}
           onPress={() => {
             setService(s);
-            router.push("/time");
+            router.push("/specialist");
           }}
         />
       ))}

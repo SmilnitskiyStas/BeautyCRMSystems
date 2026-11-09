@@ -16,9 +16,18 @@ export const formatPrice = (n: number): string => `${Number.isInteger(n) ? n : n
 
 type T = (key: string, opts?: Record<string, unknown>) => string;
 
-/** Умови скасування з полів API (§11) - без зашитих відсотків: усе береться з `CancellationTerms`. */
-export function cancellationLines(c: CancellationTerms | undefined, t: T): string[] {
+/**
+ * Умови скасування (§11), керовані салоном. Повертає рядки для показу:
+ *  - `[]`, якщо `showToClient === false` (блок не показується взагалі);
+ *  - рядки власного тексту салону (`customText`, переноси збережено), якщо він непорожній;
+ *  - інакше автоматичні рядки з числових полів (без зашитих відсотків);
+ *  - немає `cancellation` - «уточнюйте в закладі». Відсутні нові поля (старі відповіді) = показувати авто.
+ */
+export function cancellationLines(c: CancellationTerms | null | undefined, t: T): string[] {
   if (!c) return [t("cancellation.none")];
+  if (c.showToClient === false) return [];
+  const custom = typeof c.customText === "string" ? c.customText.trim() : "";
+  if (custom) return custom.split(/\r\n|\r|\n/).map((l) => l.trimEnd());
   const lines: string[] = [];
   if (c.refundPercentOutside >= 100 && !c.deductFee) {
     lines.push(t("cancellation.freeOutside", { h: c.windowHours }));

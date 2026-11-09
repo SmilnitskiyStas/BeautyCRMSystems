@@ -2,11 +2,15 @@ import { useEffect, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useTranslation } from "react-i18next";
-import { clientSchema, humanizeBookingError, isSlotLost, type BookingResult, type CreateAppointmentRequest } from "@beauty/booking-core";
+import { humanizeBookingError, isSlotLost, type BookingResult, type CreateAppointmentRequest, type ReminderOption } from "@beauty/booking-core";
 import { bookingSubmitter, localStore } from "@/services";
 import { isRetryable } from "@/features/booking/submit";
+import { REMINDER_OPTIONS, validateCheckoutForm } from "@/features/booking/checkoutForm";
+import { BookingSummary } from "@/features/booking/BookingSummary";
+import { pickOption } from "@/features/booking/summary";
+import { Select } from "@/components/Select";
 import { useDraft } from "@/state/draft";
-import { cancellationLines, formatPrice, formatWhen } from "@/lib/format";
+import { cancellationLines, formatWhen } from "@/lib/format";
 import { Body, Button, ErrorText, Field, H1, Label, Screen } from "@/ui";
 import { colors, fonts, radius, space, TOUCH } from "@/theme";
 
@@ -14,13 +18,15 @@ import { colors, fonts, radius, space, TOUCH } from "@/theme";
 export default function CheckoutScreen() {
   const { t } = useTranslation();
   const router = useRouter();
-  const { location, service, specialistId, specialistName, slot } = useDraft();
+  const { location, service, specialistName, specialist, slot } = useDraft();
   const reset = useDraft((d) => d.reset);
 
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [reminder, setReminder] = useState<ReminderOption>("none");
   const [consent, setConsent] = useState(false); // ніколи не передзаповнено
-  const [errors, setErrors] = useState<{ name?: string; phone?: string; consent?: string }>({});
+  const [errors, setErrors] = useState<{ name?: string; phone?: string; email?: string; consent?: string }>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<BookingResult | null>(null);
@@ -34,6 +40,7 @@ export default function CheckoutScreen() {
       if (p) {
         setName((n) => n || p.name);
         setPhone((v) => v || p.phone);
+        setEmail((v) => v || p.email || "");
       }
     });
   }, []);
@@ -58,25 +65,19 @@ export default function CheckoutScreen() {
   if (!location || !service || !slot) return null;
 
   const submit = async () => {
-    const parsed = clientSchema.safeParse({ name, phone });
-    const next: typeof errors = {};
-    if (!parsed.success) {
-      for (const i of parsed.error.issues) {
-        const k = i.path[0] as "name" | "phone";
-        next[k] ??= i.message;
-      }
-    }
+    const { errors: fieldErrors, client } = validateCheckoutForm({ name, phone, email, reminder });
+    const next: typeof errors = { ...fieldErrors };
     if (!consent) next.consent = t("checkout.consentRequired");
     setErrors(next);
-    if (!parsed.success || !consent) return;
+    if (!client || !consent) return;
 
     const req: CreateAppointmentRequest = {
       locationId: location.locationId,
       specialistId: slot.specialistId,
       serviceId: service.id,
       startsAt: slot.startsAt,
-      client: parsed.data,
-      reminder: "none",
+      client: { ...client, marketingConsent: false },
+      reminder,
       paymentMethod: "cash",
     };
     setSubmitting(true);
@@ -87,7 +88,7 @@ export default function CheckoutScreen() {
         serviceName: service.name,
         specialistName: specialistName || t("checkout.anySpecialist"),
       });
-      await localStore.setProfile(parsed.data);
+      await localStore.setProfile({ name: client.name, phone: client.phone, email: client.email });
       setDone(result);
     } catch (e) {
       if (isSlotLost(e)) {
@@ -102,23 +103,21 @@ export default function CheckoutScreen() {
     }
   };
 
+  const terms = cancellationLines(slot.cancellation, t as never);
+
   return (
     <Screen>
-      <View style={{ gap: space.xs }}>
-        <Label>{t("checkout.summaryService")}</Label>
-        <Body>{`${service.name} · ${service.durationMinutes} ${t("common.minutes")}`}</Body>
-        <Label>{t("checkout.summarySpecialist")}</Label>
-        <Body>{specialistId === "any" ? t("checkout.anySpecialist") : specialistName}</Body>
-        <Label>{t("checkout.summaryWhen")}</Label>
-        <Body>{`${location.name}, ${formatWhen(slot.startsAt)}`}</Body>
-        <Label>{t("checkout.summaryPrice")}</Label>
-        <Body>{formatPrice(service.priceFinal)}</Body>
-        {cancellationLines(slot.cancellation, t as never).map((l) => (
-          <Body key={l} muted>
-            {l}
-          </Body>
-        ))}
-      </View>
+      <BookingSummary location={location} service={service} specialist={specialist} startsAt={slot.startsAt} onChangeTime={() => router.back()} />
+      {terms.length > 0 ? (
+        <View style={{ gap: space.xs }} accessible accessibilityLabel={`${t("checkout.summaryPrice")}. ${terms.join(" ")}`}>
+          <Label>{t("checkout.summaryPrice")}</Label>
+          {terms.map((l, i) => (
+            <Body key={i} muted>
+              {l}
+            </Body>
+          ))}
+        </View>
+      ) : null}
 
       <Field label={t("checkout.name")} value={name} onChangeText={setName} autoComplete="name" textContentType="name" error={errors.name} />
       <Field
@@ -130,6 +129,29 @@ export default function CheckoutScreen() {
         autoComplete="tel"
         textContentType="telephoneNumber"
         error={errors.phone}
+      />
+      <View style={{ gap: space.xs }}>
+        <Field
+          label={t("checkout.email")}
+          placeholder={t("checkout.emailPlaceholder")}
+          value={email}
+          onChangeText={setEmail}
+          keyboardType="email-address"
+          autoCapitalize="none"
+          autoCorrect={false}
+          autoComplete="email"
+          textContentType="emailAddress"
+          error={errors.email}
+        />
+        <Text style={{ fontFamily: fonts.body, fontSize: 13, color: colors.muted }}>{t("checkout.emailHint")}</Text>
+      </View>
+
+      <Select
+        label={t("checkout.reminderTitle")}
+        value={reminder}
+        options={REMINDER_OPTIONS.map((o) => ({ value: o, label: t(`checkout.reminder.${o}`) }))}
+        onChange={(v) => setReminder((cur) => pickOption(REMINDER_OPTIONS, cur, v))}
+        closeLabel={t("checkout.close")}
       />
 
       <Pressable

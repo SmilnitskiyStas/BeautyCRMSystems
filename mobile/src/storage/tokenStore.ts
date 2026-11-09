@@ -62,7 +62,7 @@ export const pendingKeySchema = z.object({
 });
 export type PendingKey = z.infer<typeof pendingKeySchema>;
 
-export const profileSchema = z.object({ name: z.string(), phone: z.string() });
+export const profileSchema = z.object({ name: z.string(), phone: z.string(), email: z.string().optional() });
 export type Profile = z.infer<typeof profileSchema>;
 
 const tokenKey = (localId: string) => `${TOKEN_PREFIX}${localId}`;

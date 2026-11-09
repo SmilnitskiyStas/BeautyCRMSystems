@@ -85,7 +85,7 @@ function AppointmentCard({ record }: { record: AppointmentRecord }) {
   };
 
   const confirmCancel = () =>
-    Alert.alert(t("appointments.cancelConfirmTitle"), cancellationLines(a?.cancellation, t as never).join("\n"), [
+    Alert.alert(t("appointments.cancelConfirmTitle"), cancellationLines(a?.cancellation, t as never).join("\n") || undefined, [
       { text: t("appointments.cancelConfirmNo"), style: "cancel" },
       { text: t("appointments.cancelConfirmYes"), style: "destructive", onPress: () => void doCancel() },
     ]);
@@ -96,6 +96,7 @@ function AppointmentCard({ record }: { record: AppointmentRecord }) {
       <Body>{`${a?.locationName ?? record.locationName} · ${formatWhen(startsAt)}`}</Body>
       <Label>{t(`appointments.status.${status}`, { defaultValue: status })}</Label>
       {a ? <Body muted>{formatPrice(a.priceFinal)}</Body> : null}
+      {a && a.reminderOption !== "none" ? <Body muted>{t("appointments.reminderLine", { label: t(`checkout.reminder.${a.reminderOption}`) })}</Body> : null}
       {stale && !q.isLoading ? <Body muted>{t("appointments.stale")}</Body> : null}
       {result ? (
         <Body>

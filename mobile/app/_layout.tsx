@@ -68,6 +68,8 @@ export default function RootLayout() {
           <Stack.Screen name="index" options={{ title: "Beauty" }} />
           <Stack.Screen name="l/[code]" options={{ title: "Beauty" }} />
           <Stack.Screen name="service" options={{ title: t("service.title") }} />
+          <Stack.Screen name="specialist" options={{ title: t("specialist.title") }} />
+          <Stack.Screen name="reviews" options={{ title: t("reviews.title"), presentation: "modal" }} />
           <Stack.Screen name="time" options={{ title: t("time.title") }} />
           <Stack.Screen name="checkout" options={{ title: t("checkout.title") }} />
           <Stack.Screen name="appointments" options={{ title: t("appointments.title") }} />

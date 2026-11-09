@@ -44,3 +44,24 @@ export function longDate(iso: string): string {
   const day = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
   return `${uk.weekdaysLong[day.getUTCDay()]}, ${day.getUTCDate()} ${uk.months[day.getUTCMonth()]}`;
 }
+
+/** «ср, 13 листопада» із ISO зі зсувом закладу (дата береться з рядка, без Intl); не-ISO -> null. */
+export function shortDateLabel(iso: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!m) return null;
+  const day = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return `${uk.weekdaysShort[day.getUTCDay()]}, ${day.getUTCDate()} ${uk.months[day.getUTCMonth()]}`;
+}
+
+/** «10:00» із ISO; не-ISO -> null. */
+export function timeLabel(iso: string): string | null {
+  const m = /T(\d{2}):(\d{2})/.exec(iso);
+  return m ? `${m[1]}:${m[2]}` : null;
+}
+
+/** «ср, 13 листопада · 10:00». */
+export function slotLabel(iso: string): string {
+  const d = shortDateLabel(iso);
+  const t = timeLabel(iso);
+  return d && t ? `${d} · ${t}` : iso;
+}
