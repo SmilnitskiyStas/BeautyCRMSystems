@@ -6,6 +6,7 @@ import { processReminder } from "./beauty-reminder";
 import { processCampaign } from "./beauty-campaign";
 import { processWinback } from "./beauty-winback";
 import { processReviewRequest } from "./beauty-review";
+import { processConfirmation } from "./beauty-confirmation";
 
 /** BullMQ-backed QueuePort. jobId dedups at queue level too. */
 export function createBullQueuePort(connection: ConnectionOptions): QueuePort {
@@ -35,5 +36,6 @@ export function registerBeautyWorkers(connection: ConnectionOptions, deps: Beaut
     new Worker(QUEUES.campaign, (job) => processCampaign(deps, job.data), { connection }),
     new Worker(QUEUES.winback, () => processWinback(deps), { connection }),
     new Worker(QUEUES.review, (job) => processReviewRequest(deps, job.data), { connection }),
+    new Worker(QUEUES.confirmation, (job) => processConfirmation(deps, job.data), { connection }),
   ];
 }

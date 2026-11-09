@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 import type {
-  AppointmentInfo, AppointmentStatus, BeautyDataPort, CampaignInfo, ClientInfo, LapsedClient, OutboundMessage,
+  AppointmentDetails, AppointmentInfo, AppointmentStatus, BeautyDataPort, CampaignInfo, ClientInfo, LapsedClient, OutboundMessage,
   ReminderOption, StoredMessage,
 } from "../ports";
 import { currentTenantId, type TenantDb } from "../db/tenant-db";
@@ -12,20 +12,25 @@ const REMINDER_KEY = /^reminder:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}
 
 export function kindFromKey(key: string | null): OutboundMessage["kind"] {
   const prefix = key?.split(":", 1)[0];
-  return prefix === "reminder" || prefix === "campaign" || prefix === "winback" || prefix === "review" ? prefix : "message";
+  return prefix === "reminder" || prefix === "confirmation" || prefix === "campaign" || prefix === "winback" || prefix === "review" ? prefix : "message";
 }
 
-/** Latest active conversation of a client = where we can reach them (channel + chat id). */
+/**
+ * Де можна достукатися до клієнта: останній активний месенджер-діалог; якщо його немає, але є Client.Email
+ * (клієнт з мобільного застосунку) — fallback `channel='email', address=email`. Месенджер має пріоритет.
+ */
 const CLIENT_SQL = `
   SELECT cl.id, cl.tenant_id, cl.full_name, cl.marketing_consent, cl.unsubscribed,
-         conv.external_chat_id, conv.type
+         COALESCE(conv.external_chat_id, NULLIF(btrim(cl.email), '')) AS external_chat_id,
+         COALESCE(conv.type, 'email') AS type
   FROM beauty_clients cl
-  JOIN LATERAL (
+  LEFT JOIN LATERAL (
     SELECT c.external_chat_id, ch.type FROM beauty_conversations c
     JOIN beauty_channels ch ON ch.id = c.channel_id AND ch.is_active
     WHERE c.client_id = cl.id
     ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC LIMIT 1
-  ) conv ON true`;
+  ) conv ON true
+  WHERE (conv.external_chat_id IS NOT NULL OR NULLIF(btrim(cl.email), '') IS NOT NULL)`;
 
 interface ClientRow {
   id: string; tenant_id: string; full_name: string; marketing_consent: boolean; unsubscribed: boolean;
@@ -54,8 +59,23 @@ export class PgBeautyData implements BeautyDataPort {
   }
 
   async getClient(id: string): Promise<ClientInfo | null> {
-    const { rows } = await this.db.tx((c) => c.query<ClientRow>(`${CLIENT_SQL} WHERE cl.id = $1 AND cl.deleted_at IS NULL`, [id]));
+    const { rows } = await this.db.tx((c) => c.query<ClientRow>(`${CLIENT_SQL} AND cl.id = $1 AND cl.deleted_at IS NULL`, [id]));
     return rows[0] ? toClient(rows[0]) : null;
+  }
+
+  async getAppointmentDetails(id: string): Promise<AppointmentDetails | null> {
+    const { rows } = await this.db.tx((c) => c.query(
+      `SELECT l.name AS location_name, l.address AS location_address, l.timezone, s.name AS service_name, sp.full_name AS specialist_name
+       FROM beauty_appointments a
+       JOIN beauty_locations l ON l.id = a.location_id
+       JOIN beauty_services s ON s.id = a.service_id
+       JOIN beauty_specialists sp ON sp.id = a.specialist_id
+       WHERE a.id = $1`, [id]));
+    const r = rows[0];
+    return r ? {
+      locationName: r.location_name, locationAddress: r.location_address, timezone: r.timezone,
+      serviceName: r.service_name, specialistName: r.specialist_name,
+    } : null;
   }
 
   /** The schema has no campaigns/segments table yet (open question): campaigns cannot be loaded. */
@@ -65,7 +85,7 @@ export class PgBeautyData implements BeautyDataPort {
   async listLapsedClients(now: Date, inactiveDays: number): Promise<LapsedClient[]> {
     const { rows } = await this.db.tx((c) => c.query<ClientRow & { last_visit: Date }>(
       `SELECT x.*, v.last_visit FROM (${CLIENT_SQL}
-         WHERE cl.deleted_at IS NULL AND cl.marketing_consent AND NOT cl.unsubscribed) x
+         AND cl.deleted_at IS NULL AND cl.marketing_consent AND NOT cl.unsubscribed) x
        JOIN LATERAL (SELECT max(a.starts_at) AS last_visit FROM beauty_appointments a
                      WHERE a.client_id = x.id AND a.status = 'completed') v ON v.last_visit IS NOT NULL
        WHERE v.last_visit < $1::timestamptz - make_interval(days => $2::int)
@@ -81,12 +101,22 @@ export class PgBeautyData implements BeautyDataPort {
       const conv = await c.query<{ id: string }>(
         `SELECT id FROM beauty_conversations WHERE client_id = $1 AND external_chat_id = $2
          ORDER BY last_message_at DESC NULLS LAST LIMIT 1`, [msg.clientId, msg.address]);
-      if (!conv.rows[0]) throw new Error(`No conversation for client ${msg.clientId} / ${msg.address}`);
+      let convId = conv.rows[0]?.id;
+      if (!convId && msg.channel === "email") {
+        // Email-клієнт без діалогу: створюємо його на активному beauty_channels(type='email') закладу/тенанта.
+        const ch = await c.query<{ id: string }>(
+          "SELECT id FROM beauty_channels WHERE lower(type) = 'email' AND is_active ORDER BY created_at LIMIT 1");
+        if (!ch.rows[0]) throw new Error("No active 'email' channel configured for the tenant (beauty_channels.type = 'email')");
+        convId = (await c.query<{ id: string }>(
+          `INSERT INTO beauty_conversations (tenant_id, channel_id, client_id, external_chat_id, last_message_at)
+           VALUES ($1, $2, $3, $4, $5) RETURNING id`, [msg.tenantId, ch.rows[0].id, msg.clientId, msg.address, this.now()])).rows[0]!.id;
+      }
+      if (!convId) throw new Error(`No conversation for client ${msg.clientId} / ${msg.address}`);
       const ins = await c.query<{ id: string }>(
         `INSERT INTO beauty_messages (tenant_id, conversation_id, direction, sender_type, body, status, idempotency_key, sent_at)
          VALUES ($1, $2, 'outbound', 'system', $3, 'pending', $4, $5)
          ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
-         RETURNING id`, [msg.tenantId, conv.rows[0].id, msg.text, msg.idempotencyKey, this.now()]);
+         RETURNING id`, [msg.tenantId, convId, msg.text, msg.idempotencyKey, this.now()]);
       const created = ins.rows.length > 0;
       const id = created ? ins.rows[0]!.id
         : (await c.query<{ id: string }>("SELECT id FROM beauty_messages WHERE idempotency_key = $1", [msg.idempotencyKey])).rows[0]!.id;

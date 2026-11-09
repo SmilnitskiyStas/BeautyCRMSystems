@@ -1,10 +1,10 @@
 import type {
-  AppointmentInfo, BeautyDeps, CampaignInfo, ClientInfo, LapsedClient, NotificationLogEntry, StoredMessage,
+  AppointmentDetails, AppointmentInfo, BeautyDeps, CampaignInfo, ClientInfo, LapsedClient, NotificationLogEntry, StoredMessage,
 } from "../ports";
 
 export function makeDeps(init: {
   now?: Date; appointments?: AppointmentInfo[]; clients?: ClientInfo[]; campaign?: CampaignInfo;
-  audience?: ClientInfo[]; lapsed?: LapsedClient[]; sendFailures?: number; marketingDailyLimit?: number;
+  audience?: ClientInfo[]; details?: AppointmentDetails | null; lapsed?: LapsedClient[]; sendFailures?: number; marketingDailyLimit?: number;
 } = {}) {
   const messages = new Map<string, StoredMessage>();
   const claims = new Map<string, "held" | "done">();
@@ -22,6 +22,7 @@ export function makeDeps(init: {
     data: {
       getAppointment: async (id) => init.appointments?.find((a) => a.id === id) ?? null,
       getClient: async (id) => init.clients?.find((c) => c.id === id) ?? null,
+      getAppointmentDetails: async () => init.details === undefined ? null : init.details,
       getCampaign: async () => init.campaign ?? null,
       listCampaignAudience: async () => init.audience ?? [],
       listLapsedClients: async () => init.lapsed ?? [],

@@ -3,6 +3,7 @@ import type { Logger } from "../adapters/pg-support";
 import { withTenant } from "../db/tenant-db";
 import type { TenantDirectory } from "../db/tenants";
 import { processOutbox } from "../jobs/beauty-outbox";
+import { processConfirmation } from "../jobs/beauty-confirmation";
 import { processReviewRequest } from "../jobs/beauty-review";
 import { processReminder } from "../jobs/beauty-reminder";
 import { processWinback } from "../jobs/beauty-winback";
@@ -106,4 +107,20 @@ export function pollReviews(ctx: PollContext): Promise<PollResult> {
     }
     return res;
   }, "pollReviews");
+}
+
+/** Підтвердження запису: нещодавні записи без `confirmation:{appointmentId}` -> outbox (транзакційне, без marketingConsent). */
+export function pollConfirmations(ctx: PollContext): Promise<PollResult> {
+  return forEachTenant(ctx, async () => {
+    const res: PollResult = { processed: 0, errors: 0 };
+    for (const id of await ctx.store.listAppointmentsWithoutConfirmation(ctx.deps.now(), ctx.batchSize ?? 50)) {
+      try {
+        if (await processConfirmation(ctx.deps, { appointmentId: id }) === "queued") res.processed++;
+      } catch (err) {
+        res.errors++;
+        ctx.logger.error("confirmation failed", { appointmentId: id, error: String(err) });
+      }
+    }
+    return res;
+  }, "pollConfirmations");
 }

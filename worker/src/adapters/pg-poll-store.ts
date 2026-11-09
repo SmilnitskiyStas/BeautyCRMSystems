@@ -12,6 +12,9 @@ export const DEFAULT_WINDOW: SendWindow = { fromHour: 9, toHour: 20, defaultTime
 /** Only visits completed within this period get a review request (avoids spamming history on first start). */
 export const REVIEW_LOOKBACK_DAYS = 3;
 
+/** Підтвердження шлемо лише для записів, створених за цей період (не засипаємо історію при першому старті). */
+export const CONFIRMATION_LOOKBACK_HOURS = 24;
+
 /** Selection queries of the pollers (tenant-scoped through TenantDb). */
 export class PgPollStore {
   constructor(private readonly db: TenantDb, private readonly window: SendWindow = DEFAULT_WINDOW) {}
@@ -26,7 +29,7 @@ export class PgPollStore {
        ORDER BY r.scheduled_at LIMIT $2`, [now, limit]));
     return rows.map((r) => ({
       id: r.id, appointmentId: r.appointment_id, startsAt: r.starts_at,
-      offset: r.reminder_option === "1h" || r.reminder_option === "2h" ? r.reminder_option : null,
+      offset: r.reminder_option === "1h" || r.reminder_option === "2h" || r.reminder_option === "24h" ? r.reminder_option : null,
     }));
   }
 
@@ -38,6 +41,24 @@ export class PgPollStore {
          AND a.starts_at <= $1::timestamptz AND a.starts_at >= $1::timestamptz - make_interval(days => $2::int)
          AND NOT EXISTS (SELECT 1 FROM beauty_messages m WHERE m.idempotency_key = 'review:' || a.id::text)
        ORDER BY a.starts_at LIMIT $3`, [now, lookbackDays, limit]));
+    return rows.map((r) => r.id);
+  }
+
+  /**
+   * Нещодавно створені майбутні записи (pending/confirmed) без листа-підтвердження, клієнт досяжний
+   * (месенджер-діалог або email). Ключ повідомлення `confirmation:{appointmentId}`.
+   */
+  async listAppointmentsWithoutConfirmation(now: Date, limit: number, lookbackHours = CONFIRMATION_LOOKBACK_HOURS): Promise<string[]> {
+    const { rows } = await this.db.tx((c) => c.query<{ id: string }>(
+      `SELECT a.id FROM beauty_appointments a
+       JOIN beauty_clients cl ON cl.id = a.client_id AND cl.deleted_at IS NULL
+       WHERE a.status IN ('pending', 'confirmed')
+         AND a.starts_at > $1::timestamptz
+         AND a.created_at >= $1::timestamptz - make_interval(hours => $2::int)
+         AND (NULLIF(btrim(cl.email), '') IS NOT NULL
+              OR EXISTS (SELECT 1 FROM beauty_conversations c WHERE c.client_id = cl.id))
+         AND NOT EXISTS (SELECT 1 FROM beauty_messages m WHERE m.idempotency_key = 'confirmation:' || a.id::text)
+       ORDER BY a.created_at LIMIT $3`, [now, lookbackHours, limit]));
     return rows.map((r) => r.id);
   }
 

@@ -8,7 +8,9 @@ export interface ReminderJobData {
   reminderId?: string;
 }
 
-const OFFSET_MS: Record<ReminderOffset, number> = { "1h": 3_600_000, "2h": 7_200_000 };
+const OFFSET_TEXT: Record<ReminderOffset, string> = { "1h": "через 1 годину", "2h": "через 2 години", "24h": "завтра" };
+
+const OFFSET_MS: Record<ReminderOffset, number> = { "1h": 3_600_000, "2h": 7_200_000, "24h": 86_400_000 };
 
 /** Called when an appointment is created/changed. "none" schedules nothing. Returns scheduled offset or null. */
 export async function scheduleReminder(
@@ -35,7 +37,7 @@ export async function processReminder(deps: BeautyDeps, data: ReminderJobData): 
   const when = appt.startsAt.toISOString();
   const created = await enqueueMessage(deps, {
     tenantId: appt.tenantId, clientId: client.id, channel: client.channel, address: client.address,
-    text: `Нагадуємо: ваш візит ${when} (через ${data.offset === "1h" ? "1 годину" : "2 години"}).`,
+    text: `Нагадуємо: ваш візит ${when} (${OFFSET_TEXT[data.offset]}).`,
     idempotencyKey: data.reminderId ? `reminder:${data.reminderId}` : `reminder:${appt.id}:${data.offset}`, kind: "reminder",
   });
   return created ? "queued" : "skipped";

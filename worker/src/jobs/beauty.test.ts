@@ -3,6 +3,7 @@ import { makeDeps } from "../testing/fakes";
 import type { AppointmentInfo, ClientInfo, LapsedClient } from "../ports";
 import { processOutbox } from "./beauty-outbox";
 import { processReminder, scheduleReminder } from "./beauty-reminder";
+import { processConfirmation } from "./beauty-confirmation";
 import { processCampaign } from "./beauty-campaign";
 import { processWinback } from "./beauty-winback";
 import { processReviewRequest } from "./beauty-review";
@@ -26,6 +27,30 @@ describe("reminders", () => {
     const t = makeDeps({ now: NOW });
     await scheduleReminder(t.deps, appt({ reminderOption: "1h" }));
     expect(t.reminders[0]).toMatchObject({ offset: "1h", delayMs: 3_600_000 });
+  });
+  it("scheduleReminder_schedules-24h-before_when-option-24h", async () => {
+    const t = makeDeps({ now: NOW });
+    expect(await scheduleReminder(t.deps, appt({ startsAt: new Date("2026-01-11T14:00:00Z"), reminderOption: "24h" }))).toBe("24h");
+    expect(t.reminders[0]).toMatchObject({ offset: "24h", delayMs: 4 * 3_600_000 });
+  });
+  it("scheduleReminder_skips-24h_when-too-late", async () => {
+    const t = makeDeps({ now: NOW });
+    expect(await scheduleReminder(t.deps, appt({ startsAt: new Date("2026-01-11T09:00:00Z"), reminderOption: "24h" }))).toBeNull();
+    expect(t.reminders).toHaveLength(0);
+  });
+  it("processReminder_queues-24h-text_when-visit-is-24h-away", async () => {
+    const t = makeDeps({ now: NOW, appointments: [appt({ startsAt: new Date("2026-01-11T10:00:00Z"), reminderOption: "24h" })], clients: [client] });
+    expect(await processReminder(t.deps, { appointmentId: "a1", offset: "24h" })).toBe("queued");
+    expect(t.messages.get("m1")!.text).toContain("завтра");
+  });
+  it("processReminder_skips-stale-24h-job_when-visit-moved-further-or-option-changed", async () => {
+    const t = makeDeps({ now: NOW, appointments: [
+      appt({ startsAt: new Date("2026-01-14T10:00:00Z"), reminderOption: "24h" }),
+      appt({ id: "a2", startsAt: new Date("2026-01-11T10:00:00Z"), reminderOption: "2h" }),
+    ], clients: [client] });
+    expect(await processReminder(t.deps, { appointmentId: "a1", offset: "24h" })).toBe("skipped");
+    expect(await processReminder(t.deps, { appointmentId: "a2", offset: "24h" })).toBe("skipped");
+    expect(t.outbox).toHaveLength(0);
   });
   it("scheduleReminder_sends-nothing_when-option-none", async () => {
     const t = makeDeps({ now: NOW });
@@ -170,5 +195,35 @@ describe("marketing safeguards (unsubscribe, daily limit)", () => {
     // transactional reminder is not limited
     await processReminder(t.deps, { appointmentId: "a1", offset: "2h" });
     expect(await processOutbox(t.deps, { messageId: t.outbox[2]! })).toBe("sent");
+  });
+});
+
+describe("confirmation", () => {
+  const emailClient: ClientInfo = { id: "c1", tenantId: "t1", channel: "email", address: "anna@example.com", marketingConsent: false, name: "Анна" };
+  const details = { locationName: "Салон Центр", locationAddress: "вул. Хрещатик, 1", timezone: "Europe/Kyiv", serviceName: "Манікюр", specialistName: "Олена" };
+  const future = appt({ startsAt: new Date("2026-01-12T12:30:00Z"), reminderOption: "none" });
+
+  it("processConfirmation_queues-uk-text-in-location-timezone_without-marketing-consent", async () => {
+    const t = makeDeps({ now: NOW, appointments: [future], clients: [emailClient], details });
+    expect(await processConfirmation(t.deps, { appointmentId: "a1" })).toBe("queued");
+    const m = t.messages.get("m1")!;
+    expect(m).toMatchObject({ kind: "confirmation", channel: "email", address: "anna@example.com", idempotencyKey: "confirmation:a1" });
+    for (const part of ["Салон Центр", "вул. Хрещатик, 1", "Манікюр", "Олена", "14:30", "12 січня 2026"]) expect(m.text).toContain(part);
+    expect(m.text).not.toContain(UNSUBSCRIBE_NOTE);
+  });
+  it("processConfirmation_is-idempotent", async () => {
+    const t = makeDeps({ now: NOW, appointments: [future], clients: [emailClient], details });
+    await processConfirmation(t.deps, { appointmentId: "a1" });
+    expect(await processConfirmation(t.deps, { appointmentId: "a1" })).toBe("skipped");
+    expect(t.outbox).toHaveLength(1);
+  });
+  it("processConfirmation_skips_when-cancelled-past-no-address-or-no-details", async () => {
+    const t = makeDeps({ now: NOW, details, clients: [emailClient, { ...emailClient, id: "c3", address: "" }], appointments: [
+      appt({ id: "x1", status: "cancelled" }), appt({ id: "x2", startsAt: new Date("2026-01-09T10:00:00Z") }), appt({ id: "x3", clientId: "c3" }),
+    ] });
+    for (const id of ["x1", "x2", "x3", "zz"]) expect(await processConfirmation(t.deps, { appointmentId: id })).toBe("skipped");
+    const t2 = makeDeps({ now: NOW, appointments: [future], clients: [emailClient], details: null });
+    expect(await processConfirmation(t2.deps, { appointmentId: "a1" })).toBe("skipped");
+    expect(t.outbox).toHaveLength(0);
   });
 });

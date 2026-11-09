@@ -24,6 +24,8 @@ export class HttpChannelSender implements ChannelSenderPort {
     private readonly http: Fetch = fetch,
     private readonly now: () => Date = () => new Date(),
     private readonly urls = { telegram: TELEGRAM_API, instagram: INSTAGRAM_GRAPH_URL },
+    /** Відправник для типу `email` (SMTP/mock; конфіг з env, не з beauty_channels). */
+    private readonly email?: ChannelSenderPort,
   ) {}
 
   async send(msg: StoredMessage): Promise<void> {
@@ -37,6 +39,10 @@ export class HttpChannelSender implements ChannelSenderPort {
     if (!info) throw new ChannelSendError("Channel for message not found", true);
     if (!info.is_active) throw new ChannelSendError("Channel is inactive", true);
     const type = String(info.type).toLowerCase();
+    if (type === "email") {
+      if (!this.email) throw new ChannelSendError("Email sender is not configured", true);
+      return this.email.send(msg); // адреса = msg.address; токенів каналу немає, SMTP-секрети лише з env
+    }
     let token: string | undefined;
     try { token = readCredentials(this.key, info.credentials_encrypted).token; }
     catch { throw new ChannelSendError("Cannot decrypt channel credentials (wrong Channels__EncryptionKey?)", true); }

@@ -1,6 +1,7 @@
 import pg from "pg";
 import { HttpChannelSender } from "./adapters/channel-sender";
 import { loadKey } from "./adapters/channel-crypto";
+import { EmailSender, loadEmailConfig } from "./adapters/email-sender";
 import { PgBeautyData } from "./adapters/pg-data";
 import { DEFAULT_WINDOW, PgPollStore } from "./adapters/pg-poll-store";
 import { LoggerNotificationLog, PgAdvisoryIdempotency, PgQueuePort, consoleLogger } from "./adapters/pg-support";
@@ -9,7 +10,7 @@ import { StaticTenantDirectory, type TenantDirectory } from "./db/tenants";
 import { DEFAULT_MARKETING_DAILY_LIMIT } from "./jobs/beauty-common";
 import type { BeautyDeps } from "./ports";
 import { Scheduler } from "./scheduler/scheduler";
-import { pollOutbox, pollReminders, pollReviews, pollWinback, type PollContext } from "./scheduler/pollers";
+import { pollConfirmations, pollOutbox, pollReminders, pollReviews, pollWinback, type PollContext } from "./scheduler/pollers";
 
 const MIN = 60_000;
 
@@ -19,6 +20,8 @@ export interface WorkerRuntime { scheduler: Scheduler; ctx: PollContext; stop():
 export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants?: TenantDirectory): Promise<WorkerRuntime> {
   const url = env.WORKER_DATABASE_URL;
   if (!url) throw new Error("WORKER_DATABASE_URL is not set");
+  const emailConfig = loadEmailConfig(env); // кидає помилку, якщо EMAIL_MODE=smtp без повної конфігурації
+  consoleLogger.info("email channel", { mode: emailConfig.mode });
   const db = TenantDb.create(url, 10);
   await db.assertRlsEnforced();
   const lockPool = new pg.Pool({ connectionString: url, max: 10 });
@@ -26,7 +29,7 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
   const deps: BeautyDeps = {
     now,
     data: new PgBeautyData(db, now),
-    sender: new HttpChannelSender(db, loadKey(env["Channels__EncryptionKey"]), fetch, now),
+    sender: new HttpChannelSender(db, loadKey(env["Channels__EncryptionKey"]), fetch, now, undefined, new EmailSender(emailConfig, consoleLogger)),
     idempotency: new PgAdvisoryIdempotency(lockPool),
     log: new LoggerNotificationLog(consoleLogger),
     queue: new PgQueuePort(),
@@ -36,6 +39,7 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
   const ctx: PollContext = { deps, store, tenants: tenants ?? StaticTenantDirectory.fromEnv(env.WORKER_TENANT_IDS), logger: consoleLogger };
   const scheduler = new Scheduler([
     { name: "beauty.reminders", everyMs: 1 * MIN, run: () => pollReminders(ctx) },
+    { name: "beauty.confirmations", everyMs: 1 * MIN, run: () => pollConfirmations(ctx) },
     { name: "beauty.outbox", everyMs: 30_000, run: () => pollOutbox(ctx) },
     { name: "beauty.reviews", everyMs: 10 * MIN, run: () => pollReviews(ctx) },
     { name: "beauty.winback", everyMs: 24 * 60 * MIN, run: () => pollWinback(ctx) },
