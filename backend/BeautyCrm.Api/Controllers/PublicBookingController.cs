@@ -54,6 +54,27 @@ public sealed class PublicBookingController(PublicBookingService service) : Cont
         this.ToResult(await service.GetSlotsAsync(locationId, specialistId, serviceId, date, ct));
 
     /// <summary>
+    /// Календар доступності: статус кожного дня (available|full|closed|past) у зоні закладу + кількість вільних слотів.
+    /// `from` за замовч. = сьогодні (зона закладу), `days` 1..62 (за замовч. 31); без specialistId — будь-який майстер.
+    /// </summary>
+    [HttpGet("availability")]
+    [EnableRateLimiting(PublicRateLimit.Read)]
+    [ProducesResponseType<PublicAvailabilityDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> Availability(
+        [FromQuery] Guid locationId, [FromQuery] Guid serviceId, [FromQuery] Guid? specialistId,
+        [FromQuery] DateOnly? from, [FromQuery] int? days, CancellationToken ct) =>
+        this.ToResult(await service.GetAvailabilityAsync(locationId, specialistId, serviceId, from, days, ct));
+
+    /// <summary>Опубліковані відгуки майстра (новіші першими); автор — «Ім'я К.». limit ≤ 50.</summary>
+    [HttpGet("specialists/{specialistId:guid}/reviews")]
+    [EnableRateLimiting(PublicRateLimit.Read)]
+    [ProducesResponseType<PublicReviewsPage>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> Reviews(Guid specialistId, [FromQuery] int? limit, [FromQuery] int? offset, CancellationToken ct) =>
+        this.ToResult(await service.ListReviewsAsync(specialistId, limit, offset, ct));
+
+    /// <summary>
     /// 201 (новий запис) або 200 + `Idempotent-Replayed: true` (повтор того ж Idempotency-Key). 422 валідація, 409 слот зайнятий,
     /// 402 платіж не пройшов. Заголовок `Idempotency-Key` обов'язковий; `X-Captcha-Token` — коли CAPTCHA увімкнена.
     /// </summary>

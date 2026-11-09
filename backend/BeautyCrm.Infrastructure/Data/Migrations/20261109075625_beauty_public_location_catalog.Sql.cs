@@ -190,6 +190,26 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                 $fn$;
                 """);
 
+            // NB: EXECUTE is set BEFORE the ownership transfer: afterwards the migrator is no longer the owner and
+            // REVOKE/GRANT would silently do nothing (the ACL entries move to the new owner with ALTER OWNER).
+            // ---- EXECUTE: nobody but the runtime role ----
+            mb.Sql("REVOKE ALL ON FUNCTION public.beauty_public_resolve_location(text) FROM PUBLIC;");
+            mb.Sql("REVOKE ALL ON FUNCTION public.beauty_public_nearby_locations(double precision, double precision, double precision, integer) FROM PUBLIC;");
+            mb.Sql("REVOKE ALL ON FUNCTION public.beauty_public_search_locations_by_city(text, integer) FROM PUBLIC;");
+            mb.Sql("""
+                DO $do$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'beautycrm_app') THEN
+                        GRANT EXECUTE ON FUNCTION public.beauty_public_resolve_location(text) TO beautycrm_app;
+                        GRANT EXECUTE ON FUNCTION public.beauty_public_nearby_locations(double precision, double precision, double precision, integer) TO beautycrm_app;
+                        GRANT EXECUTE ON FUNCTION public.beauty_public_search_locations_by_city(text, integer) TO beautycrm_app;
+                    ELSE
+                        RAISE NOTICE 'Role beautycrm_app not found: GRANT EXECUTE on beauty_public_* functions to the runtime role manually (ADR-011).';
+                    END IF;
+                END
+                $do$;
+                """);
+
             // ---- Ownership (the role needs CREATE on the schema only for the duration of ALTER ... OWNER) ----
             mb.Sql("GRANT CREATE ON SCHEMA public TO beautycrm_catalog;");
             mb.Sql("ALTER FUNCTION public.beauty_public_resolve_location(text) OWNER TO beautycrm_catalog;");
@@ -211,24 +231,6 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     BEFORE UPDATE OF public_code ON beauty_locations
                     FOR EACH ROW WHEN (OLD.public_code IS DISTINCT FROM NEW.public_code)
                     EXECUTE FUNCTION public.beauty_forbid_public_code_change();
-                """);
-
-            // ---- EXECUTE: nobody but the runtime role ----
-            mb.Sql("REVOKE ALL ON FUNCTION public.beauty_public_resolve_location(text) FROM PUBLIC;");
-            mb.Sql("REVOKE ALL ON FUNCTION public.beauty_public_nearby_locations(double precision, double precision, double precision, integer) FROM PUBLIC;");
-            mb.Sql("REVOKE ALL ON FUNCTION public.beauty_public_search_locations_by_city(text, integer) FROM PUBLIC;");
-            mb.Sql("""
-                DO $do$
-                BEGIN
-                    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'beautycrm_app') THEN
-                        GRANT EXECUTE ON FUNCTION public.beauty_public_resolve_location(text) TO beautycrm_app;
-                        GRANT EXECUTE ON FUNCTION public.beauty_public_nearby_locations(double precision, double precision, double precision, integer) TO beautycrm_app;
-                        GRANT EXECUTE ON FUNCTION public.beauty_public_search_locations_by_city(text, integer) TO beautycrm_app;
-                    ELSE
-                        RAISE NOTICE 'Role beautycrm_app not found: GRANT EXECUTE on beauty_public_* functions to the runtime role manually (ADR-011).';
-                    END IF;
-                END
-                $do$;
                 """);
         }
 

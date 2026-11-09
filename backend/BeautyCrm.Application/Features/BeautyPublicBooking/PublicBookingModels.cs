@@ -56,7 +56,22 @@ public sealed record PublicClosureDto(DateOnly DateFrom, DateOnly DateTo);
 public sealed record PublicLocationDto(Guid Id, string Name, string? Address, string? Phone, string Timezone,
     IReadOnlyList<string>? ClosedWeekdays = null, IReadOnlyList<PublicClosureDto>? Closures = null,
     System.Text.Json.JsonElement? WorkingHours = null);
-public sealed record PublicSpecialistDto(Guid Id, string Name, string? Title, string? PhotoUrl);
+/// <param name="ExperienceYears">Поточний рік - рік початку практики (мін. 0); null, якщо не задано.</param>
+/// <param name="Rating">Середній рейтинг опублікованих відгуків, 1 знак після коми; null, якщо відгуків немає.</param>
+/// <param name="ReviewsCount">Кількість лише опублікованих відгуків.</param>
+public sealed record PublicSpecialistDto(Guid Id, string Name, string? Title, string? PhotoUrl,
+    int? ExperienceYears = null, string? Bio = null, double? Rating = null, int ReviewsCount = 0);
+
+/// <summary>Рядок порту даних: стаж рахує сервіс (годинник у Application).</summary>
+public sealed record PublicSpecialistRow(Guid Id, string Name, string? Title, string? PhotoUrl,
+    int? PracticeStartYear, string? Bio, double? Rating, int ReviewsCount);
+
+/// <summary>Відгук для публічного API: автор лише як «Ім'я К.», без телефону й id клієнта/запису.</summary>
+public sealed record PublicReviewDto(Guid Id, string AuthorName, int Rating, string? Text, DateTimeOffset CreatedAt);
+
+public sealed record PublicReviewsPage(int Total, IReadOnlyList<PublicReviewDto> Items);
+
+public sealed record PublicAvailabilityDto(IReadOnlyList<DayAvailability> Days);
 
 /// <summary>Послуга закладу: ціна з override закладу й акцією, що діє зараз.</summary>
 public sealed record PublicServiceDto(
@@ -64,7 +79,8 @@ public sealed record PublicServiceDto(
     decimal PriceOriginal, decimal PriceFinal, Guid? PromotionId, string? PromotionName);
 
 /// <param name="MarketingConsent">Лише явне true дає згоду на маркетинг (лише для нового клієнта; наявного профілю не змінює).</param>
-public sealed record PublicClientInput(string? Name, string? Phone, bool? MarketingConsent = null);
+/// <param name="Email">Необов'язковий: формат, ≤ 254, trim + lower-case; інакше 422 invalid_email. Не повертається у відповідях публічних ендпоінтів.</param>
+public sealed record PublicClientInput(string? Name, string? Phone, bool? MarketingConsent = null, string? Email = null);
 
 public sealed record PublicCreateAppointmentRequest(
     Guid? LocationId, Guid? SpecialistId, Guid? ServiceId, DateTimeOffset? StartsAt,
@@ -98,7 +114,9 @@ public interface IPublicBookingStore
     /// <param name="now">Для відліку «майбутніх 366 днів» закриттів у зоні кожного закладу.</param>
     Task<IReadOnlyList<PublicLocationDto>> ListActiveLocationsAsync(DateTimeOffset now, CancellationToken ct);
     /// <summary>Лише придатні до запису майстри: активні, зі збереженим графіком у закладі й призначеними послугами; serviceId — що надають цю послугу.</summary>
-    Task<IReadOnlyList<PublicSpecialistDto>> ListSpecialistsAsync(Guid locationId, Guid? serviceId, CancellationToken ct);
+    Task<IReadOnlyList<PublicSpecialistRow>> ListSpecialistsAsync(Guid locationId, Guid? serviceId, CancellationToken ct);
+    /// <summary>Опубліковані відгуки активного майстра tenant (новіші першими); null — майстра немає/неактивний/чужий (RLS).</summary>
+    Task<PublicReviewsPage?> ListReviewsAsync(Guid specialistId, int limit, int offset, CancellationToken ct);
     /// <summary>Активні послуги з ціною для закладу (override або мережева); без ціни пропускаються.</summary>
     /// <summary>Лише послуги, призначені хоча б одному придатному майстру закладу (specialistId — саме цьому майстру).</summary>
     Task<IReadOnlyList<PublicServiceBase>> ListServicesAsync(Guid locationId, Guid? specialistId, CancellationToken ct);
@@ -110,6 +128,16 @@ public interface IPublicBookingStore
     Task<int> CountRecentOnlineByPhoneAsync(string phone, DateTimeOffset since, CancellationToken ct);
     /// <summary>Онлайн-записи закладу, створені після since (будь-який статус) — ліміт MaxPublicCreatesPerLocationPerHour.</summary>
     Task<int> CountRecentOnlineByLocationAsync(Guid locationId, DateTimeOffset since, CancellationToken ct);
+
+    // ---------- email-підтвердження (outbox: рядок beauty_messages зі status 'pending'; надсилає worker) ----------
+    /// <summary>Збережений email клієнта (null — немає). Лише для внутрішнього використання, у відповіді не потрапляє.</summary>
+    Task<string?> GetClientEmailAsync(Guid clientId, CancellationToken ct);
+    Task<string?> GetLocationAddressAsync(Guid locationId, CancellationToken ct);
+    /// <summary>
+    /// Ставить у чергу вихідний лист: знаходить/створює email-канал tenant-а й розмову (client, external_chat_id = email),
+    /// вставляє beauty_messages (outbound, system, pending) з ключем ідемпотентності. true — створено; false — вже було.
+    /// </summary>
+    Task<bool> QueueEmailMessageAsync(Guid clientId, string email, string idempotencyKey, string body, CancellationToken ct);
 }
 
 public sealed record PublicServiceBase(Guid Id, string Name, string? Description, string? Category, int DurationMinutes, decimal Price);

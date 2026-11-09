@@ -98,15 +98,21 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
             return await db.Clients.AnyAsync(c => c.Id == id && c.DeletedAt == null, ct) ? id : null;
 
         var phone = client.Phone!.Trim();
-        var existing = await db.Clients.Where(c => c.Phone == phone && c.DeletedAt == null)
-            .Select(c => (Guid?)c.Id).FirstOrDefaultAsync(ct);
-        if (existing is not null) return existing;
+        var email = string.IsNullOrWhiteSpace(client.Email) ? null : client.Email.Trim();
+        var existing = await db.Clients.Where(c => c.Phone == phone && c.DeletedAt == null).FirstOrDefaultAsync(ct);
+        if (existing is not null)
+        {
+            // Email лише доповнюється (порожній не затирає наявний; наявний не перезаписується анонімним викликом —
+            // інакше за чужим телефоном можна підмінити адресу листів). Зберігається разом із записом (AddAppointmentAsync).
+            if (email is not null && string.IsNullOrWhiteSpace(existing.Email)) existing.Email = email;
+            return existing.Id;
+        }
 
         // Зберігається разом із записом одним SaveChanges (див. AddAppointmentAsync).
         var created = new Client
         {
             Id = Guid.NewGuid(), FullName = client.Name!.Trim(), Phone = phone, MarketingConsent = client.MarketingConsent,
-            Email = string.IsNullOrWhiteSpace(client.Email) ? null : client.Email.Trim(),
+            Email = email,
         };
         db.Clients.Add(created);
         return created.Id;

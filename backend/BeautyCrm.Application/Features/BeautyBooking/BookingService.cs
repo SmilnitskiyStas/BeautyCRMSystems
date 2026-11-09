@@ -38,13 +38,60 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
         return Result<IReadOnlyList<FreeSlot>>.Ok(slots);
     }
 
+    /// <summary>
+    /// Календар доступності: статус кожного дня діапазону [from, from+days) у зоні закладу. Правила слотів не дублюються:
+    /// кожен день рахується тим самим <see cref="SlotCalculator.Compute"/>, що й /slots. «Потенційні» слоти (без записів і
+    /// без часу «зараз») = 0 -> closed (заклад/майстер не працює: графік, вихідний, закриття, відсутність, послуга не призначена);
+    /// інакше вільні слоти = 0 -> full. Один запит розкладів і один запит зайнятості на весь діапазон (без N+1).
+    /// from допускається не раніше «вчора» в зоні закладу (запас на розбіжність зон клієнта); такі дні — past.
+    /// Дні далі за maxDaysAhead (горизонт запису) відкидаються.
+    /// </summary>
+    public async Task<Result<IReadOnlyList<DayAvailability>>> GetAvailabilityAsync(
+        Guid locationId, Guid? specialistId, Guid serviceId, DateOnly? from, int days, int maxDaysAhead, CancellationToken ct)
+    {
+        if (days is < 1 or > 62) return Error.Validation("invalid_days", "days must be between 1 and 62.");
+        var service = await store.GetServiceAsync(serviceId, ct);
+        if (service is not { IsActive: true }) return Error.NotFound("service_not_found", "Service not found.");
+        var location = await store.GetLocationAsync(locationId, ct);
+        if (location is not { IsActive: true }) return Error.NotFound("location_not_found", "Location not found.");
+
+        var now = clock.GetUtcNow();
+        var today = SlotCalculator.LocalDate(now, location.Timezone);
+        var start = from ?? today;
+        if (start < today.AddDays(-1) || start > today.AddDays(maxDaysAhead))
+            return Error.Validation("invalid_date", $"from must be between yesterday and {maxDaysAhead} days ahead (location time zone).");
+        var last = start.AddDays(days - 1);
+        if (last > today.AddDays(maxDaysAhead)) last = today.AddDays(maxDaysAhead);
+
+        var schedules = await store.GetSchedulesAsync(locationId, specialistId, ct);
+        var tz = TimeZoneInfo.FindSystemTimeZoneById(location.Timezone);
+        var busyBySpecialist = schedules.Count == 0
+            ? new Dictionary<Guid, List<TimeRange>>()
+            : (await store.GetBusyAsync(schedules.Select(s => s.SpecialistId).ToList(),
+                    SlotCalculator.ToOffset(start, TimeOnly.MinValue, tz), SlotCalculator.ToOffset(last.AddDays(1), TimeOnly.MinValue, tz), null, ct))
+                .GroupBy(b => b.SpecialistId).ToDictionary(g => g.Key, g => g.Select(b => b.Range).ToList());
+        var withTz = schedules.Select(s => s with { Timezone = location.Timezone }).ToList();
+
+        var result = new List<DayAvailability>();
+        for (var date = start; date <= last; date = date.AddDays(1))
+        {
+            if (date < today) { result.Add(new DayAvailability(date, DayStatus.Past, 0)); continue; }
+            var potential = withTz.Sum(s => SlotCalculator.Compute(s, date, service.DurationMinutes, [], DateTimeOffset.MinValue, service.Id).Count);
+            if (potential == 0) { result.Add(new DayAvailability(date, DayStatus.Closed, 0)); continue; }
+            var free = withTz.Sum(s => SlotCalculator.Compute(s, date, service.DurationMinutes,
+                busyBySpecialist.GetValueOrDefault(s.SpecialistId) ?? [], now, service.Id).Count);
+            result.Add(new DayAvailability(date, free == 0 ? DayStatus.Full : DayStatus.Available, free));
+        }
+        return Result<IReadOnlyList<DayAvailability>>.Ok(result);
+    }
+
     // ---------- створення ----------
 
     public async Task<Result<AppointmentDto>> CreateAsync(CreateAppointmentRequest req, CancellationToken ct, PublicCreateOptions? publicOptions = null)
     {
         var source = req.Source ?? "online";
         if (!BookingValues.Sources.Contains(source)) return Error.Validation("invalid_source", "Unknown source.");
-        if (!BookingValues.Reminders.Contains(req.Reminder)) return Error.Validation("invalid_reminder", "Reminder must be none, 1h or 2h.");
+        if (!BookingValues.Reminders.Contains(req.Reminder)) return Error.Validation("invalid_reminder", "Reminder must be none, 1h, 2h or 24h.");
         if (!BookingValues.PaymentMethods.Contains(req.PaymentMethod)) return Error.Validation("invalid_payment_method", "Payment method must be card or cash.");
         var c = req.Client;
         if (c.Id is null && (string.IsNullOrWhiteSpace(c.Name) || string.IsNullOrWhiteSpace(c.Phone)))
@@ -80,7 +127,7 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
         var clientId = await store.ResolveClientAsync(c, ct);
         if (clientId is null) return Error.NotFound("client_not_found", "Client not found.");
 
-        var offset = req.Reminder switch { "1h" => TimeSpan.FromHours(1), "2h" => TimeSpan.FromHours(2), _ => (TimeSpan?)null };
+        var offset = BookingValues.ReminderOffset(req.Reminder);
         var reminderAt = offset is null ? (DateTimeOffset?)null : req.StartsAt - offset.Value;
         if (reminderAt is not null && reminderAt <= now) reminderAt = null; // нагадувати вже запізно
 
@@ -145,7 +192,7 @@ public sealed class BookingService(IBookingStore store, IPaymentService payments
                 case SlotCheck.Busy: return Error.Conflict("slot_unavailable", "The slot overlaps another appointment.");
             }
 
-            var offset = appt.ReminderOption switch { "1h" => TimeSpan.FromHours(1), "2h" => TimeSpan.FromHours(2), _ => (TimeSpan?)null };
+            var offset = BookingValues.ReminderOffset(appt.ReminderOption);
             var reminderAt = offset is null ? (DateTimeOffset?)null : newStart - offset.Value;
             if (reminderAt is not null && reminderAt <= now) reminderAt = null;
 

@@ -23,7 +23,7 @@ public sealed partial class EfBeautyStore : IStaffStore
     {
         var specialists = await db.Specialists.AsNoTracking().Where(s => id == null || s.Id == id)
             .OrderBy(s => s.FullName).ThenBy(s => s.Id)
-            .Select(s => new { s.Id, s.FullName, s.Phone, s.Position, s.PhotoUrl, s.IsActive }).ToListAsync(ct);
+            .Select(s => new { s.Id, s.FullName, s.Phone, s.Position, s.PhotoUrl, s.IsActive, s.PracticeStartYear, s.Bio }).ToListAsync(ct);
         if (specialists.Count == 0) return [];
 
         var roles = (await db.Users.AsNoTracking().Where(u => u.SpecialistId != null && (id == null || u.SpecialistId == id))
@@ -41,7 +41,7 @@ public sealed partial class EfBeautyStore : IStaffStore
 
         return specialists.Select(s => new StaffSpecialistRecord(
             s.Id, s.FullName, s.Phone, s.Position, s.PhotoUrl, s.IsActive, roles.GetValueOrDefault(s.Id),
-            services.GetValueOrDefault(s.Id) ?? [], locations.GetValueOrDefault(s.Id) ?? [])).ToList();
+            services.GetValueOrDefault(s.Id) ?? [], locations.GetValueOrDefault(s.Id) ?? [], s.PracticeStartYear, s.Bio)).ToList();
     }
 
     public async Task<SpecialistLink?> GetSpecialistLinkAsync(Guid id, CancellationToken ct)
@@ -63,7 +63,11 @@ public sealed partial class EfBeautyStore : IStaffStore
     public async Task<Guid> CreateSpecialistAsync(NewSpecialist n, CancellationToken ct)
     {
         var id = Guid.NewGuid();
-        db.Specialists.Add(new Specialist { Id = id, FullName = n.Name, Phone = n.Phone, Position = n.Position, IsActive = true });
+        db.Specialists.Add(new Specialist
+        {
+            Id = id, FullName = n.Name, Phone = n.Phone, Position = n.Position, IsActive = true,
+            PracticeStartYear = n.PracticeStartYear, Bio = n.Bio, PhotoUrl = n.PhotoUrl,
+        });
         foreach (var locationId in n.LocationIds)
             db.SpecialistLocations.Add(new SpecialistLocation
             {
@@ -104,6 +108,15 @@ public sealed partial class EfBeautyStore : IStaffStore
                 .ExecuteUpdateAsync(x => x.SetProperty(t => t.RevokedAt, at), ct);
         }
         await tx.CommitAsync(ct);
+    }
+
+    public async Task UpdateSpecialistProfileAsync(Guid id, SpecialistProfilePatch patch, CancellationToken ct)
+    {
+        var s = await db.Specialists.FirstAsync(x => x.Id == id, ct);
+        if (patch.SetYear) s.PracticeStartYear = patch.PracticeStartYear;
+        if (patch.SetBio) s.Bio = patch.Bio;
+        if (patch.SetPhoto) s.PhotoUrl = patch.PhotoUrl;
+        await db.SaveChangesAsync(ct);
     }
 
     public async Task ReplaceServicesAsync(Guid specialistId, IReadOnlyCollection<Guid> serviceIds, CancellationToken ct)

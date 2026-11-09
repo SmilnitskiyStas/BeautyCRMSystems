@@ -26,10 +26,39 @@ public sealed partial class PublicBookingService(
     public async Task<IReadOnlyList<PublicLocationDto>> ListLocationsAsync(CancellationToken ct) =>
         await pub.ListActiveLocationsAsync(clock.GetUtcNow(), ct);
 
-    public async Task<Result<IReadOnlyList<PublicSpecialistDto>>> ListSpecialistsAsync(Guid locationId, Guid? serviceId, CancellationToken ct) =>
-        await store.GetLocationAsync(locationId, ct) is { IsActive: true }
-            ? Result<IReadOnlyList<PublicSpecialistDto>>.Ok(await pub.ListSpecialistsAsync(locationId, serviceId, ct))
-            : Error.NotFound("location_not_found", "Location not found.");
+    public async Task<Result<IReadOnlyList<PublicSpecialistDto>>> ListSpecialistsAsync(Guid locationId, Guid? serviceId, CancellationToken ct)
+    {
+        if (await store.GetLocationAsync(locationId, ct) is not { IsActive: true })
+            return Error.NotFound("location_not_found", "Location not found.");
+        var year = clock.GetUtcNow().Year;
+        var rows = await pub.ListSpecialistsAsync(locationId, serviceId, ct);
+        return Result<IReadOnlyList<PublicSpecialistDto>>.Ok(rows.Select(r => new PublicSpecialistDto(
+            r.Id, r.Name, r.Title, r.PhotoUrl,
+            r.PracticeStartYear is { } y ? Math.Max(0, year - y) : null,
+            r.Bio, r.Rating is { } rt ? Math.Round(rt, 1, MidpointRounding.AwayFromZero) : null, r.ReviewsCount)).ToList());
+    }
+
+    public const int MaxReviewsLimit = 50;
+
+    /// <summary>Опубліковані відгуки майстра: limit 1..50 (за замовч. 20), offset >= 0. Невідомий/чужий майстер -> 404.</summary>
+    public async Task<Result<PublicReviewsPage>> ListReviewsAsync(Guid specialistId, int? limit, int? offset, CancellationToken ct)
+    {
+        var l = limit ?? 20;
+        var o = offset ?? 0;
+        if (l < 1 || l > MaxReviewsLimit) return Error.Validation("invalid_limit", $"limit must be between 1 and {MaxReviewsLimit}.");
+        if (o < 0) return Error.Validation("invalid_offset", "offset must be >= 0.");
+        return await pub.ListReviewsAsync(specialistId, l, o, ct) is { } page
+            ? page
+            : Error.NotFound("specialist_not_found", "Specialist not found.");
+    }
+
+    /// <summary>Календар доступності (див. <see cref="BookingService.GetAvailabilityAsync"/>); горизонт — options.MaxDaysAhead.</summary>
+    public async Task<Result<PublicAvailabilityDto>> GetAvailabilityAsync(
+        Guid locationId, Guid? specialistId, Guid serviceId, DateOnly? from, int? days, CancellationToken ct)
+    {
+        var r = await booking.GetAvailabilityAsync(locationId, specialistId, serviceId, from, days ?? 31, options.MaxDaysAhead, ct);
+        return r.IsOk ? new PublicAvailabilityDto(r.Value!) : r.Error!;
+    }
 
     /// <summary>Ціна = override закладу або мережева; акція (найбільша знижка) рахується на поточний момент.</summary>
     public async Task<Result<IReadOnlyList<PublicServiceDto>>> ListServicesAsync(Guid locationId, Guid? specialistId, CancellationToken ct)
@@ -77,6 +106,9 @@ public sealed partial class PublicBookingService(
         var phone = PhoneNormalizer.Normalize(req.Client?.Phone);
         if (phone is null)
             return Error.Validation("invalid_phone", "Phone must be in international format, e.g. +380501234567.");
+        var email = NormalizeEmail(req.Client?.Email, out var emailValid);
+        if (!emailValid)
+            return Error.Validation("invalid_email", "Email must be a valid address of at most 254 characters.");
         var startsAt = req.StartsAt.Value;
         var now = clock.GetUtcNow();
         // Лише слоти, які віддає /slots: сітка 15 хв (UTC-ticks) і горизонт запису.
@@ -86,13 +118,13 @@ public sealed partial class PublicBookingService(
             return Error.Validation("invalid_start", $"startsAt must be within {options.MaxDaysAhead} days ahead.");
         var reminder = req.Reminder ?? "none";
         var payment = req.PaymentMethod;
-        if (!BookingValues.Reminders.Contains(reminder)) return Error.Validation("invalid_reminder", "Reminder must be none, 1h or 2h.");
+        if (!BookingValues.Reminders.Contains(reminder)) return Error.Validation("invalid_reminder", "Reminder must be none, 1h, 2h or 24h.");
         if (payment is null || !BookingValues.PaymentMethods.Contains(payment))
             return Error.Validation("invalid_payment_method", "Payment method must be card or cash.");
 
         var keyHash = PublicTokenService.Hash("idem:" + ctx.IdempotencyKey);
         var requestHash = PublicTokenService.Hash(string.Join('|', req.LocationId, req.SpecialistId, req.ServiceId,
-            startsAt.UtcTicks, phone, name, reminder, payment));
+            startsAt.UtcTicks, phone, name, reminder, payment, email));
 
         // Ідемпотентність: той самий ключ і те саме тіло -> той самий результат без повторного списання.
         if (await pub.FindByIdempotencyKeyAsync(keyHash, ct) is { } hit)
@@ -112,7 +144,7 @@ public sealed partial class PublicBookingService(
         var id = Guid.NewGuid();
         var token = tokens.Create(tenantId, id);
         var createRequest = new CreateAppointmentRequest(req.LocationId.Value, req.SpecialistId.Value, req.ServiceId.Value, startsAt,
-            new ClientInput(null, name, phone, null, req.Client?.MarketingConsent == true), reminder, payment, "online");
+            new ClientInput(null, name, phone, email, req.Client?.MarketingConsent == true), reminder, payment, "online");
         var publicOptions = new PublicCreateOptions(id, PublicTokenService.Hash(token), keyHash, requestHash);
 
         // Паралельні повтори одного ключа можуть взаємно відкотитися (unique-ключ, exclusion слоту, deadlock):
@@ -138,7 +170,69 @@ public sealed partial class PublicBookingService(
             return Error.Conflict("slot_unavailable", "The slot overlaps another appointment.");
         if (!created.IsOk) return created.Error!;
 
+        await QueueConfirmationEmailAsync(created.Value!, email, ct);
         return new PublicCreateResult(new PublicBookingCreatedDto(token, await ToPublicAsync(created.Value!, ct)), false);
+    }
+
+    public const int MaxEmailLength = 254;
+
+    [GeneratedRegex(@"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$")]
+    private static partial Regex EmailPattern();
+
+    /// <summary>Порожній/відсутній -> null (валідно); інакше trim + lower-case, формат, ≤ 254, без керівних символів і кількох '@'.</summary>
+    internal static string? NormalizeEmail(string? raw, out bool valid)
+    {
+        valid = true;
+        var e = raw?.Trim();
+        if (string.IsNullOrEmpty(e)) return null;
+        e = e.ToLowerInvariant();
+        if (e.Length > MaxEmailLength || e.Any(char.IsControl) || e.Count(c => c == '@') != 1 || !EmailPattern().IsMatch(e)
+            || e.Split('@')[1].StartsWith('.') || e.EndsWith('.') || e.Contains(".."))
+        {
+            valid = false;
+            return null;
+        }
+        return e;
+    }
+
+    /// <summary>
+    /// Лист-підтвердження в outbox (kind confirmation: ключ "confirmation:{appointmentId}"). Адреса — з запиту, інакше збережена в клієнта.
+    /// Токен скасування в листі НЕ передається (він лише в застосунку). Збій черги не скасовує вже створений запис; email у лог не потрапляє.
+    /// </summary>
+    private async Task QueueConfirmationEmailAsync(AppointmentDto a, string? requestEmail, CancellationToken ct)
+    {
+        try
+        {
+            var email = requestEmail ?? await pub.GetClientEmailAsync(a.ClientId, ct);
+            if (string.IsNullOrWhiteSpace(email)) return;
+            var tz = (await store.GetLocationAsync(a.LocationId, ct))?.Timezone ?? a.Timezone ?? "UTC";
+            var address = await pub.GetLocationAddressAsync(a.LocationId, ct);
+            await pub.QueueEmailMessageAsync(a.ClientId, email, $"confirmation:{a.Id}", ConfirmationText(a, tz, address), ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogWarning(ex, "booking_confirmation_email_queue_failed appointment={AppointmentId}", a.Id);
+        }
+    }
+
+    internal static string ConfirmationText(AppointmentDto a, string timezone, string? address)
+    {
+        DateTimeOffset local;
+        try { local = TimeZoneInfo.ConvertTime(a.StartsAt, TimeZoneInfo.FindSystemTimeZoneById(timezone)); }
+        catch (Exception ex) when (ex is TimeZoneNotFoundException or InvalidTimeZoneException) { local = a.StartsAt.ToUniversalTime(); }
+        var lines = new List<string>
+        {
+            "Ваш запис підтверджено.",
+            "",
+            $"Заклад: {a.LocationName}",
+        };
+        if (!string.IsNullOrWhiteSpace(address)) lines.Add($"Адреса: {address}");
+        lines.Add($"Послуга: {a.ServiceName}");
+        lines.Add($"Майстер: {a.SpecialistName}");
+        lines.Add($"Дата і час: {local.ToString("dd.MM.yyyy HH:mm", System.Globalization.CultureInfo.InvariantCulture)} ({timezone})");
+        lines.Add("");
+        lines.Add("Скасувати або переглянути запис можна в застосунку.");
+        return string.Join("\n", lines);
     }
 
     /// <summary>

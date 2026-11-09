@@ -77,6 +77,8 @@ phone           VARCHAR(32)
 email           VARCHAR(320)
 photo_url       VARCHAR(2048)
 position        VARCHAR (text, added TASK-691, e.g. "Hairdresser", "Colorist")
+practice_start_year INTEGER NULL  -- CHECK 1950..2100 (поточний рік перевіряє сервіс)
+bio             VARCHAR(500) NULL -- CHECK char_length <= 500
 is_active       BOOLEAN DEFAULT true
 created_at      TIMESTAMPTZ NOT NULL
 updated_at      TIMESTAMPTZ NOT NULL
@@ -86,6 +88,27 @@ UNIQUE (tenant_id, id)
 
 **Indexes:** (tenant_id, id); (tenant_id, is_active).
 **RLS Policy:** `tenant_isolation` (ENABLE ROW LEVEL SECURITY FORCE).
+**Notes (public profile):** `photo_url` — лише https-URL до 500 символів перевіряє сервіс (у БД ліміт лишається 2048, щоб не ламати наявні рядки).
+
+#### beauty_specialist_reviews
+```sql
+id              UUID PRIMARY KEY DEFAULT gen_random_uuid()
+tenant_id       UUID NOT NULL (RLS filtered)
+specialist_id   UUID NOT NULL (composite FK (tenant_id, specialist_id) -> beauty_specialists, ON DELETE CASCADE)
+appointment_id  UUID NULL (composite FK -> beauty_appointments, RESTRICT)
+client_id       UUID NULL (composite FK -> beauty_clients, RESTRICT)
+author_name     VARCHAR(100) NOT NULL  -- вже у вигляді «Ім'я К.», обчислюється при створенні
+rating          SMALLINT NOT NULL      -- CHECK 1..5
+text            VARCHAR(1000) NULL
+is_published    BOOLEAN NOT NULL DEFAULT true
+created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+
+UNIQUE (tenant_id, id)
+```
+
+**Indexes:** UNIQUE `ux_beauty_specialist_reviews_appointment` (tenant_id, appointment_id) WHERE appointment_id IS NOT NULL (один відгук на запис); `ix_beauty_specialist_reviews_specialist_published` (tenant_id, specialist_id, is_published, created_at DESC); (tenant_id, client_id).
+**RLS Policy:** `tenant_isolation` (ENABLE + FORCE).
+**Notes:** публічний API віддає лише `is_published`; client_id/appointment_id у відповідь не потрапляють. Створення відгуків клієнтом і адмін-модерація — окремі кроки (ще не реалізовані).
 
 **Notes:** Deactivation (isActive=false) in transaction: user→is_active=false (except owner), refresh tokens revoked, pending invites→revoked. Does NOT delete appointments.
 
@@ -281,7 +304,7 @@ source          VARCHAR(32) NOT NULL (CHECK IN ('admin','online','telegram','ins
 price_original  NUMERIC(12, 2)
 price_final     NUMERIC(12, 2)
 promotion_id    UUID (nullable, FK beauty_promotions)
-reminder_option VARCHAR(32) NOT NULL (CHECK IN ('none','1h','2h'))
+reminder_option VARCHAR(32) NOT NULL (CHECK IN ('none','1h','2h','24h'))
 payment_method  VARCHAR(32) (nullable, CHECK IN ('card','cash'))
 cancelled_at    TIMESTAMPTZ (nullable, set at cancellation)
 cancelled_by_type VARCHAR(16) (nullable, added TASK-697, CHECK IN ('client','staff','system'))
@@ -366,7 +389,7 @@ ON DELETE CASCADE (if client soft-deleted or hard-deleted)
 id              UUID PRIMARY KEY
 tenant_id       UUID NOT NULL (RLS filtered)
 location_id     UUID (nullable, FK beauty_locations)
-type            VARCHAR(32) NOT NULL (CHECK IN ('telegram','instagram','viber','whatsapp','facebook','widget'))
+type            VARCHAR(32) NOT NULL (CHECK IN ('telegram','instagram','viber','whatsapp','facebook','widget','email'))
 name            VARCHAR(200) NOT NULL
 credentials_encrypted TEXT (nullable, AES-256-GCM encrypted JSON of {token, webhookSecret, appSecret, verifyToken})
 credentials_last4 VARCHAR(4) (nullable, masked display "****abcd")
@@ -379,6 +402,8 @@ UNIQUE (tenant_id, id)
 ```
 
 **Encryption (TASK-689):** `credentials_encrypted` is AES-256-GCM using `Channels__EncryptionKey` (.env, base64 32+ bytes). Decryption in `Infrastructure/Integrations/Channels/AesGcmSecretProtector`. Credentials JSON includes `{token, webhookSecret, appSecret, verifyToken}` (Instagram M5: separate appSecret for HMAC, verifyToken for GET, not webhookSecret anymore).
+
+**Email channel:** `type='email'` (one lazily created row per tenant, no credentials; SMTP is global in the worker). Client address = `beauty_conversations.external_chat_id` (lowercase), `last_message_at` stays NULL so a messenger conversation wins in the worker's `CLIENT_SQL`. Confirmation = `beauty_messages` (outbound, system, `pending`, `idempotency_key = 'confirmation:{appointmentId}'`).
 
 **RLS Policy:** `tenant_isolation` (ENABLE ROW LEVEL SECURITY FORCE).
 **Webhook Policy:** `channel_webhook_lookup` (SELECT only, by channel ID).
@@ -505,6 +530,8 @@ refund_percent_in_window INT NOT NULL
 refund_percent_outside INT NOT NULL
 deduct_fee      BOOLEAN DEFAULT false
 fee_percent     INT NOT NULL
+show_terms_to_client BOOLEAN NOT NULL DEFAULT true  -- показ умов клієнту (лише презентація)
+custom_terms_text TEXT NULL                          -- власний текст умов, ≤ 500
 created_at      TIMESTAMPTZ NOT NULL
 updated_at      TIMESTAMPTZ NOT NULL
 
@@ -512,9 +539,10 @@ CHECK (window_hours BETWEEN 0 AND 720)
 CHECK (refund_percent_in_window BETWEEN 0 AND 100)
 CHECK (refund_percent_outside BETWEEN 0 AND 100)
 CHECK (fee_percent BETWEEN 0 AND 100)
+CHECK (custom_terms_text IS NULL OR char_length(custom_terms_text) <= 500)  -- ck_beauty_cancellation_settings_terms_text
 ```
 
-**Default values (if row absent):** `window_hours=12`, `refund_percent_in_window=50`, `refund_percent_outside=100`, `deduct_fee=false`, `fee_percent=0`.
+**Default values (if row absent):** `window_hours=12`, `refund_percent_in_window=50`, `refund_percent_outside=100`, `deduct_fee=false`, `fee_percent=0`, `show_terms_to_client=true`, `custom_terms_text=NULL`. Прапорець/текст керують лише показом клієнту й не впливають на розрахунок повернення.
 
 **Calculation (TASK-685):** 
 ```
@@ -706,6 +734,18 @@ Adds beauty_locations.working_hours (JSONB).
 ### 11. `20261109075625_beauty_public_location_catalog` (ADR-011)
 
 Adds beauty_locations.public_code (backfilled by `public.beauty_generate_public_code()`), latitude, longitude, city, is_discoverable; unique index `ux_beauty_locations_public_code`; CHECKs (`ck_beauty_locations_public_code`, `_latitude`, `_longitude`, `_coords_pair`); partial indexes for nearby and city search. Creates role `beautycrm_catalog` if missing, column grants, `public_catalog_read` policies, and the three SECURITY DEFINER functions (§5). Down drops functions, policies, indexes and checks; the cluster role is kept.
+
+### 12. `beauty_specialist_profile_reviews` (мобільний потік «послуга → майстер → дата → час»)
+
+Adds beauty_specialists.practice_start_year, bio (+ CHECKs). Creates beauty_specialist_reviews (§ вище) with RLS ENABLE+FORCE, `tenant_isolation`, guarded `GRANT SELECT, INSERT, UPDATE, DELETE ... TO beautycrm_app` (лише якщо роль існує) і DO-блоком, що падає, якщо FORCE RLS не ввімкнено. Down робить DROP TABLE відгуків і прибирає колонки/CHECK-и майстра. Покрито `SpecialistReviewsMigrationTests` (Up/Down/Up, RLS, унікальність запису, CHECK-и).
+
+### 13. `20261109150000_beauty_reminder_24h_email_channel` (написана вручну)
+
+Лише заміна CHECK-ів: `ck_beauty_appointments_reminder_option` + `'24h'`, `ck_beauty_channels_type` + `'email'`. Down (RAISE EXCEPTION, якщо є рядки з `24h`/`email`) повертає старі CHECK-и. Покрито `ReminderEmailMigrationTests`.
+
+### 14. `20261110090000_beauty_cancellation_terms_visibility` (написана вручну)
+
+`beauty_cancellation_settings` + `show_terms_to_client boolean NOT NULL DEFAULT true`, `custom_terms_text text NULL`, CHECK `ck_beauty_cancellation_settings_terms_text` (≤ 500). `ADD COLUMN IF NOT EXISTS`; наявні рядки = true/NULL. Down видаляє CHECK і колонки. Покрито `CancellationTermsMigrationTests`.
 
 ---
 

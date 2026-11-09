@@ -318,6 +318,8 @@ List specialists.
     "photoUrl": "https://...",
     "isActive": true,
     "hasAccount": true,
+    "practiceStartYear": 2015,
+    "bio": "…",
     "services": [{ "id": "uuid", "name": "Haircut" }],
     "locations": [
       {
@@ -344,13 +346,18 @@ Create specialist profile.
   "position": "Colorist",
   "locationIds": ["loc-id1", "loc-id2"],
   "serviceIds": ["svc-id1"],
-  "workingHours": { "mon": [{"from":"09:00","to":"18:00"}], ... }
+  "workingHours": { "mon": [{"from":"09:00","to":"18:00"}], ... },
+  "practiceStartYear": 2015,
+  "bio": "Short description (<= 500)",
+  "photoUrl": "https://cdn.example.com/a.jpg"
 }
 ```
 
+Публічний профіль (необов'язково): `practiceStartYear` 1950..поточний рік (UTC), `bio` до 500 символів, `photoUrl` — лише абсолютний `https` URL до 500 символів без credentials (файли не завантажуються).
+
 **Response:** `201` SpecialistDto.
 
-**Errors:** `409 location_already_assigned`, `422 invalid_name|invalid_phone|invalid_position|invalid_working_hours|location_required|location_not_found|service_not_found`.
+**Errors:** `409 location_already_assigned`, `422 invalid_name|invalid_phone|invalid_position|invalid_working_hours|location_required|location_not_found|service_not_found|invalid_practice_start_year|invalid_bio|invalid_photo_url`.
 
 ### GET /beauty/specialists/{id}
 **Access:** owner, admin, specialist
@@ -370,15 +377,18 @@ Update specialist profile.
   "name": "Jane Smith",
   "phone": "+380501234567",
   "position": "Colorist",
-  "isActive": false
+  "isActive": false,
+  "practiceStartYear": 2015,
+  "bio": "…",
+  "photoUrl": "https://cdn.example.com/a.jpg"
 }
 ```
 
 **Response:** `200` SpecialistDto.
 
-**Errors:** `403 forbidden_role` (admin can't edit owner's profile), `404 specialist_not_found`, `422 invalid_*`.
+**Errors:** `403 forbidden_role` (admin can't edit owner's profile), `404 specialist_not_found`, `422 invalid_*` (у т.ч. `invalid_practice_start_year|invalid_bio|invalid_photo_url`).
 
-**Notes:** `isActive=false` deactivates in one transaction (user disabled, tokens revoked, pending invites revoked).
+**Notes:** поля публічного профілю (`practiceStartYear`, `bio`, `photoUrl`): `null`/відсутнє = без змін (старі клієнти не стирають дані); очищення — `bio: ""`, `photoUrl: ""`, `practiceStartYear: 0`. Валідація як при створенні. `isActive=false` deactivates in one transaction (user disabled, tokens revoked, pending invites revoked).
 
 ### PUT /beauty/specialists/{id}/services
 **Access:** owner, admin
@@ -617,7 +627,7 @@ Create appointment.
     "phone": "+380501234567",
     "email": "client@example.com (optional)"
   },
-  "reminder": "none|1h|2h",
+  "reminder": "none|1h|2h|24h",
   "paymentMethod": "card|cash",
   "source": "admin|online (default: online)"
 }
@@ -1150,20 +1160,27 @@ Get tenant's cancellation policy.
   "refundPercentInWindow": 50,
   "refundPercentOutside": 100,
   "deductFee": false,
-  "feePercent": 0
+  "feePercent": 0,
+  "showTermsToClient": true,
+  "customTermsText": null
 }
 ```
+
+`showTermsToClient` (за замовч. `true`) і `customTermsText` (`string|null`) керують лише показом умов клієнту; правила й розрахунок повернення від них не залежать.
 
 ### PUT /beauty/settings/cancellation
 **Access:** owner only
 
-Update cancellation policy (all 5 fields required).
+Update cancellation policy (5 числових полів обов'язкові).
 
-**Body:** Same as GET response.
+**Body:** Same as GET response. `showTermsToClient` / `customTermsText` необов'язкові: відсутні в тілі = не змінювати (старі клієнти). `customTermsText`: trim; `null`/порожній/пробіли = очистити; ≤ 500 символів; без керівних символів, крім `
+`.
 
 **Response:** `200` same.
 
-**Errors:** `422 invalid_window_hours|invalid_refund_percent|invalid_fee_percent|settings_incomplete`, `403 forbidden_role`.
+**`cancellation` у слотах/записах (публічних і адмінських):** до п'яти числових полів додано `showToClient` (bool) і `customText` (string|null); при `showToClient=false` `customText=null`, числа без змін.
+
+**Errors:** `422 invalid_window_hours|invalid_refund_percent|invalid_fee_percent|invalid_terms_text|settings_incomplete`, `403 forbidden_role`.
 
 ---
 
@@ -1204,10 +1221,46 @@ List specialists at location (with optional service filter).
     "id": "uuid",
     "name": "John Doe",
     "title": "Hairdresser",
-    "photoUrl": "https://..."
+    "photoUrl": "https://...|null",
+    "experienceYears": 8,
+    "bio": "...|null",
+    "rating": 4.3,
+    "reviewsCount": 12
   }
 ]
 ```
+`experienceYears` = поточний рік − `practice_start_year` (мін. 0), `null`, якщо не задано. `rating` — середнє опублікованих відгуків з 1 знаком після коми, `null`, якщо їх немає; `reviewsCount` — лише опубліковані.
+
+### GET /public/{tenantSlug}/specialists/{specialistId}/reviews
+**Access:** Public (Read rate limit)
+
+Опубліковані відгуки активного майстра, новіші першими.
+
+**Query:** `limit` (1..50, за замовч. 20), `offset` (>= 0, за замовч. 0).
+
+**Response:** `200`
+```json
+{
+  "total": 12,
+  "items": [
+    { "id": "uuid", "authorName": "Olena K.", "rating": 5, "text": "…|null", "createdAt": "2030-01-07T10:00:00+00:00" }
+  ]
+}
+```
+Автор лише у вигляді «Ім'я К.» (зберігається так при створенні); телефон, id клієнта/запису не віддаються. **Errors:** `404 specialist_not_found` (неіснуючий, чужий tenant або неактивний майстер), `422 invalid_limit|invalid_offset`.
+
+### GET /public/{tenantSlug}/availability
+**Access:** Public (Read rate limit)
+
+Календар доступності послуги: статус кожного дня в часовій зоні закладу.
+
+**Query:** `locationId`, `serviceId` (required); `specialistId` (optional; без нього — «будь-який майстер»); `from` (`YYYY-MM-DD`, за замовч. сьогодні в зоні закладу; допускається не раніше «вчора» зони закладу, не далі за горизонт запису); `days` (1..62, за замовч. 31).
+
+**Response:** `200`
+```json
+{ "days": [ { "date": "2030-01-07", "status": "available", "freeSlots": 12 } ] }
+```
+`status`: `past` — дата раніше сьогодні; `closed` — заклад/майстер не працює (графік, вихідний, закриття, відсутність, послуга не призначена, години закладу); `full` — день робочий, вільних слотів немає (у т.ч. сьогодні, коли решта слотів минула або зайнята); `available` — є вільні слоти. `freeSlots` — кількість слотів, як у `/slots` (для «будь-якого майстра» — сума по майстрах). Дні далі за горизонт запису відкидаються. **Errors:** `404 service_not_found|location_not_found`, `422 invalid_days|invalid_date`.
 
 ### GET /public/{tenantSlug}/locations/{locationId}/services
 **Access:** Public
@@ -1278,9 +1331,10 @@ Create appointment.
   "startsAt": "2026-10-10T09:00:00Z",
   "client": {
     "name": "John Client",
-    "phone": "+380501234567|0501234567|CC1234567890"
+    "phone": "+380501234567|0501234567|CC1234567890",
+    "email": "client@example.com (optional; <=254, trim+lowercase; else 422 invalid_email)"
   },
-  "reminder": "none|1h|2h (default: none)",
+  "reminder": "none|1h|2h|24h (default: none)",
   "paymentMethod": "card|cash",
   "captchaToken": "... (alternate header location)"
 }
@@ -1323,7 +1377,7 @@ Create appointment.
 
 **Errors:**
 - `422 idempotency_key_required|invalid_idempotency_key|idempotency_key_reused` (key validation)
-- `422 invalid_name|invalid_phone|invalid_reminder|invalid_payment_method|invalid_request` (data validation)
+- `422 invalid_name|invalid_phone|invalid_email|invalid_reminder|invalid_payment_method|invalid_request` (data validation)
 - `422 invalid_start|slot_in_past|outside_working_hours` (slot validation)
 - `422 booking_limit_reached` (>3 active per phone or >5 created/hour per phone)
 - `422 captcha_failed` (if enabled)
@@ -1335,6 +1389,8 @@ Create appointment.
 - Phone normalized to E.164 (`+380...`); accepts `+CC...`, `00CC...`, `0XXXXXXXXX` (→ +380), `CC...` (11-15 digits).
 - Client deduplicated by normalized phone; existing name NOT overwritten.
 - `marketingConsent` only explicit `true` for new clients; anonymous existing profile not changed.
+- `email` (optional): stored in `beauty_clients.email`; an existing client's email is only filled when empty (never wiped by an empty value, never overwritten by an anonymous call). Not logged, not returned by public endpoints.
+- If the client has an email, a confirmation is queued in the outbox (`beauty_messages`, idempotency key `confirmation:{appointmentId}`, email channel); the text has no cancel token. Delivery is done by the worker.
 - PII not logged; slug/token in path not logged by Kestrel.
 
 ### GET /public/{tenantSlug}/appointments/{publicToken}

@@ -21,7 +21,7 @@
 ## 2. Сутності (tenant_id + RLS на всіх)
 `beauty_locations`, `beauty_specialists`, `beauty_specialist_locations`, `beauty_services`, `beauty_service_prices`, `beauty_appointments`, `beauty_clients`, `beauty_client_notes`, `beauty_promotions` (+`_locations`, `_services`), `beauty_channels`, `beauty_conversations`, `beauty_messages`, `beauty_ai_actions`, `beauty_reminders`, `beauty_payments`.
 
-`beauty_appointments`: `id`, `tenant_id`, `location_id`, `specialist_id`, `service_id`, `client_id`, `starts_at`, `duration_minutes`, `status` (pending|confirmed|completed|cancelled|no_show), `source` (admin|online|telegram|instagram), `price_original`, `price_final`, `promotion_id`, `reminder_option` (none|1h|2h), `payment_method` (card|cash).
+`beauty_appointments`: `id`, `tenant_id`, `location_id`, `specialist_id`, `service_id`, `client_id`, `starts_at`, `duration_minutes`, `status` (pending|confirmed|completed|cancelled|no_show), `source` (admin|online|telegram|instagram), `price_original`, `price_final`, `promotion_id`, `reminder_option` (none|reminder?: none|1h|2h|24h (за замовч. none)|2h|24h), `payment_method` (card|cash).
 
 ## 3. API (`/api/beauty/...`, `[RequireModule("beauty_*")]`)
 | Метод | Шлях | Призначення |
@@ -143,7 +143,7 @@ public interface IPaymentService {
 | GET | `/locations/{id}/specialists` | `[{id, name, title?, photoUrl?}]` (без email/телефону) |
 | GET | `/locations/{id}/services` | `[{id, name, description?, category?, durationMinutes, priceOriginal, priceFinal, promotionId?, promotionName?}]`; `priceOriginal` = override закладу або мережева, `priceFinal` = після акції (найбільша знижка) на зараз |
 | GET | `/slots?locationId&serviceId&date[&specialistId]` | як §9/§11 (`[{specialistId, startsAt, endsAt, label, cancellation}]`); `date` від вчора до `MaxDaysAhead` (180), інакше 422 `invalid_date` |
-| POST | `/appointments` | `{locationId, specialistId, serviceId, startsAt, client:{name, phone}, reminder?: none\|1h\|2h (за замовч. none), paymentMethod: card\|cash, captchaToken?}` -> `201 {publicToken, appointment}`; повтор того ж `Idempotency-Key` -> `200` + `Idempotent-Replayed: true` |
+| POST | `/appointments` | `{locationId, specialistId, serviceId, startsAt, client:{name, phone}, reminder?: none|1h|2h|24h (за замовч. none)\|1h\|2h (за замовч. none), paymentMethod: card\|cash, captchaToken?}` -> `201 {publicToken, appointment}`; повтор того ж `Idempotency-Key` -> `200` + `Idempotent-Replayed: true` |
 | GET | `/appointments/{publicToken}` | `PublicAppointment` (див. нижче) |
 | POST | `/appointments/{publicToken}/cancel` | `{appointment, refundAmount, refundPercent, feePercent}` за політикою §11 |
 
