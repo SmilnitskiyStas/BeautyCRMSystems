@@ -1,0 +1,5 @@
+# Скрипти виконуються в Linux-контейнерах: завжди LF (інакше на Windows-чекауті ламаються shebang і psql-скрипти).
+*.sh text eol=lf
+*.sql text eol=lf
+*.conf text eol=lf
+*.inc text eol=lf
