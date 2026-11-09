@@ -134,6 +134,21 @@ export const mockBookingApi: BookingApi = {
     return delay(slots);
   },
 
+  getSpecialistReviews: () => delay({ total: 0, items: [] }),
+
+  async getAvailability(_t, { locationId, from, days }) {
+    const [y, m, d] = from.split("-").map(Number);
+    const loc = locations.find((l) => l.id === locationId);
+    const today = new Date().toISOString().slice(0, 10);
+    return delay(
+      Array.from({ length: days }, (_, i) => {
+        const date = new Date(Date.UTC(y, m - 1, d + i)).toISOString().slice(0, 10);
+        const status = date < today ? ("past" as const) : isClosedDate(date, loc) ? ("closed" as const) : ("available" as const);
+        return { date, status, freeSlots: status === "available" ? SLOT_TIMES.length : 0 };
+      }),
+    );
+  },
+
   async createAppointment(_t, req) {
     const parsed = createAppointmentSchema.safeParse(req);
     if (!parsed.success) throw new BookingApiError(422, "invalid_request");

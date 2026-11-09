@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const reminderOptionSchema = z.enum(["none", "1h", "2h"]);
+export const reminderOptionSchema = z.enum(["none", "1h", "2h", "24h"]);
 export type ReminderOption = z.infer<typeof reminderOptionSchema>;
 
 export const paymentMethodSchema = z.enum(["card", "cash"]);
@@ -27,8 +27,50 @@ export interface Specialist {
   name: string;
   /** Посада (`title` публічного API); може бути порожньою. */
   role: string;
+  /** https-URL фото або null/відсутнє. */
+  photoUrl?: string | null;
+  experienceYears?: number | null;
+  bio?: string | null;
+  /** Середній рейтинг (1 знак) або null, якщо відгуків немає. */
+  rating?: number | null;
+  reviewsCount?: number;
   /** Лише для mock: підказка «найближчий запис». Публічний API її не віддає. */
   nextFree?: string;
+}
+
+/** Відгук про майстра (`GET /specialists/{id}/reviews`). */
+export interface SpecialistReview {
+  id: string;
+  /** Скорочене ім'я автора, напр. «Анна К.». */
+  authorName: string;
+  rating: number;
+  text: string | null;
+  createdAt: string;
+}
+
+export interface SpecialistReviewsPage {
+  total: number;
+  items: SpecialistReview[];
+}
+
+export type DayStatus = "available" | "full" | "closed" | "past";
+
+/** День календаря доступності (`GET /availability`). */
+export interface DayAvailability {
+  date: string;
+  status: DayStatus;
+  freeSlots: number;
+}
+
+export interface AvailabilityQuery {
+  locationId: string;
+  serviceId: string;
+  /** ANY_SPECIALIST_ID/відсутнє = будь-який майстер (без параметра). */
+  specialistId?: string;
+  /** YYYY-MM-DD */
+  from: string;
+  /** ≤ 62 */
+  days: number;
 }
 
 /** Спеціальне значення «будь-який майстер»: для API це відсутність `specialistId`. */
@@ -54,6 +96,18 @@ export interface CancellationTerms {
   refundPercentOutside: number;
   deductFee: boolean;
   feePercent: number;
+  /** Салон може сховати умови від клієнта. Відсутнє в старих відповідях = true. */
+  showToClient?: boolean;
+  /** Власний текст салону замість автоматичних рядків. Відсутнє/порожнє = null. */
+  customText?: string | null;
+}
+
+/** Нормалізує умови з API: старі відповіді без нових полів валідні; порожній customText -> null; showToClient=false => customText=null. */
+export function normalizeCancellation(c: CancellationTerms | null | undefined): CancellationTerms | undefined {
+  if (!c) return undefined;
+  const showToClient = c.showToClient !== false;
+  const trimmed = typeof c.customText === "string" ? c.customText.trim() : "";
+  return { ...c, showToClient, customText: showToClient && trimmed ? trimmed : null };
 }
 
 export interface Slot {
@@ -64,12 +118,33 @@ export interface Slot {
   cancellation?: CancellationTerms;
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/;
+
+/** Пошта (необов'язкова): trim, ≤ 254, формат; порожнє -> undefined; значення нормалізується до нижнього регістру. */
+export const emailSchema = z
+  .string()
+  .trim()
+  .max(254, "Пошта занадто довга")
+  .refine((v) => v === "" || EMAIL_RE.test(v), "Вкажіть коректну пошту")
+  .transform((v) => (v === "" ? undefined : v.toLowerCase()))
+  .optional();
+
+export const EMAIL_REQUIRED_FOR_REMINDER = "Вкажіть пошту, щоб ми могли надіслати нагадування";
+
+/** Правило форми: нагадування (≠ none) потребує пошти. Повертає текст помилки або null. */
+export function reminderEmailError(reminder: ReminderOption, email: string | undefined | null): string | null {
+  return reminder !== "none" && !(email ?? "").trim() ? EMAIL_REQUIRED_FOR_REMINDER : null;
+}
+
 export const clientSchema = z.object({
   name: z.string().trim().min(2, "Вкажіть імʼя").max(100, "Імʼя занадто довге"),
   phone: z
     .string()
     .trim()
     .regex(/^\+?[0-9\s()-]{9,16}$/, "Вкажіть коректний номер телефону"),
+  email: emailSchema,
+  /** Згода на маркетинг: у мобільному потоці завжди false (окремої згоди немає). */
+  marketingConsent: z.boolean().optional(),
 });
 export type ClientInput = z.infer<typeof clientSchema>;
 

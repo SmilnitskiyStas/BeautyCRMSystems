@@ -56,7 +56,8 @@ describe("слоти", () => {
     ];
     const out = toSlots(rows);
     expect(out.map((s) => s.label)).toEqual(["09:00", "12:00"]);
-    expect(out[0].cancellation).toEqual(terms);
+    // нормалізація умов додає показ (за замовч. увімкнено) і власний текст (null)
+    expect(out[0].cancellation).toEqual({ ...terms, showToClient: true, customText: null });
   });
 });
 

@@ -2,6 +2,9 @@ import type {
   BookingResult,
   CancelResult,
   Appointment,
+  AvailabilityQuery,
+  DayAvailability,
+  SpecialistReviewsPage,
   CreateAppointmentRequest,
   Location,
   Service,
@@ -25,6 +28,14 @@ export interface BookingApi {
     tenant: string,
     q: { locationId: string; specialistId: string; serviceId: string; date: string },
   ): Promise<Slot[]>;
+  /** GET /specialists/{id}/reviews?limit&offset */
+  getSpecialistReviews(
+    tenant: string,
+    specialistId: string,
+    page: { limit: number; offset: number },
+  ): Promise<SpecialistReviewsPage>;
+  /** GET /availability?locationId&serviceId[&specialistId]&from&days; ANY_SPECIALIST_ID -> без specialistId */
+  getAvailability(tenant: string, q: AvailabilityQuery): Promise<DayAvailability[]>;
   /** POST /appointments з заголовком Idempotency-Key */
   createAppointment(tenant: string, req: CreateAppointmentRequest, idempotencyKey: string): Promise<BookingResult>;
   /** GET /appointments/{publicToken} */

@@ -1,6 +1,10 @@
 import {
   ANY_SPECIALIST_ID,
   type Appointment,
+  type DayAvailability,
+  type DayStatus,
+  type SpecialistReview,
+  type SpecialistReviewsPage,
   type AppointmentStatus,
   BookingApiError,
   type CancellationTerms,
@@ -9,6 +13,7 @@ import {
   type Service,
   type Slot,
   type Specialist,
+  normalizeCancellation,
   reminderOptionSchema,
 } from "./types";
 import type { BookingApi } from "./client";
@@ -38,6 +43,17 @@ interface PublicSpecialistDto {
   name: string;
   title: string | null;
   photoUrl: string | null;
+  experienceYears?: number | null;
+  bio?: string | null;
+  rating?: number | null;
+  reviewsCount?: number | null;
+}
+interface SpecialistReviewsDto {
+  total: number;
+  items: { id: string; authorName: string; rating: number; text: string | null; createdAt: string }[];
+}
+interface AvailabilityDto {
+  days: { date: string; status: string; freeSlots: number }[];
 }
 interface PublicServiceDto {
   id: string;
@@ -104,7 +120,35 @@ export function toLocation(l: PublicLocationDto): Location {
   };
 }
 
-export const toSpecialist = (s: PublicSpecialistDto): Specialist => ({ id: s.id, name: s.name, role: s.title ?? "" });
+/** Лише https-фото; інше (http, javascript:, порожнє) -> null (UI покаже ініціали). */
+export const safePhotoUrl = (u: string | null | undefined): string | null =>
+  typeof u === "string" && /^https:\/\//i.test(u.trim()) ? u.trim() : null;
+
+export const toSpecialist = (s: PublicSpecialistDto): Specialist => ({
+  id: s.id,
+  name: s.name,
+  role: s.title ?? "",
+  photoUrl: safePhotoUrl(s.photoUrl),
+  experienceYears: typeof s.experienceYears === "number" ? s.experienceYears : null,
+  bio: s.bio?.trim() ? s.bio.trim() : null,
+  rating: typeof s.rating === "number" ? s.rating : null,
+  reviewsCount: s.reviewsCount ?? 0,
+});
+
+export const toReviewsPage = (r: SpecialistReviewsDto): SpecialistReviewsPage => ({
+  total: r.total,
+  items: r.items.map((i): SpecialistReview => ({ ...i, text: i.text ?? null })),
+});
+
+const DAY_STATUSES: DayStatus[] = ["available", "full", "closed", "past"];
+
+/** Невідомий статус -> `closed` (безпечно: не клікабельний). */
+export const toDays = (r: AvailabilityDto): DayAvailability[] =>
+  r.days.map((d) => ({
+    date: d.date.slice(0, 10),
+    status: (DAY_STATUSES as string[]).includes(d.status) ? (d.status as DayStatus) : "closed",
+    freeSlots: d.freeSlots,
+  }));
 
 /** Мітка акції: назва акції + відсоток знижки з різниці цін. */
 export function promoLabel(s: Pick<PublicServiceDto, "priceOriginal" | "priceFinal" | "promotionName" | "promotionId">): string | undefined {
@@ -139,7 +183,7 @@ export function toSlots(rows: FreeSlotDto[]): Slot[] {
     const key = new Date(r.startsAt).toISOString();
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ startsAt: r.startsAt, label: r.label, specialistId: r.specialistId, cancellation: r.cancellation ?? undefined });
+    out.push({ startsAt: r.startsAt, label: r.label, specialistId: r.specialistId, cancellation: normalizeCancellation(r.cancellation) });
   }
   return out;
 }
@@ -160,7 +204,7 @@ export function toAppointment(a: PublicAppointmentDto): Appointment {
     reminderOption: reminder.success ? reminder.data : "none",
     paymentMethod: a.paymentMethod === "card" || a.paymentMethod === "cash" ? (a.paymentMethod as PaymentMethod) : undefined,
     paymentStatus: a.paymentStatus ?? undefined,
-    cancellation: a.cancellation ?? undefined,
+    cancellation: normalizeCancellation(a.cancellation),
   };
 }
 
@@ -278,6 +322,28 @@ export function createHttpBookingApi(opts: HttpBookingApiOptions): BookingApi {
         ),
       ),
 
+    getSpecialistReviews: async (tenant, specialistId, page) =>
+      toReviewsPage(
+        await request<SpecialistReviewsDto>(
+          tenant,
+          `/specialists/${encodeURIComponent(specialistId)}/reviews${q({ limit: String(page.limit), offset: String(page.offset) })}`,
+        ),
+      ),
+
+    getAvailability: async (tenant, p) =>
+      toDays(
+        await request<AvailabilityDto>(
+          tenant,
+          `/availability${q({
+            locationId: p.locationId,
+            serviceId: p.serviceId,
+            specialistId: !p.specialistId || p.specialistId === ANY_SPECIALIST_ID ? undefined : p.specialistId,
+            from: p.from,
+            days: String(p.days),
+          })}`,
+        ),
+      ),
+
     async createAppointment(tenant, req, idempotencyKey) {
       const r = await request<PublicBookingCreatedDto>(tenant, "/appointments", {
         method: "POST",
@@ -287,7 +353,7 @@ export function createHttpBookingApi(opts: HttpBookingApiOptions): BookingApi {
           specialistId: req.specialistId,
           serviceId: req.serviceId,
           startsAt: req.startsAt,
-          client: { name: req.client.name, phone: req.client.phone },
+          client: { name: req.client.name, phone: req.client.phone, ...(req.client.email ? { email: req.client.email } : {}), ...(req.client.marketingConsent !== undefined ? { marketingConsent: req.client.marketingConsent } : {}) },
           reminder: req.reminder,
           paymentMethod: req.paymentMethod,
           website: req.website ?? "",

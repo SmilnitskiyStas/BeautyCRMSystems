@@ -10,6 +10,7 @@ const BY_CODE: Record<string, string> = {
   invalid_date: "Оберіть дату в межах найближчих днів.",
   invalid_name: "Вкажіть імʼя (від 2 до 100 символів).",
   invalid_phone: "Перевірте номер телефону, наприклад +380501112233.",
+  invalid_email: "Перевірте пошту, наприклад name@example.com.",
   invalid_reminder: "Оберіть варіант нагадування зі списку.",
   invalid_payment_method: "Оберіть спосіб оплати зі списку.",
   booking_limit_reached: "На цей номер уже забагато записів. Спробуйте пізніше або зверніться до закладу.",

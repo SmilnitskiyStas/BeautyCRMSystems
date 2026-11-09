@@ -110,6 +110,8 @@ let cancellationSettings: CancellationSettings = {
   refundPercentOutside: 100,
   deductFee: false,
   feePercent: 0,
+  showTermsToClient: true,
+  customTermsText: null,
 };
 const addedNotes:Record<string, ClientNote[]> = {};
 
@@ -367,7 +369,9 @@ export const mockBeautyApi: BeautyAdminApi = {
   getCancellationSettings: () => wait(cancellationSettings),
 
   updateCancellationSettings: async (next) => {
-    cancellationSettings = { ...next };
+    const text = (next.customTermsText ?? "").trim();
+    if (text.length > 500) throw new BeautyApiError(422, "invalid_terms_text", "invalid_terms_text");
+    cancellationSettings = { ...next, showTermsToClient: next.showTermsToClient ?? true, customTermsText: text === "" ? null : text };
     return wait(cancellationSettings);
   },
 
