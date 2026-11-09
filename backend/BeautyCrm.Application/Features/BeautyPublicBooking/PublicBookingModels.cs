@@ -8,6 +8,35 @@ public sealed class PublicBookingOptions
 {
     /// <summary>Якщо true, POST /appointments вимагає токен CAPTCHA, який має підтвердити <see cref="ICaptchaVerifier"/>.</summary>
     public bool CaptchaRequired { get; set; }
+    /// <summary>
+    /// ADR-011: політика перевірки клієнта за міткою <c>X-Booking-Client</c> (web|ios|android). Для web `CaptchaRequired=true`
+    /// означає enforce. Для ios/android за замовчуванням none (MVP).
+    /// </summary>
+    public ProtectionMode ProtectionWeb { get; set; } = ProtectionMode.None;
+    public ProtectionMode ProtectionIos { get; set; } = ProtectionMode.None;
+    public ProtectionMode ProtectionAndroid { get; set; } = ProtectionMode.None;
+    /// <summary>
+    /// ADR-011: ліміт онлайн-створень на один заклад за годину (радіус ураження ротації телефонів/IP); персонал не рахується.
+    /// 0 або менше = вимкнено.
+    /// </summary>
+    public int MaxPublicCreatesPerLocationPerHour { get; set; } = 60;
+    /// <summary>Мінімальна підтримувана версія застосунку для ios / android (kill switch застарілих; null = без обмеження).</summary>
+    public Version? MinAppVersionIos { get; set; }
+    public Version? MinAppVersionAndroid { get; set; }
+
+    public ProtectionMode ProtectionFor(ClientKind kind) => kind switch
+    {
+        ClientKind.Ios => ProtectionIos,
+        ClientKind.Android => ProtectionAndroid,
+        _ => CaptchaRequired ? ProtectionMode.Enforce : ProtectionWeb,
+    };
+
+    public Version? MinVersionFor(ClientKind kind) => kind switch
+    {
+        ClientKind.Ios => MinAppVersionIos,
+        ClientKind.Android => MinAppVersionAndroid,
+        _ => null,
+    };
     /// <summary>Скільки майбутніх активних онлайн-записів може мати один телефон у tenant.</summary>
     public int MaxActiveBookingsPerPhone { get; set; } = 3;
     /// <summary>Скільки онлайн-записів (будь-який статус) можна створити з одного телефону за годину.</summary>
@@ -42,7 +71,10 @@ public sealed record PublicCreateAppointmentRequest(
     PublicClientInput? Client, string? Reminder, string? PaymentMethod, string? CaptchaToken, string? Website = null);
 
 /// <summary>Контекст HTTP-запиту, потрібний захисту від зловживань (без PII).</summary>
-public sealed record PublicRequestContext(string? IdempotencyKey, string? CaptchaToken, string? RemoteIp);
+/// <param name="Client">Самодекларована мітка клієнта (X-Booking-Client), НЕ автентифікація.</param>
+/// <param name="IntegrityToken">Доказ клієнта (app attest / play integrity) для ios/android; для web використовується <paramref name="CaptchaToken"/>.</param>
+public sealed record PublicRequestContext(string? IdempotencyKey, string? CaptchaToken, string? RemoteIp,
+    ClientKind Client = ClientKind.Web, string? IntegrityToken = null);
 
 /// <summary>Вигляд запису для клієнта: мінімум PII (без імені/телефону/email клієнта й без внутрішніх id).</summary>
 public sealed record PublicAppointmentDto(
@@ -76,6 +108,8 @@ public interface IPublicBookingStore
     Task<int> CountActiveOnlineByPhoneAsync(string phone, DateTimeOffset now, CancellationToken ct);
     /// <summary>Онлайн-записи з цим телефоном, створені після since (будь-який статус) — для rate limit на телефон.</summary>
     Task<int> CountRecentOnlineByPhoneAsync(string phone, DateTimeOffset since, CancellationToken ct);
+    /// <summary>Онлайн-записи закладу, створені після since (будь-який статус) — ліміт MaxPublicCreatesPerLocationPerHour.</summary>
+    Task<int> CountRecentOnlineByLocationAsync(Guid locationId, DateTimeOffset since, CancellationToken ct);
 }
 
 public sealed record PublicServiceBase(Guid Id, string Name, string? Description, string? Category, int DurationMinutes, decimal Price);
@@ -92,4 +126,34 @@ public interface ICaptchaVerifier
 public sealed class RejectAllCaptchaVerifier : ICaptchaVerifier
 {
     public Task<bool> VerifyAsync(string? token, string? remoteIp, CancellationToken ct) => Task.FromResult(false);
+}
+
+// ---------- ADR-011 §6: захист клієнтів замість CAPTCHA-хука ----------
+
+/// <summary>Мітка клієнта (X-Booking-Client). Самодекларована: слугує метриці, мінімальній версії й вибору політики.</summary>
+public enum ClientKind { Web, Ios, Android }
+
+public enum ProtectionMode { None, Monitor, Enforce }
+
+/// <summary>Вид доказу клієнта: captcha (web), app_attest (ios), play_integrity (android).</summary>
+public enum ClientProofKind { Captcha, AppAttest, PlayIntegrity }
+
+public sealed record ClientProof(ClientProofKind Kind, string? Token);
+
+/// <summary>
+/// Перевірка «справжній клієнт». Узагальнення <see cref="ICaptchaVerifier"/>. Реалізації App Attest / Play Integrity —
+/// окрема задача (Phase 2); за замовчуванням підключено <see cref="DefaultClientIntegrityVerifier"/> (captcha -> ICaptchaVerifier,
+/// решта -> false, тобто fail closed у режимі enforce).
+/// </summary>
+public interface IClientIntegrityVerifier
+{
+    Task<bool> VerifyAsync(ClientProof proof, string? remoteIp, CancellationToken ct);
+}
+
+public sealed class DefaultClientIntegrityVerifier(ICaptchaVerifier captcha) : IClientIntegrityVerifier
+{
+    public Task<bool> VerifyAsync(ClientProof proof, string? remoteIp, CancellationToken ct) =>
+        proof.Kind == ClientProofKind.Captcha && !string.IsNullOrWhiteSpace(proof.Token)
+            ? captcha.VerifyAsync(proof.Token, remoteIp, ct)
+            : Task.FromResult(false);
 }

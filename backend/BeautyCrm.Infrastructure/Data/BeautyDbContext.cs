@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using BeautyCrm.Infrastructure.Data.Entities;
 using BeautyCrm.Infrastructure.Data.Tenancy;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace BeautyCrm.Infrastructure.Data;
@@ -89,8 +90,24 @@ public class BeautyDbContext : DbContext
         mb.Entity<Location>(b =>
         {
             Base(b, "beauty_locations", t =>
+            {
                 t.HasCheckConstraint("ck_beauty_locations_closed_weekdays",
-                    "closed_weekdays <@ ARRAY['mon','tue','wed','thu','fri','sat','sun']::text[]"));
+                    "closed_weekdays <@ ARRAY['mon','tue','wed','thu','fri','sat','sun']::text[]");
+                // ADR-011
+                t.HasCheckConstraint("ck_beauty_locations_public_code", "public_code ~ '^[0-9A-HJKMNP-TV-Z]{8}$'");
+                t.HasCheckConstraint("ck_beauty_locations_latitude", "latitude IS NULL OR latitude BETWEEN -90 AND 90");
+                t.HasCheckConstraint("ck_beauty_locations_longitude", "longitude IS NULL OR longitude BETWEEN -180 AND 180");
+                t.HasCheckConstraint("ck_beauty_locations_coords_pair", "(latitude IS NULL) = (longitude IS NULL)");
+            });
+            b.Property(x => x.PublicCode).HasMaxLength(8).IsRequired()
+                .HasDefaultValueSql("public.beauty_generate_public_code()");
+            b.Property(x => x.PublicCode).Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore); // незмінний (ADR-011 §1)
+            b.HasIndex(x => x.PublicCode).IsUnique().HasDatabaseName("ux_beauty_locations_public_code");
+            b.Property(x => x.City).HasMaxLength(100);
+            b.Property(x => x.IsDiscoverable).HasDefaultValue(false);
+            b.HasIndex(x => new { x.Latitude, x.Longitude }).HasDatabaseName("ix_beauty_locations_discoverable_coords")
+                .HasFilter("is_discoverable AND is_active AND latitude IS NOT NULL");
+            // + ix_beauty_locations_discoverable_city ON (lower(city)) — вираз-індекс, лише в SQL міграції
             b.Property(x => x.Name).HasMaxLength(200);
             b.Property(x => x.Address).HasMaxLength(500);
             b.Property(x => x.Phone).HasMaxLength(32);

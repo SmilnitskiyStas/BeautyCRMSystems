@@ -740,6 +740,11 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(500)")
                         .HasColumnName("address");
 
+                    b.Property<string>("City")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("city");
+
                     b.Property<string[]>("ClosedWeekdays")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
@@ -757,6 +762,20 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("is_active");
 
+                    b.Property<bool>("IsDiscoverable")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("is_discoverable");
+
+                    b.Property<double?>("Latitude")
+                        .HasColumnType("double precision")
+                        .HasColumnName("latitude");
+
+                    b.Property<double?>("Longitude")
+                        .HasColumnType("double precision")
+                        .HasColumnName("longitude");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -767,6 +786,14 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)")
                         .HasColumnName("phone");
+
+                    b.Property<string>("PublicCode")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)")
+                        .HasColumnName("public_code")
+                        .HasDefaultValueSql("public.beauty_generate_public_code()");
 
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid")
@@ -794,9 +821,25 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.HasAlternateKey("TenantId", "Id")
                         .HasName("ak_beauty_locations_tenant_id_id");
 
+                    b.HasIndex("PublicCode")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_locations_public_code");
+
+                    b.HasIndex("Latitude", "Longitude")
+                        .HasDatabaseName("ix_beauty_locations_discoverable_coords")
+                        .HasFilter("is_discoverable AND is_active AND latitude IS NOT NULL");
+
                     b.ToTable("beauty_locations", null, t =>
                         {
                             t.HasCheckConstraint("ck_beauty_locations_closed_weekdays", "closed_weekdays <@ ARRAY['mon','tue','wed','thu','fri','sat','sun']::text[]");
+
+                            t.HasCheckConstraint("ck_beauty_locations_coords_pair", "(latitude IS NULL) = (longitude IS NULL)");
+
+                            t.HasCheckConstraint("ck_beauty_locations_latitude", "latitude IS NULL OR latitude BETWEEN -90 AND 90");
+
+                            t.HasCheckConstraint("ck_beauty_locations_longitude", "longitude IS NULL OR longitude BETWEEN -180 AND 180");
+
+                            t.HasCheckConstraint("ck_beauty_locations_public_code", "public_code ~ '^[0-9A-HJKMNP-TV-Z]{8}$'");
                         });
                 });
 

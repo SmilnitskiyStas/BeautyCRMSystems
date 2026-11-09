@@ -1,6 +1,6 @@
 # Beauty CRM — Database Schema & RLS
 
-**Current version:** 0.8 (TASK-697/698, 2026-10-08)
+**Current version:** 0.9 (ADR-011 public location catalog, 2026-11-09; TASK-697/698, 2026-10-08)
 **Database:** PostgreSQL 16+ (RLS-enabled)
 **ORM:** EF Core 8.0 with Npgsql 8.0.11
 
@@ -31,18 +31,35 @@ tenant_id       UUID NOT NULL (RLS filtered)
 name            VARCHAR(200) NOT NULL
 address         VARCHAR(500)
 phone           VARCHAR(32)
-timezone        VARCHAR(64) NOT NULL (IANA: "Europe/Kyiv"; validated per §16)
+timezone        VARCHAR(64) NOT NULL (IANA: "Europe/Kyiv"; validated per domain-model §9)
 is_active       BOOLEAN DEFAULT true
 created_at      TIMESTAMPTZ NOT NULL
 updated_at      TIMESTAMPTZ NOT NULL
+closed_weekdays TEXT[] (migration 9, weekly closed days mon..sun)
+working_hours   JSONB (migration 10, location working hours)
+public_code     VARCHAR(8) NOT NULL (ADR-011, DEFAULT public.beauty_generate_public_code(), globally unique, immutable)
+latitude        DOUBLE PRECISION NULL (ADR-011, -90..90)
+longitude       DOUBLE PRECISION NULL (ADR-011, -180..180)
+city            VARCHAR(100) NULL (ADR-011, city search only)
+is_discoverable BOOLEAN NOT NULL DEFAULT false (ADR-011, opt-in to nearby and city search)
 
 UNIQUE (tenant_id, name) -- case-insensitive via lower()
 CHECK (char_length(name) >= 1 AND char_length(name) <= 200)
 CHECK (char_length(address) IS NULL OR char_length(address) <= 500)
+CHECK ck_beauty_locations_public_code: public_code ~ '^[0-9A-HJKMNP-TV-Z]{8}$'
+CHECK ck_beauty_locations_latitude / ck_beauty_locations_longitude: NULL or range
+CHECK ck_beauty_locations_coords_pair: (latitude IS NULL) = (longitude IS NULL)
+CHECK ck_beauty_locations_closed_weekdays: closed_weekdays <@ ARRAY['mon',...,'sun']
 ```
 
-**Indexes:** (tenant_id, id); (tenant_id, is_active).
-**RLS Policy:** `tenant_isolation` (ENABLE ROW LEVEL SECURITY FORCE).
+**Indexes:** (tenant_id, id); (tenant_id, is_active);
+`ux_beauty_locations_public_code` UNIQUE (public_code) — **global**, not per tenant (ADR-011);
+`ix_beauty_locations_discoverable_coords` (latitude, longitude) WHERE is_discoverable AND is_active AND latitude IS NOT NULL;
+`ix_beauty_locations_discoverable_city` (lower(city)) WHERE is_discoverable AND is_active AND city IS NOT NULL.
+
+**RLS Policy:** `tenant_isolation` (ENABLE ROW LEVEL SECURITY FORCE). Cross-tenant public reads of the catalog columns
+(`public_code`, `latitude`, `longitude`, `city`, `is_discoverable`, `name`, `address`, `timezone`, `is_active`) go only via
+the `beautycrm_catalog` role policy `public_catalog_read` and the SECURITY DEFINER functions (§5).
 
 **Notes:** Deactivation blocked if has future pending/confirmed appointments (TASK-697). Timezone change blocked similarly. No delete — only soft deactivation.
 
@@ -644,7 +661,7 @@ Similar flow: set `app.tenant_slug`, resolve `tenant_id`, then set `app.tenant_i
 
 ---
 
-## 4. Migrations (in order, 8 total)
+## 4. Migrations (in order, 11 total)
 
 ### 1. `20261007115130_add_beauty_schema` (TASK-674)
 
@@ -678,6 +695,18 @@ Adds cancelled_by_user_id, cancelled_at to beauty_specialist_absences. DO-block 
 
 Adds cancelled_by_type, cancelled_by_user_id, cancel_reason to beauty_appointments. CHECK constraints for cancel metadata. FK RESTRICT on users. Backfill: set cancelled_by_type='system' for existing cancelled rows (under NO FORCE, then FORCE again). DO-block verifies FORCE on beauty_appointments, beauty_locations.
 
+### 9. `20261010130434_beauty_location_closures` (TASK-701)
+
+Adds beauty_locations.closed_weekdays (TEXT[], CHECK on weekday codes). Creates beauty_location_closures (date-range closures per location) with FKs and indexes.
+
+### 10. `20261010135605_beauty_location_working_hours` (TASK-703)
+
+Adds beauty_locations.working_hours (JSONB).
+
+### 11. `20261109075625_beauty_public_location_catalog` (ADR-011)
+
+Adds beauty_locations.public_code (backfilled by `public.beauty_generate_public_code()`), latitude, longitude, city, is_discoverable; unique index `ux_beauty_locations_public_code`; CHECKs (`ck_beauty_locations_public_code`, `_latitude`, `_longitude`, `_coords_pair`); partial indexes for nearby and city search. Creates role `beautycrm_catalog` if missing, column grants, `public_catalog_read` policies, and the three SECURITY DEFINER functions (§5). Down drops functions, policies, indexes and checks; the cluster role is kept.
+
 ---
 
 ## 5. Runtime Roles & GRANTs
@@ -709,6 +738,37 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO beautycrm_app;
 ```
 
 **Runtime check (TASK-689, H1):** API `DbRoleGuard` queries `pg_roles` on startup, fails if runtime role has `rolsuper` or `rolbypassrls` (except Development + `Beauty__AllowPrivilegedDbRole=true`).
+
+### Public catalog role `beautycrm_catalog` (ADR-011, migration `20261109075625_beauty_public_location_catalog`)
+- Functions (signatures as in the migration; output columns: `public_code, tenant_slug, location_id, name, address, city, timezone` plus `distance_km` for nearby):
+  `beauty_public_resolve_location(p_code text)`, `beauty_public_nearby_locations(p_lat, p_lng, p_radius_km, p_limit)`,
+  `beauty_public_search_locations_by_city(p_city text, p_limit integer)`.
+- Radius is capped at 30 km inside the function; limit at 1..10. Changing the cap requires a new migration.
+- `NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT`; owns the SECURITY DEFINER functions `beauty_public_resolve_location(text)`,
+  `beauty_public_nearby_locations(double precision, double precision, double precision, integer)`,
+  `beauty_public_search_locations_by_city(text, integer)`. Column-level SELECT on public columns of `beauty_locations` and `tenants`
+  plus role-scoped (`TO beautycrm_catalog`) read policies `public_catalog_read`. `beautycrm_app` has EXECUTE only (no membership).
+- The migration creates the role if missing (idempotent; needs `CREATEROLE`). Without `CREATEROLE` ops pre-provision it **before** migrating:
+  ```sql
+  CREATE ROLE beautycrm_catalog NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT;
+  GRANT beautycrm_catalog TO <migrator_role> WITH INHERIT FALSE, SET TRUE;   -- SET: hand function ownership; INHERIT FALSE is mandatory
+  ```
+  Migration fails loudly if the role is LOGIN/SUPERUSER/BYPASSRLS. It grants EXECUTE to `beautycrm_app` only if that role exists;
+  with a differently named runtime role run `GRANT EXECUTE ON FUNCTION ... TO <runtime_role>` for the three functions.
+  Re-creating a function (Down/Up) resets its grants: repeat the GRANT.
+- **Policy scope:** a policy `TO beautycrm_catalog` applies not only when `current_user = beautycrm_catalog` but to every role that
+  inherits its privileges (member with `inherit_option`). Therefore all members (the migrator included) are `WITH INHERIT FALSE, SET TRUE`.
+  The migration (re)grants the migrator's membership so; if a non-admin migrator cannot, it fails with instructions.
+- `DbRoleGuard` also checks (when the role exists): catalog role NOLOGIN/not superuser/not BYPASSRLS/NOINHERIT, no memberships of its own,
+  runtime role not a member, **no member with `inherit_option`**, exactly the three `beauty_public_*` functions (no extra/missing), each owned by
+  the catalog role, SECURITY DEFINER, `proconfig` exactly `search_path=pg_catalog, pg_temp`, not executable by PUBLIC.
+- **Rule for future definer functions (owned by `beautycrm_catalog`):** the existing policies `TO PUBLIC` (tenant isolation) also
+  apply to the catalog role, and the role-scoped policies only add visibility. Every such function MUST check `is_active` /
+  `status = 'active'` / `'beauty_booking' = ANY (modules)` explicitly in its WHERE; eligibility must never rely on a policy.
+  New `beauty_public_*` functions also require updating the expected set in `DbRoleGuard`.
+- `beauty_locations.public_code` is immutable: trigger `trg_beauty_locations_public_code_immutable` (BEFORE UPDATE OF public_code,
+  `restrict_violation` 23001; no-op writes of the same value pass). Down drops the trigger and `beauty_forbid_public_code_change()`.
+- Down drops functions/policies/privileges but does **not** drop the cluster-level role.
 
 ---
 

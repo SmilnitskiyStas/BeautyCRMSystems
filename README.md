@@ -25,10 +25,24 @@ B2B-платформа для б'юті-сфери: салони, барберш
 | Worker | Node.js 22, TypeScript, `pg` (черга читається з БД, Redis не потрібен для локального запуску) |
 | AI | Anthropic Claude (Messages API), ізольовано в `Infrastructure/AI/Beauty` |
 
+## Мобільний застосунок
+Мобільний клієнт онлайн-запису (гість, без входу), ADR-010 і ADR-011.
+- **Стек:** Expo SDK 58 (`expo ~58.0.23`), expo-router, React Native 0.88, TypeScript, TanStack Query, Zustand, Zod, i18next. Код у `mobile/`, спільний клієнт API у `packages/booking-core`.
+- **Розміщення:** `mobile/` **не** входить у кореневі npm workspaces; має окремий `mobile/package.json` і встановлюється окремо.
+- **Команди та налаштування:** див. [mobile/README.md](mobile/README.md). Коротко: `cd mobile && npm install`, потім `EXPO_PUBLIC_API_URL=... EXPO_PUBLIC_WEB_DOMAIN=... npx expo start`, `npm run typecheck`, `npm test`.
+- **Посилання на заклад (deep link):**
+  - `https://{domain}/l/{publicCode}` — Universal Link (iOS) / App Link (Android);
+  - `beautycrm://l/{publicCode}` — власна схема (dev / запасний варіант).
+  - `publicCode` — 8 символів (показується як `XXXX-XXXX`). Посилання містять лише код.
+- **Домен — плейсхолдер** `app.beautycrm.example` (`mobile/app.config.ts`); реальний домен задається `EXPO_PUBLIC_WEB_DOMAIN` на етапі збірки. Домен має роздавати `apple-app-site-association` і `assetlinks.json`; у репозиторії вони ще **не** реалізовані.
+- Universal/App Links працюють лише зі збіркою (EAS / dev client), Expo Go їх не підтримує.
+
 ## Структура
 ```
 backend/    BeautyCrm.{Domain,Application,Infrastructure,Api,Tests}
 frontend/   Next.js: адмінка (/beauty), вхід (/login), публічний запис (/book), e2e/
+mobile/     Expo-застосунок онлайн-запису (окремо від кореневих workspaces)
+packages/   booking-core — спільний клієнт API для frontend і mobile (TypeScript-джерело)
 worker/     фонові задачі (нагадування, outbox, winback)
 docs/beauty-crm/prototype/   вихідний UI-прототип
 .claude/    агенти, skills, контракти й документація (.claude/docs), task logs
@@ -39,7 +53,7 @@ docs/beauty-crm/prototype/   вихідний UI-прототип
 
 ## Документація
 - [api.md](.claude/docs/api.md), [database.md](.claude/docs/database.md), [domain-model.md](.claude/docs/domain-model.md), [runbook.md](.claude/docs/runbook.md)
-- Контракти й рішення: [beauty-contracts.md](.claude/docs/beauty-contracts.md); ADR: [.claude/docs/adr/](.claude/docs/adr/) (001 стек, 002 RLS, 003 outbox і worker, 004 канали, 005 AI, 006 автентифікація, 007 політика повернення, 008 працівники, 009 скасування й заклади)
+- Контракти й рішення: [beauty-contracts.md](.claude/docs/beauty-contracts.md); ADR: [.claude/docs/adr/](.claude/docs/adr/) (001 стек, 002 RLS, 003 outbox і worker, 004 канали, 005 AI, 006 автентифікація, 007 політика повернення, 008 працівники, 009 скасування й заклади, 010 мобільний клієнт, 011 публічний код закладу й каталог)
 - [known-discrepancies.md](.claude/docs/known-discrepancies.md): розбіжності між документами й кодом
 - Джерело вимог: [BEAUTY_CRM_PROMPT.md](BEAUTY_CRM_PROMPT.md)
 

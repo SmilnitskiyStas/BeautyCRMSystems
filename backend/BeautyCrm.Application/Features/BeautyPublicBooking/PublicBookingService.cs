@@ -2,17 +2,18 @@ using System.Text.RegularExpressions;
 using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Application.Features.BeautyCommon;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace BeautyCrm.Application.Features.BeautyPublicBooking;
 
 /// <summary>
 /// Публічний потік онлайн-запису анонімного клієнта. Tenant уже визначено <see cref="PublicTenantResolver"/>.
-/// Логування свідомо немає: тут проходять ім'я й телефон клієнта.
+/// Логування мінімальне: лише Warning про спрацювання лімітів (id tenant/закладу, без імені, телефону й токенів).
 /// </summary>
 public sealed partial class PublicBookingService(
     IPublicBookingStore pub, IBookingStore store, BookingService booking, CancellationService cancellation,
     CancellationSettingsService settings, PublicTenantResolver tenant, PublicTokenService tokens,
-    ICaptchaVerifier captcha, PublicBookingOptions options, TimeProvider clock)
+    IClientIntegrityVerifier integrity, PublicBookingOptions options, TimeProvider clock, ILogger<PublicBookingService> log)
 {
     /// <summary>Єдина відповідь на неіснуючий/чужий/зіпсований токен (розрізнити причини ззовні неможливо).</summary>
     public static readonly Error TokenNotFound = Error.NotFound("not_found", "Not found.");
@@ -97,14 +98,16 @@ public sealed partial class PublicBookingService(
         if (await pub.FindByIdempotencyKeyAsync(keyHash, ct) is { } hit)
             return await ReplayAsync(tenantId, hit, requestHash, ct);
 
-        if (options.CaptchaRequired
-            && (string.IsNullOrWhiteSpace(ctx.CaptchaToken) || !await captcha.VerifyAsync(ctx.CaptchaToken, ctx.RemoteIp, ct)))
-            return Error.Validation("captcha_failed", "CAPTCHA verification failed.");
+        if (await CheckClientProofAsync(ctx, ct) is { } proofError) return proofError;
+
+        if (options.MaxPublicCreatesPerLocationPerHour > 0
+            && await pub.CountRecentOnlineByLocationAsync(req.LocationId.Value, now.AddHours(-1), ct) >= options.MaxPublicCreatesPerLocationPerHour)
+            return LimitReached("location_hourly", tenantId, req.LocationId.Value, "Too many bookings right now. Try again later.");
 
         if (await pub.CountActiveOnlineByPhoneAsync(phone, now, ct) >= options.MaxActiveBookingsPerPhone)
-            return Error.Validation("booking_limit_reached", "Too many active bookings. Try again later.");
+            return LimitReached("phone_active", tenantId, req.LocationId.Value, "Too many active bookings. Try again later.");
         if (await pub.CountRecentOnlineByPhoneAsync(phone, now.AddHours(-1), ct) >= options.MaxCreatesPerPhonePerHour)
-            return Error.Validation("booking_limit_reached", "Too many active bookings. Try again later.");
+            return LimitReached("phone_hourly", tenantId, req.LocationId.Value, "Too many active bookings. Try again later.");
 
         var id = Guid.NewGuid();
         var token = tokens.Create(tenantId, id);
@@ -136,6 +139,41 @@ public sealed partial class PublicBookingService(
         if (!created.IsOk) return created.Error!;
 
         return new PublicCreateResult(new PublicBookingCreatedDto(token, await ToPublicAsync(created.Value!, ct)), false);
+    }
+
+    /// <summary>
+    /// Політика за міткою клієнта: none — без перевірки; monitor — перевіряємо й лише позначаємо вердикт (Activity), не блокуємо;
+    /// enforce — без валідного доказу відмова (fail closed). Web: captcha_failed (як і раніше); ios/android: integrity_failed.
+    /// </summary>
+    public static readonly System.Diagnostics.Metrics.Meter Meter = new("BeautyCrm.PublicBooking");
+    private static readonly System.Diagnostics.Metrics.Counter<long> LimitReachedCounter =
+        Meter.CreateCounter<long>("beauty.public_booking.limit_reached", description: "booking_limit_reached rejections by scope");
+
+    /// <summary>ADR-011 Consequences: сигнал про можливе блокування закладу (метрика + Warning без PII: лише scope та id tenant/закладу).</summary>
+    private Error LimitReached(string scope, Guid tenantId, Guid locationId, string message)
+    {
+        LimitReachedCounter.Add(1, new KeyValuePair<string, object?>("scope", scope));
+        log.LogWarning("booking_limit_reached scope={Scope} tenant={TenantId} location={LocationId}", scope, tenantId, locationId);
+        return Error.Validation("booking_limit_reached", message);
+    }
+
+    private async Task<Error?> CheckClientProofAsync(PublicRequestContext ctx, CancellationToken ct)
+    {
+        var mode = options.ProtectionFor(ctx.Client);
+        if (mode == ProtectionMode.None) return null;
+        var web = ctx.Client == ClientKind.Web;
+        var proof = new ClientProof(
+            web ? ClientProofKind.Captcha : ctx.Client == ClientKind.Ios ? ClientProofKind.AppAttest : ClientProofKind.PlayIntegrity,
+            web ? ctx.CaptchaToken : ctx.IntegrityToken);
+        var ok = !string.IsNullOrWhiteSpace(proof.Token) && await integrity.VerifyAsync(proof, ctx.RemoteIp, ct);
+        if (mode == ProtectionMode.Monitor)
+        {
+            System.Diagnostics.Activity.Current?.SetTag("beauty.integrity.verdict", $"{ctx.Client}:{(ok ? "ok" : "fail")}");
+            return null;
+        }
+        return ok ? null : web
+            ? Error.Validation("captcha_failed", "CAPTCHA verification failed.")
+            : Error.Validation("integrity_failed", "Client verification failed.");
     }
 
     private async Task<Result<PublicCreateResult>> ReplayAsync(Guid tenantId, IdempotencyHit hit, string requestHash, CancellationToken ct)
@@ -192,6 +230,8 @@ public static class PublicBookingServiceExtensions
         services.AddScoped<PublicTenantResolver>();
         services.AddScoped<PublicBookingService>();
         services.AddSingleton<ICaptchaVerifier, RejectAllCaptchaVerifier>(); // провайдера підключає окрема реєстрація
+        services.AddSingleton<IClientIntegrityVerifier, DefaultClientIntegrityVerifier>(); // ADR-011: App Attest/Play Integrity — пізніше
+        services.AddScoped<BeautyPublicCatalog.PublicCatalogService>();
         return services;
     }
 }

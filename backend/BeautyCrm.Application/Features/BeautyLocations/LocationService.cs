@@ -9,11 +9,18 @@ using BeautyCrm.Application.Features.BeautyStaff;
 
 namespace BeautyCrm.Application.Features.BeautyLocations;
 
-/// <summary>POST/PUT /locations (§16). IsActive: у PUT пропущено = без змін; у POST ігнорується (новий заклад активний).</summary>
-public sealed record LocationRequest(string? Name, string? Address, string? Phone, string? Timezone, bool? IsActive = null);
+/// <summary>
+/// POST/PUT /locations (§16). IsActive: у PUT пропущено = без змін; у POST ігнорується (новий заклад активний).
+/// ADR-011: Latitude/Longitude (разом), City, IsDiscoverable. У PUT пропущено/null = без змін (старі клієнти форми не затирають
+/// координати й opt-in); очистити: ClearCoordinates=true, City="" . PublicCode не приймається (незмінний).
+/// </summary>
+public sealed record LocationRequest(string? Name, string? Address, string? Phone, string? Timezone, bool? IsActive = null,
+    double? Latitude = null, double? Longitude = null, string? City = null, bool? IsDiscoverable = null, bool? ClearCoordinates = null);
 
-/// <summary>Нормалізований (обрізаний, перевірений) вміст запису закладу.</summary>
-public sealed record LocationChange(string Name, string? Address, string? Phone, string Timezone, bool? IsActive);
+/// <summary>Нормалізований (обрізаний, перевірений) вміст запису закладу. City: null = без змін, "" = очистити (нормалізовано до ClearCity).</summary>
+public sealed record LocationChange(string Name, string? Address, string? Phone, string Timezone, bool? IsActive,
+    double? Latitude = null, double? Longitude = null, string? City = null, bool ClearCity = false,
+    bool? IsDiscoverable = null, bool ClearCoordinates = false);
 
 public enum LocationWriteOutcome { Ok, NotFound, NameTaken, HasFutureAppointments, TimezoneLocked }
 
@@ -96,7 +103,7 @@ public interface ILocationStore
 
 public sealed partial class LocationService(ILocationStore store, TimeProvider clock)
 {
-    public const int MaxName = 200, MaxAddress = 500, MaxPhone = 32, MaxTimezone = 64;
+    public const int MaxName = 200, MaxAddress = 500, MaxPhone = 32, MaxTimezone = 64, MaxCity = 100;
     public const int MaxClosureReason = 200, MaxClosureDays = 366;
 
     private static readonly string[] Weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -256,7 +263,19 @@ public sealed partial class LocationService(ILocationStore store, TimeProvider c
         if (phone is { Length: > MaxPhone }) return Error.Validation("invalid_phone", $"Phone is too long (max {MaxPhone}).");
         var tz = req.Timezone?.Trim();
         if (!IsValidTimezone(tz)) return Error.Validation("invalid_timezone", "Timezone must be a valid IANA zone, e.g. Europe/Kyiv.");
-        return new LocationChange(name, address, phone, tz!, req.IsActive);
+
+        // ADR-011: координати лише парою, у межах; city до 100 символів ("" = очистити).
+        var clearCoords = req.ClearCoordinates == true;
+        if ((req.Latitude is null) != (req.Longitude is null) || (clearCoords && req.Latitude is not null))
+            return Error.Validation("invalid_coordinates", "latitude and longitude must be provided together (or clearCoordinates=true, alone).");
+        if (req.Latitude is { } lat && (!double.IsFinite(lat) || lat is < -90 or > 90)
+            || req.Longitude is { } lng && (!double.IsFinite(lng) || lng is < -180 or > 180))
+            return Error.Validation("invalid_coordinates", "latitude must be within -90..90 and longitude within -180..180.");
+        var city = req.City?.Trim();
+        if (city is { Length: > MaxCity } || city?.Any(char.IsControl) == true)
+            return Error.Validation("invalid_city", $"City is too long (max {MaxCity}).");
+        return new LocationChange(name, address, phone, tz!, req.IsActive, req.Latitude, req.Longitude,
+            string.IsNullOrEmpty(city) ? null : city, city is { Length: 0 }, req.IsDiscoverable, clearCoords);
     }
 
     /// <summary>Валідна IANA-зона, яку знає середовище виконання (TimeZoneInfo).</summary>

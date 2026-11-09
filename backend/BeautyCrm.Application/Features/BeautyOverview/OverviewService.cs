@@ -8,9 +8,11 @@ namespace BeautyCrm.Application.Features.BeautyOverview;
 /// Заклад для адмінки (GET /locations). Address може бути null. ClosedWeekdays — щотижневі вихідні (mon..sun, §17;
 /// порожньо = працює 7 днів).
 /// </summary>
+/// <remarks>ADR-011: PublicCode — публічний код закладу (XXXXXXXX, незмінний; людям показується як XXXX-XXXX); Latitude/Longitude/City — адреса для каталогу; IsDiscoverable — opt-in до nearby/пошуку за містом.</remarks>
 /// <remarks>WorkingHours — години роботи закладу (§18.1, формат §9); null = не задано (обмеження немає).</remarks>
 public sealed record LocationDto(Guid Id, string Name, string? Address, string Timezone, bool IsActive, string? Phone = null,
-    IReadOnlyList<string>? ClosedWeekdays = null, JsonElement? WorkingHours = null);
+    IReadOnlyList<string>? ClosedWeekdays = null, JsonElement? WorkingHours = null,
+    string? PublicCode = null, double? Latitude = null, double? Longitude = null, string? City = null, bool IsDiscoverable = false);
 
 /// <summary>
 /// KPI дня. AppointmentsCount — усі записи дня, крім скасованих; Revenue — сума price_final завершених (як в аналітиці);

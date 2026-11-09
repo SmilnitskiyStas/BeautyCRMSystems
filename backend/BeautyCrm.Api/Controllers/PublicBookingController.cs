@@ -16,8 +16,10 @@ namespace BeautyCrm.Api.Controllers;
 [ApiController]
 [Route("api/public/{tenantSlug}")]
 [AllowAnonymous]
+[PublicClient]
 [PublicTenant]
 [ProducesResponseType(StatusCodes.Status404NotFound)]
+[ProducesResponseType(StatusCodes.Status426UpgradeRequired)]
 [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
 public sealed class PublicBookingController(PublicBookingService service) : ControllerBase
 {
@@ -67,7 +69,9 @@ public sealed class PublicBookingController(PublicBookingService service) : Cont
         var ctx = new PublicRequestContext(
             Request.Headers[IdempotencyHeader].FirstOrDefault(),
             Request.Headers[CaptchaHeader].FirstOrDefault() ?? request.CaptchaToken,
-            HttpContext.Connection.RemoteIpAddress?.ToString());
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            PublicClientInfo.KindOf(HttpContext),
+            Request.Headers[PublicClientInfo.IntegrityHeader].FirstOrDefault());
         return this.ToResult(await service.CreateAsync(request, ctx, ct), r =>
         {
             if (!r.Replayed) return StatusCode(StatusCodes.Status201Created, r.Booking);

@@ -128,6 +128,36 @@ public sealed class HardeningTests(AuthApiFixture fx) : IClassFixture<AuthApiFix
     }
 
     [SkippableFact]
+    public async Task dbRoleGuard_rejects_runtime_role_that_is_a_member_of_catalog_role()
+    {
+        NeedDb();
+        var role = "beauty_member_" + Guid.NewGuid().ToString("N")[..10];
+        const string password = "Pw-member-123";
+        await using (var admin = new NpgsqlConnection(fx.Db.AdminConnectionString))
+        {
+            await admin.OpenAsync();
+            await using var create = new NpgsqlCommand(
+                $"CREATE ROLE {role} LOGIN PASSWORD '{password}' NOSUPERUSER NOBYPASSRLS; GRANT beautycrm_catalog TO {role}", admin);
+            await create.ExecuteNonQueryAsync();
+        }
+        try
+        {
+            var cs = new NpgsqlConnectionStringBuilder(fx.Db.AdminConnectionString) { Username = role, Password = password }.ConnectionString;
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => StartGuard(cs));
+            Assert.Contains("beautycrm_catalog", ex.Message);
+            Assert.Contains("must not be a member", ex.Message);
+        }
+        finally
+        {
+            NpgsqlConnection.ClearAllPools();
+            await using var admin = new NpgsqlConnection(fx.Db.AdminConnectionString);
+            await admin.OpenAsync();
+            await using var drop = new NpgsqlCommand($"REVOKE beautycrm_catalog FROM {role}; DROP ROLE IF EXISTS {role}", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [SkippableFact]
     public async Task dbRoleGuard_rejects_npgsql_multiplexing_because_tenant_context_is_per_connection()
     {
         NeedDb();

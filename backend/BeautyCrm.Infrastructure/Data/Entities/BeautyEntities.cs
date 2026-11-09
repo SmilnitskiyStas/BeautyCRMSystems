@@ -28,6 +28,19 @@ public class Location : TenantEntity
     public string[] ClosedWeekdays { get; set; } = [];
     /// <summary>Години роботи закладу (TASK-703, §18.1; формат §9, нормалізований JSON). null = не задано, обмеження немає.</summary>
     public string? WorkingHours { get; set; }
+    /// <summary>
+    /// ADR-011: публічний код закладу (8 символів Crockford Base32 без I/L/O/U), глобально унікальний, незмінний.
+    /// Якщо не задано, БД сама генерує значення (DEFAULT beauty_generate_public_code()).
+    /// </summary>
+    public string PublicCode { get; set; } = null!;
+    /// <summary>ADR-011: широта адреси закладу (-90..90); задається разом з <see cref="Longitude"/>.</summary>
+    public double? Latitude { get; set; }
+    /// <summary>ADR-011: довгота адреси закладу (-180..180); задається разом з <see cref="Latitude"/>.</summary>
+    public double? Longitude { get; set; }
+    /// <summary>ADR-011: місто (для пошуку за містом у публічному каталозі).</summary>
+    public string? City { get; set; }
+    /// <summary>ADR-011: заклад показується у публічному каталозі (nearby / за містом) лише якщо true (opt-in).</summary>
+    public bool IsDiscoverable { get; set; }
 }
 
 /// <summary>Конкретні дати закриття закладу (повні дні в зоні закладу, включно; без автоповтору). TASK-701, §17.</summary>

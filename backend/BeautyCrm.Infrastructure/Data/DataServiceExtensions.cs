@@ -5,6 +5,7 @@ using BeautyCrm.Application.Features.BeautyCatalog;
 using BeautyCrm.Application.Features.BeautyChannels;
 using BeautyCrm.Application.Features.BeautyClients;
 using BeautyCrm.Application.Features.BeautyOverview;
+using BeautyCrm.Application.Features.BeautyPublicCatalog;
 using BeautyCrm.Application.Features.BeautyStaff;
 using BeautyCrm.Infrastructure.Data.Beauty;
 using BeautyCrm.Infrastructure.Data.Tenancy;
@@ -55,6 +56,7 @@ public static class DataServiceExtensions
         services.AddScoped<IStaffStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<IOverviewStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<ILocationStore>(sp => sp.GetRequiredService<EfBeautyStore>());
+        services.AddSingleton<IPublicCatalogStore, EfPublicCatalogStore>(); // ADR-011: cross-tenant каталог лише через definer-функції
 
         return services;
     }

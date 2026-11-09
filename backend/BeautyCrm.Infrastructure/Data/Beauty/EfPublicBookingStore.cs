@@ -103,6 +103,10 @@ public sealed class EfPublicBookingStore(BeautyDbContext db) : IPublicBookingSto
         db.Appointments.AsNoTracking().CountAsync(a => a.Source == AppointmentSource.Online && a.CreatedAt > since
             && a.Client!.Phone == phone && a.Client.DeletedAt == null, ct);
 
+    public Task<int> CountRecentOnlineByLocationAsync(Guid locationId, DateTimeOffset since, CancellationToken ct) =>
+        db.Appointments.AsNoTracking().CountAsync(a => a.Source == AppointmentSource.Online && a.CreatedAt > since
+            && a.LocationId == locationId, ct);
+
     public Task<int> CountActiveOnlineByPhoneAsync(string phone, DateTimeOffset now, CancellationToken ct) =>
         db.Appointments.AsNoTracking().CountAsync(a =>
             a.Source == AppointmentSource.Online && a.StartsAt > now

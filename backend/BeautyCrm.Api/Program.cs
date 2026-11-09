@@ -32,7 +32,7 @@ builder.Services
     .AddBeautyApplication()
     .AddBeautyAuthData()
     .AddBeautyAuthApi(builder.Configuration) // JWT, ролі, rate limit; без Auth:JwtSigningKey додаток не стартує
-    .AddBeautyPublicBookingApi(builder.Configuration); // публічний запис /api/public/{slug} (TASK-688)
+    .AddBeautyPublicBookingApi(builder.Configuration, builder.Environment); // публічний запис /api/public/{slug} (TASK-688)
 builder.Services.AddScoped<ITenantModuleProvider, DbTenantModuleProvider>(); // tenants.modules
 builder.Services.AddBeautyDbRoleGuard(); // старт падає, якщо runtime-роль БД superuser/BYPASSRLS (H1)
 builder.Services.AddBeautyCors(builder.Configuration); // Beauty:AllowedOrigins (адмінка), без credentials
