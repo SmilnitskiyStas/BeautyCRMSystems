@@ -1,0 +1,11 @@
+{
+  "_comment": "ЗАГЛУШКА-ШАБЛОН. Замініть __APPLE_TEAM_ID__ і __IOS_BUNDLE_ID__ реальними значеннями (див. mobile/app.config.ts) до публікації.",
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["__APPLE_TEAM_ID__.__IOS_BUNDLE_ID__"],
+        "components": [{ "/": "/l/*", "comment": "Публічні посилання закладів /l/{publicCode}" }]
+      }
+    ]
+  }
+}

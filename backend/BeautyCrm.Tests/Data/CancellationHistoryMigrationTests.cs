@@ -50,6 +50,9 @@ public sealed class CancellationHistoryMigrationTests
             {
                 await admin.OpenAsync();
                 await Exec(admin, $"CREATE ROLE {owner} LOGIN PASSWORD '{password}' NOSUPERUSER NOBYPASSRLS");
+                // ADR-011: ops pre-provisions the catalog role (CREATEROLE is not granted to the migrator)
+                await Exec(admin, "DO $$ BEGIN CREATE ROLE beautycrm_catalog NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; EXCEPTION WHEN duplicate_object THEN NULL; END $$");
+                await Exec(admin, $"GRANT beautycrm_catalog TO {owner} WITH INHERIT FALSE, SET TRUE");
                 await Exec(admin, $"CREATE DATABASE {db} OWNER {owner}");
             }
             var ownerCs = new NpgsqlConnectionStringBuilder(adminCs) { Database = db, Username = owner, Password = password }.ConnectionString;

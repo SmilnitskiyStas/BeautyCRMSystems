@@ -149,6 +149,36 @@ public class BookingServiceTests
     }
 
     [Fact]
+    public async Task create_accepts_24h_reminder_and_schedules_it_a_day_before_visit()
+    {
+        var r = await Sut().CreateAsync(Req(T(10), "24h"), default);
+        Assert.True(r.IsOk);
+        Assert.Equal("24h", r.Value!.ReminderOption);
+        Assert.Equal(T(10).AddHours(-24), Assert.Single(_store.Reminders, x => x.AppointmentId == r.Value.Id).At);
+    }
+
+    [Fact]
+    public async Task create_skips_24h_reminder_when_it_is_already_in_the_past()
+    {
+        // візит за < 24 год до «зараз»: 24h-нагадування вже минуло -> не планується (запис створюється)
+        var late = new BookingService(_store, _pay, FakeSettings.Service(), new FakeClock(T(9, 30)));
+        var r = await late.CreateAsync(Req(T(10), "24h"), default);
+        Assert.True(r.IsOk);
+        Assert.Empty(_store.Reminders);
+    }
+
+    [Theory]
+    [InlineData("3h")]
+    [InlineData("48h")]
+    [InlineData("24H")]
+    public async Task create_rejects_unknown_reminder_value(string option)
+    {
+        var r = await Sut().CreateAsync(Req(T(10), option), default);
+        Assert.Equal("invalid_reminder", r.Error!.Code);
+        Assert.Contains("24h", r.Error.Message);
+    }
+
+    [Fact]
     public async Task create_does_not_schedule_reminder_for_none_or_too_late()
     {
         await Sut().CreateAsync(Req(T(10), "none"), default);

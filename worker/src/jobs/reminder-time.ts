@@ -97,7 +97,7 @@ export function sanitizeLine(value: string | null | undefined, max = 80): string
 
 export const STOP_LINE = "Щоб не отримувати нагадування, напишіть «Стоп».";
 
-const LEGACY_LEAD: Record<string, string> = { "1h": "через 1 годину", "2h": "через 2 години" };
+const LEGACY_LEAD: Record<string, string> = { "1h": "через 1 годину", "2h": "через 2 години", "24h": "завтра" };
 
 /**
  * Reminder text (§22.5). `legacyOption` (rows without offset_minutes) adds "(через 1 годину)" so a legacy reminder keeps

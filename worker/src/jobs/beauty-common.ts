@@ -6,6 +6,7 @@ export const QUEUES = {
   campaign: "beauty.campaign.run",
   winback: "beauty.winback.run",
   review: "beauty.review.request",
+  confirmation: "beauty.confirmation.send",
 } as const;
 
 export const OUTBOX_MAX_ATTEMPTS = 3;

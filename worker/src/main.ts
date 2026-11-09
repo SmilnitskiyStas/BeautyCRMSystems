@@ -2,6 +2,7 @@ import pg from "pg";
 import { HttpChannelSender } from "./adapters/channel-sender";
 import { loadKey } from "./adapters/channel-crypto";
 import { MockChannelSender, useMockChannels } from "./adapters/mock-channel-sender";
+import { EmailSender, loadEmailConfig } from "./adapters/email-sender";
 import { PgBeautyData } from "./adapters/pg-data";
 import { DEFAULT_WINDOW, PgPollStore } from "./adapters/pg-poll-store";
 import { LoggerNotificationLog, PgAdvisoryIdempotency, PgQueuePort, consoleLogger } from "./adapters/pg-support";
@@ -17,7 +18,7 @@ import { PgFeedbackStore } from "./feedback/feedback-store";
 import { pollFeedback } from "./feedback/poller";
 import { NONCE_CLEANUP_EVERY_MS, purgeControlPlaneNonces } from "./maintenance/nonce-cleanup";
 import { Scheduler } from "./scheduler/scheduler";
-import { pollCampaigns, pollOutbox, pollReminders, pollReviews, pollWinback, type PollContext } from "./scheduler/pollers";
+import { pollCampaigns, pollConfirmations, pollOutbox, pollReminders, pollReviews, pollWinback, type PollContext } from "./scheduler/pollers";
 
 const MIN = 60_000;
 
@@ -28,6 +29,8 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
   assertMarketingLegalGate(env);
   const url = env.WORKER_DATABASE_URL;
   if (!url) throw new Error("WORKER_DATABASE_URL is not set");
+  const emailConfig = loadEmailConfig(env); // кидає помилку, якщо EMAIL_MODE=smtp без повної конфігурації
+  consoleLogger.info("email channel", { mode: emailConfig.mode });
   const db = TenantDb.create(url, 10);
   await db.assertRlsEnforced();
   const lockPool = new pg.Pool({ connectionString: url, max: 10 });
@@ -38,7 +41,7 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
     now,
     data: new PgBeautyData(db, now),
     // Channels__UseMocks=true (Development only) -> no real Telegram/Instagram HTTP, as in the API.
-    sender: useMockChannels(env) ? new MockChannelSender() : new HttpChannelSender(db, loadKey(env["Channels__EncryptionKey"]), fetch, now),
+    sender: useMockChannels(env) ? new MockChannelSender() : new HttpChannelSender(db, loadKey(env["Channels__EncryptionKey"]), fetch, now, undefined, new EmailSender(emailConfig, consoleLogger)),
     idempotency: new PgAdvisoryIdempotency(lockPool),
     log: new LoggerNotificationLog(consoleLogger),
     queue: new PgQueuePort(),
@@ -77,6 +80,7 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
     // TASK-826 (L1): replay-protection nonces older than 15 min are useless (signature window 300 s).
     { name: "platform.nonce-cleanup", everyMs: NONCE_CLEANUP_EVERY_MS, run: () => purgeControlPlaneNonces(db.pool, now()) },
     { name: "beauty.reminders", everyMs: 1 * MIN, run: () => pollReminders(ctx) },
+    { name: "beauty.confirmations", everyMs: 1 * MIN, run: () => pollConfirmations(ctx) },
     { name: "beauty.outbox", everyMs: 30_000, run: () => pollOutbox(ctx) },
     { name: "beauty.reviews", everyMs: 10 * MIN, run: () => pollReviews(ctx) },
     { name: "beauty.campaigns", everyMs: 1 * MIN, run: () => pollCampaigns(ctx) },

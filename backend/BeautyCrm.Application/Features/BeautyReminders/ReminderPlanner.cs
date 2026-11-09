@@ -59,11 +59,12 @@ public static class ReminderOffsets
         _ => "custom",
     };
 
-    /// <summary>Спадкове значення reminder -> (method, offsets): none -> (none, {}), 1h -> (auto, {60}), 2h -> (auto, {120}).</summary>
+    /// <summary>Спадкове значення reminder -> (method, offsets): none -> (none, {}), 1h -> (auto, {60}), 2h -> (auto, {120}), 24h -> (auto, {1440}).</summary>
     public static (string Method, short[] Offsets) FromLegacy(string? option) => option switch
     {
         "1h" => (ReminderMethods.Auto, [60]),
         "2h" => (ReminderMethods.Auto, [120]),
+        "24h" => (ReminderMethods.Auto, [1440]),
         _ => (ReminderMethods.None, []),
     };
 }
@@ -90,7 +91,11 @@ public sealed record ReminderPlanInput(
 /// <summary>Результат планування: знімок плану запису + точки, які store пише в транзакції запису/переносу.</summary>
 public sealed record PlannedReminders(string Method, IReadOnlyList<short> Offsets, DateTimeOffset StartsAt, IReadOnlyList<ReminderPoint> Points)
 {
-    public string Mirror => ReminderOffsets.Mirror(Offsets);
+    /// <summary>
+    /// Дзеркало reminder_option. Виняток (мобільний застосунок): спадкове значення «24h» дає план (auto, {1440}) - його дзеркало «24h»,
+    /// а не «custom»; для явних планів (telegram/call) правило не змінюється.
+    /// </summary>
+    public string Mirror => Method == ReminderMethods.Auto && Offsets.Count == 1 && Offsets[0] == 1440 ? "24h" : ReminderOffsets.Mirror(Offsets);
 
     /// <summary>Спадкова єдина точка (сумісність зі старими портами/fakes): найраніша активна точка-повідомлення.</summary>
     public DateTimeOffset? LegacyReminderAt =>

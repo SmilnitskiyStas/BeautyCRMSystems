@@ -268,6 +268,82 @@ public class CancellationSettingsServiceTests
         Assert.Equal(new CancellationTerms(12, 50, 100, false, 0), await sut.GetTermsAsync(default));
     }
 
+    private static UpdateCancellationSettingsRequest Body(string json) =>
+        System.Text.Json.JsonSerializer.Deserialize<UpdateCancellationSettingsRequest>(json,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+
+    private const string Nums = "\"windowHours\":24,\"refundPercentInWindow\":30,\"refundPercentOutside\":90,\"deductFee\":true,\"feePercent\":10";
+
+    [Fact]
+    public async Task get_defaults_show_terms_without_custom_text()
+    {
+        var s = await Sut().GetAsync(default);
+        Assert.True(s.ShowTermsToClient);
+        Assert.Null(s.CustomTermsText);
+        var t = await Sut().GetTermsAsync(default);
+        Assert.True(t.ShowToClient);
+        Assert.Null(t.CustomText);
+    }
+
+    [Fact]
+    public async Task put_saves_terms_fields_trimmed_and_terms_expose_them()
+    {
+        var r = await Sut().UpdateAsync(Body("{" + Nums + ",\"showTermsToClient\":true,\"customTermsText\":\"  Скасування за 24 год.\\nДякуємо  \"}"), default);
+        Assert.True(r.IsOk);
+        Assert.Equal("Скасування за 24 год.\nДякуємо", r.Value!.CustomTermsText);
+        var t = await Sut().GetTermsAsync(default);
+        Assert.True(t.ShowToClient);
+        Assert.Equal("Скасування за 24 год.\nДякуємо", t.CustomText);
+    }
+
+    [Fact]
+    public async Task put_without_terms_fields_keeps_them_but_null_or_blank_text_clears()
+    {
+        await Sut().UpdateAsync(Body("{" + Nums + ",\"showTermsToClient\":false,\"customTermsText\":\"Текст\"}"), default);
+        // старий клієнт: нових полів немає -> не змінюються
+        await Sut().UpdateAsync(Body("{" + Nums + "}"), default);
+        var kept = await Sut().GetAsync(default);
+        Assert.False(kept.ShowTermsToClient);
+        Assert.Equal("Текст", kept.CustomTermsText);
+        // явний null / пробіли -> очищення
+        await Sut().UpdateAsync(Body("{" + Nums + ",\"customTermsText\":null}"), default);
+        Assert.Null((await Sut().GetAsync(default)).CustomTermsText);
+        await Sut().UpdateAsync(Body("{" + Nums + ",\"customTermsText\":\"Текст\"}"), default);
+        await Sut().UpdateAsync(Body("{" + Nums + ",\"customTermsText\":\"   \"}"), default);
+        Assert.Null((await Sut().GetAsync(default)).CustomTermsText);
+    }
+
+    [Fact]
+    public async Task put_validates_terms_text_length_and_control_chars()
+    {
+        Assert.True((await Sut().UpdateAsync(Req() with { CustomTermsText = new string('а', 500) }, default)).IsOk);
+        foreach (var bad in new[] { new string('а', 501), "a\u0000b", "a\tb", "a\rb" })
+        {
+            var r = await Sut().UpdateAsync(Req() with { CustomTermsText = bad }, default);
+            Assert.Equal(ErrorKind.Validation, r.Error!.Kind);
+            Assert.Equal("invalid_terms_text", r.Error.Code);
+        }
+        // довжина рахується після trim
+        Assert.True((await Sut().UpdateAsync(Req() with { CustomTermsText = "  " + new string('б', 500) + "  " }, default)).IsOk);
+    }
+
+    [Fact]
+    public void hidden_terms_return_null_text_but_keep_numbers_and_refund_logic()
+    {
+        var settings = new CancellationSettings(12, 50, 100, true, 10, ShowTermsToClient: false, CustomTermsText: "Секрет");
+        var t = CancellationTerms.From(settings);
+        Assert.False(t.ShowToClient);
+        Assert.Null(t.CustomText);
+        Assert.Equal((12, 50, 100, true, 10), (t.WindowHours, t.RefundPercentInWindow, t.RefundPercentOutside, t.DeductFee, t.FeePercent));
+
+        // розрахунок повернення не залежить від показу
+        var now = new DateTimeOffset(2030, 1, 6, 8, 0, 0, TimeSpan.Zero);
+        var visible = settings with { ShowTermsToClient = true };
+        foreach (var hours in new[] { 1, 48 })
+            Assert.Equal(CancellationPolicy.Calculate(now.AddHours(hours), now, 100m, visible),
+                CancellationPolicy.Calculate(now.AddHours(hours), now, 100m, settings));
+    }
+
     [Fact]
     public async Task slots_and_appointments_carry_cancellation_terms()
     {

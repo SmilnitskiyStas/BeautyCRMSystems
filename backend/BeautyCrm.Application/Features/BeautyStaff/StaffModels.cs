@@ -42,14 +42,29 @@ public sealed record CreateSpecialistRequest(
     [StringLength(200)] string? Position,
     IReadOnlyList<Guid>? LocationIds,
     IReadOnlyList<Guid>? ServiceIds,
-    JsonElement? WorkingHours);
+    JsonElement? WorkingHours,
+    int? PracticeStartYear = null,
+    [StringLength(500)] string? Bio = null,
+    [StringLength(500)] string? PhotoUrl = null);
 
-/// <summary>Повна заміна name/phone/position; IsActive = null — без змін.</summary>
+/// <summary>
+/// Повна заміна name/phone/position; IsActive = null — без змін.
+/// Публічний профіль (мобільний потік): PracticeStartYear/Bio/PhotoUrl — null = без змін (старі клієнти не стирають дані);
+/// очищення: Bio/PhotoUrl = "" , PracticeStartYear = 0. PhotoUrl — лише https-URL до 500 символів, Bio — до 500,
+/// рік — 1950..поточний.
+/// </summary>
 public sealed record UpdateSpecialistRequest(
     [Required, StringLength(200, MinimumLength = 1)] string Name,
     [StringLength(32)] string? Phone,
     [StringLength(200)] string? Position,
-    bool? IsActive);
+    bool? IsActive,
+    int? PracticeStartYear = null,
+    [StringLength(500)] string? Bio = null,
+    [StringLength(500)] string? PhotoUrl = null);
+
+/// <summary>Частковий патч публічного профілю для порту даних: Set* = true — записати значення (null очищає).</summary>
+public sealed record SpecialistProfilePatch(
+    bool SetYear, int? PracticeStartYear, bool SetBio, string? Bio, bool SetPhoto, string? PhotoUrl);
 
 public sealed record SetSpecialistServicesRequest([Required] IReadOnlyList<Guid> ServiceIds);
 
@@ -75,7 +90,8 @@ public sealed record SpecialistDto(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Phone,
     string? Position, string? PhotoUrl, bool IsActive,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? HasAccount,
-    IReadOnlyList<SpecialistServiceRef> Services, IReadOnlyList<SpecialistLocationDto> Locations);
+    IReadOnlyList<SpecialistServiceRef> Services, IReadOnlyList<SpecialistLocationDto> Locations,
+    int? PracticeStartYear = null, string? Bio = null);
 
 public sealed record AbsenceConflictDto(Guid AppointmentId, DateTimeOffset StartsAt, string ServiceName);
 
@@ -94,13 +110,15 @@ public sealed record StaffLocationRecord(Guid LocationId, string LocationName, b
 
 public sealed record StaffSpecialistRecord(
     Guid Id, string FullName, string? Phone, string? Position, string? PhotoUrl, bool IsActive, string? LinkedUserRole,
-    IReadOnlyList<SpecialistServiceRef> Services, IReadOnlyList<StaffLocationRecord> Locations);
+    IReadOnlyList<SpecialistServiceRef> Services, IReadOnlyList<StaffLocationRecord> Locations,
+    int? PracticeStartYear = null, string? Bio = null);
 
 /// <summary>Мінімум для перевірок прав: існування, активність, роль прив'язаного користувача (admin не змінює owner).</summary>
 public sealed record SpecialistLink(Guid Id, bool IsActive, string? LinkedUserRole);
 
 public sealed record NewSpecialist(
-    string Name, string? Phone, string? Position, IReadOnlyList<Guid> LocationIds, IReadOnlyList<Guid> ServiceIds, string? WorkingHoursJson);
+    string Name, string? Phone, string? Position, IReadOnlyList<Guid> LocationIds, IReadOnlyList<Guid> ServiceIds, string? WorkingHoursJson,
+    int? PracticeStartYear = null, string? Bio = null, string? PhotoUrl = null);
 
 /// <summary>
 /// Candidates заповнюється лише записами, що створюють/переводять відсутність у статус зі зверненням до conflicts[]

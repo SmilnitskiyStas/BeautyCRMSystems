@@ -1,0 +1,158 @@
+# Beauty CRM: production-стек (postgres -> migrate -> api -> worker, web; опційно proxy).
+# Запуск (з каталогу deploy/):  cp .env.example .env  (заповнити)  &&  docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+# Назва проєкту за замовчуванням `beautycrm` (змінюється `-p`; локальна перевірка використовувала `beautycrm-deploy`).
+# Збірка: контекст = корінь репозиторію (..), Dockerfile-и в deploy/docker/.
+name: ${COMPOSE_PROJECT_NAME:-beautycrm}
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "5" }
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    # Порт назовні НЕ публікується: лише внутрішня мережа compose.
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-beautycrm}
+      BEAUTY_DB_OWNER_PASSWORD: ${BEAUTY_DB_OWNER_PASSWORD:?set BEAUTY_DB_OWNER_PASSWORD}
+      BEAUTY_DB_APP_PASSWORD: ${BEAUTY_DB_APP_PASSWORD:?set BEAUTY_DB_APP_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # init виконується лише на порожньому томі (створює ролі beautycrm_owner/app/catalog і передає БД власнику).
+      - ./db/init-roles.sql:/opt/beauty-db/init-roles.sql:ro
+      - ./db/00-init-roles.sh:/docker-entrypoint-initdb.d/00-init-roles.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB:-beautycrm}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [beauty]
+    logging: *logging
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: deploy/docker/backend.Dockerfile
+      target: migrate
+    image: ${BEAUTY_IMAGE_PREFIX:-beautycrm}-migrate:${BEAUTY_IMAGE_TAG:-local}
+    restart: "no"
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:-beautycrm}
+      PGUSER: beautycrm_owner
+      PGPASSWORD: ${BEAUTY_DB_OWNER_PASSWORD}
+      BEAUTY_APP_ROLE: beautycrm_app
+    networks: [beauty]
+    logging: *logging
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/docker/backend.Dockerfile
+      target: api
+    image: ${BEAUTY_IMAGE_PREFIX:-beautycrm}-api:${BEAUTY_IMAGE_TAG:-local}
+    restart: unless-stopped
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Default: Host=postgres;Port=5432;Database=${POSTGRES_DB:-beautycrm};Username=beautycrm_app;Password=${BEAUTY_DB_APP_PASSWORD}
+      Auth__JwtSigningKey: ${Auth__JwtSigningKey:?set Auth__JwtSigningKey}
+      Auth__PlatformKey: ${Auth__PlatformKey:?set Auth__PlatformKey}
+      Channels__EncryptionKey: ${Channels__EncryptionKey:?set Channels__EncryptionKey}
+      Channels__UseMocks: ${Channels__UseMocks:-false}
+      Beauty__AllowedOrigins: ${Beauty__AllowedOrigins:?set Beauty__AllowedOrigins}
+      # IP/CIDR reverse proxy. За замовчуванням = підмережа мережі `beauty` (host nginx бачиться як її gateway).
+      Beauty__TrustedProxies: ${Beauty__TrustedProxies:-172.29.88.0/24}
+      PublicBooking__TokenKey: ${PublicBooking__TokenKey:-}
+      PublicBooking__CaptchaRequired: ${PublicBooking__CaptchaRequired:-false}
+      PublicBooking__AllowWeakerClientPaths: ${PublicBooking__AllowWeakerClientPaths:-false}
+      PublicBooking__MaxPublicCreatesPerLocationPerHour: ${PublicBooking__MaxPublicCreatesPerLocationPerHour:-60}
+      PublicBooking__Protection__Web: ${PublicBooking__Protection__Web:-none}
+      PublicBooking__Protection__Ios: ${PublicBooking__Protection__Ios:-none}
+      PublicBooking__Protection__Android: ${PublicBooking__Protection__Android:-none}
+      PublicBooking__MinAppVersion__Ios: ${PublicBooking__MinAppVersion__Ios:-}
+      PublicBooking__MinAppVersion__Android: ${PublicBooking__MinAppVersion__Android:-}
+      PublicBooking__RateLimit__NearbyPermit: ${PublicBooking__RateLimit__NearbyPermit:-10}
+      PublicBooking__RateLimit__SearchPermit: ${PublicBooking__RateLimit__SearchPermit:-20}
+    # Лише loopback хоста: для host nginx. Назовні не відкривається.
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-15080}:8080"
+    networks: [beauty]
+    logging: *logging
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/docker/worker.Dockerfile
+    image: ${BEAUTY_IMAGE_PREFIX:-beautycrm}-worker:${BEAUTY_IMAGE_TAG:-local}
+    restart: unless-stopped
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    environment:
+      WORKER_DATABASE_URL: postgres://beautycrm_app:${BEAUTY_DB_APP_PASSWORD}@postgres:5432/${POSTGRES_DB:-beautycrm}
+      WORKER_TENANT_IDS: ${WORKER_TENANT_IDS:-}
+      WORKER_MARKETING_DAILY_LIMIT: ${WORKER_MARKETING_DAILY_LIMIT:-}
+      WORKER_DEFAULT_TIMEZONE: ${WORKER_DEFAULT_TIMEZONE:-Europe/Kyiv}
+      Channels__EncryptionKey: ${Channels__EncryptionKey}
+      EMAIL_MODE: ${EMAIL_MODE:-mock}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+    networks: [beauty]
+    logging: *logging
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/docker/web.Dockerfile
+      args:
+        # Вбудовуються у збірку (NEXT_PUBLIC_*): після зміни потрібна перезбірка (`up -d --build web`).
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?set NEXT_PUBLIC_API_URL}
+        NEXT_PUBLIC_TENANT_SLUG: ${NEXT_PUBLIC_TENANT_SLUG:-}
+    image: ${BEAUTY_IMAGE_PREFIX:-beautycrm}-web:${BEAUTY_IMAGE_TAG:-local}
+    restart: unless-stopped
+    depends_on:
+      api: { condition: service_healthy }
+    environment:
+      # Серверні (BFF /api/session/*) виклики до API йдуть по внутрішній мережі, не через зовнішній домен.
+      API_URL: http://api:8080
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT:-13000}:3000"
+    networks: [beauty]
+    logging: *logging
+
+  # Необов'язковий контейнерний nginx (profile `proxy`): для локальної перевірки або сервера без власного nginx.
+  # Лише HTTP; TLS у проді завершується на хостовому nginx (deploy/nginx/beauty.conf).
+  proxy:
+    profiles: ["proxy"]
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      web: { condition: service_healthy }
+      api: { condition: service_healthy }
+    volumes:
+      - ./nginx/compose-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/beauty-locations.inc:/etc/nginx/beauty/beauty-locations.inc:ro
+      - ./nginx/well-known:/var/www/beauty-wellknown:ro
+    ports:
+      - "127.0.0.1:${PROXY_HOST_PORT:-18080}:80"
+    networks: [beauty]
+    logging: *logging
+
+networks:
+  beauty:
+    ipam:
+      config:
+        - subnet: ${BEAUTY_NET_SUBNET:-172.29.88.0/24}
+
+volumes:
+  pgdata:

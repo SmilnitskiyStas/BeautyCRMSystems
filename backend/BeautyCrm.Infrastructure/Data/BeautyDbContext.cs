@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using BeautyCrm.Infrastructure.Data.Entities;
 using BeautyCrm.Infrastructure.Data.Tenancy;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace BeautyCrm.Infrastructure.Data;
@@ -21,6 +22,7 @@ public class BeautyDbContext : DbContext
     public DbSet<Location> Locations => Set<Location>();
     public DbSet<LocationClosure> LocationClosures => Set<LocationClosure>();
     public DbSet<Specialist> Specialists => Set<Specialist>();
+    public DbSet<SpecialistReview> SpecialistReviews => Set<SpecialistReview>();
     public DbSet<SpecialistLocation> SpecialistLocations => Set<SpecialistLocation>();
     public DbSet<SpecialistServiceLink> SpecialistServices => Set<SpecialistServiceLink>();
     public DbSet<SpecialistAbsence> SpecialistAbsences => Set<SpecialistAbsence>();
@@ -128,9 +130,20 @@ public class BeautyDbContext : DbContext
                 // TASK-836 (ADR-020 §2.4): координати - обидва або жодного, в межах діапазонів
                 t.HasCheckConstraint("ck_beauty_locations_coordinates",
                     "(latitude IS NULL) = (longitude IS NULL) AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180");
+                // ADR-011
+                t.HasCheckConstraint("ck_beauty_locations_public_code", "public_code ~ '^[0-9A-HJKMNP-TV-Z]{8}$'");
             });
             b.Property(x => x.Latitude).HasPrecision(9, 6);
             b.Property(x => x.Longitude).HasPrecision(9, 6);
+            b.Property(x => x.PublicCode).HasMaxLength(8).IsRequired()
+                .HasDefaultValueSql("public.beauty_generate_public_code()");
+            b.Property(x => x.PublicCode).Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore); // незмінний (ADR-011 §1)
+            b.HasIndex(x => x.PublicCode).IsUnique().HasDatabaseName("ux_beauty_locations_public_code");
+            b.Property(x => x.City).HasMaxLength(100);
+            b.Property(x => x.IsDiscoverable).HasDefaultValue(false);
+            b.HasIndex(x => new { x.Latitude, x.Longitude }).HasDatabaseName("ix_beauty_locations_discoverable_coords")
+                .HasFilter("is_discoverable AND is_active AND latitude IS NOT NULL");
+            // + ix_beauty_locations_discoverable_city ON (lower(city)) — вираз-індекс, лише в SQL міграції
             b.Property(x => x.Name).HasMaxLength(200);
             b.Property(x => x.Address).HasMaxLength(500);
             b.Property(x => x.Phone).HasMaxLength(32);
@@ -160,13 +173,45 @@ public class BeautyDbContext : DbContext
 
         mb.Entity<Specialist>(b =>
         {
-            Base(b, "beauty_specialists");
+            Base(b, "beauty_specialists", t =>
+            {
+                // Верхня межа року в БД статична (поточний рік перевіряє сервіс): CHECK з now() ламає dump/restore.
+                t.HasCheckConstraint("ck_beauty_specialists_practice_start_year",
+                    "practice_start_year IS NULL OR practice_start_year BETWEEN 1950 AND 2100");
+                t.HasCheckConstraint("ck_beauty_specialists_bio_len", "bio IS NULL OR char_length(bio) <= 500");
+            });
+            b.Property(x => x.Bio).HasMaxLength(500);
             b.Property(x => x.FullName).HasMaxLength(200);
             b.Property(x => x.Title).HasMaxLength(200);
             b.Property(x => x.Position).HasMaxLength(200);
             b.Property(x => x.Phone).HasMaxLength(32);
             b.Property(x => x.Email).HasMaxLength(320);
             b.Property(x => x.PhotoUrl).HasMaxLength(2048);
+        });
+
+        mb.Entity<SpecialistReview>(b =>
+        {
+            b.ToTable("beauty_specialist_reviews", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_specialist_reviews_rating", "rating BETWEEN 1 AND 5");
+                t.HasCheckConstraint("ck_beauty_specialist_reviews_text_len", "text IS NULL OR char_length(text) <= 1000");
+                t.HasCheckConstraint("ck_beauty_specialist_reviews_author_len", "char_length(author_name) BETWEEN 1 AND 100");
+            });
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            b.Property(x => x.IsPublished).HasDefaultValue(true);
+            b.Property(x => x.AuthorName).HasMaxLength(100);
+            b.Property(x => x.Text).HasMaxLength(1000);
+            b.HasAlternateKey(x => new { x.TenantId, x.Id });
+            TenantFk(b, x => x.Specialist, x => new { x.TenantId, x.SpecialistId }, DeleteBehavior.Cascade);
+            // FK на appointment/client — в кінці OnModelCreating (після Base() для Appointment/Client), інакше EF
+            // створює їхні альтернативні ключі з іншими іменами й міграція перейменовує наявні ak_*.
+            b.HasIndex(x => new { x.TenantId, x.AppointmentId }).IsUnique().HasFilter("appointment_id IS NOT NULL")
+                .HasDatabaseName("ux_beauty_specialist_reviews_appointment");
+            b.HasIndex(x => new { x.TenantId, x.SpecialistId, x.IsPublished, x.CreatedAt })
+                .IsDescending(false, false, false, true).HasDatabaseName("ix_beauty_specialist_reviews_specialist_published");
+            b.HasIndex(x => new { x.TenantId, x.ClientId });
         });
 
         mb.Entity<SpecialistLocation>(b =>
@@ -543,12 +588,15 @@ public class BeautyDbContext : DbContext
                 t.HasCheckConstraint("ck_beauty_cancellation_settings_window", "window_hours >= 0 AND window_hours <= 720");
                 t.HasCheckConstraint("ck_beauty_cancellation_settings_percents",
                     "refund_percent_in_window BETWEEN 0 AND 100 AND refund_percent_outside BETWEEN 0 AND 100 AND fee_percent BETWEEN 0 AND 100");
+                t.HasCheckConstraint("ck_beauty_cancellation_settings_terms_text", "custom_terms_text IS NULL OR char_length(custom_terms_text) <= 500");
             });
             b.Property(x => x.WindowHours).HasDefaultValue(12);
             b.Property(x => x.RefundPercentInWindow).HasDefaultValue(50);
             b.Property(x => x.RefundPercentOutside).HasDefaultValue(100);
             b.Property(x => x.DeductFee).HasDefaultValue(false);
             b.Property(x => x.FeePercent).HasDefaultValue(0);
+            b.Property(x => x.ShowTermsToClient).HasDefaultValue(true);
+            b.Property(x => x.CustomTermsText);
             b.HasIndex(x => x.TenantId).IsUnique(); // один рядок на tenant
         });
 
@@ -1270,6 +1318,15 @@ public class BeautyDbContext : DbContext
             TenantFk(b, x => x.User, x => new { x.TenantId, x.UserId }, DeleteBehavior.Cascade);
             b.HasIndex(x => new { x.TenantId, x.TokenHash }).IsUnique();
             b.HasIndex(x => new { x.TenantId, x.UserId });
+        });
+
+        // Відгуки: FK на запис/клієнта (композитні, tenant-safe; Restrict — історія відгуків не губиться разом із записом).
+        mb.Entity<SpecialistReview>(b =>
+        {
+            b.HasOne<Appointment>().WithMany().HasForeignKey(x => new { x.TenantId, x.AppointmentId })
+                .HasPrincipalKey(a => new { a.TenantId, a.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<Client>().WithMany().HasForeignKey(x => new { x.TenantId, x.ClientId })
+                .HasPrincipalKey(c => new { c.TenantId, c.Id }).OnDelete(DeleteBehavior.Restrict);
         });
     }
 

@@ -140,6 +140,10 @@ export interface CancellationSettings {
   refundPercentOutside: number;
   deductFee: boolean;
   feePercent: number;
+  /** Показувати клієнту умови скасування у застосунку. Відсутнє -> true. */
+  showTermsToClient?: boolean;
+  /** Власний текст умов (до 500 символів). Відсутнє/порожнє -> null (автотекст). */
+  customTermsText?: string | null;
 }
 
 export interface OverviewKpi {

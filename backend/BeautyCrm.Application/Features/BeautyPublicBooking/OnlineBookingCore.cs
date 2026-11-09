@@ -23,6 +23,11 @@ public sealed class OnlineBookingCore(IPublicBookingStore pub, BookingService bo
         return await booking.GetSlotsAsync(locationId, specialistId, serviceId, date, ct);
     }
 
+    /// <summary>Календар доступності (див. <see cref="BookingService.GetAvailabilityAsync"/>); горизонт — options.MaxDaysAhead.</summary>
+    public Task<Result<IReadOnlyList<DayAvailability>>> GetAvailabilityAsync(
+        Guid locationId, Guid? specialistId, Guid serviceId, DateOnly? from, int days, CancellationToken ct) =>
+        booking.GetAvailabilityAsync(locationId, specialistId, serviceId, from, days, options.MaxDaysAhead, ct);
+
     /// <summary>Лише слоти, які віддає /slots: сітка 15 хв (UTC-ticks) і горизонт запису.</summary>
     public Error? ValidateStart(DateTimeOffset startsAt, DateTimeOffset now)
     {

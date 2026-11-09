@@ -82,6 +82,8 @@ public sealed class PlatformTenantService(IAuthStore store, IPasswordHasher hash
     {
         var slug = TenantRules.NormalizeSlug(req.Slug);
         if (slug is null) return AuthError.Validation("invalid_slug", "Slug: 3-64 chars, a-z, 0-9, hyphen.");
+        if (BeautyPublicBooking.PublicTenantResolver.ReservedSlugs.Contains(slug))
+            return AuthError.Validation("slug_reserved", "This slug is reserved.");
         var modules = NormalizeModules(req.Modules) ?? BeautyModules.All;
         if (req.Modules is not null && NormalizeModules(req.Modules) is null)
             return AuthError.Validation("invalid_modules", "Unknown module name.");

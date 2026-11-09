@@ -30,7 +30,16 @@ public sealed record CancelledByDto(string Type, [property: JsonIgnore(Condition
 public static class BookingValues
 {
     public static readonly string[] Sources = ["admin", "online", "telegram", "instagram"];
-    public static readonly string[] Reminders = ["none", "1h", "2h"];
+    public static readonly string[] Reminders = ["none", "1h", "2h", "24h"];
+
+    /// <summary>Зсув нагадування до початку візиту; null — без нагадування (none/невідоме).</summary>
+    public static TimeSpan? ReminderOffset(string? option) => option switch
+    {
+        "1h" => TimeSpan.FromHours(1),
+        "2h" => TimeSpan.FromHours(2),
+        "24h" => TimeSpan.FromHours(24),
+        _ => null,
+    };
     public static readonly string[] PaymentMethods = ["card", "cash"];
     public static readonly string[] PatchableStatuses = ["confirmed", "completed", "no_show"];
 }
@@ -38,6 +47,18 @@ public static class BookingValues
 /// <param name="Timezone">IANA-зона закладу (TASK-690): Label/startsAt слід показувати в ній, а не в зоні браузера.</param>
 public sealed record FreeSlot(Guid SpecialistId, DateTimeOffset StartsAt, DateTimeOffset EndsAt, string Label,
     CancellationTerms? Cancellation = null, string? Timezone = null);
+
+/// <summary>Статуси дня в календарі доступності.</summary>
+public static class DayStatus
+{
+    public const string Available = "available";
+    public const string Full = "full";
+    public const string Closed = "closed";
+    public const string Past = "past";
+}
+
+/// <summary>День календаря доступності (дата — у зоні закладу); FreeSlots — кількість слотів, як у /slots (для «будь-якого майстра» — сума по майстрах).</summary>
+public sealed record DayAvailability(DateOnly Date, string Status, int FreeSlots);
 
 /// <param name="PhoneSource">TASK-769 (§25.7): web_form (публічний запис) | staff; для нового клієнта. Наявний клієнт не змінюється.</param>
 public sealed record ClientInput(Guid? Id, string? Name, string? Phone, string? Email, bool MarketingConsent = false, string? PhoneSource = null);

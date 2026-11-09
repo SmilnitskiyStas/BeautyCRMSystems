@@ -33,6 +33,8 @@ public sealed partial class ControlPlaneService(IControlPlaneStore store, Contro
         if (req.Owner?.Password is not null) return AuthError.Validation("password_not_allowed", "The owner password is set by the owner via the invite link.");
         var slug = TenantRules.NormalizeSlug(req.Slug);
         if (slug is null) return AuthError.Validation("invalid_slug", "Slug: 3-64 chars, a-z, 0-9, hyphen.");
+        if (BeautyPublicBooking.PublicTenantResolver.ReservedSlugs.Contains(slug))
+            return AuthError.Validation("slug_reserved", "This slug is reserved.");
         var modules = req.Modules is null ? BeautyModules.All : TenantRules.NormalizeModules(req.Modules);
         if (modules is null) return AuthError.Validation("unknown_module", "Unknown module name.");
         var email = req.Owner?.Email?.Trim().ToLowerInvariant();

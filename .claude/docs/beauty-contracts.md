@@ -21,7 +21,7 @@
 ## 2. Сутності (tenant_id + RLS на всіх)
 `beauty_locations`, `beauty_specialists`, `beauty_specialist_locations`, `beauty_services`, `beauty_service_prices`, `beauty_appointments`, `beauty_clients`, `beauty_client_notes`, `beauty_promotions` (+`_locations`, `_services`), `beauty_channels`, `beauty_conversations`, `beauty_messages`, `beauty_ai_actions`, `beauty_reminders`, `beauty_payments`.
 
-`beauty_appointments`: `id`, `tenant_id`, `location_id`, `specialist_id`, `service_id`, `client_id`, `starts_at`, `duration_minutes`, `status` (pending|confirmed|completed|cancelled|no_show), `source` (admin|online|telegram|instagram), `price_original`, `price_final`, `promotion_id`, `reminder_option` (none|1h|2h), `payment_method` (card|cash).
+`beauty_appointments`: `id`, `tenant_id`, `location_id`, `specialist_id`, `service_id`, `client_id`, `starts_at`, `duration_minutes`, `status` (pending|confirmed|completed|cancelled|no_show), `source` (admin|online|telegram|instagram), `price_original`, `price_final`, `promotion_id`, `reminder_option` (none|1h|2h|24h|custom; `custom` — дзеркало довільного плану §22.3), `payment_method` (card|cash).
 
 ## 3. API (`/api/beauty/...`, `[RequireModule("beauty_*")]`)
 | Метод | Шлях | Призначення |
@@ -143,7 +143,7 @@ public interface IPaymentService {
 | GET | `/locations/{id}/specialists` | `[{id, name, title?, photoUrl?}]` (без email/телефону) |
 | GET | `/locations/{id}/services` | `[{id, name, description?, category?, durationMinutes, priceOriginal, priceFinal, promotionId?, promotionName?}]`; `priceOriginal` = override закладу або мережева, `priceFinal` = після акції (найбільша знижка) на зараз |
 | GET | `/slots?locationId&serviceId&date[&specialistId]` | як §9/§11 (`[{specialistId, startsAt, endsAt, label, cancellation}]`); `date` від вчора до `MaxDaysAhead` (180), інакше 422 `invalid_date` |
-| POST | `/appointments` | `{locationId, specialistId, serviceId, startsAt, client:{name, phone}, reminder?: none\|1h\|2h (за замовч. none), paymentMethod: card\|cash, captchaToken?}` -> `201 {publicToken, appointment}`; повтор того ж `Idempotency-Key` -> `200` + `Idempotent-Replayed: true` |
+| POST | `/appointments` | `{locationId, specialistId, serviceId, startsAt, client:{name, phone}, reminder?: none\|1h\|2h\|24h (за замовч. none), paymentMethod: card\|cash, captchaToken?}` -> `201 {publicToken, appointment}`; повтор того ж `Idempotency-Key` -> `200` + `Idempotent-Replayed: true` |
 | GET | `/appointments/{publicToken}` | `PublicAppointment` (див. нижче) |
 | POST | `/appointments/{publicToken}/cancel` | `{appointment, refundAmount, refundPercent, feePercent}` за політикою §11 |
 
@@ -160,6 +160,7 @@ public interface IPaymentService {
 - Rate limit за IP (fixed window `PublicBooking:RateLimit:WindowSeconds`=60): читання каталогу/слотів 120, перегляд за токеном 30, POST create/cancel 10 (ключі `ReadPermit|TokenPermit|WritePermit`); перевищення -> `429 rate_limited`. За reverse proxy потрібні ForwardedHeaders із довіреними проксі.
 - PII не логується (код публічного потоку нічого не логує); slug і токен у шляху — Kestrel/hosting не логує шлях на рівні Warning (`Microsoft.AspNetCore: Warning`); reverse proxy/access-логи треба налаштувати так, щоб не зберігати шлях `/appointments/{token}`.
 - Схема (міграція `beauty_public_booking`, лише AddColumn/CreateIndex): `beauty_appointments.public_token_hash`, `idempotency_key_hash`, `idempotency_request_hash` (varchar(64), nullable) + partial unique-індекси `ux_beauty_appointments_public_token`, `ux_beauty_appointments_idempotency` на `(tenant_id, hash)`. Нових таблиць і GRANT-ів не потрібно.
+- **Каталог закладів (ADR-011, v0.20).** Cross-tenant маршрути `GET /api/public/resolve/{publicCode}`, `POST /api/public/locations/nearby`, `POST /api/public/locations/search` (без `{tenantSlug}`, без JWT) описані в §19. Мітки клієнта `X-Booking-Client` / `X-App-Version`, захист (`PublicBooking:Protection:*`), 426 `upgrade_required` і per-location ліміт створення діють на цьому публічному API (деталі — §19.4–§19.6). Зарезервовані slug-и: `resolve`, `locations` (§19.9).
 
 ## 13. Керування працівниками (TASK-691 backend, TASK-692 frontend)
 Рішення користувача: (1) адмін створює профіль працівника, запрошення на вхід необов'язкове; (2) відсутність блокує нові слоти, наявні записи не чіпаємо автоматично, адмін бачить список конфліктів і сам переносить/скасовує (дані зараз демо, міграції можуть їх змінювати); (3) усі працівники бачать ТИП відсутності, текст примітки бачать лише owner/admin та автор; (4) працівник може створити ЗАПИТ на власну відсутність, адмін підтверджує.
@@ -3811,3 +3812,98 @@ TASK-817 (схема HMAC, вектор), TASK-818 (§27.3–§27.5, §27.7), TA
 ### 28.16 Поетапність і споживачі
 - **V1** (за `ChatFlow:Enabled`): §28.1–§28.14. **Пізніше:** «Будь-який спеціаліст» (Q3), ціна на кнопці майстра (Q2, після ADR-017), потік у `suggest` (Q1), «Продовжити» після таймауту (Q5), потік в Instagram.
 - Споживачі: TASK-836 (§28.10), TASK-837 (§28.5 regex, §28.9 парсер і пам'ять), TASK-838 (§28.3, §28.4, §28.8), TASK-839 (§28.11 API), TASK-840 (§28.6, §28.7, §28.9 обробка, §28.12), TASK-841 (повторна відправка `requestLocation`, нові `kind`), TASK-842 (§28.11 frontend), TASK-843 (§28.15), TASK-844 (§28.14, §28.9), TASK-845 (runbook §28.2, GRANT, відкат).
+
+## §29. Публічний каталог закладів і захист мобільних клієнтів (ADR-011) — (гілка mobile, інтегровано поверх §28)
+Адитивний розділ: §3–§18 не змінено. Рішення — `.claude/docs/adr/ADR-011-public-location-code-catalog-and-mobile-booking-protection.md`. Помилка = `{ "code", "message" }`; camel-case JSON.
+
+### 29.1 Маршрути каталогу
+Контролер `PublicCatalogController`, база `/api/public`, `[AllowAnonymous]` (без JWT, без `{tenantSlug}`). Дані читаються лише через SECURITY DEFINER-функції БД `beauty_public_*`. Відповіді мають `Cache-Control: no-store` і `Referrer-Policy: no-referrer`.
+
+| Метод | Шлях | Rate-limit політика | Відповідь |
+|---|---|---|---|
+| GET | `/resolve/{publicCode}` | `public-token` (30/хв на IP) | `PublicLocationRefDto` |
+| POST | `/locations/nearby` | `public-nearby` (10/хв) | `{items: PublicNearbyItemDto[]}`; тіло `{lat, lng, radiusKm?}`, ліміт тіла 1024 байти |
+| POST | `/locations/search` | `public-search` (20/хв) | `{items: PublicLocationRefDto[]}`; тіло `{city}`, ліміт тіла 1024 байти |
+
+- **resolve.** Код `XXXX-XXXX` або `XXXXXXXX`; регістр, дефіс і пробіли не важливі; аліаси O→0, I/L→1 (нормалізує функція БД). Довжина понад 9 символів відсікається до перевірки формату. Працює для активного закладу tenant-а в статусі active з модулем `beauty_booking`. Прапорець `isDiscoverable` на resolve не впливає.
+- **nearby.** Координати в тілі POST; сервер округлює їх до 3 знаків (~110 м) **до** виклику БД, тож повна точність не потрапляє в параметри SQL і логи PostgreSQL. Лише заклади з `isDiscoverable=true`, активні, tenant active з модулем. Радіус за замовчуванням і максимум 30 км; `radiusKm` понад 30 обрізається до 30 (це не помилка). До 10 результатів з різних tenant-ів, сортування за відстанню, далі за `publicCode`. `distanceKm` округлено до 0.1 км.
+- **search.** `POST` з тілом `{"city": "..."}` (місто не передається в URL/query, щоб не потрапляти в access-логи проксі й сервера; старий `GET /locations/search?city=` **видалено**, не deprecated). `city` після trim; точний збіг без урахування регістру; лише discoverable-заклади; до 10 результатів, сортування за назвою, далі за `publicCode`. Відстані немає. Префікси й шаблони (`%`) не працюють.
+
+### 29.2 Схеми відповідей
+- `PublicLocationRefDto`: `publicCode` (8 символів Crockford без дефіса), `tenantSlug`, `locationId`, `name`, `address?`, `city?`, `timezone`.
+- `PublicNearbyItemDto`: усі поля `PublicLocationRefDto` + `distanceKm` (decimal).
+- `PublicNearbyResponse` / `PublicSearchResponse`: `{items: [...]}`; порожній результат — `items: []`.
+- У відповідях немає `tenantId`, телефону, координат, `is_active` і внутрішніх id клієнта (перевіряє набір полів у тестах).
+
+### 29.3 Коди помилок
+| HTTP | code | Коли |
+|---|---|---|
+| 404 | `not_found` | resolve: будь-яка невдача (формат, невідомий код, неактивний заклад, призупинений tenant, вимкнений модуль) — однакове тіло. Публічні маршрути з `{tenantSlug}` для невідомого/призупиненого/без модуля/неправильного slug віддають те саме тіло побайтно |
+| 422 | `invalid_coordinates` | nearby: `lat`/`lng` відсутні, не числа, не скінченні, поза −90..90 / −180..180 |
+| 422 | `invalid_radius` | nearby: `radiusKm` ≤ 0 або не скінченний |
+| 422 | `invalid_city` | search: після trim менше 2 або більше 100 символів, є контрольні символи, `city` відсутнє. Тіло відсутнє/зіпсоване — `422 validation_failed` |
+| 422 | `validation_failed` | загальна помилка валідації моделі (`InvalidModelStateResponseFactory` у `Program.cs`) |
+| 422 | `booking_limit_reached` | `POST /api/public/{tenantSlug}/appointments`: перевищено ліміт per-location або per-phone (§29.6) |
+| 422 | `captcha_failed` | `POST .../appointments`, web у режимі enforce (§29.5) |
+| 422 | `integrity_failed` | `POST .../appointments`, ios/android у режимі enforce (§29.5) |
+| 422 | `slug_reserved` | створення tenant-а (`POST /api/platform/tenants`) зі зарезервованим slug (§29.9) |
+| 426 | `upgrade_required` | ios/android з `X-App-Version` нижче `PublicBooking:MinAppVersion:{Ios|Android}`, на будь-якому публічному маршруті з `[PublicClient]` (web не блокується) |
+| 429 | `rate_limited` | перевищено ліміт політики (§29.7) |
+
+### 29.4 Мітки клієнта
+- `X-Booking-Client: web|ios|android` (регістр і пробіли не важливі). Відсутня або невідома мітка = `web` (найсуворіша політика для неоголошеного клієнта).
+- `X-App-Version: 1.2.3`. Враховуються ведучі цифри й крапки до 4 компонентів; суфікси (`-beta`, `+build`) відкидаються. Невалідна версія = `null` і не блокується.
+- `X-Client-Integrity`: токен доказу для ios/android (Play Integrity / App Attest). Зчитується лише в `POST .../appointments` (`PublicBookingController.Create`).
+- Мітки **не є автентифікацією**: їх можна витягти з клієнта. Вони потрібні для метрик, вибору політики захисту й kill switch застарілих версій.
+
+### 29.5 Режими захисту
+Налаштування: `PublicBooking:Protection:{Web|Ios|Android}` = `none|monitor|enforce` (регістр не важливий; інше значення = помилка старту). За замовчуванням усі `none` (MVP).
+- `none` — перевірки немає.
+- `monitor` — перевірка виконується, вердикт пишеться в тег Activity `beauty.integrity.verdict` (`{client}:{ok|fail}`); запис **не** блокується.
+- `enforce` — без валідного доказу відмова (fail closed): web → `422 captcha_failed`; ios/android → `422 integrity_failed`.
+- Для web при `PublicBooking:CaptchaRequired=true` режим завжди `enforce` (незалежно від `Protection:Web`). Доказ web — заголовок `X-Captcha-Token` або `captchaToken` у тілі; ios/android — `X-Client-Integrity`. Порожній токен = невдача.
+- Перевірка йде після пошуку ідемпотентного ключа: повтор із тим самим `Idempotency-Key` її не повторює.
+- **Перевірка шляхів на старті (M3).** API настільки сильне, наскільки слабкий найслабший прийнятий шлях (мітка `X-Booking-Client` самодекларована). Якщо ефективні режими Web/Ios/Android різні (зокрема `CaptchaRequired=true` без `enforce` для `Ios` і `Android`), а `PublicBooking:AllowWeakerClientPaths` не `true`: **Production (і невизначене середовище) — помилка старту** з поясненням; **Development — попередження (Warning) у логу** при старті. `AllowWeakerClientPaths=true` явно приймає розбіжність (напр. поетапне ввімкнення enforce) і вимикає і помилку, і попередження. Усі режими однакові (за замовчуванням усі `none`) — перевірка мовчить.
+
+### 29.6 Ліміт створень на заклад
+- `PublicBooking:MaxPublicCreatesPerLocationPerHour` (за замовчуванням 60; `0` = вимкнено): онлайн-створення в один заклад за останню годину, будь-який статус. Персонал (staff API) не рахується.
+- Перевищення → `422 booking_limit_reached`. Перевірка йде перед лімітами на телефон (`MaxActiveBookingsPerPhone`, `MaxCreatesPerPhonePerHour` з §12).
+
+### 29.7 Rate limits каталогу та публічного запису
+Фіксоване вікно на ключ клієнта: IPv4 — адреса, **IPv6 — префікс /64** (ротація адрес усередині /64 не обходить ліміт; IPv4-mapped IPv6 зводиться до IPv4), на основі `RemoteIpAddress`, `PublicBooking:RateLimit:WindowSeconds` (60), черги немає. Ключі й значення за замовчуванням:
+
+| Політика | Ключ | За замовч. | Маршрути |
+|---|---|---|---|
+| `public-read` | `ReadPermit` | 120 | читання tenant-scoped каталогу/слотів (§12) |
+| `public-token` | `TokenPermit` | 30 | `resolve`, перегляд запису за токеном |
+| `public-write` | `WritePermit` | 10 | POST create/cancel |
+| `public-nearby` | `NearbyPermit` | 10 | `locations/nearby` |
+| `public-search` | `SearchPermit` | 20 | `POST locations/search` |
+
+Перевищення → `429 rate_limited`.
+
+**Чекліст деплою (обов'язково):** за reverse proxy / CDN / балансувальником **потрібно** задати `Beauty:TrustedProxies` (IP або CIDR проксі, §14). Без цього `RemoteIpAddress` = адреса проксі, і всі клієнти ділять один ліміт (DoS для легітимних), а недовірений `X-Forwarded-For` ігнорується. Перевірити після деплою: два запити з різних клієнтів дають різні ключі (див. логи/метрики), а спуфлений `X-Forwarded-For` від не-проксі не змінює ключ.
+
+### 29.8 Адмін-API закладу: геополя (ADR-011)
+Ті самі `POST /api/beauty/locations` і `PUT /api/beauty/locations/{id}` (§16), доступ owner/admin; specialist → `403 forbidden_role`; чужий заклад → `404 location_not_found`.
+- `latitude` + `longitude` — лише разом; діапазони −90..90 і −180..180, скінченні. Порушення → `422 invalid_coordinates`. Колонки/семантика — як у §28.11 (`numeric(9,6)`, округлення до 6 знаків): обидва поля відсутні = без змін, обидва явні `null` = очистити, обидва числа = задати.
+- `clearCoordinates: true` — очищує координати; без `lat`/`lng` у тому самому запиті (інакше `422 invalid_coordinates`).
+- `city` — після trim, до 100 символів, без контрольних. `""` = очистити. Понад 100 → `422 invalid_city`.
+- `isDiscoverable` — opt-in до каталогу. У POST за замовчуванням `false`.
+- **Семантика PUT:** пропущене поле (або `null`) = без змін для `city`, `isDiscoverable`; для координат діє правило §28.11 (явна пара `null` очищує; `clearCoordinates: true` — те саме). Стара форма без цих полів нічого не затирає.
+- **`publicCode`:** генерує БД (`DEFAULT public.beauty_generate_public_code()`, 8 символів Crockford, унікальний у всіх tenant-ах). Значення в тілі запиту ігнорується. Після створення колонка не записується (EF `PropertySaveBehavior.Ignore`). Незмінність додатково гарантує DB-тригер `trg_beauty_locations_public_code_immutable`. Колізія унікального індексу `ux_beauty_locations_public_code` (23505) при створенні закладу повторюється до 5 спроб (`EfBeautyStore.RetryOnPublicCodeCollisionAsync`); інші помилки не повторюються. У тестах БД перевіряються формат, унікальність і CHECK координат (`PublicCatalogRlsTests`).
+- Відповіді містять `publicCode`, `latitude`, `longitude`, `city`, `isDiscoverable`.
+
+### 29.9 Зарезервовані slug-и
+`resolve`, `locations` та `integrity` (`PublicTokens.ReservedSlugs`) не можна використати як slug tenant-а: `POST /api/platform/tenants` → `422 slug_reserved` (регістр не важливий). Перевірка також є в `UserAdminService`. Міграції й seed tenant-ів із такими slug не створюють (тест `reserved_slugs_cannot_be_created_and_do_not_shadow_catalog_routes` перевіряє, що в `tenants` їх немає). Причина: `/api/public/resolve/...` і `/api/public/locations/...` не повинні конфліктувати з `/api/public/{tenantSlug}/...`.
+
+### 29.10 OpenAPI-документ
+- Файл `backend/openapi.json` (OpenAPI 3.0.1). Містить `/api/public/resolve/{publicCode}`, `POST /api/public/locations/nearby`, `POST /api/public/locations/search`.
+- Перегенерація: тест `openapi_document_lists_catalog_routes_and_can_be_exported` (`PublicCatalogApiTests`) бере `/swagger/v1/swagger.json` у середовищі Development і, якщо задано `BEAUTY_EXPORT_OPENAPI=<абсолютний шлях до файлу>`, записує його з відступами. Тест потребує PostgreSQL (без БД пропускається; `BEAUTY_TEST_REQUIRE_DB=1` робить пропуск помилкою).
+- PowerShell: `$env:BEAUTY_EXPORT_OPENAPI = "<абсолютний шлях>\backend\openapi.json"; dotnet test backend/BeautyCrm.Tests --filter "FullyQualifiedName~openapi_document"`.
+
+### 29.11 Тести
+- `backend/BeautyCrm.Tests/PublicBooking/PublicHardeningFollowupTests.cs` — округлення координат, ключ rate limit IPv6 /64, перевірка шляхів Protection (Production/Development), зарезервовані slug-и, повтор при колізії `public_code`.
+- `backend/BeautyCrm.Tests/PublicBooking/PublicCatalogApiTests.cs` — HTTP-конвеєр на PostgreSQL: resolve (нормалізація, однаковий 404, ізоляція), nearby (фільтри, радіус, ліміт 10 між tenant-ами, 422, логи без координат і міста), search (точний збіг, 422), зарезервовані slug-и, окремі rate-limit політики, адмін-геополя (валідація, незмінний `publicCode`, ізоляція tenant-ів, specialist не пише), openapi.
+- `backend/BeautyCrm.Tests/Data/PublicCatalogRlsTests.cs` — рівень даних: `public_code` (унікальність, формат, CHECK координат), definer-функції, ролі.
+- `backend/BeautyCrm.Tests/PublicBooking/PublicBookingApiTests.cs` — 426 (`old_app_version_gets_426_everywhere_on_public_api_but_labels_never_block_otherwise`), `integrity_failed` для ios/android (`X-Client-Integrity`), per-location ліміт (`MaxPublicCreatesPerLocationPerHour`, 0 = вимкнено).

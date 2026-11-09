@@ -5,6 +5,7 @@ using BeautyCrm.Application.Features.BeautyCatalog;
 using BeautyCrm.Application.Features.BeautyChannels;
 using BeautyCrm.Application.Features.BeautyClients;
 using BeautyCrm.Application.Features.BeautyOverview;
+using BeautyCrm.Application.Features.BeautyPublicCatalog;
 using BeautyCrm.Application.Features.BeautyStaff;
 using BeautyCrm.Infrastructure.Data.Beauty;
 using BeautyCrm.Infrastructure.Data.Tenancy;
@@ -69,6 +70,7 @@ public static class DataServiceExtensions
         services.AddScoped<ClientPhoneService>(); // TASK-769: телефон клієнта (збереження, pending, cooldown), §25
         services.AddScoped<ServiceCostService>(); // TASK-763: CRUD собівартості послуг (§24.6.1)
         services.AddScoped<PlatformFeedbackService>(); // TASK-820: заявки до провайдера (§27.9, ADR-018)
+        services.AddSingleton<IPublicCatalogStore, EfPublicCatalogStore>(); // ADR-011: cross-tenant каталог лише через definer-функції
 
         return services;
     }

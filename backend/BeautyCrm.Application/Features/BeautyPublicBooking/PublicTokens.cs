@@ -96,6 +96,12 @@ public static class PhoneNormalizer
 /// </summary>
 public sealed partial class PublicTenantResolver(IAuthStore store)
 {
+    /// <summary>
+    /// Slug-и, що збігаються з першим сегментом інших публічних маршрутів `api/public/{segment}/...` (ADR-011: каталог).
+    /// Їх не можна створити як tenant (див. PlatformTenantService) і вони завжди дають 404 тут.
+    /// </summary>
+    public static readonly IReadOnlySet<string> ReservedSlugs = new HashSet<string>(StringComparer.Ordinal) { "resolve", "locations", "integrity" };
+
     [GeneratedRegex("^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")]
     private static partial Regex SlugPattern();
 
@@ -107,7 +113,7 @@ public sealed partial class PublicTenantResolver(IAuthStore store)
     public async Task<bool> ResolveAsync(string? slug, CancellationToken ct)
     {
         var normalized = slug?.Trim().ToLowerInvariant();
-        if (normalized is null || !SlugPattern().IsMatch(normalized)) return false;
+        if (normalized is null || !SlugPattern().IsMatch(normalized) || ReservedSlugs.Contains(normalized)) return false;
         var tenant = await store.FindTenantBySlugAsync(normalized, ct);
         if (tenant is { Status: "suspended" })
         {
