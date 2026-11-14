@@ -6,7 +6,7 @@ using Npgsql;
 
 namespace BeautyCrm.Tests.Data;
 
-/// <summary>ADR-011: public_code, cross-tenant public catalog (definer functions of beautycrm_catalog) and role invariants.</summary>
+/// <summary>ADR-022: public_code, cross-tenant public catalog (definer functions of beautycrm_catalog) and role invariants.</summary>
 public sealed class PublicCatalogRlsTests : IClassFixture<PostgresRlsFixture>
 {
     private static readonly Regex CodeFormat = new("^[0-9A-HJKMNP-TV-Z]{8}$");

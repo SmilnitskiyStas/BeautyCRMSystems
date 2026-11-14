@@ -237,7 +237,7 @@ public sealed partial class PublicBookingService(
     private static readonly System.Diagnostics.Metrics.Counter<long> LimitReachedCounter =
         Meter.CreateCounter<long>("beauty.public_booking.limit_reached", description: "booking_limit_reached rejections by scope");
 
-    /// <summary>ADR-011 Consequences: сигнал про можливе блокування закладу (метрика + Warning без PII: лише scope та id tenant/закладу).</summary>
+    /// <summary>ADR-022 Consequences: сигнал про можливе блокування закладу (метрика + Warning без PII: лише scope та id tenant/закладу).</summary>
     private Error LimitReached(string scope, Guid tenantId, Guid locationId, string message)
     {
         LimitReachedCounter.Add(1, new KeyValuePair<string, object?>("scope", scope));
@@ -320,7 +320,7 @@ public static class PublicBookingServiceExtensions
         services.AddScoped<OnlineBookingCore>();
         services.AddScoped<PublicBookingService>();
         services.AddSingleton<ICaptchaVerifier, RejectAllCaptchaVerifier>(); // провайдера підключає окрема реєстрація
-        services.AddSingleton<IClientIntegrityVerifier, DefaultClientIntegrityVerifier>(); // ADR-011: App Attest/Play Integrity — пізніше
+        services.AddSingleton<IClientIntegrityVerifier, DefaultClientIntegrityVerifier>(); // ADR-022: App Attest/Play Integrity — пізніше
         services.AddScoped<BeautyPublicCatalog.PublicCatalogService>();
         return services;
     }

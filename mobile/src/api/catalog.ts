@@ -2,7 +2,7 @@ import { BookingApiError } from "@beauty/booking-core";
 import { z } from "zod";
 
 /**
- * Каталог закладів (ADR-011): міжtenant-ендпоінти, що живуть ТІЛЬКИ в mobile (не в packages/booking-core).
+ * Каталог закладів (ADR-022): міжtenant-ендпоінти, що живуть ТІЛЬКИ в mobile (не в packages/booking-core).
  * КОНТРАКТ (backend паралельно):
  *   GET  /api/public/resolve/{publicCode}            -> PublicLocationRef
  *   POST /api/public/locations/nearby {lat,lng,radiusKm?} -> {items:[PublicLocationRef & {distanceKm}]}

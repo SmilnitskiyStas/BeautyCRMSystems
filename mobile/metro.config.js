@@ -1,4 +1,4 @@
-// Metro без root npm workspaces (mobile не входить у root `workspaces`; див. звіт/ADR-010 §5).
+// Metro без root npm workspaces (mobile не входить у root `workspaces`; див. звіт/ADR-021 §5).
 // Спільний пакет @beauty/booking-core читається як TypeScript-джерело з ../packages/booking-core:
 //  - watchFolders: Metro стежить за пакетом поза projectRoot;
 //  - extraNodeModules: аліас @beauty/booking-core -> джерело (без symlink у node_modules);

@@ -2,7 +2,7 @@ node_modules/
 .expo/
 dist/
 web-build/
-# Continuous Native Generation: нативні папки не комітяться (ADR-010 §1)
+# Continuous Native Generation: нативні папки не комітяться (ADR-021 §1)
 /ios
 /android
 expo-env.d.ts

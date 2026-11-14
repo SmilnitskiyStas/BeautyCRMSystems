@@ -4,7 +4,7 @@ using BeautyCrm.Application.Features.BeautyCommon;
 namespace BeautyCrm.Application.Features.BeautyPublicCatalog;
 
 /// <summary>
-/// ADR-011: публічний каталог закладів (cross-tenant, лише через definer-функції БД). Відповідь навмисно НЕ містить
+/// ADR-022: публічний каталог закладів (cross-tenant, лише через definer-функції БД). Відповідь навмисно НЕ містить
 /// tenant_id, телефонів і будь-чого поза переліком полів.
 /// </summary>
 public sealed record PublicLocationRefDto(string PublicCode, string TenantSlug, Guid LocationId, string Name,

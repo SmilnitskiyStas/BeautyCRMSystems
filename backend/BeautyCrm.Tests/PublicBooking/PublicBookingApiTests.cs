@@ -642,7 +642,7 @@ public sealed class PublicBookingApiTests : IClassFixture<AuthApiFixture>, IDisp
         await Err(await PostAsync(s.Slug, Body(s, starts[12], "+380509998877", payment: "cash"), c: c),
             HttpStatusCode.UnprocessableEntity, "booking_limit_reached");
     }
-    // ---------- ADR-011: ліміт на заклад, мітки клієнта, політика захисту ----------
+    // ---------- ADR-022: ліміт на заклад, мітки клієнта, політика захисту ----------
 
     private Task<HttpResponseMessage> PostWithHeadersAsync(Seed s, object body, HttpClient c, params (string, string)[] headers)
     {

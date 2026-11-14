@@ -52,7 +52,7 @@ const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
   poweredByHeader: false,
-  // Внутрішній workspace-пакет поставляється як TS-джерело (ADR-010 §5).
+  // Внутрішній workspace-пакет поставляється як TS-джерело (ADR-021 §5).
   transpilePackages: ["@beauty/booking-core"],
   async headers() {
     return [

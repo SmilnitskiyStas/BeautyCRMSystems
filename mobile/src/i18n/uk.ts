@@ -1,4 +1,4 @@
-/** Український текст застосунку (ADR-010 §1: жодного копірайту в компонентах). Помилки API - `humanizeBookingError` з core. */
+/** Український текст застосунку (ADR-021 §1: жодного копірайту в компонентах). Помилки API - `humanizeBookingError` з core. */
 export const uk = {
   common: {
     back: "Назад",

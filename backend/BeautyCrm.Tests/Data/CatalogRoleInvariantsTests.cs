@@ -11,7 +11,7 @@ using Testcontainers.PostgreSql;
 namespace BeautyCrm.Tests.Data;
 
 /// <summary>
-/// ADR-011 / security review M1, L1, L2: membership of the migrator in beautycrm_catalog is INHERIT FALSE, SET TRUE;
+/// ADR-022 / security review M1, L1, L2: membership of the migrator in beautycrm_catalog is INHERIT FALSE, SET TRUE;
 /// DbRoleGuard rejects every deviation of the catalog-role invariants.
 /// </summary>
 public sealed class CatalogRoleInvariantsTests : IClassFixture<PostgresRlsFixture>

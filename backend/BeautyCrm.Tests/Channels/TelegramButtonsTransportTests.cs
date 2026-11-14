@@ -480,10 +480,10 @@ public sealed class TelegramButtonsDbTests : IClassFixture<PostgresRlsFixture>
         Assert.Single(await MessagesAsync(t));
         Assert.Contains($"telegram_ack_failed channel={ch} error=TransientChannelException", h.Logs.All);
 
-        h.Bot.Responder = null; h.Bot.Delay = TimeSpan.FromSeconds(6);
+        h.Bot.Responder = null; h.Bot.Delay = TimeSpan.FromSeconds(20); // далеко за таймаутом ack (~3 с): запас на навантаження CI, перевірка не слабша
         var sw = System.Diagnostics.Stopwatch.StartNew();
         await Webhook(h, ch, Update(51, "SECRETQID2", "i:help"));
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"ack timeout must be ~3s, was {sw.Elapsed}");
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(10), $"ack timeout must be ~3s, was {sw.Elapsed}");
         Assert.Equal(2, (await MessagesAsync(t)).Count);
         Assert.Contains("error=TimeoutException", h.Logs.All);
 

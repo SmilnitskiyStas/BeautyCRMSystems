@@ -1,7 +1,7 @@
 import type { ExpoConfig } from "expo/config";
 
 /**
- * Домен і API - ПЛЕЙСХОЛДЕРИ (ADR-010 §3). Реальні значення задаються env на етапі збірки (EAS profile):
+ * Домен і API - ПЛЕЙСХОЛДЕРИ (ADR-021 §3). Реальні значення задаються env на етапі збірки (EAS profile):
  *   EXPO_PUBLIC_WEB_DOMAIN  - домен universal/app links (де лежать apple-app-site-association і assetlinks.json)
  *   EXPO_PUBLIC_API_URL     - origin backend (без кінцевого слеша)
  * У коді застосунку домен не зашивається: його читає src/config.ts з `extra`.
@@ -44,7 +44,7 @@ const config: ExpoConfig = {
     [
       "expo-location",
       {
-        // Дозвіл запитується лише на кроці «заклади поблизу» (ADR-011 §4); координати не зберігаються.
+        // Дозвіл запитується лише на кроці «заклади поблизу» (ADR-022 §4); координати не зберігаються.
         locationWhenInUsePermission:
           "Геолокація потрібна лише щоб один раз знайти найближчі заклади. Ми не зберігаємо ваші координати.",
       },

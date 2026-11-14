@@ -1,4 +1,4 @@
-# ADR-010: Mobile Booking Client (React Native + Expo, Universal App, Guest Model)
+# ADR-021: Mobile Booking Client (React Native + Expo, Universal App, Guest Model)
 
 **Date:** 2026-11-09
 
@@ -12,7 +12,7 @@ layout below describe the actual state. Phase 2 is not started.
 
 **Deciders:** pending (user decisions on stack / single app / guest model recorded in plan `humming-snacking-kitten.md`)
 
-**Related:** ADR-001 (stack), ADR-002 (RLS), ADR-006 (no self-registration), ADR-009 (locations), ADR-011 (public location code, catalog, mobile booking protection)
+**Related:** ADR-001 (stack), ADR-002 (RLS), ADR-006 (no self-registration), ADR-009 (locations), ADR-022 (public location code, catalog, mobile booking protection)
 
 ---
 
@@ -25,7 +25,7 @@ layout below describe the actual state. Phase 2 is not started.
   **location -> service -> specialist (or "any") + calendar/slots -> name/phone + confirm**.
 - Location choice must work like Altegio-style links: a link/QR with a public location ID opens exactly that salon
   (each branch of a network has its own link). Otherwise: last used location on the device; otherwise geolocation and
-  the nearest location (ADR-011).
+  the nearest location (ADR-022).
 - User decisions (plan, 2026-11): React Native + Expo; **one** universal app + deep links; **guest** with phone,
   appointments kept locally. MVP is phased: Phase 1 = book + cancel; Phase 2 = push + reschedule.
 - ADR-006 forbids self-registration for staff. End-clients never had accounts: the public API is already
@@ -58,7 +58,7 @@ layout below describe the actual state. Phase 2 is not started.
 - Location selection precedence (first match wins):
   1. **Deep link** `/l/{publicCode}` (cold or warm start) — becomes the new saved location;
   2. **Saved last location** on the device;
-  3. **Nearby** via geolocation (permission requested only at this step, ADR-011 §4);
+  3. **Nearby** via geolocation (permission requested only at this step, ADR-022 §4);
   4. **Manual**: scan QR / enter code (fallback when permission denied or nothing nearby).
 - A saved location that stops resolving (deactivated, ADR-009) is cleared and the flow falls through to step 3.
 
@@ -69,14 +69,14 @@ layout below describe the actual state. Phase 2 is not started.
   (owner: `devops-engineer`). QR codes and links in the admin always use the https form.
 - Custom scheme **`beautycrm://l/{publicCode}`** is registered as a secondary entry point (in-app/dev use, fallback).
   It is not verified by the OS (any app can claim it), so it must carry nothing but the public code.
-- **Web fallback** (app not installed): the Next.js route `/l/[code]` resolves the code via ADR-011 resolve and
+- **Web fallback** (app not installed): the Next.js route `/l/[code]` resolves the code via ADR-022 resolve and
   redirects to the existing web booking flow for that tenant/location. One link works for app and web.
   *State (2026-11-09):* the route is **not present** in `frontend/app/` in this worktree; `apple-app-site-association`
   and `assetlinks.json` are not present either. Not implemented yet.
 - **Mobile link parsing** is implemented in `mobile/src/lib/deeplink.ts` (strict: other domains, `http`, userinfo,
-  ports and extra path segments are rejected; the code is normalized with the ADR-011 rules). Zod is used for API responses,
+  ports and extra path segments are rejected; the code is normalized with the ADR-022 rules). Zod is used for API responses,
   not for link payloads.
-- Link payload is **untrusted input**: validated against the PublicCode format (ADR-011 §1) with `zod` before any
+- Link payload is **untrusted input**: validated against the PublicCode format (ADR-022 §1) with `zod` before any
   request; links never contain appointment tokens, phone numbers, or other PII.
 
 ### 4. Guest model and local data
@@ -174,14 +174,14 @@ location, secure storage, linking, and future push/attestation modules.
 
 ### 3. PWA / web-only (reuse the Next.js flow)
 **Rejected:** user explicitly wants a store app; weaker push on iOS, no App Attest / Play Integrity (needed for
-ADR-011 §5), no reliable QR/deep-link entry from the camera into an installed app.
+ADR-022 §5), no reliable QR/deep-link entry from the camera into an installed app.
 
 ### 4. White-label app per tenant
 **Rejected for MVP:** N store listings, per-tenant signing and review cycles; contradicts "one universal app".
 
 ### 5. Client accounts (login with phone/password or OTP) and server-side "My appointments"
 **Rejected for MVP:** new auth surface and PII store for end-clients; needs an SMS/OTP provider not yet chosen;
-user chose guest + local storage. Revisit together with phone OTP (ADR-011 §5) if cross-device history is required.
+user chose guest + local storage. Revisit together with phone OTP (ADR-022 §5) if cross-device history is required.
 
 ### 6. Copy the booking client into `mobile/` instead of a shared package
 **Rejected:** two diverging copies of the contract client, error codes and idempotency logic.
@@ -197,7 +197,7 @@ This ADR is authoritative for: the mobile stack and its placement (`mobile/`); t
 location-selection precedence; the deep-link URL formats and the rule that links carry only a public code; the
 guest/local-storage data model on the device; the existence, boundaries and rules of `packages/booking-core`;
 the Phase 1 / Phase 2 split. The PublicCode format, the resolve/nearby endpoints, geolocation handling on the
-server, and mobile booking protection are owned by **ADR-011**. Changes require a new ADR.
+server, and mobile booking protection are owned by **ADR-022**. Changes require a new ADR.
 
 ---
 

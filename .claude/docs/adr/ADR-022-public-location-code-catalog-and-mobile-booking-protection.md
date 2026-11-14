@@ -1,4 +1,4 @@
-# ADR-011: Public Location Code, Cross-Tenant Public Catalog over RLS, Geolocation Privacy, Mobile Booking Protection
+# ADR-022: Public Location Code, Cross-Tenant Public Catalog over RLS, Geolocation Privacy, Mobile Booking Protection
 
 **Date:** 2026-11-09
 
@@ -15,13 +15,13 @@ until the security review is done. Known gaps between this text and the code are
 **Deciders:** pending
 
 **Related:** ADR-002 (RLS, FORCE, no BYPASSRLS), ADR-006 (public endpoints, rate limits), ADR-009 (`beauty_locations`,
-deactivation), ADR-010 (mobile client, deep links)
+deactivation), ADR-021 (mobile client, deep links)
 
 ---
 
 ## Context
 
-- ADR-010 needs: (a) a link/QR `https://{domain}/l/{publicCode}` that identifies **one location of one tenant**;
+- ADR-021 needs: (a) a link/QR `https://{domain}/l/{publicCode}` that identifies **one location of one tenant**;
   (b) "nearest location" from the device position when nothing is saved and no link was opened; (c) a manual fallback
   when geolocation is denied (city search or code entry).
 - Today the only public identifier is `tenants.slug`; `beauty_locations` had no public code and no coordinates.
@@ -201,11 +201,11 @@ credential.
 - After resolving, clients use the existing tenant-scoped endpoints with `tenantSlug` — the booking flow stays
   under full RLS exactly as today.
 - The contract is `backend/openapi.json` (generated; contains the three `PublicCatalog` paths) and the hand-written
-  section §19 of `.claude/docs/beauty-contracts.md` (added; endpoint table, error codes, rate-limit classes).
+  section §29 of `.claude/docs/beauty-contracts.md` (added; endpoint table, error codes, rate-limit classes).
 
 ### 5. Geolocation is personal data
 
-- **Client (ADR-010):** permission requested only at the "nearby" step (no deep link and no saved location);
+- **Client (ADR-021):** permission requested only at the "nearby" step (no deep link and no saved location);
   foreground "when in use" only (`expo-location`, `requestForegroundPermissionsAsync`); the position is sent once in the
   nearby request; the chosen `publicCode` is saved, coordinates are not. Denial -> manual city search / code / QR.
   Requirement "one fix at reduced accuracy, rounded to 3 decimals on the device": implemented (see Implementation notes).
@@ -363,12 +363,12 @@ simplification to review or an open task; none of them is silently accepted by t
 - Per-location code retry (§1): implemented. `EfBeautyStore.Locations.cs` retries the whole transaction up to 5 times
   on 23505 for `ux_beauty_locations_public_code`; no migration change. Test:
   `PublicHardeningFollowupTests.public_code_collision_is_retried_up_to_5_attempts`.
-- Web fallback route `/l/[code]` (ADR-010 §3) and `apple-app-site-association` / `assetlinks.json`: still not present
+- Web fallback route `/l/[code]` (ADR-021 §3) and `apple-app-site-association` / `assetlinks.json`: still not present
   in `frontend/` (checked 2026-11-09). `mobile/app/l/[code].tsx` exists, but it is the in-app deep-link handler, not a web
   route. The domain is still a placeholder (`app.beautycrm.example` in `mobile/app.config.ts`).
 - Admin UI (`frontend/`): still no fields for `publicCode`, `latitude`, `longitude`, `city`, `isDiscoverable` (checked
   2026-11-09: no matches in `frontend/`). The API supports them (`POST/PUT /api/beauty/locations`).
-- Contract doc: `.claude/docs/beauty-contracts.md` §19 describes the public catalog (endpoints, error codes, rate-limit
+- Contract doc: `.claude/docs/beauty-contracts.md` §29 describes the public catalog (endpoints, error codes, rate-limit
   classes, rules for nearby/search). `.claude/docs/api.md` also lists the three routes. The machine-readable contract is
   `backend/openapi.json`.
 - Mobile handling of `426 upgrade_required`: implemented. `mobile/src/services.ts` sends `X-Booking-Client` and

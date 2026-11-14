@@ -1,6 +1,6 @@
 # Beauty CRM: локальний запуск (runbook)
 
-Версія 1.1 (2026-11-09; додано роль `beautycrm_catalog`, міграцію ADR-011, ризики збірки через workspaces). Кроки 1–8 виконано вручну на Windows 11 (Git Bash + PowerShell + Docker Desktop) у версії 1.0 (2026-10-08); кроки з ADR-011 (роль каталогу, міграція 11) **не перевірено** на стенді. Redis для локального запуску **не потрібен**: worker читає чергу безпосередньо з PostgreSQL (див. ADR-003).
+Версія 1.1 (2026-11-09; додано роль `beautycrm_catalog`, міграцію ADR-022, ризики збірки через workspaces). Кроки 1–8 виконано вручну на Windows 11 (Git Bash + PowerShell + Docker Desktop) у версії 1.0 (2026-10-08); кроки з ADR-022 (роль каталогу, міграція 11) **не перевірено** на стенді. Redis для локального запуску **не потрібен**: worker читає чергу безпосередньо з PostgreSQL (див. ADR-003).
 
 Потрібно: Docker, .NET SDK 8+ (перевірено на 10.0 з таргетом net8.0), Node.js 22+, `dotnet-ef` (`dotnet tool install -g dotnet-ef`).
 
@@ -17,7 +17,7 @@ docker exec beautycrm psql -U postgres -v ON_ERROR_STOP=1 \
 docker exec beautycrm psql -U postgres -d beautycrm -c "GRANT CONNECT ON DATABASE beautycrm TO beautycrm_app"
 ```
 
-## 1a. Роль публічного каталогу `beautycrm_catalog` (ADR-011)
+## 1a. Роль публічного каталогу `beautycrm_catalog` (ADR-022)
 Міграція `20261109075625_beauty_public_location_catalog` сама створює роль `NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT`,
 якщо її немає, але для цього мігратору потрібен `CREATEROLE`. Локальний стенд з кроку 1 (`beautycrm_owner` без `CREATEROLE`)
 тому роль треба створити заздалегідь суперкористувачем `postgres`:
@@ -70,6 +70,9 @@ docker exec beautycrm psql -U postgres -d beautycrm \
 | `EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_WEB_DOMAIN` | мобільний застосунок, на етапі збірки (`mobile/README.md`) |
 | `WORKER_DATABASE_URL`, `WORKER_TENANT_IDS`, `WORKER_MARKETING_DAILY_LIMIT` | worker |
 | `NEXT_PUBLIC_API_URL`, `API_URL`, `NEXT_PUBLIC_TENANT_SLUG` | frontend (читаються під час **build**) |
+| `APPLE_TEAM_ID`, `IOS_BUNDLE_ID`, `ANDROID_PACKAGE`, `ANDROID_SHA256_CERT_FINGERPRINTS` | frontend runtime: `/.well-known/*` (див. §12a) |
+| `API_INTERNAL_URL` | frontend runtime: server-side URL API для `/l/[code]` (fallback `NEXT_PUBLIC_API_URL`) |
+| `NEXT_PUBLIC_IOS_STORE_URL`, `NEXT_PUBLIC_ANDROID_STORE_URL` | frontend build: кнопки магазинів на лендінгу `/l/{code}` |
 | `NEXT_PUBLIC_USE_MOCK=1`, `NEXT_PUBLIC_MOCK_ROLE` | demo без backend (`owner`/`admin`/`specialist`) |
 
 ## 4. Backend
@@ -206,3 +209,18 @@ cd frontend; npm.cmd test; npx tsc --noEmit; npm.cmd run lint
 - **Образи:** `backend/Dockerfile`, `worker/Dockerfile`, `frontend/Dockerfile` (Next `standalone` вмикається змінною `NEXT_OUTPUT=standalone`; `NEXT_PUBLIC_*` передаються build-arg). Публікація в ghcr.io лише вручну: `.github/workflows/staging-images.yml` (workflow_dispatch; вимагає зелений CI для SHA; тег `sha-<повний SHA>`, деплой за digest; артефакт `migrations-<SHA>` з ідемпотентним SQL).
 - **Проби API:** `GET /healthz` (liveness), `GET /readyz` (`SELECT 1` до БД, 503 без деталей), без автентифікації.
 - **Розгортання** на спільному сервері, ізольований Compose-проєкт `beauty_staging`, порти лише 127.0.0.1, nginx-приклад, бекап, міграції, відкат: `deploy/staging/README.md` (всі кроки на сервері виконує людина; автоматичного CD немає).
+
+## 12a. Універсальні посилання закладу (release-крок)
+- **Потік:** код закладу (`publicCode`) -> `https://beauty.<DOMAIN>/l/{code}`. Якщо застосунок встановлено і домен у ньому
+  прописано (`EXPO_PUBLIC_WEB_DOMAIN`), iOS/Android відкривають його напряму (universal link / App Link). Інакше відкривається
+  веб-лендінг `frontend/app/(public)/l/[code]/page.tsx` з кнопками App Store / Google Play (`NEXT_PUBLIC_*_STORE_URL`).
+- **Звідки взяти значення:** `APPLE_TEAM_ID` — Apple Developer -> Membership details -> Team ID (10 символів). `IOS_BUNDLE_ID` —
+  `mobile/app.config.ts` (за замовч. `com.beautycrm.booking`). `ANDROID_PACKAGE` — там само. `ANDROID_SHA256_CERT_FINGERPRINTS` —
+  Play Console -> Setup -> App signing (SHA-256 сертифіката підпису; додайте й upload-сертифікат, якщо потрібен) або
+  `keytool -list -v -keystore <keystore>`; кілька значень через кому.
+- **Задати:** `$SECRETS_DIR/web.env` (шаблон `deploy/staging/.env.web.example`), далі `$DC up -d web`. nginx-блоки `/l/` і `/.well-known/*`
+  з `auth_basic off` — `deploy/staging/README.md` §6.3.
+- **Без цих змінних** `/.well-known/apple-app-site-association` (немає `APPLE_TEAM_ID`) і `/.well-known/assetlinks.json` (немає
+  `ANDROID_PACKAGE` або відбитків) повертають **404**: universal links не працюють, лендінг продовжує працювати.
+- **Перевірка:** `curl -si https://beauty.<DOMAIN>/.well-known/assetlinks.json` (200, `application/json`, без редиректу і без 401).
+  Apple кешує AASA через CDN, зміни можуть з'являтися не одразу; після зміни переінсталюйте застосунок.

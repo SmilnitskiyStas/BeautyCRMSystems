@@ -26,7 +26,7 @@ B2B-платформа для б'юті-сфери: салони, барберш
 | AI | Anthropic Claude (Messages API), ізольовано в `Infrastructure/AI/Beauty` |
 
 ## Мобільний застосунок
-Мобільний клієнт онлайн-запису (гість, без входу), ADR-010 і ADR-011.
+Мобільний клієнт онлайн-запису (гість, без входу), ADR-021 і ADR-022.
 - **Стек:** Expo SDK 58 (`expo ~58.0.23`), expo-router, React Native 0.88, TypeScript, TanStack Query, Zustand, Zod, i18next. Код у `mobile/`, спільний клієнт API у `packages/booking-core`.
 - **Розміщення:** `mobile/` **не** входить у кореневі npm workspaces; має окремий `mobile/package.json` і встановлюється окремо.
 - **Команди та налаштування:** див. [mobile/README.md](mobile/README.md). Коротко: `cd mobile && npm install`, потім `EXPO_PUBLIC_API_URL=... EXPO_PUBLIC_WEB_DOMAIN=... npx expo start`, `npm run typecheck`, `npm test`.

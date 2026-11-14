@@ -1,6 +1,6 @@
 # @beauty/booking-core
 
-Internal TypeScript-source package shared by `frontend` (Next) and the future `mobile` app (ADR-010 §5).
+Internal TypeScript-source package shared by `frontend` (Next) and the future `mobile` app (ADR-021 §5).
 Not published; consumers transpile it (Next `transpilePackages`, Metro monorepo support).
 
 Rules: no React / Next / React Native / DOM / `process.env`. Configuration is injected

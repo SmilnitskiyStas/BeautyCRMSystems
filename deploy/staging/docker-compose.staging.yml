@@ -73,6 +73,9 @@ services:
     <<: *hardening
     container_name: beauty_staging_web
     image: ${WEB_IMAGE:?set WEB_IMAGE (ghcr.io/OWNER/beautycrm-web@sha256:...)}
+    env_file: # опційно: APPLE_TEAM_ID, ANDROID_* для /.well-known/* (див. .env.web.example)
+      - path: "${SECRETS_DIR}/web.env"
+        required: false
     environment:
       API_URL: "http://api:8080" # серверні виклики Next до API всередині мережі (не секрет)
     depends_on: [api]

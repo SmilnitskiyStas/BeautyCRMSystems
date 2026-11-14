@@ -14,7 +14,7 @@ using static BeautyCrm.Tests.Auth.AuthApiFixture;
 namespace BeautyCrm.Tests.PublicBooking;
 
 /// <summary>
-/// ADR-011: публічний каталог (resolve / nearby / search) і адмін-API закладу (public_code, координати) через повний HTTP-конвеєр
+/// ADR-022: публічний каталог (resolve / nearby / search) і адмін-API закладу (public_code, координати) через повний HTTP-конвеєр
 /// на реальному PostgreSQL (роль без BYPASSRLS, definer-функції). Без БД пропускаються; BEAUTY_TEST_REQUIRE_DB=1 -> помилка.
 /// </summary>
 public sealed class PublicCatalogApiTests : IClassFixture<AuthApiFixture>, IDisposable

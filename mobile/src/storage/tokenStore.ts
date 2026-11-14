@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Локальне сховище гостя (ADR-010 §4, skill offline-storage).
+ * Локальне сховище гостя (ADR-021 §4, skill offline-storage).
  *  - `publicToken` кожного запису: окремий ключ SecureStore `appt-token.{localId}` (bearer-credential);
  *  - індекс записів (без токенів і без телефону): AsyncStorage - для відображення/офлайн-кешу;
  *  - ім'я/телефон: SecureStore;  - остання локація: AsyncStorage (лише код і назва, ніколи координати).

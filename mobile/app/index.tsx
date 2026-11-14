@@ -14,7 +14,7 @@ import { ScanModal } from "@/features/location/ScanModal";
 import { Body, Button, ErrorText, Field, H1, Row, Screen, Spinner } from "@/ui";
 import { space } from "@/theme";
 
-/** Крок 1: заклад. Джерело (ADR-010 §2): збережена -> явний тап nearby (дозвіл лише тут) -> місто/код/QR. Deep link обробляє app/l/[code]. */
+/** Крок 1: заклад. Джерело (ADR-021 §2): збережена -> явний тап nearby (дозвіл лише тут) -> місто/код/QR. Deep link обробляє app/l/[code]. */
 export default function LocationScreen() {
   const { t } = useTranslation();
   const { change } = useLocalSearchParams<{ change?: string }>();

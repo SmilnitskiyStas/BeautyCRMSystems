@@ -10,7 +10,7 @@ import { createBookingSubmitter } from "@/features/booking/submit";
 import { withUpgradeGuard } from "@/lib/upgrade";
 import { useUpgrade } from "@/state/upgrade";
 
-/** ADR-011 §3: мітка клієнта й версія - НЕ автентифікація, а метрики/kill-switch (426). */
+/** ADR-022 §3: мітка клієнта й версія - НЕ автентифікація, а метрики/kill-switch (426). */
 const clientHeaders = {
   "X-Booking-Client": Platform.OS === "ios" ? "ios" : "android",
   "X-App-Version": config.appVersion,

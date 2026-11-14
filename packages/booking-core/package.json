@@ -2,7 +2,7 @@
   "name": "@beauty/booking-core",
   "version": "0.0.0",
   "private": true,
-  "description": "Framework-free booking client core (ADR-010 §5). TypeScript source, never published.",
+  "description": "Framework-free booking client core (ADR-021 §5). TypeScript source, never published.",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

@@ -9,14 +9,14 @@ public sealed class PublicBookingOptions
     /// <summary>Якщо true, POST /appointments вимагає токен CAPTCHA, який має підтвердити <see cref="ICaptchaVerifier"/>.</summary>
     public bool CaptchaRequired { get; set; }
     /// <summary>
-    /// ADR-011: політика перевірки клієнта за міткою <c>X-Booking-Client</c> (web|ios|android). Для web `CaptchaRequired=true`
+    /// ADR-022: політика перевірки клієнта за міткою <c>X-Booking-Client</c> (web|ios|android). Для web `CaptchaRequired=true`
     /// означає enforce. Для ios/android за замовчуванням none (MVP).
     /// </summary>
     public ProtectionMode ProtectionWeb { get; set; } = ProtectionMode.None;
     public ProtectionMode ProtectionIos { get; set; } = ProtectionMode.None;
     public ProtectionMode ProtectionAndroid { get; set; } = ProtectionMode.None;
     /// <summary>
-    /// ADR-011: ліміт онлайн-створень на один заклад за годину (радіус ураження ротації телефонів/IP); персонал не рахується.
+    /// ADR-022: ліміт онлайн-створень на один заклад за годину (радіус ураження ротації телефонів/IP); персонал не рахується.
     /// 0 або менше = вимкнено.
     /// </summary>
     public int MaxPublicCreatesPerLocationPerHour { get; set; } = 60;
@@ -161,7 +161,7 @@ public sealed class RejectAllCaptchaVerifier : ICaptchaVerifier
     public Task<bool> VerifyAsync(string? token, string? remoteIp, CancellationToken ct) => Task.FromResult(false);
 }
 
-// ---------- ADR-011 §6: захист клієнтів замість CAPTCHA-хука ----------
+// ---------- ADR-022 §6: захист клієнтів замість CAPTCHA-хука ----------
 
 /// <summary>Мітка клієнта (X-Booking-Client). Самодекларована: слугує метриці, мінімальній версії й вибору політики.</summary>
 public enum ClientKind { Web, Ios, Android }

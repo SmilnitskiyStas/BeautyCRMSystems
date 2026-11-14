@@ -97,7 +97,7 @@ public static class PhoneNormalizer
 public sealed partial class PublicTenantResolver(IAuthStore store)
 {
     /// <summary>
-    /// Slug-и, що збігаються з першим сегментом інших публічних маршрутів `api/public/{segment}/...` (ADR-011: каталог).
+    /// Slug-и, що збігаються з першим сегментом інших публічних маршрутів `api/public/{segment}/...` (ADR-022: каталог).
     /// Їх не можна створити як tenant (див. PlatformTenantService) і вони завжди дають 404 тут.
     /// </summary>
     public static readonly IReadOnlySet<string> ReservedSlugs = new HashSet<string>(StringComparer.Ordinal) { "resolve", "locations", "integrity" };

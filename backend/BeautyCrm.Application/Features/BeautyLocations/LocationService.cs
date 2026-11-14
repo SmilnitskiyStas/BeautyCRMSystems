@@ -12,8 +12,8 @@ namespace BeautyCrm.Application.Features.BeautyLocations;
 /// <summary>POST/PUT /locations (§16). IsActive: у PUT пропущено = без змін; у POST ігнорується (новий заклад активний).</summary>
 /// <remarks>
 /// Latitude/Longitude (§28.11): JsonElement, щоб відрізнити «поле відсутнє» (Undefined: координати не змінюються) від явного
-/// null (очистити пару) і числа (задати пару). ClearCoordinates=true (ADR-011) — те саме, що пара явних null.
-/// ADR-011: City (пропущено/null = без змін, "" = очистити), IsDiscoverable (пропущено/null = без змін). PublicCode не приймається (незмінний).
+/// null (очистити пару) і числа (задати пару). ClearCoordinates=true (ADR-022) — те саме, що пара явних null.
+/// ADR-022: City (пропущено/null = без змін, "" = очистити), IsDiscoverable (пропущено/null = без змін). PublicCode не приймається (незмінний).
 /// </remarks>
 public sealed record LocationRequest(string? Name, string? Address, string? Phone, string? Timezone, bool? IsActive = null,
     JsonElement Latitude = default, JsonElement Longitude = default, string? City = null, bool? IsDiscoverable = null, bool? ClearCoordinates = null);
@@ -274,7 +274,7 @@ public sealed partial class LocationService(ILocationStore store, TimeProvider c
         var coords = clearCoords ? Result<(bool, decimal?, decimal?)>.Ok((true, null, null)) : ParseCoordinates(req.Latitude, req.Longitude);
         if (!coords.IsOk) return coords.Error!;
         var (provided, lat, lon) = coords.Value;
-        // ADR-011: city до 100 символів ("" = очистити).
+        // ADR-022: city до 100 символів ("" = очистити).
         var city = req.City?.Trim();
         if (city is { Length: > MaxCity } || city?.Any(char.IsControl) == true)
             return Error.Validation("invalid_city", $"City is too long (max {MaxCity}).");

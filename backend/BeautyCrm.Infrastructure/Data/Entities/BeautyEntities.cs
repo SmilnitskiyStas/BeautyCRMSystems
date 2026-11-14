@@ -29,16 +29,16 @@ public class Location : TenantEntity
     /// <summary>Години роботи закладу (TASK-703, §18.1; формат §9, нормалізований JSON). null = не задано, обмеження немає.</summary>
     public string? WorkingHours { get; set; }
     /// <summary>
-    /// ADR-011: публічний код закладу (8 символів Crockford Base32 без I/L/O/U), глобально унікальний, незмінний.
+    /// ADR-022: публічний код закладу (8 символів Crockford Base32 без I/L/O/U), глобально унікальний, незмінний.
     /// Якщо не задано, БД сама генерує значення (DEFAULT beauty_generate_public_code()).
     /// </summary>
     public string PublicCode { get; set; } = null!;
     /// <summary>TASK-836 (ADR-020): координати закладу (дані бізнесу, не ПД); обидва або жодного. Також основа публічного каталогу (ADR-011).</summary>
     public decimal? Latitude { get; set; }
     public decimal? Longitude { get; set; }
-    /// <summary>ADR-011: місто (для пошуку за містом у публічному каталозі).</summary>
+    /// <summary>ADR-022: місто (для пошуку за містом у публічному каталозі).</summary>
     public string? City { get; set; }
-    /// <summary>ADR-011: заклад показується у публічному каталозі (nearby / за містом) лише якщо true (opt-in).</summary>
+    /// <summary>ADR-022: заклад показується у публічному каталозі (nearby / за містом) лише якщо true (opt-in).</summary>
     public bool IsDiscoverable { get; set; }
 }
 

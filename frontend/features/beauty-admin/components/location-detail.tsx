@@ -11,6 +11,7 @@ import type { BeautyLocation, OutsideHoursConflict, WorkingHours } from "../type
 import { defaultHours, normalizeHours, summarizeHours, validateHours, WEEKDAYS } from "../working-hours";
 import { ClosedDaysConflictDialog, ClosedDaysSection } from "./closed-days";
 import { LocationForm } from "./location-form";
+import { LocationInviteLink } from "./location-invite-link";
 import { CheckRow, ERROR_TEXT, ErrorBanner, SuccessBanner, WorkingHoursEditor } from "./staff-parts";
 import { Badge, Card, EmptyState, PrimaryButton, QueryState, SecondaryButton, TextLink } from "./ui";
 
@@ -286,6 +287,7 @@ export function LocationDetailScreen({ id }: { id: string }) {
             </div>
             {!isManager ? <p className="text-sm text-(--muted)">Перегляд: змінювати налаштування закладу можуть власник і адміністратор.</p> : null}
             <BasicSection location={location} canEdit={isManager} />
+            <LocationInviteLink location={location} />
             <HoursSection location={location} canEdit={isManager} />
             <ClosedSection location={location} canEdit={isManager} showReason={canSeeClosureReason(user.role)} />
             <StaffSection location={location} role={user.role} selfId={user.specialistId ?? null} />

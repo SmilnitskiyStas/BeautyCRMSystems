@@ -14,7 +14,7 @@ using Npgsql;
 
 namespace BeautyCrm.Tests.PublicBooking;
 
-/// <summary>Серверні знахідки security-рев'ю ADR-011 (M2, M3, L3, L6, L10); без БД.</summary>
+/// <summary>Серверні знахідки security-рев'ю ADR-022 (M2, M3, L3, L6, L10); без БД.</summary>
 public sealed class PublicHardeningFollowupTests
 {
     // ---------- M2: координати округлюються до виклику store ----------

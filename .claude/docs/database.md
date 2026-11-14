@@ -1,6 +1,6 @@
 # Beauty CRM — Database Schema & RLS
 
-**Current version:** 0.9 (ADR-011 public location catalog, 2026-11-09; TASK-697/698, 2026-10-08)
+**Current version:** 0.9 (ADR-022 public location catalog, 2026-11-09; TASK-697/698, 2026-10-08)
 **Database:** PostgreSQL 16+ (RLS-enabled)
 **ORM:** EF Core 8.0 with Npgsql 8.0.11
 
@@ -37,11 +37,11 @@ created_at      TIMESTAMPTZ NOT NULL
 updated_at      TIMESTAMPTZ NOT NULL
 closed_weekdays TEXT[] (migration 9, weekly closed days mon..sun)
 working_hours   JSONB (migration 10, location working hours)
-public_code     VARCHAR(8) NOT NULL (ADR-011, DEFAULT public.beauty_generate_public_code(), globally unique, immutable)
-latitude        DOUBLE PRECISION NULL (ADR-011, -90..90)
-longitude       DOUBLE PRECISION NULL (ADR-011, -180..180)
-city            VARCHAR(100) NULL (ADR-011, city search only)
-is_discoverable BOOLEAN NOT NULL DEFAULT false (ADR-011, opt-in to nearby and city search)
+public_code     VARCHAR(8) NOT NULL (ADR-022, DEFAULT public.beauty_generate_public_code(), globally unique, immutable)
+latitude        DOUBLE PRECISION NULL (ADR-022, -90..90)
+longitude       DOUBLE PRECISION NULL (ADR-022, -180..180)
+city            VARCHAR(100) NULL (ADR-022, city search only)
+is_discoverable BOOLEAN NOT NULL DEFAULT false (ADR-022, opt-in to nearby and city search)
 
 UNIQUE (tenant_id, name) -- case-insensitive via lower()
 CHECK (char_length(name) >= 1 AND char_length(name) <= 200)
@@ -53,7 +53,7 @@ CHECK ck_beauty_locations_closed_weekdays: closed_weekdays <@ ARRAY['mon',...,'s
 ```
 
 **Indexes:** (tenant_id, id); (tenant_id, is_active);
-`ux_beauty_locations_public_code` UNIQUE (public_code) — **global**, not per tenant (ADR-011);
+`ux_beauty_locations_public_code` UNIQUE (public_code) — **global**, not per tenant (ADR-022);
 `ix_beauty_locations_discoverable_coords` (latitude, longitude) WHERE is_discoverable AND is_active AND latitude IS NOT NULL;
 `ix_beauty_locations_discoverable_city` (lower(city)) WHERE is_discoverable AND is_active AND city IS NOT NULL.
 
@@ -712,7 +712,10 @@ Set `app.tenant_external_ref` with `set_config(..., true)` (transaction-local), 
 
 ---
 
-## 4. Migrations (in order, 11 total)
+## 4. Migrations (24 total in the Migrations directory; 15 described below)
+
+> Примітка: детально описані міграції 1–15 нижче; не описані тут (джерело істини — `backend/BeautyCrm.Infrastructure/Data/Migrations/`): `20261024091314_beauty_ai_settings_and_usage`, `20261024102153_beauty_chat_assistant`, `20261024193048_beauty_reminders_contacts_inbox`, `20261025080340_beauty_chat_buttons`, `20261026091203_beauty_service_costs`, `20261026093343_beauty_client_phone_capture`, `20261026203521_beauty_marketing`, `20261107134706_beauty_chat_booking_flow`, `20261107145615_beauty_chat_booking_flow_step_checks`.
+
 
 ### 1. `20261007115130_add_beauty_schema` (TASK-674)
 
@@ -746,18 +749,6 @@ Adds cancelled_by_user_id, cancelled_at to beauty_specialist_absences. DO-block 
 
 Adds cancelled_by_type, cancelled_by_user_id, cancel_reason to beauty_appointments. CHECK constraints for cancel metadata. FK RESTRICT on users. Backfill: set cancelled_by_type='system' for existing cancelled rows (under NO FORCE, then FORCE again). DO-block verifies FORCE on beauty_appointments, beauty_locations.
 
-> Stale note: this section lists only migrations 1-8; later migrations (through `20261026203521_beauty_marketing`) are not described here. Source of truth is `backend/BeautyCrm.Infrastructure/Data/Migrations/` (separate doc task).
-
-### `20261104182836_platform_control_plane` (TASK-816, ADR-018)
-
-- `tenants`: `external_ref varchar(64) NULL`, `external_source varchar(16) NULL` ('shelfguard'), `suspended_at`, `suspended_reason varchar(500)`. Partial `UNIQUE (external_source, external_ref) WHERE external_ref IS NOT NULL` (`ux_tenants_external_ref`). CHECK: ref format `^[A-Za-z0-9_-]{1,64}$`, source in ('shelfguard'), ref and source set together, `suspended_*` only while `status = 'suspended'`. Policy `tenants_control_lookup` (see section 3).
-- `users`: `password_hash` is NULL-able; new `state` ('active' default | 'invited'); CHECK `password_hash IS NOT NULL OR state = 'invited'`. Login for a user without a hash must be rejected (done in `AuthService`).
-- `platform_owner_invites` (platform table, no tenant RLS): `token_hash bytea` (sha256, 32 bytes, UNIQUE), composite FK `(tenant_id, user_id)` -> users, partial unique "one active invite per user" (`ux_platform_owner_invites_active_user`).
-- `platform_audit_log` (platform table, no tenant RLS, no FK on `tenant_id`): append-only by trigger (UPDATE/DELETE/TRUNCATE -> 42501) and by `REVOKE UPDATE, DELETE` for `beautycrm_app`. `details` must be a JSON object without secrets/tokens/passwords/message text.
-- `control_plane_nonces` (platform table): PK `(key_id, nonce)`, index on `seen_at` for the worker cleanup (> 15 min).
-- `beauty_platform_feedback` (tenant table, ENABLE + FORCE `tenant_isolation`): doubles as the delivery queue (`delivery_status`, `attempts`, `next_attempt_at`, `last_error`, `delivered_at`, `external_lead_id`). There is no generic outbox table in this schema.
-- GRANTs (`deploy/staging/db/grants.sql` and `scripts/dev/setup-db.ps1`): app `REVOKE UPDATE, DELETE ON platform_audit_log`; worker `SELECT, UPDATE` on feedback, `SELECT, DELETE` on nonces, column-level `SELECT (id, tenant_id, email, full_name, role)` on users (no `password_hash`).
-- Down is a human gate: it refuses (RAISE) while any user has `state = 'invited'` / NULL hash, and it drops the audit log, invites, nonces, feedback and the `external_ref` link.
 ### 9. `20261010130434_beauty_location_closures` (TASK-701)
 
 Adds beauty_locations.closed_weekdays (TEXT[], CHECK on weekday codes). Creates beauty_location_closures (date-range closures per location) with FKs and indexes.
@@ -766,11 +757,11 @@ Adds beauty_locations.closed_weekdays (TEXT[], CHECK on weekday codes). Creates 
 
 Adds beauty_locations.working_hours (JSONB).
 
-### 11. `20261109075625_beauty_public_location_catalog` (ADR-011)
+### 11. `20261109075625_beauty_public_location_catalog` (ADR-022)
 
 Adds beauty_locations.public_code (backfilled by `public.beauty_generate_public_code()`), city, is_discoverable; unique index `ux_beauty_locations_public_code`; CHECK `ck_beauty_locations_public_code`. Columns `latitude`/`longitude` (`numeric(9,6)`) and CHECK `ck_beauty_locations_coordinates` already come from `20261107134706_beauty_chat_booking_flow` (agent-system-v2) and are NOT re-created here; partial indexes for nearby and city search. Creates role `beautycrm_catalog` if missing, column grants, `public_catalog_read` policies, and the three SECURITY DEFINER functions (§5). Down drops functions, policies, indexes and checks; the cluster role is kept.
 
-### 12. `beauty_specialist_profile_reviews` (мобільний потік «послуга → майстер → дата → час»)
+### 12. `20261109135452_beauty_specialist_profile_reviews` (мобільний потік «послуга → майстер → дата → час»)
 
 Adds beauty_specialists.practice_start_year, bio (+ CHECKs). Creates beauty_specialist_reviews (§ вище) with RLS ENABLE+FORCE, `tenant_isolation`, guarded `GRANT SELECT, INSERT, UPDATE, DELETE ... TO beautycrm_app` (лише якщо роль існує) і DO-блоком, що падає, якщо FORCE RLS не ввімкнено. Down робить DROP TABLE відгуків і прибирає колонки/CHECK-и майстра. Покрито `SpecialistReviewsMigrationTests` (Up/Down/Up, RLS, унікальність запису, CHECK-и).
 
@@ -781,6 +772,17 @@ Adds beauty_specialists.practice_start_year, bio (+ CHECKs). Creates beauty_spec
 ### 14. `20261110090000_beauty_cancellation_terms_visibility` (написана вручну)
 
 `beauty_cancellation_settings` + `show_terms_to_client boolean NOT NULL DEFAULT true`, `custom_terms_text text NULL`, CHECK `ck_beauty_cancellation_settings_terms_text` (≤ 500). `ADD COLUMN IF NOT EXISTS`; наявні рядки = true/NULL. Down видаляє CHECK і колонки. Покрито `CancellationTermsMigrationTests`.
+
+### 15. `20261104182836_platform_control_plane` (TASK-816, ADR-018; за часом застосування стоїть між marketing і chat_booking_flow)
+
+- `tenants`: `external_ref varchar(64) NULL`, `external_source varchar(16) NULL` ('shelfguard'), `suspended_at`, `suspended_reason varchar(500)`. Partial `UNIQUE (external_source, external_ref) WHERE external_ref IS NOT NULL` (`ux_tenants_external_ref`). CHECK: ref format `^[A-Za-z0-9_-]{1,64}$`, source in ('shelfguard'), ref and source set together, `suspended_*` only while `status = 'suspended'`. Policy `tenants_control_lookup` (see section 3).
+- `users`: `password_hash` is NULL-able; new `state` ('active' default | 'invited'); CHECK `password_hash IS NOT NULL OR state = 'invited'`. Login for a user without a hash must be rejected (done in `AuthService`).
+- `platform_owner_invites` (platform table, no tenant RLS): `token_hash bytea` (sha256, 32 bytes, UNIQUE), composite FK `(tenant_id, user_id)` -> users, partial unique "one active invite per user" (`ux_platform_owner_invites_active_user`).
+- `platform_audit_log` (platform table, no tenant RLS, no FK on `tenant_id`): append-only by trigger (UPDATE/DELETE/TRUNCATE -> 42501) and by `REVOKE UPDATE, DELETE` for `beautycrm_app`. `details` must be a JSON object without secrets/tokens/passwords/message text.
+- `control_plane_nonces` (platform table): PK `(key_id, nonce)`, index on `seen_at` for the worker cleanup (> 15 min).
+- `beauty_platform_feedback` (tenant table, ENABLE + FORCE `tenant_isolation`): doubles as the delivery queue (`delivery_status`, `attempts`, `next_attempt_at`, `last_error`, `delivered_at`, `external_lead_id`). There is no generic outbox table in this schema.
+- GRANTs (`deploy/staging/db/grants.sql` and `scripts/dev/setup-db.ps1`): app `REVOKE UPDATE, DELETE ON platform_audit_log`; worker `SELECT, UPDATE` on feedback, `SELECT, DELETE` on nonces, column-level `SELECT (id, tenant_id, email, full_name, role)` on users (no `password_hash`).
+- Down is a human gate: it refuses (RAISE) while any user has `state = 'invited'` / NULL hash, and it drops the audit log, invites, nonces, feedback and the `external_ref` link.
 
 ---
 
@@ -814,7 +816,7 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO beautycrm_app;
 
 **Runtime check (TASK-689, H1):** API `DbRoleGuard` queries `pg_roles` on startup, fails if runtime role has `rolsuper` or `rolbypassrls` (except Development + `Beauty__AllowPrivilegedDbRole=true`).
 
-### Public catalog role `beautycrm_catalog` (ADR-011, migration `20261109075625_beauty_public_location_catalog`)
+### Public catalog role `beautycrm_catalog` (ADR-022, migration `20261109075625_beauty_public_location_catalog`)
 - Functions (signatures as in the migration; output columns: `public_code, tenant_slug, location_id, name, address, city, timezone` plus `distance_km` for nearby):
   `beauty_public_resolve_location(p_code text)`, `beauty_public_nearby_locations(p_lat, p_lng, p_radius_km, p_limit)`,
   `beauty_public_search_locations_by_city(p_city text, p_limit integer)`.

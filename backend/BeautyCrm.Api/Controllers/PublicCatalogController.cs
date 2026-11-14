@@ -8,7 +8,7 @@ using Microsoft.AspNetCore.RateLimiting;
 namespace BeautyCrm.Api.Controllers;
 
 /// <summary>
-/// ADR-011: ПУБЛІЧНИЙ каталог закладів (cross-tenant), без JWT і без {tenantSlug}. Явний виняток із "автентифікація за замовчуванням".
+/// ADR-022: ПУБЛІЧНИЙ каталог закладів (cross-tenant), без JWT і без {tenantSlug}. Явний виняток із "автентифікація за замовчуванням".
 /// Читає лише через SECURITY DEFINER-функції БД; відповіді не містять tenant_id/телефонів. Маршрути `resolve` і `locations`
 /// зарезервовані як slug-и tenant-ів, тож не конфліктують з api/public/{tenantSlug}/...
 /// Координати nearby і місто search: лише в тілі POST, не логуються й не зберігаються; no-store.

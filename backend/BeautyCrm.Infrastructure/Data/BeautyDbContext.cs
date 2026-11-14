@@ -130,14 +130,14 @@ public class BeautyDbContext : DbContext
                 // TASK-836 (ADR-020 §2.4): координати - обидва або жодного, в межах діапазонів
                 t.HasCheckConstraint("ck_beauty_locations_coordinates",
                     "(latitude IS NULL) = (longitude IS NULL) AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180");
-                // ADR-011
+                // ADR-022
                 t.HasCheckConstraint("ck_beauty_locations_public_code", "public_code ~ '^[0-9A-HJKMNP-TV-Z]{8}$'");
             });
             b.Property(x => x.Latitude).HasPrecision(9, 6);
             b.Property(x => x.Longitude).HasPrecision(9, 6);
             b.Property(x => x.PublicCode).HasMaxLength(8).IsRequired()
                 .HasDefaultValueSql("public.beauty_generate_public_code()");
-            b.Property(x => x.PublicCode).Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore); // незмінний (ADR-011 §1)
+            b.Property(x => x.PublicCode).Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore); // незмінний (ADR-022 §1)
             b.HasIndex(x => x.PublicCode).IsUnique().HasDatabaseName("ux_beauty_locations_public_code");
             b.Property(x => x.City).HasMaxLength(100);
             b.Property(x => x.IsDiscoverable).HasDefaultValue(false);

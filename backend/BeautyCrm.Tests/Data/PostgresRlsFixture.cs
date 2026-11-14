@@ -75,7 +75,7 @@ public sealed class PostgresRlsFixture : IAsyncLifetime
             await Exec(admin, $"GRANT CONNECT ON DATABASE {DatabaseName} TO {AppRole}");
             await Exec(admin, $"GRANT USAGE ON SCHEMA public TO {AppRole}");
             await Exec(admin, $"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {AppRole}");
-            // ADR-011: the migration grants EXECUTE only to `beautycrm_app`; the test role has another name (ops step in prod).
+            // ADR-022: the migration grants EXECUTE only to `beautycrm_app`; the test role has another name (ops step in prod).
             await Exec(admin, $"GRANT EXECUTE ON FUNCTION public.beauty_public_resolve_location(text) TO {AppRole}");
             await Exec(admin, $"GRANT EXECUTE ON FUNCTION public.beauty_public_nearby_locations(double precision, double precision, double precision, integer) TO {AppRole}");
             await Exec(admin, $"GRANT EXECUTE ON FUNCTION public.beauty_public_search_locations_by_city(text, integer) TO {AppRole}");

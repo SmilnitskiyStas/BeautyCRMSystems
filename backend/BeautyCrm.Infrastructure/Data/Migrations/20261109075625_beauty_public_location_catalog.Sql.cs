@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace BeautyCrm.Infrastructure.Data.Migrations
 {
-    // Hand-written part of beauty_public_location_catalog (ADR-011): things EF does not generate.
+    // Hand-written part of beauty_public_location_catalog (ADR-022): things EF does not generate.
     // Frozen together with the migration - add a new migration instead of editing after it was applied.
     //
     // PROVISIONING NOTE (prod): the migration creates the NOLOGIN role `beautycrm_catalog` if it is missing
@@ -65,7 +65,7 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
 
                     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'beautycrm_catalog'
                                AND (rolcanlogin OR rolsuper OR rolbypassrls)) THEN
-                        RAISE EXCEPTION 'Role beautycrm_catalog must be NOLOGIN NOSUPERUSER NOBYPASSRLS (ADR-011)';
+                        RAISE EXCEPTION 'Role beautycrm_catalog must be NOLOGIN NOSUPERUSER NOBYPASSRLS (ADR-022)';
                     END IF;
 
                     -- The migrator must be able to hand ownership of the functions to the role (needs the SET option,
@@ -204,7 +204,7 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         GRANT EXECUTE ON FUNCTION public.beauty_public_nearby_locations(double precision, double precision, double precision, integer) TO beautycrm_app;
                         GRANT EXECUTE ON FUNCTION public.beauty_public_search_locations_by_city(text, integer) TO beautycrm_app;
                     ELSE
-                        RAISE NOTICE 'Role beautycrm_app not found: GRANT EXECUTE on beauty_public_* functions to the runtime role manually (ADR-011).';
+                        RAISE NOTICE 'Role beautycrm_app not found: GRANT EXECUTE on beauty_public_* functions to the runtime role manually (ADR-022).';
                     END IF;
                 END
                 $do$;

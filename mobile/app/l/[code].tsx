@@ -11,7 +11,7 @@ import { Body, Button, ErrorText, H1, Screen, Spinner } from "@/ui";
 
 /**
  * Deep link `beautycrm://l/{code}` і `https://{domain}/l/{code}` (expo-router мапить обидва на цей маршрут).
- * Параметр - недовірений: нормалізація+перевірка формату до запиту; успіх -> нова збережена локація (ADR-010 §2.1).
+ * Параметр - недовірений: нормалізація+перевірка формату до запиту; успіх -> нова збережена локація (ADR-021 §2.1).
  */
 export default function DeepLinkLocation() {
   const { t } = useTranslation();

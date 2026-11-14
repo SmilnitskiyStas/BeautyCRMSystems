@@ -21,9 +21,9 @@ public static class PublicRateLimit
     public const string Token = "public-token";
     /// <summary>POST створення/скасування (найсуворіше).</summary>
     public const string Write = "public-write";
-    /// <summary>POST /locations/nearby (ADR-011): координати, захист від сканування сіткою.</summary>
+    /// <summary>POST /locations/nearby (ADR-022): координати, захист від сканування сіткою.</summary>
     public const string Nearby = "public-nearby";
-    /// <summary>POST /locations/search, тіло {city} (ADR-011).</summary>
+    /// <summary>POST /locations/search, тіло {city} (ADR-022).</summary>
     public const string Search = "public-search";
 
     /// <summary>
@@ -42,7 +42,7 @@ public static class PublicRateLimit
 }
 
 /// <summary>
-/// ADR-011 §6: самодекларовані мітки клієнта. НЕ автентифікація (будь-що з бінарника витягується): використовуються для метрик,
+/// ADR-022 §6: самодекларовані мітки клієнта. НЕ автентифікація (будь-що з бінарника витягується): використовуються для метрик,
 /// вибору політики захисту й kill switch застарілих версій. Заголовки: X-Booking-Client: web|ios|android; X-App-Version: 1.2.3.
 /// </summary>
 public static class PublicClientInfo
@@ -131,7 +131,7 @@ public static class PublicBookingSetup
     /// Конфіг: PublicBooking:RateLimit:{ReadPermit=120,TokenPermit=30,WritePermit=10,WindowSeconds=60},
     /// PublicBooking:CaptchaRequired, PublicBooking:MaxActiveBookingsPerPhone, PublicBooking:MaxDaysAhead,
     /// PublicBooking:AllowWeakerClientPaths (дозвіл на різні режими Web/Ios/Android; інакше Production падає, Development попереджає).
-    /// ADR-011: RateLimit:{NearbyPermit=10,SearchPermit=20}, MaxPublicCreatesPerLocationPerHour=60 (0 = вимкнено),
+    /// ADR-022: RateLimit:{NearbyPermit=10,SearchPermit=20}, MaxPublicCreatesPerLocationPerHour=60 (0 = вимкнено),
     /// Protection:{Web|Ios|Android}=none|monitor|enforce, MinAppVersion:{Ios|Android}=1.2.3.
     /// </summary>
     public static IServiceCollection AddBeautyPublicBookingApi(this IServiceCollection services, IConfiguration config, IHostEnvironment? env = null)
@@ -155,7 +155,7 @@ public static class PublicBookingSetup
         services.AddBeautyChatBookingApplication(new ChatBookingOptions { ProposalTtlMinutes = config.GetValue("ChatAssistant:ProposalTtlMinutes", 15) })
             .AddBeautyChatBookingData();
 
-        // M3: найслабший прийнятий шлях визначає захист усього API (ADR-011 §6) — на старті це або явно дозволено, або помилка/попередження.
+        // M3: найслабший прийнятий шлях визначає захист усього API (ADR-022 §6) — на старті це або явно дозволено, або помилка/попередження.
         var allowWeaker = config.GetValue("PublicBooking:AllowWeakerClientPaths", false);
         var weakPaths = DescribeWeakerClientPaths(options);
         if (weakPaths is not null && !allowWeaker)

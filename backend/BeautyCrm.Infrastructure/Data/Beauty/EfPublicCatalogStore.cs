@@ -5,7 +5,7 @@ using Npgsql;
 namespace BeautyCrm.Infrastructure.Data.Beauty;
 
 /// <summary>
-/// ADR-011: єдиний шлях cross-tenant публічного читання — SECURITY DEFINER-функції beauty_public_* (роль beautycrm_catalog,
+/// ADR-022: єдиний шлях cross-tenant публічного читання — SECURITY DEFINER-функції beauty_public_* (роль beautycrm_catalog,
 /// фіксований набір колонок). Окреме підключення без tenant-контексту: runtime-роль без app.tenant_id не бачить жодного
 /// рядка таблиць напряму. Координати — лише параметри запиту: не логуються (логування тут немає), не зберігаються.
 /// </summary>

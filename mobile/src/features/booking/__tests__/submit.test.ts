@@ -151,7 +151,7 @@ describe("pending idempotency key survives restarts", () => {
     const store = sharedStore();
     let seen: unknown = null;
     const create = jest.fn(async () => {
-      seen = await store.getPendingKey();
+      seen = await store.getPendingKey(new Date("2026-11-09T10:00:00Z").getTime());
       return result();
     });
     await make(store, create, "aaaaaaaa").submit("salon-a", req(), names);

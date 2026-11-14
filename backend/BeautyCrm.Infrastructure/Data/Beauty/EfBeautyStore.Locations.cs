@@ -19,7 +19,7 @@ public sealed partial class EfBeautyStore
     private const string PublicCodeIndex = "ux_beauty_locations_public_code";
 
     /// <summary>
-    /// ADR-011 §1: public_code видає DB default; колізія (23505 на ux_beauty_locations_public_code) дуже малоймовірна, але інакше INSERT падав би 500.
+    /// ADR-022 §1: public_code видає DB default; колізія (23505 на ux_beauty_locations_public_code) дуже малоймовірна, але інакше INSERT падав би 500.
     /// Повторюємо всю транзакцію (після помилки Postgres вона перервана) до <see cref="MaxPublicCodeAttempts"/> разів; інші помилки не ковтаються.
     /// </summary>
     public static async Task<T> RetryOnPublicCodeCollisionAsync<T>(Func<int, Task<T>> attempt, Action? onRetry = null)
@@ -77,7 +77,7 @@ public sealed partial class EfBeautyStore
         l.Timezone = change.Timezone;
         if (change.IsActive is { } active) l.IsActive = active;
         if (change.CoordinatesProvided) { l.Latitude = change.Latitude; l.Longitude = change.Longitude; } // §28.11: відсутні в PUT = без змін
-        // ADR-011: пропущено = без змін (форма без цих полів не затирає каталог); PublicCode не змінюється ніколи.
+        // ADR-022: пропущено = без змін (форма без цих полів не затирає каталог); PublicCode не змінюється ніколи.
         if (change.ClearCity) l.City = null; else if (change.City is not null) l.City = change.City;
         if (change.IsDiscoverable is { } disc) l.IsDiscoverable = disc;
         await db.SaveChangesAsync(ct);

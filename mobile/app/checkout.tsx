@@ -14,7 +14,7 @@ import { cancellationLines, formatWhen } from "@/lib/format";
 import { Body, Button, ErrorText, Field, H1, Label, Screen } from "@/ui";
 import { colors, fonts, radius, space, TOUCH } from "@/theme";
 
-/** Крок 4: ім'я/телефон + підтвердження. Оплата лише в закладі (cash, ADR-010 §6). */
+/** Крок 4: ім'я/телефон + підтвердження. Оплата лише в закладі (cash, ADR-021 §6). */
 export default function CheckoutScreen() {
   const { t } = useTranslation();
   const router = useRouter();

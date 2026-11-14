@@ -48,7 +48,7 @@ export async function processReminder(deps: BeautyDeps, data: ReminderJobData): 
 // TASK-742 (§22.5): DB-driven reminder rows (offset_minutes / planned_starts_at), venue-local text, quiet hours, Telegram address.
 
 import type { DueReminder, PgPollStore, ReminderCloseStatus } from "../adapters/pg-poll-store";
-import { buildReminderText, isQuiet, nextQuietEnd } from "./reminder-time";
+import { buildEmailReminderText, buildReminderText, isQuiet, nextQuietEnd } from "./reminder-time";
 
 export const DEFAULT_MIN_LEAD_MINUTES = 15;
 const MIN_GAP_MS = 60 * 60_000; // §22.4: a shifted point must still be >= 60 min before the visit
@@ -107,11 +107,12 @@ export async function processDueReminder(
   if (ctx.preferenceMethod === "none") return close("stopped", ctx.startsAt);
   // 6. address: Telegram conversation of the client in an active channel
   // Месенджер має пріоритет; без нього — email клієнта (мобільний застосунок, канал `email`).
-  const conversationId = (await store.findTelegramConversation(ctx.clientId, ctx.preferenceConversationId))
-    ?? (await store.findEmailConversation(ctx.clientId, now));
+  const telegramConversationId = await store.findTelegramConversation(ctx.clientId, ctx.preferenceConversationId);
+  const conversationId = telegramConversationId ?? (await store.findEmailConversation(ctx.clientId, now));
   if (!conversationId) return close("no_channel", ctx.startsAt);
 
-  const text = buildReminderText({
+  // Email-розмова (без месенджера): окремий текст без «напишіть сюди» / «Стоп»; Telegram-текст не змінюється.
+  const text = (telegramConversationId ? buildReminderText : buildEmailReminderText)({
     service: ctx.service, startsAt: ctx.startsAt, timeZone: ctx.timeZone, locationName: ctx.locationName,
     locationAddress: ctx.locationAddress, legacyOption: legacy ? r.offset : null,
   });

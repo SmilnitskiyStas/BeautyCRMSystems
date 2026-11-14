@@ -66,7 +66,7 @@ public sealed class DbRoleGuard(IConfiguration config, IHostEnvironment env, ILo
 
     public const string CatalogRole = "beautycrm_catalog";
 
-    /// <summary>Exact set of public catalog definer functions (a new one needs a reviewed change here + ADR-011).</summary>
+    /// <summary>Exact set of public catalog definer functions (a new one needs a reviewed change here + ADR-022).</summary>
     private static readonly HashSet<string> ExpectedFunctions =
     [
         "beauty_public_resolve_location",
@@ -75,7 +75,7 @@ public sealed class DbRoleGuard(IConfiguration config, IHostEnvironment env, ILo
     ];
 
     /// <summary>
-    /// ADR-011: інваріанти публічного каталогу. Якщо роль <c>beautycrm_catalog</c> існує, вона має бути NOLOGIN,
+    /// ADR-022: інваріанти публічного каталогу. Якщо роль <c>beautycrm_catalog</c> існує, вона має бути NOLOGIN,
     /// не superuser, не BYPASSRLS, NOINHERIT, без власних членств; runtime-роль не є її членом (немає шляху <c>SET ROLE</c>);
     /// жоден член не має INHERIT (політики <c>TO beautycrm_catalog</c> діють на всіх, хто успадковує її права); точний набір
     /// функцій <c>beauty_public_*</c> належить їй, SECURITY DEFINER, фіксований search_path, не виконуються для PUBLIC. Роль відсутня (міграція ще не застосована)
@@ -151,7 +151,7 @@ public sealed class DbRoleGuard(IConfiguration config, IHostEnvironment env, ILo
             problems.Add($"function {missing} is missing");
 
         if (problems.Count > 0)
-            throw new InvalidOperationException("Public catalog role invariants violated (ADR-011): " + string.Join("; ", problems) + ".");
+            throw new InvalidOperationException("Public catalog role invariants violated (ADR-022): " + string.Join("; ", problems) + ".");
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;

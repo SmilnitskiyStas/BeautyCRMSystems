@@ -160,7 +160,7 @@ public interface IPaymentService {
 - Rate limit за IP (fixed window `PublicBooking:RateLimit:WindowSeconds`=60): читання каталогу/слотів 120, перегляд за токеном 30, POST create/cancel 10 (ключі `ReadPermit|TokenPermit|WritePermit`); перевищення -> `429 rate_limited`. За reverse proxy потрібні ForwardedHeaders із довіреними проксі.
 - PII не логується (код публічного потоку нічого не логує); slug і токен у шляху — Kestrel/hosting не логує шлях на рівні Warning (`Microsoft.AspNetCore: Warning`); reverse proxy/access-логи треба налаштувати так, щоб не зберігати шлях `/appointments/{token}`.
 - Схема (міграція `beauty_public_booking`, лише AddColumn/CreateIndex): `beauty_appointments.public_token_hash`, `idempotency_key_hash`, `idempotency_request_hash` (varchar(64), nullable) + partial unique-індекси `ux_beauty_appointments_public_token`, `ux_beauty_appointments_idempotency` на `(tenant_id, hash)`. Нових таблиць і GRANT-ів не потрібно.
-- **Каталог закладів (ADR-011, v0.20).** Cross-tenant маршрути `GET /api/public/resolve/{publicCode}`, `POST /api/public/locations/nearby`, `POST /api/public/locations/search` (без `{tenantSlug}`, без JWT) описані в §19. Мітки клієнта `X-Booking-Client` / `X-App-Version`, захист (`PublicBooking:Protection:*`), 426 `upgrade_required` і per-location ліміт створення діють на цьому публічному API (деталі — §19.4–§19.6). Зарезервовані slug-и: `resolve`, `locations` (§19.9).
+- **Каталог закладів (ADR-022, v0.20).** Cross-tenant маршрути `GET /api/public/resolve/{publicCode}`, `POST /api/public/locations/nearby`, `POST /api/public/locations/search` (без `{tenantSlug}`, без JWT) описані в §29. Мітки клієнта `X-Booking-Client` / `X-App-Version`, захист (`PublicBooking:Protection:*`), 426 `upgrade_required` і per-location ліміт створення діють на цьому публічному API (деталі — §29.4–§29.6). Зарезервовані slug-и: `resolve`, `locations` (§29.9).
 
 ## 13. Керування працівниками (TASK-691 backend, TASK-692 frontend)
 Рішення користувача: (1) адмін створює профіль працівника, запрошення на вхід необов'язкове; (2) відсутність блокує нові слоти, наявні записи не чіпаємо автоматично, адмін бачить список конфліктів і сам переносить/скасовує (дані зараз демо, міграції можуть їх змінювати); (3) усі працівники бачать ТИП відсутності, текст примітки бачать лише owner/admin та автор; (4) працівник може створити ЗАПИТ на власну відсутність, адмін підтверджує.
@@ -3813,8 +3813,8 @@ TASK-817 (схема HMAC, вектор), TASK-818 (§27.3–§27.5, §27.7), TA
 - **V1** (за `ChatFlow:Enabled`): §28.1–§28.14. **Пізніше:** «Будь-який спеціаліст» (Q3), ціна на кнопці майстра (Q2, після ADR-017), потік у `suggest` (Q1), «Продовжити» після таймауту (Q5), потік в Instagram.
 - Споживачі: TASK-836 (§28.10), TASK-837 (§28.5 regex, §28.9 парсер і пам'ять), TASK-838 (§28.3, §28.4, §28.8), TASK-839 (§28.11 API), TASK-840 (§28.6, §28.7, §28.9 обробка, §28.12), TASK-841 (повторна відправка `requestLocation`, нові `kind`), TASK-842 (§28.11 frontend), TASK-843 (§28.15), TASK-844 (§28.14, §28.9), TASK-845 (runbook §28.2, GRANT, відкат).
 
-## §29. Публічний каталог закладів і захист мобільних клієнтів (ADR-011) — (гілка mobile, інтегровано поверх §28)
-Адитивний розділ: §3–§18 не змінено. Рішення — `.claude/docs/adr/ADR-011-public-location-code-catalog-and-mobile-booking-protection.md`. Помилка = `{ "code", "message" }`; camel-case JSON.
+## §29. Публічний каталог закладів і захист мобільних клієнтів (ADR-022) — (гілка mobile, інтегровано поверх §28)
+Адитивний розділ: §3–§18 не змінено. Рішення — `.claude/docs/adr/ADR-022-public-location-code-catalog-and-mobile-booking-protection.md`. Помилка = `{ "code", "message" }`; camel-case JSON.
 
 ### 29.1 Маршрути каталогу
 Контролер `PublicCatalogController`, база `/api/public`, `[AllowAnonymous]` (без JWT, без `{tenantSlug}`). Дані читаються лише через SECURITY DEFINER-функції БД `beauty_public_*`. Відповіді мають `Cache-Control: no-store` і `Referrer-Policy: no-referrer`.
@@ -3884,7 +3884,7 @@ TASK-817 (схема HMAC, вектор), TASK-818 (§27.3–§27.5, §27.7), TA
 
 **Чекліст деплою (обов'язково):** за reverse proxy / CDN / балансувальником **потрібно** задати `Beauty:TrustedProxies` (IP або CIDR проксі, §14). Без цього `RemoteIpAddress` = адреса проксі, і всі клієнти ділять один ліміт (DoS для легітимних), а недовірений `X-Forwarded-For` ігнорується. Перевірити після деплою: два запити з різних клієнтів дають різні ключі (див. логи/метрики), а спуфлений `X-Forwarded-For` від не-проксі не змінює ключ.
 
-### 29.8 Адмін-API закладу: геополя (ADR-011)
+### 29.8 Адмін-API закладу: геополя (ADR-022)
 Ті самі `POST /api/beauty/locations` і `PUT /api/beauty/locations/{id}` (§16), доступ owner/admin; specialist → `403 forbidden_role`; чужий заклад → `404 location_not_found`.
 - `latitude` + `longitude` — лише разом; діапазони −90..90 і −180..180, скінченні. Порушення → `422 invalid_coordinates`. Колонки/семантика — як у §28.11 (`numeric(9,6)`, округлення до 6 знаків): обидва поля відсутні = без змін, обидва явні `null` = очистити, обидва числа = задати.
 - `clearCoordinates: true` — очищує координати; без `lat`/`lng` у тому самому запиті (інакше `422 invalid_coordinates`).
@@ -3896,6 +3896,9 @@ TASK-817 (схема HMAC, вектор), TASK-818 (§27.3–§27.5, §27.7), TA
 
 ### 29.9 Зарезервовані slug-и
 `resolve`, `locations` та `integrity` (`PublicTokens.ReservedSlugs`) не можна використати як slug tenant-а: `POST /api/platform/tenants` → `422 slug_reserved` (регістр не важливий). Перевірка також є в `UserAdminService`. Міграції й seed tenant-ів із такими slug не створюють (тест `reserved_slugs_cannot_be_created_and_do_not_shadow_catalog_routes` перевіряє, що в `tenants` їх немає). Причина: `/api/public/resolve/...` і `/api/public/locations/...` не повинні конфліктувати з `/api/public/{tenantSlug}/...`.
+
+### 29.9a Посилання-запрошення закладу
+`https://<host>/l/{publicCode}` (web, `frontend/app/(public)/l/[code]/page.tsx`) резолвить код через `GET /api/public/resolve/{publicCode}` (server-side, `API_INTERNAL_URL`). Якщо застосунок встановлено, universal link / App Link відкриває його (AASA `/l/*`, `assetlinks.json` віддає web з env, без env 404); інакше лендінг із кнопками магазинів. Деталі й release-крок: `runbook.md` §12a.
 
 ### 29.10 OpenAPI-документ
 - Файл `backend/openapi.json` (OpenAPI 3.0.1). Містить `/api/public/resolve/{publicCode}`, `POST /api/public/locations/nearby`, `POST /api/public/locations/search`.
