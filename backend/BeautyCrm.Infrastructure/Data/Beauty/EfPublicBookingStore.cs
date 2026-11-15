@@ -52,7 +52,19 @@ public sealed class EfPublicBookingStore(BeautyDbContext db) : IPublicBookingSto
         return rows.Where(r => SlotCalculator.HasWorkingHours(r.WorkingHours)).Select(r => r.SpecialistId).Distinct().ToList();
     }
 
-    public async Task<IReadOnlyList<PublicSpecialistDto>> ListSpecialistsAsync(Guid locationId, Guid? serviceId, CancellationToken ct)
+    public async Task<PublicReviewsPage?> ListReviewsAsync(Guid specialistId, int limit, int offset, CancellationToken ct)
+    {
+        // RLS обмежує tenant-ом; неіснуючий, чужий або неактивний майстер -> null (404).
+        if (!await db.Specialists.AsNoTracking().AnyAsync(s => s.Id == specialistId && s.IsActive, ct)) return null;
+        var q = db.SpecialistReviews.AsNoTracking().Where(r => r.SpecialistId == specialistId && r.IsPublished);
+        var total = await q.CountAsync(ct);
+        // Проєкція лише публічних полів: client_id/appointment_id у відповідь не потрапляють.
+        var items = await q.OrderByDescending(r => r.CreatedAt).ThenByDescending(r => r.Id).Skip(offset).Take(limit)
+            .Select(r => new PublicReviewDto(r.Id, r.AuthorName, r.Rating, r.Text, r.CreatedAt)).ToListAsync(ct);
+        return new PublicReviewsPage(total, items);
+    }
+
+    public async Task<IReadOnlyList<PublicSpecialistRow>> ListSpecialistsAsync(Guid locationId, Guid? serviceId, CancellationToken ct)
     {
         var ids = await EligibleSpecialistIdsAsync(locationId, ct);
         if (serviceId is { } sid)
@@ -61,9 +73,18 @@ public sealed class EfPublicBookingStore(BeautyDbContext db) : IPublicBookingSto
                 .Select(x => x.SpecialistId).ToListAsync(ct);
             ids = offering;
         }
-        return await db.Specialists.AsNoTracking().Where(s => ids.Contains(s.Id)).OrderBy(s => s.FullName)
-            .Select(s => new PublicSpecialistDto(s.Id, s.FullName, s.Position ?? s.Title, s.PhotoUrl))
+        var specialists = await db.Specialists.AsNoTracking().Where(s => ids.Contains(s.Id)).OrderBy(s => s.FullName)
+            .Select(s => new { s.Id, s.FullName, Title = s.Position ?? s.Title, s.PhotoUrl, s.PracticeStartYear, s.Bio })
             .ToListAsync(ct);
+        if (specialists.Count == 0) return [];
+        // Один агрегат за всіма майстрами (без N+1); лише опубліковані відгуки.
+        var stats = (await db.SpecialistReviews.AsNoTracking().Where(r => r.IsPublished && ids.Contains(r.SpecialistId))
+                .GroupBy(r => r.SpecialistId)
+                .Select(g => new { Id = g.Key, Count = g.Count(), Avg = g.Average(r => (double)r.Rating) }).ToListAsync(ct))
+            .ToDictionary(x => x.Id);
+        return specialists.Select(s => new PublicSpecialistRow(
+            s.Id, s.FullName, s.Title, s.PhotoUrl, s.PracticeStartYear, s.Bio,
+            stats.TryGetValue(s.Id, out var st) ? st.Avg : null, stats.TryGetValue(s.Id, out var st2) ? st2.Count : 0)).ToList();
     }
 
     public async Task<IReadOnlyList<PublicServiceBase>> ListServicesAsync(Guid locationId, Guid? specialistId, CancellationToken ct)
@@ -103,11 +124,64 @@ public sealed class EfPublicBookingStore(BeautyDbContext db) : IPublicBookingSto
         db.Appointments.AsNoTracking().CountAsync(a => a.Source == AppointmentSource.Online && a.CreatedAt > since
             && a.Client!.Phone == phone && a.Client.DeletedAt == null, ct);
 
+    public Task<int> CountRecentOnlineByLocationAsync(Guid locationId, DateTimeOffset since, CancellationToken ct) =>
+        db.Appointments.AsNoTracking().CountAsync(a => a.Source == AppointmentSource.Online && a.CreatedAt > since
+            && a.LocationId == locationId, ct);
+
     public Task<int> CountActiveOnlineByPhoneAsync(string phone, DateTimeOffset now, CancellationToken ct) =>
         db.Appointments.AsNoTracking().CountAsync(a =>
             a.Source == AppointmentSource.Online && a.StartsAt > now
             && (a.Status == AppointmentStatus.Pending || a.Status == AppointmentStatus.Confirmed)
             && a.Client!.Phone == phone && a.Client.DeletedAt == null, ct);
+
+    public Task<string?> GetClientEmailAsync(Guid clientId, CancellationToken ct) =>
+        db.Clients.AsNoTracking().Where(c => c.Id == clientId && c.DeletedAt == null).Select(c => c.Email).FirstOrDefaultAsync(ct);
+
+    public Task<string?> GetLocationAddressAsync(Guid locationId, CancellationToken ct) =>
+        db.Locations.AsNoTracking().Where(l => l.Id == locationId).Select(l => l.Address).FirstOrDefaultAsync(ct);
+
+    /// <summary>
+    /// Контракт для worker: рядок beauty_messages (outbound, system, status 'pending', idempotency_key) у розмові email-каналу tenant-а;
+    /// beauty_conversations.external_chat_id = адреса. Канал/розмова створюються ліниво; advisory-лок tenant-а серіалізує
+    /// find-or-create (немає unique-індексу на канал), повтор того самого ключа ідемпотентний. last_message_at лишається NULL,
+    /// тож месенджер-розмова клієнта (з last_message_at) має пріоритет у CLIENT_SQL воркера, а email — запасний канал.
+    /// </summary>
+    public async Task<bool> QueueEmailMessageAsync(Guid clientId, string email, string idempotencyKey, string body, CancellationToken ct)
+    {
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            await db.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT pg_advisory_xact_lock(hashtextextended('beauty_email_outbox:' || current_setting('app.tenant_id', true), 0))", ct);
+            if (await db.Messages.AnyAsync(m => m.IdempotencyKey == idempotencyKey, ct)) return false;
+
+            var channel = await db.Channels.FirstOrDefaultAsync(c => c.Type == ChannelType.Email && c.IsActive, ct);
+            if (channel is null)
+            {
+                channel = new Channel { Id = Guid.NewGuid(), Type = ChannelType.Email, Name = "Email", IsActive = true };
+                db.Channels.Add(channel);
+            }
+            var conv = await db.Conversations.FirstOrDefaultAsync(c => c.ChannelId == channel.Id && c.ExternalChatId == email, ct);
+            if (conv is null)
+            {
+                conv = new Conversation { Id = Guid.NewGuid(), ChannelId = channel.Id, ClientId = clientId, ExternalChatId = email };
+                db.Conversations.Add(conv);
+            }
+            db.Messages.Add(new Message
+            {
+                Id = Guid.NewGuid(), ConversationId = conv.Id, Direction = MessageDirection.Outbound, SenderType = MessageSenderType.System,
+                Body = body, Status = "pending", IdempotencyKey = idempotencyKey,
+            });
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+            return true;
+        }
+        catch
+        {
+            db.ChangeTracker.Clear();
+            throw;
+        }
+    }
 }
 
 public static class PublicBookingDataExtensions

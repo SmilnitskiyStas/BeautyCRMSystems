@@ -101,15 +101,26 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
 
         var phone = client.Phone!.Trim();
         // §25.7: порівняння за цифрами (спадкові номери), детермінований пріоритет оригіналу (без duplicate_of, найстарший)
+        var email = string.IsNullOrWhiteSpace(client.Email) ? null : client.Email.Trim();
         var existing = (await FindClientIdsByPhoneAsync(phone, null, 1, ct)).Select(x => (Guid?)x).FirstOrDefault();
-        if (existing is not null) return existing;
+        if (existing is not null)
+        {
+            // Email лише доповнюється (порожній не затирає наявний; наявний не перезаписується анонімним викликом —
+            // інакше за чужим телефоном можна підмінити адресу листів). Зберігається разом із записом (AddAppointmentAsync).
+            if (email is not null)
+            {
+                var row = await db.Clients.Where(c => c.Id == existing.Value).FirstOrDefaultAsync(ct);
+                if (row is not null && string.IsNullOrWhiteSpace(row.Email)) row.Email = email;
+            }
+            return existing;
+        }
 
         // Зберігається разом із записом одним SaveChanges (див. AddAppointmentAsync).
         var created = new Client
         {
             Id = Guid.NewGuid(), FullName = client.Name!.Trim(), Phone = phone, MarketingConsent = false, // §26.4 (TASK-779): персонал згоду не створює; лише MarketingConsentService (кнопка клієнта)
             PhoneSource = client.PhoneSource is PhoneSources.WebForm ? PhoneSources.WebForm : PhoneSources.Staff,
-            Email = string.IsNullOrWhiteSpace(client.Email) ? null : client.Email.Trim(),
+            Email = email,
         };
         db.Clients.Add(created);
         return created.Id;

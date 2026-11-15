@@ -202,6 +202,23 @@ export const mockBookingApi: BookingApi = guardSuspended({
     return delay(mockSlots(q).map((s) => ({ label: s.label, startsAt: s.startsAt, specialistId: s.specialistId, cancellation: TERMS })));
   },
 
+  getSpecialistReviews: () => delay({ total: 0, items: [] }),
+
+  async getAvailability(_t, { locationId, serviceId, specialistId, from, days }) {
+    const [y, m, d] = from.split("-").map(Number);
+    const loc = locations().find((l) => l.id === locationId);
+    const today = new Date().toISOString().slice(0, 10);
+    return delay(
+      Array.from({ length: days }, (_, i) => {
+        const date = new Date(Date.UTC(y, m - 1, d + i)).toISOString().slice(0, 10);
+        if (date < today) return { date, status: "past" as const, freeSlots: 0 };
+        if (isClosedDate(date, loc)) return { date, status: "closed" as const, freeSlots: 0 };
+        const freeSlots = mockSlots({ locationId, serviceId, specialistId: specialistId ?? ANY_SPECIALIST_ID, date }).length;
+        return { date, status: freeSlots > 0 ? ("available" as const) : ("full" as const), freeSlots };
+      }),
+    );
+  },
+
   async createAppointment(_t, req) {
     const parsed = createAppointmentSchema.safeParse(req);
     if (!parsed.success) throw new BookingApiError(422, "invalid_request");

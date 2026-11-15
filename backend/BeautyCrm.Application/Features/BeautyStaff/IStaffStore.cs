@@ -21,6 +21,8 @@ public interface IStaffStore
     /// Повторна активація (true) користувача НЕ вмикає.
     /// </summary>
     Task UpdateSpecialistAsync(Guid id, string name, string? phone, string? position, bool? isActive, DateTimeOffset now, CancellationToken ct);
+    /// <summary>Частково оновлює публічний профіль (рік практики, bio, photoUrl); значення вже перевірені сервісом.</summary>
+    Task UpdateSpecialistProfileAsync(Guid id, SpecialistProfilePatch patch, CancellationToken ct);
     /// <summary>Повна заміна переліку призначених послуг.</summary>
     Task ReplaceServicesAsync(Guid specialistId, IReadOnlyCollection<Guid> serviceIds, CancellationToken ct);
     /// <summary>Створює або оновлює графік майстра в закладі.</summary>

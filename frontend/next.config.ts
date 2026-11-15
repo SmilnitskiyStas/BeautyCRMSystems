@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { NextConfig } from "next";
 
 const isProd = process.env.NODE_ENV === "production";
@@ -51,6 +52,8 @@ const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
   poweredByHeader: false,
+  // Внутрішній workspace-пакет поставляється як TS-джерело (ADR-021 §5).
+  transpilePackages: ["@beauty/booking-core"],
   async headers() {
     return [
       { source: "/:path*", headers: securityHeaders },
@@ -73,6 +76,8 @@ const nextConfig: NextConfig = {
     ];
   },
   turbopack: {
+    // Корінь монорепо (npm workspaces): пакет `packages/booking-core` лежить поза `frontend/`.
+    root: path.join(import.meta.dirname, ".."),
     rules: {
       "*.css": {
         loaders: ["@tailwindcss/turbopack"],

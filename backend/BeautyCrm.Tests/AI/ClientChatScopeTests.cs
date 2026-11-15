@@ -772,7 +772,8 @@ public class ClientChatScopeTests
             var core = new OnlineBookingCore(pubStore, booking, options, Clock);
             var cancel = new CancellationService(Store, new SpyPayments(), FakeSettings.Service(), Clock);
             var pub = new PublicBookingService(pubStore, Store, cancel, FakeSettings.Service(), null!, new PublicTokenService(options),
-                new RejectAllCaptchaVerifier(), options, Clock, core);
+                new DefaultClientIntegrityVerifier(new RejectAllCaptchaVerifier()), options, Clock, core,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<PublicBookingService>.Instance);
             var chat = new ChatBookingService(Chat, pubStore, Store, core, new ChatBookingOptions(), Clock);
             var sp = new ServiceCollection().AddSingleton(pub).AddSingleton(chat).BuildServiceProvider();
             Adapter = new ClientChatPortAdapter(sp, TenantCtx);

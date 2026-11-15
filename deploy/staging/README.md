@@ -38,6 +38,7 @@
    S=/opt/beauty_staging/secrets
    cp .env.db.example $S/db.env; cp .env.api.example $S/api.env; cp .env.worker.example $S/worker.env
    cp .env.migrator.example $S/migrator.env
+   cp .env.web.example $S/web.env   # опційно: universal links (APPLE_TEAM_ID, ANDROID_*), див. runbook
    chmod 600 $S/*.env .env.compose
    ```
 
@@ -64,7 +65,7 @@
 
 Передумови: окремий **тестовий бот** із власним токеном (один токен не можна ділити з dev-polling: `getUpdates` дасть 409 Conflict, а webhook перехопить оновлення dev); синтетичний tenant; схвалення Q1.
 
-1. Людина створює тестового бота в BotFather. Токен бота зберігається в застосунку (зашифровано в БД, ADR-010 і канали), процедуру реєстрації каналу — за runbook (ADR-013). Токен у файли репозиторію й у чат не потрапляє.
+1. Людина створює тестового бота в BotFather. Токен бота зберігається в застосунку (зашифровано в БД, ADR-021 і канали), процедуру реєстрації каналу — за runbook (ADR-013). Токен у файли репозиторію й у чат не потрапляє.
 2. Секрет webhook (`secret_token`) — це `WebhookSecret` каналу. Згенеруйте і збережіть у застосунку: `openssl rand -hex 32`.
 3. Токен і секрет передайте в оболонку без історії (приховане читання), `setWebhook` виконуйте через stdin, щоб не світити токен в аргументах процесу:
    ```bash
@@ -206,6 +207,29 @@ server {
         proxy_pass http://127.0.0.1:<BEAUTY_WEB_PORT>;
         include /etc/nginx/beauty-staging-proxy.conf;
     }
+    # Universal links / App Links: публічні, без basic auth (Apple/Google/мобільний клієнт не вміють його проходити)
+    location ^~ /l/ {
+        auth_basic off;
+        proxy_pass http://127.0.0.1:<BEAUTY_WEB_PORT>;   # web, loopback 3400
+        include /etc/nginx/beauty-staging-proxy.conf;
+    }
+    # Без редиректів; Content-Type application/json; віддає web (404, поки не задано APPLE_TEAM_ID / ANDROID_*)
+    location = /.well-known/apple-app-site-association {
+        auth_basic off;
+        default_type application/json;
+        proxy_pass http://127.0.0.1:<BEAUTY_WEB_PORT>;
+        proxy_hide_header Content-Type;
+        add_header Content-Type application/json always;
+        include /etc/nginx/beauty-staging-proxy.conf;
+    }
+    location = /.well-known/assetlinks.json {
+        auth_basic off;
+        default_type application/json;
+        proxy_pass http://127.0.0.1:<BEAUTY_WEB_PORT>;
+        proxy_hide_header Content-Type;
+        add_header Content-Type application/json always;
+        include /etc/nginx/beauty-staging-proxy.conf;
+    }
     # решта API -> api
     location /api/ {
         proxy_pass http://127.0.0.1:<BEAUTY_API_PORT>;
@@ -234,6 +258,8 @@ proxy_read_timeout 60s;
 curl -sI http://beauty.<DOMAIN>/ | head -1                 # очікування: 301 на https
 curl -sI https://beauty.<DOMAIN>/ | head -1                # очікування: 401 (basic auth)
 curl -sI https://beauty.<DOMAIN>/api/beauty/webhooks/telegram/<CHANNEL_ID> | head -1   # не 401 від basic auth
+curl -sI https://beauty.<DOMAIN>/.well-known/assetlinks.json | head -1                  # не 401; 200 лише коли задано ANDROID_* (інакше 404)
+curl -sI https://beauty.<DOMAIN>/l/TESTCODE | head -1                                    # не 401
 openssl s_client -connect beauty.<DOMAIN>:443 -servername beauty.<DOMAIN> </dev/null 2>/dev/null \
   | openssl x509 -noout -subject -issuer -enddate -ext subjectAltName
 ```
@@ -253,6 +279,33 @@ sudo chmod 640 /etc/nginx/beauty-staging.htpasswd && sudo chown root:www-data /e
 - **Оновлення:** новий workflow публікації -> нові digest-и в `.env.compose` -> бекап -> (якщо є міграції: розділ 4 п. 4) -> `$DC pull && $DC up -d api worker web`. Простій короткий, для staging прийнятно. Не масштабувати `api`/`worker`.
 - **Відкат образів:** повернути попередні digest-и в `.env.compose`, `$DC up -d api worker web`. Міграції автоматично не відкочуються: міграції вперед сумісні, відкат схеми лише з бекапу (`pg_restore` у зупинену БД за окремим планом людини). Тому бекап перед кожною міграцією обов'язковий.
 - **Зупинка проєкту:** `$DC stop` (дані лишаються). **Видалення** (`$DC down -v` знищує том `beauty_staging_pgdata`) лише свідомо; чужих ресурсів це не торкається, бо всі імена з префіксом `beauty_staging`.
+
+### 7.1 Реліз: мобільний запис (каталог, відгуки, email)
+
+Стосується міграцій `20261109075625` (публічний каталог закладів), `20261109135452` (профіль і відгуки майстрів), `20261109150000` (нагадування за 24 год, email-канал) і `20261110090000` (умови скасування). Кожен крок схвалює людина (ADR-016 §2.1.1). Команди з `deploy/staging/`, `DC` як у розділі 4.
+
+1. **Бекап** (розділ 5): `pg_dump -U postgres -Fc beautycrm` і перевірка ненульового розміру файлу. Без бекапу далі не йти.
+2. **Роль каталогу** (суперкористувач, **до** міграцій; `beautycrm_owner` не має `CREATEROLE`, тож без цього кроку міграція каталогу зупиниться з помилкою):
+   `$DC exec -T db psql -U postgres -d beautycrm -v ON_ERROR_STOP=1 < db/init-catalog-role.sql`
+   Скрипт ідемпотентний; у виводі очікуємо `rolcanlogin=f, rolsuper=f, rolbypassrls=f, rolinherit=f` і `inherit_option=f, set_option=t`.
+3. **Міграції:** `$DC stop api worker`, далі SQL-скрипт `migrations-<SHA>.sql` від `beautycrm_owner` (розділ 4 п. 4.4). Перегляньте SQL перед застосуванням. Скрипт ідемпотентний (`__EFMigrationsHistory`).
+4. **GRANT-и:** `$DC exec -T db psql -U postgres -d beautycrm -v ON_ERROR_STOP=1 < db/grants.sql`. Додано: `beauty_specialist_reviews` для app, `EXECUTE` на три функції `beauty_public_*` лише для app (не `PUBLIC`, не worker), `SELECT beauty_specialists` і `INSERT beauty_conversations` для worker (підтвердження запису й email-нагадування).
+5. **Конфіг:** у `api.env` і `worker.env` додайте змінні з `.env.api.example` (`PublicBooking__*`) і `.env.worker.example` (`EMAIL_*`, `SMTP_*`). Без змін лишається безпечний стан: `EMAIL_MODE=mock` (листи не надсилаються), режими захисту `none`.
+6. **Образи:** нові digest-и в `.env.compose`, `$DC pull && $DC up -d api worker` (розділ 7).
+7. **Перевірки** (з хоста, `P=http://127.0.0.1:$BEAUTY_API_PORT`, `SLUG` = slug синтетичного tenant):
+   - `curl -fsS $P/readyz`; у `$DC logs api` немає помилок `DbRoleGuard`.
+   - Код закладу: `curl -sS $P/api/public/resolve/<publicCode>` (код видає міграція для наявних закладів; невідомий код дає 404, не 500).
+   - Календар: `curl -sS "$P/api/public/$SLUG/availability?locationId=<id>&serviceId=<id>&days=7"`.
+   - Відгуки: `curl -sS "$P/api/public/$SLUG/specialists/<id>/reviews"`.
+   - Запис: `POST $P/api/public/$SLUG/appointments` синтетичним клієнтом; у відповіді `publicToken`; потім `GET .../appointments/<publicToken>` і скасування `POST .../cancel` для прибирання.
+   - Worker: `$DC logs worker` без помилок; при `EMAIL_MODE=mock` у логу рядок `email queued (mock, not sent)` (лише id і kind, без тексту).
+8. **Відкат:** образи (розділ 7: повернути попередні digest-и). Схема назад автоматично не відкочується: міграції лише додають, тож попередні образи сумісні зі схемою; повернення схеми лише з бекапу п. 1 (`pg_restore` у зупинену БД за окремим планом людини). Роль `beautycrm_catalog` кластерна, її не видаляють.
+
+Відкриті питання (не вирішені, потрібне рішення людини):
+- **SMTP-провайдер** не обрано: до того `EMAIL_MODE=mock`. Для `smtp` потрібні домен відправника з SPF/DKIM і секрети лише на сервері.
+- **Домен для universal links / App Links** не визначено; шаблони в `well-known/` (див. `well-known/README.md`) містять плейсхолдери.
+- **App Attest / Play Integrity** не підключені: режими `PublicBooking__Protection__Ios|Android` лишаються `none` (або `monitor`); `enforce` без атестації заблокує мобільний запис. Допустимість `AllowWeakerClientPaths=true` у Production на час MVP: ADR-022, відкрите питання 4.
+- Увімкнення `WORKER_REMINDERS_ENABLED` для реальних клієнтів: окреме рішення (ADR-016 §2.10).
 
 ## 8. Як не зачепити сусідні сервіси (чеклист)
 

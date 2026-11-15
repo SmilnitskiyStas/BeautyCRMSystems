@@ -150,6 +150,10 @@ interface LocationDto {
   /** §28.11. */
   latitude?: number | null;
   longitude?: number | null;
+  /** ADR-022. */
+  publicCode?: string | null;
+  city?: string | null;
+  isDiscoverable?: boolean;
 }
 /** §17: закриття закладу; `reason` лише керівникам. */
 interface ClosureDto {
@@ -487,6 +491,9 @@ const toLocation = (l: LocationDto): BeautyLocation => ({
   isActive: l.isActive,
   latitude: typeof l.latitude === "number" ? l.latitude : null,
   longitude: typeof l.longitude === "number" ? l.longitude : null,
+  publicCode: typeof l.publicCode === "string" && l.publicCode ? l.publicCode : null,
+  city: l.city ?? null,
+  isDiscoverable: l.isDiscoverable === true,
 });
 
 /** §28.11: PUT без полів не чіпає координати; обидва `null` очищають; створення - лише якщо задано. */

@@ -1,0 +1,8 @@
+{
+  "name": "beauty-crm",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "packages/*"
+  ]
+}

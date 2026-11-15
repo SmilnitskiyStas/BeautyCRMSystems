@@ -9,7 +9,9 @@ export interface ReminderJobData {
   reminderId?: string;
 }
 
-const OFFSET_MS: Record<ReminderOffset, number> = { "1h": 3_600_000, "2h": 7_200_000 };
+const OFFSET_TEXT: Record<ReminderOffset, string> = { "1h": "через 1 годину", "2h": "через 2 години", "24h": "завтра" };
+
+const OFFSET_MS: Record<ReminderOffset, number> = { "1h": 3_600_000, "2h": 7_200_000, "24h": 86_400_000 };
 
 /** Called when an appointment is created/changed. "none" schedules nothing. Returns scheduled offset or null. */
 export async function scheduleReminder(
@@ -36,7 +38,7 @@ export async function processReminder(deps: BeautyDeps, data: ReminderJobData): 
   const when = appt.startsAt.toISOString();
   const created = await enqueueMessage(deps, {
     tenantId: appt.tenantId, clientId: client.id, channel: client.channel, address: client.address,
-    text: `Нагадуємо: ваш візит ${when} (через ${data.offset === "1h" ? "1 годину" : "2 години"}).`,
+    text: `Нагадуємо: ваш візит ${when} (${OFFSET_TEXT[data.offset]}).`,
     idempotencyKey: data.reminderId ? `reminder:${data.reminderId}` : `reminder:${appt.id}:${data.offset}`, kind: "reminder",
   });
   return created ? "queued" : "skipped";
@@ -46,13 +48,13 @@ export async function processReminder(deps: BeautyDeps, data: ReminderJobData): 
 // TASK-742 (§22.5): DB-driven reminder rows (offset_minutes / planned_starts_at), venue-local text, quiet hours, Telegram address.
 
 import type { DueReminder, PgPollStore, ReminderCloseStatus } from "../adapters/pg-poll-store";
-import { buildReminderText, isQuiet, nextQuietEnd } from "./reminder-time";
+import { buildEmailReminderText, buildReminderText, isQuiet, nextQuietEnd } from "./reminder-time";
 
 export const DEFAULT_MIN_LEAD_MINUTES = 15;
 const MIN_GAP_MS = 60 * 60_000; // §22.4: a shifted point must still be >= 60 min before the visit
 
 export type ReminderStore = Pick<PgPollStore,
-  "loadReminderContext" | "findTelegramConversation" | "enqueueReminderMessage" | "deferReminder" | "closeReminder">;
+  "loadReminderContext" | "findTelegramConversation" | "findEmailConversation" | "enqueueReminderMessage" | "deferReminder" | "closeReminder">;
 
 export type ReminderOutcome =
   | { kind: "queued"; messageId: string }
@@ -82,7 +84,7 @@ export async function processDueReminder(
   const remaining = ctx.startsAt.getTime() - now.getTime();
   // 2. the plan must still match the visit time (legacy rows: the old "visit is ~offset away" check)
   if (legacy) {
-    const offsetMs = r.offset === "1h" ? 3_600_000 : r.offset === "2h" ? 7_200_000 : null;
+    const offsetMs = r.offset ? OFFSET_MS[r.offset] : null;
     if (remaining <= 0) return close("too_late", ctx.startsAt);
     if (offsetMs === null || ctx.legacyOption !== r.offset || remaining > offsetMs + 60_000) return close("replanned", ctx.startsAt);
   } else if (r.plannedStartsAt && r.plannedStartsAt.getTime() !== ctx.startsAt.getTime()) {
@@ -104,10 +106,13 @@ export async function processDueReminder(
   // 5. STOP preference
   if (ctx.preferenceMethod === "none") return close("stopped", ctx.startsAt);
   // 6. address: Telegram conversation of the client in an active channel
-  const conversationId = await store.findTelegramConversation(ctx.clientId, ctx.preferenceConversationId);
+  // Месенджер має пріоритет; без нього — email клієнта (мобільний застосунок, канал `email`).
+  const telegramConversationId = await store.findTelegramConversation(ctx.clientId, ctx.preferenceConversationId);
+  const conversationId = telegramConversationId ?? (await store.findEmailConversation(ctx.clientId, now));
   if (!conversationId) return close("no_channel", ctx.startsAt);
 
-  const text = buildReminderText({
+  // Email-розмова (без месенджера): окремий текст без «напишіть сюди» / «Стоп»; Telegram-текст не змінюється.
+  const text = (telegramConversationId ? buildReminderText : buildEmailReminderText)({
     service: ctx.service, startsAt: ctx.startsAt, timeZone: ctx.timeZone, locationName: ctx.locationName,
     locationAddress: ctx.locationAddress, legacyOption: legacy ? r.offset : null,
   });

@@ -27,6 +27,10 @@ export interface BeautyLocation {
   /** §28.11: необов'язкові координати (для сортування закладів за геолокацією клієнта); лише парою. */
   latitude?: number | null;
   longitude?: number | null;
+  /** ADR-022: публічний код закладу (8 символів, незмінний, генерується БД); відсутній у старих відповідях/mock. */
+  publicCode?: string | null;
+  city?: string | null;
+  isDiscoverable?: boolean;
 }
 
 /** Закриття закладу на дати (§17): повні дні в зоні закладу, включно. `reason` приходить лише керівникам. */
@@ -140,6 +144,10 @@ export interface CancellationSettings {
   refundPercentOutside: number;
   deductFee: boolean;
   feePercent: number;
+  /** Показувати клієнту умови скасування у застосунку. Відсутнє -> true. */
+  showTermsToClient?: boolean;
+  /** Власний текст умов (до 500 символів). Відсутнє/порожнє -> null (автотекст). */
+  customTermsText?: string | null;
 }
 
 export interface OverviewKpi {

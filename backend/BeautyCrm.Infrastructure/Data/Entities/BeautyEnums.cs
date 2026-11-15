@@ -29,6 +29,7 @@ public enum ReminderOption
     [EnumMember(Value = "2h")] TwoHours,
     /// <summary>TASK-736 (§22.3): будь-який інший набір точок; дзеркало плану reminder_method/reminder_offsets.</summary>
     [EnumMember(Value = "custom")] Custom,
+    [EnumMember(Value = "24h")] TwentyFourHours,
 }
 
 public enum PaymentMethod
@@ -59,6 +60,8 @@ public enum ChannelType
     [EnumMember(Value = "whatsapp")] WhatsApp,
     [EnumMember(Value = "viber")] Viber,
     [EnumMember(Value = "widget")] Widget,
+    /// <summary>Email-доставка (підтвердження запису): адреса клієнта — у beauty_conversations.external_chat_id; SMTP — глобальний, без секретів у каналі.</summary>
+    [EnumMember(Value = "email")] Email,
 }
 
 public enum ConversationStatus

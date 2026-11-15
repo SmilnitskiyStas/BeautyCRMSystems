@@ -748,7 +748,7 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
 
                             t.HasCheckConstraint("ck_beauty_appointments_reminder_offsets", "reminder_offsets <@ ARRAY[60, 120, 1440]::smallint[] AND cardinality(reminder_offsets) <= 3");
 
-                            t.HasCheckConstraint("ck_beauty_appointments_reminder_option", "reminder_option IN ('none', '1h', '2h', 'custom')");
+                            t.HasCheckConstraint("ck_beauty_appointments_reminder_option", "reminder_option IN ('none', '1h', '2h', 'custom', '24h')");
 
                             t.HasCheckConstraint("ck_beauty_appointments_source", "source IN ('admin', 'online', 'telegram', 'instagram')");
 
@@ -1208,6 +1208,10 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnName("created_at")
                         .HasDefaultValueSql("now()");
 
+                    b.Property<string>("CustomTermsText")
+                        .HasColumnType("text")
+                        .HasColumnName("custom_terms_text");
+
                     b.Property<bool>("DeductFee")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
@@ -1231,6 +1235,12 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnType("integer")
                         .HasDefaultValue(100)
                         .HasColumnName("refund_percent_outside");
+
+                    b.Property<bool>("ShowTermsToClient")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true)
+                        .HasColumnName("show_terms_to_client");
 
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid")
@@ -1261,6 +1271,8 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.ToTable("beauty_cancellation_settings", null, t =>
                         {
                             t.HasCheckConstraint("ck_beauty_cancellation_settings_percents", "refund_percent_in_window BETWEEN 0 AND 100 AND refund_percent_outside BETWEEN 0 AND 100 AND fee_percent BETWEEN 0 AND 100");
+
+                            t.HasCheckConstraint("ck_beauty_cancellation_settings_terms_text", "custom_terms_text IS NULL OR char_length(custom_terms_text) <= 500");
 
                             t.HasCheckConstraint("ck_beauty_cancellation_settings_window", "window_hours >= 0 AND window_hours <= 720");
                         });
@@ -1334,7 +1346,7 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
 
                     b.ToTable("beauty_channels", null, t =>
                         {
-                            t.HasCheckConstraint("ck_beauty_channels_type", "type IN ('telegram', 'instagram', 'facebook', 'whatsapp', 'viber', 'widget')");
+                            t.HasCheckConstraint("ck_beauty_channels_type", "type IN ('telegram', 'instagram', 'facebook', 'whatsapp', 'viber', 'widget', 'email')");
                         });
                 });
 
@@ -2679,6 +2691,11 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(500)")
                         .HasColumnName("address");
 
+                    b.Property<string>("City")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("city");
+
                     b.Property<string[]>("ClosedWeekdays")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
@@ -2695,6 +2712,12 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean")
                         .HasColumnName("is_active");
+
+                    b.Property<bool>("IsDiscoverable")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("is_discoverable");
 
                     b.Property<decimal?>("Latitude")
                         .HasPrecision(9, 6)
@@ -2716,6 +2739,14 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)")
                         .HasColumnName("phone");
+
+                    b.Property<string>("PublicCode")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)")
+                        .HasColumnName("public_code")
+                        .HasDefaultValueSql("public.beauty_generate_public_code()");
 
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid")
@@ -2743,11 +2774,21 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.HasAlternateKey("TenantId", "Id")
                         .HasName("ak_beauty_locations_tenant_id_id");
 
+                    b.HasIndex("PublicCode")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_locations_public_code");
+
+                    b.HasIndex("Latitude", "Longitude")
+                        .HasDatabaseName("ix_beauty_locations_discoverable_coords")
+                        .HasFilter("is_discoverable AND is_active AND latitude IS NOT NULL");
+
                     b.ToTable("beauty_locations", null, t =>
                         {
                             t.HasCheckConstraint("ck_beauty_locations_closed_weekdays", "closed_weekdays <@ ARRAY['mon','tue','wed','thu','fri','sat','sun']::text[]");
 
                             t.HasCheckConstraint("ck_beauty_locations_coordinates", "(latitude IS NULL) = (longitude IS NULL) AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180");
+
+                            t.HasCheckConstraint("ck_beauty_locations_public_code", "public_code ~ '^[0-9A-HJKMNP-TV-Z]{8}$'");
                         });
                 });
 
@@ -4139,6 +4180,11 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnName("id")
                         .HasDefaultValueSql("gen_random_uuid()");
 
+                    b.Property<string>("Bio")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("bio");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("timestamp with time zone")
@@ -4175,6 +4221,10 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("position");
 
+                    b.Property<int?>("PracticeStartYear")
+                        .HasColumnType("integer")
+                        .HasColumnName("practice_start_year");
+
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid")
                         .HasColumnName("tenant_id");
@@ -4196,7 +4246,12 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.HasAlternateKey("TenantId", "Id")
                         .HasName("ak_beauty_specialists_tenant_id_id");
 
-                    b.ToTable("beauty_specialists", (string)null);
+                    b.ToTable("beauty_specialists", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_specialists_bio_len", "bio IS NULL OR char_length(bio) <= 500");
+
+                            t.HasCheckConstraint("ck_beauty_specialists_practice_start_year", "practice_start_year IS NULL OR practice_start_year BETWEEN 1950 AND 2100");
+                        });
                 });
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.SpecialistAbsence", b =>
@@ -4350,6 +4405,85 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasDatabaseName("ix_beauty_specialist_locations_tenant_id_specialist_id_locatio");
 
                     b.ToTable("beauty_specialist_locations", (string)null);
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.SpecialistReview", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<Guid?>("AppointmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("appointment_id");
+
+                    b.Property<string>("AuthorName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("author_name");
+
+                    b.Property<Guid?>("ClientId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("client_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<bool>("IsPublished")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true)
+                        .HasColumnName("is_published");
+
+                    b.Property<short>("Rating")
+                        .HasColumnType("smallint")
+                        .HasColumnName("rating");
+
+                    b.Property<Guid>("SpecialistId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("specialist_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("Text")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("text");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_specialist_reviews");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_specialist_reviews_tenant_id_id");
+
+                    b.HasIndex("TenantId", "AppointmentId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_specialist_reviews_appointment")
+                        .HasFilter("appointment_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "ClientId")
+                        .HasDatabaseName("ix_beauty_specialist_reviews_tenant_id_client_id");
+
+                    b.HasIndex("TenantId", "SpecialistId", "IsPublished", "CreatedAt")
+                        .IsDescending(false, false, false, true)
+                        .HasDatabaseName("ix_beauty_specialist_reviews_specialist_published");
+
+                    b.ToTable("beauty_specialist_reviews", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_specialist_reviews_author_len", "char_length(author_name) BETWEEN 1 AND 100");
+
+                            t.HasCheckConstraint("ck_beauty_specialist_reviews_rating", "rating BETWEEN 1 AND 5");
+
+                            t.HasCheckConstraint("ck_beauty_specialist_reviews_text_len", "text IS NULL OR char_length(text) <= 1000");
+                        });
                 });
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.SpecialistServiceLink", b =>
@@ -5702,6 +5836,33 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasConstraintName("fk_beauty_specialist_locations_beauty_specialists_tenant_id_sp");
 
                     b.Navigation("Location");
+
+                    b.Navigation("Specialist");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.SpecialistReview", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Appointment", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "AppointmentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_specialist_reviews_beauty_appointments_tenant_id_app");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Client", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ClientId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_specialist_reviews_beauty_clients_tenant_id_client_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Specialist", "Specialist")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SpecialistId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_specialist_reviews_beauty_specialists_tenant_id_spec");
 
                     b.Navigation("Specialist");
                 });

@@ -1,9 +1,7 @@
 import { USE_MOCK } from "@/features/beauty-auth/types";
+import { isValidSlug, resolveTenant as resolveTenantCore } from "@beauty/booking-core";
 
-/** Slug tenant-а (§12): 3-64 символи `a-z0-9-`. Невалідний slug не відправляємо на сервер. */
-export const SLUG_RE = /^[a-z0-9-]{3,64}$/;
-
-export const isValidSlug = (s: string | null | undefined): s is string => !!s && SLUG_RE.test(s);
+export { SLUG_RE, isValidSlug } from "@beauty/booking-core";
 
 /** Slug за замовчуванням: `NEXT_PUBLIC_TENANT_SLUG`; у демо-режимі — "demo". */
 export const ENV_TENANT: string = (() => {
@@ -13,11 +11,8 @@ export const ENV_TENANT: string = (() => {
 })();
 
 /** Slug з маршруту (`/book/[tenant]`, `?tenant=`) має пріоритет над env; `null` — tenant не визначено. */
-export function resolveTenant(routeSlug?: string | null, envSlug: string = ENV_TENANT): string | null {
-  const r = routeSlug?.trim().toLowerCase();
-  if (isValidSlug(r)) return r;
-  return isValidSlug(envSlug) ? envSlug : null;
-}
+export const resolveTenant = (routeSlug?: string | null, envSlug: string = ENV_TENANT): string | null =>
+  resolveTenantCore(routeSlug, envSlug);
 
 /** Посилання на запис: токен у шляху; slug додається в query, лише якщо він не збігається зі slug за замовчуванням. */
 export function appointmentHref(tenant: string, token: string, envSlug: string = ENV_TENANT): string {

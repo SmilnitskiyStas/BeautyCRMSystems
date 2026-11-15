@@ -198,7 +198,7 @@ internal sealed class FakeStaffStore : IStaffStore
 
     public Task<Guid> CreateSpecialistAsync(NewSpecialist n, CancellationToken ct)
     {
-        var s = new StaffSpecialistRecord(Guid.NewGuid(), n.Name, n.Phone, n.Position, null, true, null, [], []);
+        var s = new StaffSpecialistRecord(Guid.NewGuid(), n.Name, n.Phone, n.Position, n.PhotoUrl, true, null, [], [], n.PracticeStartYear, n.Bio);
         Specialists.Add(s);
         return Task.FromResult(s.Id);
     }
@@ -206,6 +206,18 @@ internal sealed class FakeStaffStore : IStaffStore
     {
         var i = Specialists.FindIndex(s => s.Id == id);
         Specialists[i] = Specialists[i] with { FullName = name, Phone = phone, Position = position, IsActive = isActive ?? Specialists[i].IsActive };
+        return Task.CompletedTask;
+    }
+    public Task UpdateSpecialistProfileAsync(Guid id, SpecialistProfilePatch patch, CancellationToken ct)
+    {
+        var i = Specialists.FindIndex(s => s.Id == id);
+        var cur = Specialists[i];
+        Specialists[i] = cur with
+        {
+            PracticeStartYear = patch.SetYear ? patch.PracticeStartYear : cur.PracticeStartYear,
+            Bio = patch.SetBio ? patch.Bio : cur.Bio,
+            PhotoUrl = patch.SetPhoto ? patch.PhotoUrl : cur.PhotoUrl,
+        };
         return Task.CompletedTask;
     }
     public Task ReplaceServicesAsync(Guid specialistId, IReadOnlyCollection<Guid> serviceIds, CancellationToken ct) => Task.CompletedTask;

@@ -97,7 +97,7 @@ export function sanitizeLine(value: string | null | undefined, max = 80): string
 
 export const STOP_LINE = "Щоб не отримувати нагадування, напишіть «Стоп».";
 
-const LEGACY_LEAD: Record<string, string> = { "1h": "через 1 годину", "2h": "через 2 години" };
+const LEGACY_LEAD: Record<string, string> = { "1h": "через 1 годину", "2h": "через 2 години", "24h": "завтра" };
 
 /**
  * Reminder text (§22.5). `legacyOption` (rows without offset_minutes) adds "(через 1 годину)" so a legacy reminder keeps
@@ -114,5 +114,33 @@ export function buildReminderText(o: {
   const lines = [`Нагадуємо про ваш візит: ${service}, ${formatVisitTime(o.startsAt, o.timeZone)}${lead ? ` (${lead})` : ""}.`];
   if (name) lines.push(`Заклад: ${name}${address ? `, ${address}` : ""}.`);
   lines.push("Скасувати чи перенести — напишіть сюди.", STOP_LINE);
+  return lines.join("\n");
+}
+
+/** «12 січня 2026 р. о 14:30» у зоні закладу (як у підтвердженні запису); невалідна зона -> UTC, лист не падає. */
+export function formatVisitDateTimeLong(startsAt: Date, timeZone: string): string {
+  const fmt = (opts: Intl.DateTimeFormatOptions, tz: string) => new Intl.DateTimeFormat("uk-UA", { timeZone: tz, ...opts }).format(startsAt);
+  let tz = timeZone;
+  try { fmt({}, tz); } catch { tz = "UTC"; }
+  return `${fmt({ day: "numeric", month: "long", year: "numeric" }, tz)} о ${fmt({ hour: "2-digit", minute: "2-digit", hourCycle: "h23" }, tz)}`;
+}
+
+/**
+ * Текст email-нагадування (канал `email`, клієнт без месенджера). Без «напишіть сюди» і «Стоп»: на лист відповісти не можна.
+ * `legacyOption` додає «(завтра / через 1 годину)» так само, як у месенджерному тексті.
+ */
+export function buildEmailReminderText(o: {
+  service: string | null; startsAt: Date; timeZone: string; locationName: string | null; locationAddress: string | null;
+  legacyOption?: string | null;
+}): string {
+  const lead = o.legacyOption ? LEGACY_LEAD[o.legacyOption] : undefined;
+  const service = sanitizeLine(o.service) || "візит";
+  const name = sanitizeLine(o.locationName);
+  const address = sanitizeLine(o.locationAddress);
+  const lines = ["Вітаємо!", "", `Нагадуємо про ваш візит${lead ? ` (${lead})` : ""}.`, `Послуга: ${service}`,
+    `Дата й час: ${formatVisitDateTimeLong(o.startsAt, o.timeZone)}`];
+  if (name) lines.push(`Заклад: ${name}`);
+  if (address) lines.push(`Адреса: ${address}`);
+  lines.push("", "Скасувати чи змінити запис можна в застосунку або за телефоном закладу.", "Чекаємо на вас!");
   return lines.join("\n");
 }

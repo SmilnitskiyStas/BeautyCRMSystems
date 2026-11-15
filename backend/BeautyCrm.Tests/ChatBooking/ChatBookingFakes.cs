@@ -65,9 +65,10 @@ internal sealed class FakePublicStore(SerializedBookingStore bookings) : IPublic
 {
     public Task<IReadOnlyList<PublicLocationDto>> ListActiveLocationsAsync(DateTimeOffset now, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<PublicLocationDto>>([new PublicLocationDto(FakeBookingStore.Location, "Центр", "Вул. 1", null, bookings.Inner.Timezone)]);
-    public Task<IReadOnlyList<PublicSpecialistDto>> ListSpecialistsAsync(Guid locationId, Guid? serviceId, CancellationToken ct) =>
-        Task.FromResult<IReadOnlyList<PublicSpecialistDto>>(locationId == FakeBookingStore.Location && (serviceId is null || serviceId == FakeBookingStore.Service90)
-            ? [new PublicSpecialistDto(FakeBookingStore.Specialist, "Марина", "Майстер", null)] : []);
+    public Task<IReadOnlyList<PublicSpecialistRow>> ListSpecialistsAsync(Guid locationId, Guid? serviceId, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<PublicSpecialistRow>>(locationId == FakeBookingStore.Location && (serviceId is null || serviceId == FakeBookingStore.Service90)
+            ? [new PublicSpecialistRow(FakeBookingStore.Specialist, "Марина", "Майстер", null, null, null, null, 0)] : []);
+    public Task<PublicReviewsPage?> ListReviewsAsync(Guid specialistId, int limit, int offset, CancellationToken ct) => Task.FromResult<PublicReviewsPage?>(null);
     public Task<IReadOnlyList<PublicServiceBase>> ListServicesAsync(Guid locationId, Guid? specialistId, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<PublicServiceBase>>(locationId == FakeBookingStore.Location && bookings.Inner.Price is { } price
             ? [new PublicServiceBase(FakeBookingStore.Service90, "Манікюр", null, null, bookings.Inner.ServiceDuration, price)] : []);
@@ -75,6 +76,10 @@ internal sealed class FakePublicStore(SerializedBookingStore bookings) : IPublic
     public Task<IdempotencyHit?> FindByIdempotencyKeyAsync(string keyHash, CancellationToken ct) => Task.FromResult(bookings.Find(keyHash));
     public Task<int> CountActiveOnlineByPhoneAsync(string phone, DateTimeOffset now, CancellationToken ct) => Task.FromResult(0);
     public Task<int> CountRecentOnlineByPhoneAsync(string phone, DateTimeOffset since, CancellationToken ct) => Task.FromResult(0);
+    public Task<int> CountRecentOnlineByLocationAsync(Guid locationId, DateTimeOffset since, CancellationToken ct) => Task.FromResult(0);
+    public Task<string?> GetClientEmailAsync(Guid clientId, CancellationToken ct) => Task.FromResult<string?>(null);
+    public Task<string?> GetLocationAddressAsync(Guid locationId, CancellationToken ct) => Task.FromResult<string?>(null);
+    public Task<bool> QueueEmailMessageAsync(Guid clientId, string email, string idempotencyKey, string body, CancellationToken ct) => Task.FromResult(false);
 }
 
 internal sealed class FakeChatStore(SerializedBookingStore bookings) : IChatBookingStore

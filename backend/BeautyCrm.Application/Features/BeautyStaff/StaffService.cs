@@ -33,6 +33,7 @@ public sealed partial class StaffService(IStaffStore store, TimeProvider clock)
     {
         if (!StaffRoles.IsManager(actor)) return Forbidden;
         if (ValidateProfile(req.Name, req.Phone, req.Position) is { } invalid) return invalid;
+        if (ValidatePublicProfile(req.PracticeStartYear, req.Bio, req.PhotoUrl, allowClear: false) is { } invalidPublic) return invalidPublic;
 
         var locationIds = (req.LocationIds ?? []).Distinct().ToList();
         var serviceIds = (req.ServiceIds ?? []).Distinct().ToList();
@@ -51,7 +52,8 @@ public sealed partial class StaffService(IStaffStore store, TimeProvider clock)
         }
 
         var id = await store.CreateSpecialistAsync(
-            new NewSpecialist(req.Name.Trim(), Clean(req.Phone), Clean(req.Position), locationIds, serviceIds, hours), ct);
+            new NewSpecialist(req.Name.Trim(), Clean(req.Phone), Clean(req.Position), locationIds, serviceIds, hours,
+                req.PracticeStartYear, Clean(req.Bio), Clean(req.PhotoUrl)), ct);
         return ToDto((await store.GetSpecialistAsync(id, ct))!, true);
     }
 
@@ -59,11 +61,17 @@ public sealed partial class StaffService(IStaffStore store, TimeProvider clock)
     {
         if (!StaffRoles.IsManager(actor)) return Forbidden;
         if (ValidateProfile(req.Name, req.Phone, req.Position) is { } invalid) return invalid;
+        if (ValidatePublicProfile(req.PracticeStartYear, req.Bio, req.PhotoUrl, allowClear: true) is { } invalidPublic) return invalidPublic;
         if (await Guard(actor, id, ct) is { } denied) return denied;
 
         // isActive = false каскадно (в одній транзакції) вимикає прив'язаного користувача, відкликає його refresh-токени й
         // pending-запрошення. Повторна активація доступ НЕ повертає: користувача вмикають явно (PATCH /api/users/{id}/status).
         await store.UpdateSpecialistAsync(id, req.Name.Trim(), Clean(req.Phone), Clean(req.Position), req.IsActive, clock.GetUtcNow(), ct);
+        if (req.PracticeStartYear is not null || req.Bio is not null || req.PhotoUrl is not null)
+            await store.UpdateSpecialistProfileAsync(id, new SpecialistProfilePatch(
+                req.PracticeStartYear is not null, req.PracticeStartYear is null or 0 ? null : req.PracticeStartYear,
+                req.Bio is not null, Clean(req.Bio),
+                req.PhotoUrl is not null, Clean(req.PhotoUrl)), ct);
         return ToDto((await store.GetSpecialistAsync(id, ct))!, true);
     }
 
@@ -157,12 +165,35 @@ public sealed partial class StaffService(IStaffStore store, TimeProvider clock)
         return null;
     }
 
+    /// <summary>
+    /// Публічний профіль: рік 1950..поточний (UTC), bio до 500 символів, photoUrl лише абсолютний https до 500 символів.
+    /// allowClear (PUT): рік 0 / порожні рядки означають «очистити».
+    /// </summary>
+    private Error? ValidatePublicProfile(int? year, string? bio, string? photoUrl, bool allowClear)
+    {
+        if (year is { } y && !(allowClear && y == 0) && (y < 1950 || y > clock.GetUtcNow().Year))
+            return Error.Validation("invalid_practice_start_year", $"practiceStartYear must be between 1950 and {clock.GetUtcNow().Year}.");
+        var b = Clean(bio);
+        if (b is not null && (b.Length > 500 || b.Any(c => char.IsControl(c) && c is not ('\n' or '\r'))))
+            return Error.Validation("invalid_bio", "Bio must be at most 500 characters.");
+        var p = Clean(photoUrl);
+        if (p is not null && !IsHttpsUrl(p))
+            return Error.Validation("invalid_photo_url", "photoUrl must be an absolute https URL of at most 500 characters.");
+        return null;
+    }
+
+    private static bool IsHttpsUrl(string value) =>
+        value.Length <= 500 && !value.Any(char.IsControl)
+        && Uri.TryCreate(value, UriKind.Absolute, out var u) && u.Scheme == Uri.UriSchemeHttps && !string.IsNullOrEmpty(u.Host)
+        && string.IsNullOrEmpty(u.UserInfo);
+
     private static string? Clean(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
     private static SpecialistDto ToDto(StaffSpecialistRecord r, bool manager) => new(
         r.Id, r.FullName, manager ? r.Phone : null, r.Position, r.PhotoUrl, r.IsActive, manager ? r.LinkedUserRole is not null : null,
         r.Services,
-        r.Locations.Select(l => new SpecialistLocationDto(l.LocationId, l.LocationName, l.IsActive, ParseHours(l.WorkingHoursJson))).ToList());
+        r.Locations.Select(l => new SpecialistLocationDto(l.LocationId, l.LocationName, l.IsActive, ParseHours(l.WorkingHoursJson))).ToList(),
+        r.PracticeStartYear, r.Bio);
 
     private static JsonElement? ParseHours(string? json)
     {

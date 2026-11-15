@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildReminderText, formatVisitTime, isQuiet, nextQuietEnd, parseClock, sanitizeLine, STOP_LINE, zonedTimeToUtc,
+  buildEmailReminderText, buildReminderText, formatVisitTime, isQuiet, nextQuietEnd, parseClock, sanitizeLine, STOP_LINE, zonedTimeToUtc,
 } from "./reminder-time";
 
 const KYIV = "Europe/Kyiv";
@@ -84,5 +84,40 @@ describe("buildReminderText", () => {
     expect(text).not.toContain("\u0007");
     expect(sanitizeLine("a".repeat(200))).toHaveLength(80);
     expect(sanitizeLine("  a \n\t b  ")).toBe("a b");
+  });
+});
+
+describe("buildEmailReminderText (канал email)", () => {
+  const base = { service: "Манікюр", startsAt: new Date("2026-10-30T12:30:00Z"), timeZone: KYIV, locationName: "Салон Лілія", locationAddress: "вул. Хрещатик, 1" };
+  it("has_service_venue-local-date-time_place_and_no-chat-or-stop-lines", () => {
+    const t = buildEmailReminderText(base);
+    expect(t).toContain("Послуга: Манікюр");
+    expect(t).toContain("Дата й час: 30 жовтня 2026 р. о 14:30"); // Kyiv EET, not UTC 12:30
+    expect(t).toContain("Заклад: Салон Лілія");
+    expect(t).toContain("Адреса: вул. Хрещатик, 1");
+    expect(t).toContain("в застосунку або за телефоном закладу");
+    expect(t).not.toContain("напишіть");
+    expect(t).not.toContain("Стоп");
+    expect(t).not.toContain("T12:30");
+  });
+  it("legacy-24h_adds-tomorrow-lead", () => {
+    expect(buildEmailReminderText({ ...base, legacyOption: "24h" })).toContain("Нагадуємо про ваш візит (завтра).");
+    expect(buildEmailReminderText({ ...base, legacyOption: "1h" })).toContain("(через 1 годину)");
+    expect(buildEmailReminderText(base)).toContain("Нагадуємо про ваш візит.");
+  });
+  it("zone-differs_and-invalid-zone-falls-back-to-utc", () => {
+    expect(buildEmailReminderText({ ...base, timeZone: "America/New_York" })).toContain("о 08:30");
+    expect(buildEmailReminderText({ ...base, timeZone: "Not/AZone" })).toContain("о 12:30");
+  });
+  it("missing-service-and-venue_degrade-gracefully", () => {
+    const t = buildEmailReminderText({ ...base, service: null, locationName: null, locationAddress: null });
+    expect(t).toContain("Послуга: візит");
+    expect(t).not.toContain("Заклад:");
+    expect(t).not.toContain("Адреса:");
+  });
+  it("telegram-text_is-unchanged_still-has-write-here-and-stop", () => {
+    const t = buildReminderText(base);
+    expect(t).toContain("напишіть сюди");
+    expect(t).toContain(STOP_LINE);
   });
 });

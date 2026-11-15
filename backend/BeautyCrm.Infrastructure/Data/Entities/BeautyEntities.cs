@@ -28,9 +28,18 @@ public class Location : TenantEntity
     public string[] ClosedWeekdays { get; set; } = [];
     /// <summary>Години роботи закладу (TASK-703, §18.1; формат §9, нормалізований JSON). null = не задано, обмеження немає.</summary>
     public string? WorkingHours { get; set; }
-    /// <summary>TASK-836 (ADR-020): координати закладу (дані бізнесу, не ПД); обидва або жодного.</summary>
+    /// <summary>
+    /// ADR-022: публічний код закладу (8 символів Crockford Base32 без I/L/O/U), глобально унікальний, незмінний.
+    /// Якщо не задано, БД сама генерує значення (DEFAULT beauty_generate_public_code()).
+    /// </summary>
+    public string PublicCode { get; set; } = null!;
+    /// <summary>TASK-836 (ADR-020): координати закладу (дані бізнесу, не ПД); обидва або жодного. Також основа публічного каталогу (ADR-011).</summary>
     public decimal? Latitude { get; set; }
     public decimal? Longitude { get; set; }
+    /// <summary>ADR-022: місто (для пошуку за містом у публічному каталозі).</summary>
+    public string? City { get; set; }
+    /// <summary>ADR-022: заклад показується у публічному каталозі (nearby / за містом) лише якщо true (opt-in).</summary>
+    public bool IsDiscoverable { get; set; }
 }
 
 /// <summary>Конкретні дати закриття закладу (повні дні в зоні закладу, включно; без автоповтору). TASK-701, §17.</summary>
@@ -57,7 +66,32 @@ public class Specialist : TenantEntity
     public string? Phone { get; set; }
     public string? Email { get; set; }
     public string? PhotoUrl { get; set; }
+    /// <summary>Рік початку практики (мобільний потік: стаж = поточний рік - це значення); null = не задано.</summary>
+    public int? PracticeStartYear { get; set; }
+    /// <summary>Короткий опис майстра (публічний профіль), до 500 символів.</summary>
+    public string? Bio { get; set; }
     public bool IsActive { get; set; } = true;
+}
+
+/// <summary>
+/// Відгук про майстра. AuthorName зберігається вже у публічному вигляді «Ім'я К.» (обчислюється при створенні):
+/// телефон/повне прізвище в цій таблиці не потрібні. Публічно віддаються лише IsPublished.
+/// </summary>
+public class SpecialistReview : ITenantEntity
+{
+    public Guid Id { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid SpecialistId { get; set; }
+    /// <summary>Запис, після якого залишено відгук; унікальний, якщо задано (один відгук на запис).</summary>
+    public Guid? AppointmentId { get; set; }
+    public Guid? ClientId { get; set; }
+    public string AuthorName { get; set; } = null!;
+    public short Rating { get; set; }
+    public string? Text { get; set; }
+    public bool IsPublished { get; set; } = true;
+    public DateTimeOffset CreatedAt { get; set; }
+
+    public Specialist? Specialist { get; set; }
 }
 
 /// <summary>Послуга, призначена майстру. Майстер пропонує лише призначені послуги. PK (tenant_id, specialist_id, service_id).</summary>
@@ -421,4 +455,6 @@ public class CancellationSettingsRow : TenantEntity
     public int RefundPercentOutside { get; set; } = 100;
     public bool DeductFee { get; set; }
     public int FeePercent { get; set; }
+    public bool ShowTermsToClient { get; set; } = true;
+    public string? CustomTermsText { get; set; }
 }

@@ -1,8 +1,8 @@
 // Ports: the worker owns job logic only. DB access and channel delivery are
 // implemented by other agents (database/integrations) and injected here.
 
-export type ReminderOption = "none" | "1h" | "2h";
-export type ReminderOffset = "1h" | "2h";
+export type ReminderOption = "none" | "1h" | "2h" | "24h";
+export type ReminderOffset = "1h" | "2h" | "24h";
 export type AppointmentStatus = "pending" | "confirmed" | "completed" | "cancelled" | "no_show";
 
 export interface AppointmentInfo {
@@ -12,6 +12,15 @@ export interface AppointmentInfo {
   startsAt: Date;
   status: AppointmentStatus;
   reminderOption: ReminderOption;
+}
+
+export interface AppointmentDetails {
+  locationName: string;
+  locationAddress: string | null;
+  /** IANA-часова зона закладу. */
+  timezone: string;
+  serviceName: string;
+  specialistName: string;
 }
 
 export interface ClientInfo {
@@ -33,7 +42,7 @@ export interface OutboundMessage {
   text: string;
   /** Idempotency key: same key => the message is created/sent at most once. */
   idempotencyKey: string;
-  kind: "reminder" | "campaign" | "winback" | "review" | "message";
+  kind: "reminder" | "confirmation" | "campaign" | "winback" | "review" | "message";
 }
 
 /** Neutral keyboard layout of beauty_messages.actions (§23.4): `{rows: [[{label, data}]]}`; written by .NET and by the worker. */
@@ -95,6 +104,8 @@ export interface LapsedClient extends ClientInfo {
 export interface BeautyDataPort {
   getAppointment(id: string): Promise<AppointmentInfo | null>;
   getClient(id: string): Promise<ClientInfo | null>;
+  /** Деталі запису для листа-підтвердження (заклад, послуга, майстер); null, якщо запису немає. */
+  getAppointmentDetails(id: string): Promise<AppointmentDetails | null>;
   getCampaign(id: string): Promise<CampaignInfo | null>;
   /** `pending` recipients of the confirmed (frozen) audience, `ORDER BY id`, after the optional cursor. */
   listCampaignAudience(campaignId: string, limit: number, afterId?: string): Promise<CampaignRecipientRef[]>;

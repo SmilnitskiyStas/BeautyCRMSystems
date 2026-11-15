@@ -1,6 +1,6 @@
 # Beauty CRM: локальний запуск (runbook)
 
-Версія 1.0 (2026-10-08). Кожен крок нижче виконано вручну на Windows 11 (Git Bash + PowerShell + Docker Desktop) і дав описаний результат. Redis для локального запуску **не потрібен**: worker читає чергу безпосередньо з PostgreSQL (див. ADR-003).
+Версія 1.1 (2026-11-09; додано роль `beautycrm_catalog`, міграцію ADR-022, ризики збірки через workspaces). Кроки 1–8 виконано вручну на Windows 11 (Git Bash + PowerShell + Docker Desktop) у версії 1.0 (2026-10-08); кроки з ADR-022 (роль каталогу, міграція 11) **не перевірено** на стенді. Redis для локального запуску **не потрібен**: worker читає чергу безпосередньо з PostgreSQL (див. ADR-003).
 
 Потрібно: Docker, .NET SDK 8+ (перевірено на 10.0 з таргетом net8.0), Node.js 22+, `dotnet-ef` (`dotnet tool install -g dotnet-ef`).
 
@@ -17,6 +17,24 @@ docker exec beautycrm psql -U postgres -v ON_ERROR_STOP=1 \
 docker exec beautycrm psql -U postgres -d beautycrm -c "GRANT CONNECT ON DATABASE beautycrm TO beautycrm_app"
 ```
 
+## 1a. Роль публічного каталогу `beautycrm_catalog` (ADR-022)
+Міграція `20261109075625_beauty_public_location_catalog` сама створює роль `NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT`,
+якщо її немає, але для цього мігратору потрібен `CREATEROLE`. Локальний стенд з кроку 1 (`beautycrm_owner` без `CREATEROLE`)
+тому роль треба створити заздалегідь суперкористувачем `postgres`:
+```bash
+docker exec beautycrm psql -U postgres -d beautycrm -v ON_ERROR_STOP=1 \
+  -c "CREATE ROLE beautycrm_catalog NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT" \
+  -c "GRANT beautycrm_catalog TO beautycrm_owner WITH INHERIT FALSE, SET TRUE"
+```
+- `GRANT beautycrm_catalog TO beautycrm_owner` потрібен, щоб міграція могла передати власність функцій ролі.
+- Право `EXECUTE` для `beautycrm_app` міграція видає автоматично, якщо роль `beautycrm_app` уже існує (крок 1).
+  Якщо застосунок працює під іншим ім'ям ролі, виконайте вручну:
+  `GRANT EXECUTE ON FUNCTION public.beauty_public_resolve_location(text), public.beauty_public_nearby_locations(double precision, double precision, double precision, integer), public.beauty_public_search_locations_by_city(text, integer) TO <runtime_role>`.
+- Після `Down`/`Up` міграції права на функції скидаються: повторіть `GRANT EXECUTE`.
+- Перевірка: `DbRoleGuard` при старті API перевіряє інваріанти ролі каталогу (NOLOGIN, не суперкористувач, не BYPASSRLS,
+  runtime-роль не є членом, функції належать `beautycrm_catalog`, SECURITY DEFINER, без `EXECUTE` для PUBLIC).
+- Не перевірено: чи вистачає власнику `beautycrm_owner` прав на `GRANT CREATE ON SCHEMA public` у PostgreSQL 16 (міграція тимчасово видає це право ролі каталогу).
+
 ## 2. Міграції (під власником схеми)
 PowerShell:
 ```powershell
@@ -24,7 +42,7 @@ cd backend
 $env:ConnectionStrings__Migrator = "Host=localhost;Port=55432;Database=beautycrm;Username=beautycrm_owner;Password=<owner-pw>"
 dotnet ef database update --project BeautyCrm.Infrastructure --startup-project BeautyCrm.Infrastructure
 ```
-Очікувано: застосовуються 8 міграцій (від `add_beauty_schema` до `beauty_locations_and_cancellation_history`), далі `Done.`, у схемі 25+ таблиць. Потім видайте права ролі застосунку (потрібно повторювати після кожної міграції з новими таблицями):
+Очікувано: застосовуються 11 міграцій (від `add_beauty_schema` до `beauty_public_location_catalog`), далі `Done.`, у схемі 25+ таблиць. Міграція 11 вимагає ролі `beautycrm_catalog` (розділ 1a). Потім видайте права ролі застосунку (потрібно повторювати після кожної міграції з новими таблицями):
 ```bash
 docker exec beautycrm psql -U postgres -d beautycrm \
   -c "GRANT USAGE ON SCHEMA public TO beautycrm_app" \
@@ -45,8 +63,16 @@ docker exec beautycrm psql -U postgres -d beautycrm \
 | `Beauty__AllowedOrigins` | точні origin для CORS, без `*` |
 | `Beauty__TrustedProxies` | IP/CIDR довірених reverse proxy (інакше `X-Forwarded-For` ігнорується) |
 | `Beauty__AllowPrivilegedDbRole` | лише Development: дозволити суперкористувача/BYPASSRLS |
+| `PublicBooking:MaxPublicCreatesPerLocationPerHour` | ліміт публічних записів на заклад за годину (за замовч. 60, 0 = вимкнено) |
+| `PublicBooking:MinAppVersion:Ios` / `:Android` | мінімальна версія мобільного застосунку (нижче — 426 `upgrade_required`), формат `1.2.3` |
+| `PublicBooking:Protection:Web` / `:Ios` / `:Android` | `none` / `monitor` / `enforce` (за замовч. `none`) |
+| `PublicBooking:RateLimit:NearbyPermit` / `SearchPermit` | ліміти `public-nearby` (10) і `public-search` (20) на хвилину на IP |
+| `EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_WEB_DOMAIN` | мобільний застосунок, на етапі збірки (`mobile/README.md`) |
 | `WORKER_DATABASE_URL`, `WORKER_TENANT_IDS`, `WORKER_MARKETING_DAILY_LIMIT` | worker |
 | `NEXT_PUBLIC_API_URL`, `API_URL`, `NEXT_PUBLIC_TENANT_SLUG` | frontend (читаються під час **build**) |
+| `APPLE_TEAM_ID`, `IOS_BUNDLE_ID`, `ANDROID_PACKAGE`, `ANDROID_SHA256_CERT_FINGERPRINTS` | frontend runtime: `/.well-known/*` (див. §12a) |
+| `API_INTERNAL_URL` | frontend runtime: server-side URL API для `/l/[code]` (fallback `NEXT_PUBLIC_API_URL`) |
+| `NEXT_PUBLIC_IOS_STORE_URL`, `NEXT_PUBLIC_ANDROID_STORE_URL` | frontend build: кнопки магазинів на лендінгу `/l/{code}` |
 | `NEXT_PUBLIC_USE_MOCK=1`, `NEXT_PUBLIC_MOCK_ROLE` | demo без backend (`owner`/`admin`/`specialist`) |
 
 ## 4. Backend
@@ -94,6 +120,16 @@ $env:BEAUTY_TEST_REQUIRE_DB="1"; dotnet test backend      # потрібен Doc
 cd worker; npm.cmd test                                      # Docker потрібен
 cd frontend; npm.cmd test; npx tsc --noEmit; npm.cmd run lint
 ```
+
+## 8a. Збірка через npm workspaces (ризики, не перевірено)
+Стан у worktree (2026-11-09), перевірено читанням файлів, команди не запускалися:
+- Кореневий `package.json`: `workspaces: ["frontend", "packages/*"]`. `mobile/` не входить у workspaces і має окремий `mobile/package.json`.
+- `frontend/package.json` залежить від `@beauty/booking-core: "*"`; `frontend/next.config.ts` задає `transpilePackages` і `turbopack.root` на корінь монорепо. Збірка frontend потребує `packages/booking-core`.
+- Runbook §7 пише `cd frontend; npm.cmd install`. Не перевірено, чи правильно це працює з кореневими workspaces; безпечніше встановлювати з кореня репозиторію.
+- Lock-файлів (`package-lock.json`) у корені, `frontend/` і `mobile/` **немає** в worktree. `npm ci` (типово для CI/Docker) без lock не спрацює. Не перевірено, чи lock є в git-історії / на `main`.
+- `.github/workflows/staging-images.yml` (ручна публікація образів у ghcr.io) будує контексти `backend`, `worker`, `web`. Каталогу `web/` у репозиторії немає (фронтенд — `frontend/`). Dockerfile у репозиторії (worktree) не знайдено ні для одного сервісу. Workflow також очікує `ci.yml` з успішним запуском для того самого SHA, але `ci.yml` у `.github/workflows/` цього worktree немає. Не перевірено на `main` чи інших гілках.
+- Docker-контекст для `frontend` має бути коренем репозиторію (пакет `packages/booking-core` лежить поза `frontend/`); контекст лише `frontend/` зламає збірку.
+- `deploy/staging/README.md` і ADR-016, на які посилається workflow, у worktree не знайдено.
 
 ## 9. Пастки
 - PowerShell: `npm.ps1` блокується політикою виконання, використовуйте `npm.cmd`.
@@ -173,3 +209,18 @@ cd frontend; npm.cmd test; npx tsc --noEmit; npm.cmd run lint
 - **Образи:** `backend/Dockerfile`, `worker/Dockerfile`, `frontend/Dockerfile` (Next `standalone` вмикається змінною `NEXT_OUTPUT=standalone`; `NEXT_PUBLIC_*` передаються build-arg). Публікація в ghcr.io лише вручну: `.github/workflows/staging-images.yml` (workflow_dispatch; вимагає зелений CI для SHA; тег `sha-<повний SHA>`, деплой за digest; артефакт `migrations-<SHA>` з ідемпотентним SQL).
 - **Проби API:** `GET /healthz` (liveness), `GET /readyz` (`SELECT 1` до БД, 503 без деталей), без автентифікації.
 - **Розгортання** на спільному сервері, ізольований Compose-проєкт `beauty_staging`, порти лише 127.0.0.1, nginx-приклад, бекап, міграції, відкат: `deploy/staging/README.md` (всі кроки на сервері виконує людина; автоматичного CD немає).
+
+## 12a. Універсальні посилання закладу (release-крок)
+- **Потік:** код закладу (`publicCode`) -> `https://beauty.<DOMAIN>/l/{code}`. Якщо застосунок встановлено і домен у ньому
+  прописано (`EXPO_PUBLIC_WEB_DOMAIN`), iOS/Android відкривають його напряму (universal link / App Link). Інакше відкривається
+  веб-лендінг `frontend/app/(public)/l/[code]/page.tsx` з кнопками App Store / Google Play (`NEXT_PUBLIC_*_STORE_URL`).
+- **Звідки взяти значення:** `APPLE_TEAM_ID` — Apple Developer -> Membership details -> Team ID (10 символів). `IOS_BUNDLE_ID` —
+  `mobile/app.config.ts` (за замовч. `com.beautycrm.booking`). `ANDROID_PACKAGE` — там само. `ANDROID_SHA256_CERT_FINGERPRINTS` —
+  Play Console -> Setup -> App signing (SHA-256 сертифіката підпису; додайте й upload-сертифікат, якщо потрібен) або
+  `keytool -list -v -keystore <keystore>`; кілька значень через кому.
+- **Задати:** `$SECRETS_DIR/web.env` (шаблон `deploy/staging/.env.web.example`), далі `$DC up -d web`. nginx-блоки `/l/` і `/.well-known/*`
+  з `auth_basic off` — `deploy/staging/README.md` §6.3.
+- **Без цих змінних** `/.well-known/apple-app-site-association` (немає `APPLE_TEAM_ID`) і `/.well-known/assetlinks.json` (немає
+  `ANDROID_PACKAGE` або відбитків) повертають **404**: universal links не працюють, лендінг продовжує працювати.
+- **Перевірка:** `curl -si https://beauty.<DOMAIN>/.well-known/assetlinks.json` (200, `application/json`, без редиректу і без 401).
+  Apple кешує AASA через CDN, зміни можуть з'являтися не одразу; після зміни переінсталюйте застосунок.

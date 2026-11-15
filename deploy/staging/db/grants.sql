@@ -27,3 +27,17 @@ GRANT SELECT, UPDATE ON beauty_platform_feedback TO beautycrm_worker;
 GRANT SELECT, DELETE ON control_plane_nonces TO beautycrm_worker;
 GRANT SELECT (id, tenant_id, email, full_name, role) ON users TO beautycrm_worker;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO beautycrm_worker;
+
+-- Мобільний запис (міграції 20261109*): відгуки про майстрів - лише app-роль (воркер не читає); явний GRANT на випадок, коли ALL TABLES виконано до міграції
+GRANT SELECT, INSERT, UPDATE, DELETE ON beauty_specialist_reviews TO beautycrm_app;
+-- Нові колонки (public_code, city, координати, reminder 24h, email-канал, умови скасування, профіль майстра) покриті табличними GRANT-ами вище
+-- Воркер: підтвердження запису читає ім'я майстра; email-нагадування створює розмову на каналі email (INSERT beauty_conversations)
+GRANT SELECT ON beauty_specialists TO beautycrm_worker;
+GRANT INSERT ON beauty_conversations TO beautycrm_worker;
+-- Публічний каталог закладів (ADR-022): функції належать beautycrm_catalog, EXECUTE лише для app-ролі, НЕ для PUBLIC і НЕ для воркера
+REVOKE ALL ON FUNCTION public.beauty_public_resolve_location(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.beauty_public_nearby_locations(double precision, double precision, double precision, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.beauty_public_search_locations_by_city(text, integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.beauty_public_resolve_location(text) TO beautycrm_app;
+GRANT EXECUTE ON FUNCTION public.beauty_public_nearby_locations(double precision, double precision, double precision, integer) TO beautycrm_app;
+GRANT EXECUTE ON FUNCTION public.beauty_public_search_locations_by_city(text, integer) TO beautycrm_app;
