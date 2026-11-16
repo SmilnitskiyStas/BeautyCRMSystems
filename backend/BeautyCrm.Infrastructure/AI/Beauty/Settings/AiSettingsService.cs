@@ -155,6 +155,9 @@ public sealed partial class AiSettingsService(
             var row = await db.AiSettings.FirstOrDefaultAsync(ct);
             var isNew = row is null;
             var requested = AiModes.Parse(mode);
+            // §30.6.10 (TASK-848): режим auto (ШІ діє без підтвердження, ADR-005) встановлює лише owner; повернення з auto - за ai.settings = edit
+            if (requested == AiMode.Auto && (isNew || AiModes.Parse(row!.Mode) != AiMode.Auto) && actor.Role != Roles.Owner)
+                return Error.Forbidden(ErrForbiddenRole, "Only the owner can enable the auto mode.");
             if (AiModes.AutoRequiresAcknowledgement(isNew ? AiMode.Confirm : AiModes.Parse(row!.Mode), requested, req.AcknowledgeAutoMode == true))
                 return V("auto_mode_ack_required", "Switching to auto mode requires acknowledgeAutoMode=true.");
             if (keySource is not null && keySource != (row?.KeySource ?? AiTenantRuntime.KeySourcePlatform) && actor.Role != Roles.Owner)

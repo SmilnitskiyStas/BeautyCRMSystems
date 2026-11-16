@@ -10,7 +10,7 @@ public class StaffPublicProfileTests
     private static readonly DateTimeOffset Now = new(2030, 6, 1, 0, 0, 0, TimeSpan.Zero);
     private readonly FakeStaffStore _store = new();
     private StaffService Sut() => new(_store, new FakeClock(Now));
-    private static Actor Owner() => new(Guid.NewGuid(), Guid.NewGuid(), Roles.Owner, null);
+    private static Actor Owner() => Actor.ForTest(Roles.Owner, null, Guid.NewGuid(), Guid.NewGuid());
 
     private static UpdateSpecialistRequest Upd(int? year = null, string? bio = null, string? photo = null) =>
         new("Master", null, null, null, year, bio, photo);

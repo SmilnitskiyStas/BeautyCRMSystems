@@ -19,7 +19,7 @@ namespace BeautyCrm.Api.Controllers;
 [RequireModule("beauty_marketing")]
 [CouponsMarketingGate]
 [Authorize(Policy = AuthPolicies.Staff)]
-[ReminderRoles(Roles.Owner, Roles.Admin)]
+[RequirePermission(PermissionKeys.MarketingCampaigns, PermissionLevels.Edit)]
 [InboxNoStore]
 [ProducesResponseType(StatusCodes.Status401Unauthorized)]
 [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -60,14 +60,15 @@ public sealed class CouponsController(CouponService coupons) : ControllerBase
 [Route("api/beauty/clients/{clientId:guid}/coupons")]
 [RequireModule("beauty_clients")]
 [Authorize(Policy = AuthPolicies.Staff)]
-[ReminderRoles(Roles.Owner, Roles.Admin)]
+[RequirePermission(PermissionKeys.ClientsView, PermissionLevels.Own)]
 [InboxNoStore]
-public sealed class ClientCouponsController(CouponService coupons) : ControllerBase
+public sealed class ClientCouponsController(CouponService coupons, IClientScope scope) : ControllerBase
 {
     [HttpGet]
     [ProducesResponseType<IReadOnlyList<ClientCouponDto>>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> List(Guid clientId, CancellationToken ct) => this.ToResult(await coupons.ListForClientAsync(clientId, ct));
+    public async Task<IActionResult> List(Guid clientId, CancellationToken ct) =>
+        await this.OutOfScopeAsync(scope, clientId, ct) ?? this.ToResult(await coupons.ListForClientAsync(clientId, ct));
 }
 
 /// <summary>Перевірка коду персоналом (усі ролі, модуль beauty_booking). 429 при перевищенні StaffCheckPerUserPerMinute.</summary>
@@ -75,6 +76,7 @@ public sealed class ClientCouponsController(CouponService coupons) : ControllerB
 [Route("api/beauty/coupons/check")]
 [RequireModule("beauty_booking")]
 [Authorize(Policy = AuthPolicies.Staff)]
+[RequirePermission(PermissionKeys.CalendarManage, PermissionLevels.Own)] // §30.6.2; детальні причини - лише за calendar.manage = all
 [InboxNoStore]
 public sealed class CouponCheckController(CouponService coupons) : ControllerBase
 {
@@ -91,7 +93,7 @@ public sealed class CouponCheckController(CouponService coupons) : ControllerBas
         var r = await coupons.CheckAsync(new CouponUse(CouponScope.Staff, request.Code, RateKey: actor.UserId.ToString()), loc, svc, request.ClientId, ct);
         if (!r.IsOk && r.Error!.Kind == BeautyCrm.Application.Features.BeautyCommon.ErrorKind.TooManyRequests) Response.Headers.RetryAfter = "60";
         // TASK-790 (L7): майстер (specialist) не отримує деталізованих причин - підбір і розвідка станів кодів; owner/admin бачать повні коди
-        if (!r.IsOk && !StaffRoles.IsManager(actor) && IsCodeReason(r.Error!.Code))
+        if (!r.IsOk && !actor.Access.AtLeast(PermissionKeys.CalendarManage, PermissionLevels.All) && IsCodeReason(r.Error!.Code))
             return this.ToError(BeautyCrm.Application.Features.BeautyCommon.Error.Conflict(CouponService.Invalid, "The code is not valid."));
         return this.ToResult(r);
     }

@@ -560,6 +560,10 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnName("created_at")
                         .HasDefaultValueSql("now()");
 
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by_user_id");
+
                     b.Property<int>("DurationMinutes")
                         .HasColumnType("integer")
                         .HasColumnName("duration_minutes");
@@ -692,6 +696,10 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.HasIndex("TenantId", "CouponId")
                         .HasDatabaseName("ix_beauty_appointments_tenant_id_coupon_id")
                         .HasFilter("coupon_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "CreatedByUserId")
+                        .HasDatabaseName("ix_beauty_appointments_tenant_id_created_by_user_id")
+                        .HasFilter("created_by_user_id IS NOT NULL");
 
                     b.HasIndex("TenantId", "IdempotencyKeyHash")
                         .IsUnique()
@@ -2623,6 +2631,13 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("invited_by_user_id");
 
+                    b.Property<string>("Permissions")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("permissions")
+                        .HasDefaultValueSql("'{}'::jsonb");
+
                     b.Property<DateTimeOffset?>("RevokedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("revoked_at");
@@ -2674,7 +2689,9 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
 
                     b.ToTable("invites", null, t =>
                         {
-                            t.HasCheckConstraint("ck_invites_role", "role IN ('admin', 'specialist')");
+                            t.HasCheckConstraint("ck_invites_permissions", "jsonb_typeof(permissions) = 'object'");
+
+                            t.HasCheckConstraint("ck_invites_role", "role IN ('admin', 'deputy', 'specialist')");
                         });
                 });
 
@@ -4610,6 +4627,12 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnName("id")
                         .HasDefaultValueSql("gen_random_uuid()");
 
+                    b.Property<int>("AccessVersion")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1)
+                        .HasColumnName("access_version");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("timestamp with time zone")
@@ -4700,9 +4723,122 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         {
                             t.HasCheckConstraint("ck_users_password_or_invited", "password_hash IS NOT NULL OR state = 'invited'");
 
-                            t.HasCheckConstraint("ck_users_role", "role IN ('owner', 'admin', 'specialist')");
+                            t.HasCheckConstraint("ck_users_role", "role IN ('owner', 'admin', 'deputy', 'specialist')");
 
                             t.HasCheckConstraint("ck_users_state", "state IN ('active', 'invited')");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.UserAccessAuditRow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("action");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<string>("Changes")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("changes");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid?>("InviteId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("invite_id");
+
+                    b.Property<Guid?>("TargetUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("target_user_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_user_access_audit");
+
+                    b.HasIndex("TenantId", "ActorUserId")
+                        .HasDatabaseName("ix_user_access_audit_tenant_id_actor_user_id");
+
+                    b.HasIndex("TenantId", "CreatedAt", "Id")
+                        .IsDescending(false, true, true)
+                        .HasDatabaseName("ix_user_access_audit_tenant_id_created_at_id");
+
+                    b.HasIndex("TenantId", "InviteId", "CreatedAt")
+                        .IsDescending(false, false, true)
+                        .HasDatabaseName("ix_user_access_audit_tenant_id_invite_id_created_at")
+                        .HasFilter("invite_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "TargetUserId", "CreatedAt")
+                        .IsDescending(false, false, true)
+                        .HasDatabaseName("ix_user_access_audit_tenant_id_target_user_id_created_at");
+
+                    b.ToTable("user_access_audit", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_user_access_audit_action", "action IN ('permissions_changed', 'role_changed', 'preset_reset', 'invited', 'invite_revoked', 'invite_accepted', 'activated', 'deactivated', 'migrated')");
+
+                            t.HasCheckConstraint("ck_user_access_audit_changes", "jsonb_typeof(changes) IN ('array', 'object')");
+
+                            t.HasCheckConstraint("ck_user_access_audit_target_or_invite", "target_user_id IS NOT NULL OR invite_id IS NOT NULL");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.UserPermission", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.Property<string>("Permission")
+                        .HasColumnType("text")
+                        .HasColumnName("permission");
+
+                    b.Property<string>("Level")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("level");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid?>("UpdatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by_user_id");
+
+                    b.HasKey("TenantId", "UserId", "Permission")
+                        .HasName("pk_user_permissions");
+
+                    b.HasIndex("TenantId", "UpdatedByUserId")
+                        .HasDatabaseName("ix_user_permissions_tenant_id_updated_by_user_id");
+
+                    b.ToTable("user_permissions", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_user_permissions_level", "level ~ '^[a-z_]{1,16}$'");
+
+                            t.HasCheckConstraint("ck_user_permissions_permission", "permission ~ '^[a-z_]{1,32}\\.[a-z_]{1,32}$'");
                         });
                 });
 
@@ -4796,6 +4932,13 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasPrincipalKey("TenantId", "Id")
                         .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_beauty_appointments_coupons_tenant_id_coupon_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CreatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_appointments_users_tenant_id_created_by_user_id");
 
                     b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Location", "Location")
                         .WithMany()
@@ -5907,6 +6050,48 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasConstraintName("fk_users_beauty_specialists_tenant_id_specialist_id");
 
                     b.Navigation("Specialist");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.UserAccessAuditRow", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ActorUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_user_access_audit_users_tenant_id_actor_user_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Invite", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "InviteId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_user_access_audit_invites_tenant_id_invite_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "TargetUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_user_access_audit_users_tenant_id_target_user_id");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.UserPermission", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "UpdatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_user_permissions_users_tenant_id_updated_by_user_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "UserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_user_permissions_users_tenant_id_user_id");
                 });
 #pragma warning restore 612, 618
         }

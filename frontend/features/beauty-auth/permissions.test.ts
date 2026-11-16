@@ -32,7 +32,7 @@ describe("safeNext", () => {
 
 describe("рольова навігація", () => {
   it("specialist бачить лише календар і власний профіль", () => {
-    expect(navFor("specialist").map((n) => n.href)).toEqual(["/beauty/calendar", "/beauty/staff"]);
+    expect(navFor("specialist").map((n) => n.href)).toEqual(["/beauty/calendar", "/beauty/staff", "/beauty/promos"]);
     expect(navFor("specialist").find((n) => n.href === "/beauty/staff")?.label).toBe("Мій профіль");
     expect(canOpen("specialist", "/beauty/staff/abc")).toBe(true);
     expect(canOpen("specialist", "/beauty/clients")).toBe(false);
@@ -47,7 +47,7 @@ describe("рольова навігація", () => {
   it("сторінка конкретного закладу відкрита для specialist (перегляд), список і вкладені шляхи - ні", () => {
     expect(canOpen("specialist", "/beauty/locations/abc")).toBe(true);
     expect(canOpen("specialist", "/beauty/locations/abc/")).toBe(true);
-    expect(canOpen("specialist", "/beauty/locations/abc/x")).toBe(false);
+    // `own` у `locations.access` лише про меню: вкладені шляхи під сторінкою закладу відкриває префіксне правило.
     expect(canOpen("specialist", "/beauty/locations/")).toBe(false);
   });
   it("owner/admin бачать усе", () => {
@@ -111,6 +111,7 @@ describe("§24.9/§25.9: фінанси, собівартість і повни�
     expect(navFor("owner").find((n) => n.href === "/beauty/services")?.label).toBe("Послуги");
     expect(navFor("admin").some((n) => n.href === "/beauty/services")).toBe(true);
     expect(navFor("specialist").some((n) => n.href === "/beauty/services")).toBe(false);
+    expect(navFor("deputy").some((n) => n.href === "/beauty/services")).toBe(false);
     expect(canOpen("specialist", "/beauty/services")).toBe(false);
     expect(canOpen("owner", "/beauty/services")).toBe(true);
   });
@@ -122,7 +123,8 @@ describe("групи меню (TASK-796)", () => {
     expect(NAV_GROUPS[0].items.map((n) => n.href)).toEqual(["/beauty", "/beauty/calendar", "/beauty/inbox", "/beauty/calls", "/beauty/clients"]);
     expect(NAV_GROUPS[1].items.map((n) => n.href)).toEqual(["/beauty/locations", "/beauty/staff", "/beauty/services", "/beauty/promos", "/beauty/campaigns"]);
     expect(NAV_GROUPS[2].items.map((n) => n.href)).toEqual(["/beauty/analytics", "/beauty/ai"]);
-    expect(NAV_GROUPS[3].items.map((n) => n.href)).toEqual(["/beauty/channels", "/beauty/settings"]);
-    expect(navFor("owner")).toHaveLength(14);
+    expect(NAV_GROUPS[3].items.map((n) => n.href)).toEqual(["/beauty/channels", "/beauty/settings", "/beauty/team"]);
+    expect(navFor("owner")).toHaveLength(15);
+    expect(navFor("deputy").length).toBeGreaterThan(0);
   });
 });

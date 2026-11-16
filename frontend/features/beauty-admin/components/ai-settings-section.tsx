@@ -390,7 +390,7 @@ function AiSettingsBody({ settings, catalog, canKey }: { settings: AiSettings; c
 /** Картка «ШІ-асистент» на `/beauty/settings#ai` (§20.9): owner - усе, admin - без блоку ключів, specialist - нічого. */
 export function AiSettingsSection() {
   const { user } = useAuth();
-  const allowed = canEditAiSettings(user.role);
+  const allowed = canEditAiSettings(user);
   const settings = useAiSettings(allowed);
   const models = useAiModels(allowed);
   if (!allowed) return null;
@@ -408,7 +408,7 @@ export function AiSettingsSection() {
           }}
         >
           {settings.data && models.data ? (
-            <AiSettingsBody settings={settings.data} catalog={models.data} canKey={canManageAiKey(user.role)} />
+            <AiSettingsBody settings={settings.data} catalog={models.data} canKey={canManageAiKey(user)} />
           ) : null}
         </QueryState>
       </Card>

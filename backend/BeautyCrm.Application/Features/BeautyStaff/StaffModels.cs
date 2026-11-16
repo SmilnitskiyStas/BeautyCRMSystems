@@ -26,12 +26,18 @@ public sealed class StaffOptions
 
 public static class StaffRoles
 {
-    /// <summary>owner/admin: керують профілями, графіками, відсутностями.</summary>
-    public static bool IsManager(Actor actor) => actor.Role is Roles.Owner or Roles.Admin;
+    /// <summary>ADR-023: <c>staff.access = edit</c> - керування профілями, графіками, відсутностями (було IsManager за роллю).</summary>
+    public static bool CanEditStaff(Actor actor) => actor.Access.AtLeast(PermissionKeys.StaffAccess, PermissionLevels.Edit);
 
-    /// <summary>Owner змінює все; admin — лише профілі без користувача або з користувачем-specialist (owner/admin недоторканні).</summary>
-    public static bool CanModify(Actor actor, string? linkedUserRole) =>
-        actor.Role == Roles.Owner || (actor.Role == Roles.Admin && linkedUserRole is null or Roles.Specialist);
+    /// <summary>ADR-023: <c>locations.access = edit</c> - керування закладами.</summary>
+    public static bool CanEditLocations(Actor actor) => actor.Access.AtLeast(PermissionKeys.LocationsAccess, PermissionLevels.Edit);
+
+    /// <summary>
+    /// §30.1 (M2): профіль без користувача змінює будь-хто з потрібним правом; профіль із користувачем - лише актор ВИЩОГО рангу
+    /// (owner > admin > deputy > specialist) і не сам цей користувач (власний профіль цим правилом не змінюється).
+    /// </summary>
+    public static bool CanModify(Actor actor, string? linkedUserRole, Guid? linkedUserId = null) =>
+        linkedUserRole is null || (linkedUserId != actor.UserId && Roles.Rank(actor.Role) > Roles.Rank(linkedUserRole));
 }
 
 // ---------- запити ----------
@@ -73,7 +79,9 @@ public sealed record SetScheduleRequest(Guid LocationId, JsonElement? WorkingHou
 /// <summary>POST /specialists/{id}/locations: WorkingHours необов'язковий (без нього майстер не бронюється, доки не задано графік).</summary>
 public sealed record AssignLocationRequest(Guid LocationId, JsonElement? WorkingHours);
 
-public sealed record InviteSpecialistRequest([Required, EmailAddress, StringLength(320)] string Email);
+public sealed record InviteSpecialistRequest(
+    [Required, EmailAddress, StringLength(320)] string Email,
+    IReadOnlyDictionary<string, string>? Permissions = null);
 
 public sealed record CreateAbsenceRequest(
     [Required, StringLength(16)] string Type, DateOnly DateFrom, DateOnly DateTo, [StringLength(500)] string? Note);
@@ -100,7 +108,9 @@ public sealed record AbsenceConflictDto(Guid AppointmentId, DateTimeOffset Start
 /// Conflicts — лише для керівників при створенні/підтвердженні.
 /// </summary>
 public sealed record AbsenceDto(
-    Guid Id, Guid SpecialistId, string Type, DateOnly DateFrom, DateOnly DateTo, string Status,
+    Guid Id, Guid SpecialistId,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Type, // D7: чужий тип (sick = дані про здоров'я) лише за staff.access = edit
+    DateOnly DateFrom, DateOnly DateTo, string Status,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Note,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<AbsenceConflictDto>? Conflicts = null);
 
@@ -114,7 +124,7 @@ public sealed record StaffSpecialistRecord(
     int? PracticeStartYear = null, string? Bio = null);
 
 /// <summary>Мінімум для перевірок прав: існування, активність, роль прив'язаного користувача (admin не змінює owner).</summary>
-public sealed record SpecialistLink(Guid Id, bool IsActive, string? LinkedUserRole);
+public sealed record SpecialistLink(Guid Id, bool IsActive, string? LinkedUserRole, Guid? LinkedUserId = null);
 
 public sealed record NewSpecialist(
     string Name, string? Phone, string? Position, IReadOnlyList<Guid> LocationIds, IReadOnlyList<Guid> ServiceIds, string? WorkingHoursJson,

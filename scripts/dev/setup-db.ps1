@@ -47,6 +47,11 @@ DO `$`$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='beautycrm_app') THEN CREATE ROLE beautycrm_app LOGIN PASSWORD '$app' NOSUPERUSER NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='beautycrm_worker') THEN CREATE ROLE beautycrm_worker LOGIN PASSWORD '$wrk' NOSUPERUSER NOBYPASSRLS; END IF;
 END `$`$;
+DO `$`$ BEGIN
+  -- ADR-023: власник purge_user_access_audit; членство owner INHERIT FALSE, SET TRUE (owner не має CREATEROLE)
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='beautycrm_audit_purge') THEN CREATE ROLE beautycrm_audit_purge NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; END IF;
+END `$`$;
+GRANT beautycrm_audit_purge TO beautycrm_owner WITH INHERIT FALSE, SET TRUE;
 ALTER ROLE beautycrm_owner PASSWORD '$own';
 ALTER ROLE beautycrm_app PASSWORD '$app' NOSUPERUSER NOBYPASSRLS;
 ALTER ROLE beautycrm_worker PASSWORD '$wrk' NOSUPERUSER NOBYPASSRLS;
@@ -75,6 +80,9 @@ REVOKE UPDATE, DELETE ON beauty_ai_settings_audit FROM beautycrm_app;
 REVOKE UPDATE, DELETE ON beauty_marketing_consent_events FROM beautycrm_app;
 -- Журнал platform-дій control plane (ADR-018, TASK-816) append-only для app-ролі: лише SELECT/INSERT
 REVOKE UPDATE, DELETE ON platform_audit_log FROM beautycrm_app;
+-- Права доступу користувачів (ADR-023, TASK-849): user_permissions - SELECT/INSERT/UPDATE/DELETE (ALL TABLES); журнал user_access_audit append-only: лише SELECT/INSERT
+-- Воркер і control plane не мають доступу до user_permissions та user_access_audit
+REVOKE UPDATE, DELETE ON user_access_audit FROM beautycrm_app;
 
 -- Роль воркера: мінімальні права (runbook §6/§11; контракти §22.3, §22.5, §23)
 GRANT USAGE ON SCHEMA public TO beautycrm_worker;
@@ -107,6 +115,9 @@ REVOKE ALL ON FUNCTION public.beauty_public_search_locations_by_city(text, integ
 GRANT EXECUTE ON FUNCTION public.beauty_public_resolve_location(text) TO beautycrm_app;
 GRANT EXECUTE ON FUNCTION public.beauty_public_nearby_locations(double precision, double precision, double precision, integer) TO beautycrm_app;
 GRANT EXECUTE ON FUNCTION public.beauty_public_search_locations_by_city(text, integer) TO beautycrm_app;
+-- Retention журналу доступу (ADR-023, Q7): SECURITY DEFINER-функція (власник beautycrm_audit_purge), EXECUTE лише воркеру, не PUBLIC і не app
+REVOKE ALL ON FUNCTION public.purge_user_access_audit(timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.purge_user_access_audit(timestamptz) TO beautycrm_worker;
 "@
 $grants | docker exec -i $script:Container psql -U postgres -d beautycrm -v ON_ERROR_STOP=1 -q | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'GRANT не вдався.' }

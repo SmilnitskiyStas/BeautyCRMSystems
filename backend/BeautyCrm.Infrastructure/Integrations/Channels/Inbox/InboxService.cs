@@ -41,12 +41,12 @@ public sealed partial class InboxService(
 
     // ------------------------------------------------------------------ допоміжне
 
-    private Error? Guard(Actor actor)
+    private Error? Guard(Actor actor, string level = PermissionLevels.View)
     {
         TenantGuard.Ensure(tenant, actor.TenantId);
-        return actor.Role is Roles.Owner or Roles.Admin
+        return actor.Access.AtLeast(PermissionKeys.ChannelsInbox, level)
             ? null
-            : Error.Forbidden(InboxErrors.ForbiddenRole, "Inbox is available to the owner and admin only.");
+            : Error.Forbidden(InboxErrors.ForbiddenRole, "Inbox is not available for your access level.");
     }
 
     private static Error NotFound() => Error.NotFound(InboxErrors.ConversationNotFound, "Conversation was not found.");
@@ -337,7 +337,7 @@ public sealed partial class InboxService(
             log.LogInformation("inbox_reply conversation={ConversationId} message={MessageId} user={UserId} result={Result}",
                 id, messageId, actor.UserId, result);
 
-        if (Guard(actor) is { } denied) { Audit(denied.Code); return denied; }
+        if (Guard(actor, PermissionLevels.Reply) is { } denied) { Audit(denied.Code); return denied; }
 
         var body = NormalizeText(text);
         if (body is null)
@@ -457,7 +457,7 @@ public sealed partial class InboxService(
 
     public async Task<Result<bool>> ResumeAiAsync(Actor actor, Guid id, CancellationToken ct)
     {
-        if (Guard(actor) is { } denied) return denied;
+        if (Guard(actor, PermissionLevels.Reply) is { } denied) return denied;
         if (!await db.Conversations.AnyAsync(c => c.Id == id, ct)) return NotFound();
 
         var now = clock.GetUtcNow();
@@ -494,7 +494,7 @@ public sealed partial class InboxService(
     /// </summary>
     public async Task<Result<bool>> ResolveAsync(Actor actor, Guid id, CancellationToken ct)
     {
-        if (Guard(actor) is { } denied) return denied;
+        if (Guard(actor, PermissionLevels.Reply) is { } denied) return denied;
         if (!await db.Conversations.AnyAsync(c => c.Id == id, ct)) return NotFound();
 
         var now = clock.GetUtcNow();

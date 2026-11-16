@@ -23,7 +23,8 @@ public sealed record PutContactPreferencesRequest(string? Method, int[]? Offsets
 /// <param name="PhonePending">TASK-769 (§25.7): повний непідтверджений номер, наданий у чаті; лише тут і в картці клієнта (owner/admin).</param>
 public sealed record CallTaskClientDto(
     Guid Id, string Name, string? Phone,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PhonePending = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PhonePending = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PhonePendingMasked = null);
 public sealed record CallTaskAppointmentDto(Guid Id, DateTimeOffset StartsAt, string LocalStartsAt, string ServiceName, string SpecialistName, string Status);
 public sealed record CallTaskLocationDto(Guid Id, string Name, string Timezone);
 
@@ -34,6 +35,15 @@ public sealed record CallTaskDto(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? CompletedAt,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] UserRefDto? CompletedBy,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Note);
+
+/// <summary>Маскування <c>client.phonePending</c> за <c>clients.contacts</c> (§30.6.8); телефон для дзвінка віддається за <c>clients.calls = all</c>.</summary>
+public static class CallTaskView
+{
+    public static CallTaskDto ForViewer(this CallTaskDto t, BeautyCrm.Application.Features.BeautyAuth.Actor actor) =>
+        BeautyCrm.Application.Features.BeautyAuth.ContactMasking.CanSeeContacts(actor) || t.Client.PhonePending is null
+            ? t
+            : t with { Client = t.Client with { PhonePending = null, PhonePendingMasked = BeautyCrm.Application.Features.BeautyAuth.ContactMasking.MaskPhone(t.Client.PhonePending) } };
+}
 
 public sealed record CallTaskCountsDto(int Open, int Done, int Skipped);
 public sealed record CallTaskListDto(IReadOnlyList<CallTaskDto> Items, CallTaskCountsDto Counts);

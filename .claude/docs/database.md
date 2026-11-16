@@ -583,7 +583,8 @@ id              UUID PRIMARY KEY
 tenant_id       UUID NOT NULL (FK tenants)
 email           VARCHAR NOT NULL
 full_name       VARCHAR NOT NULL
-role            VARCHAR NOT NULL (CHECK IN ('owner','admin','specialist'))
+role            VARCHAR NOT NULL (CHECK IN ('owner','admin','deputy','specialist'))  -- deputy: ADR-023
+access_version  INTEGER NOT NULL DEFAULT 1  -- ADR-023: +1 за зміни ролі, прав, активності (X-Access-Version)
 specialist_id   UUID (nullable, FK beauty_specialists, composite FK (tenant_id, specialist_id))
 is_active       BOOLEAN DEFAULT true
 password_hash   VARCHAR NULL (bcrypt, workfactor 12; NULL only while state='invited')
@@ -604,7 +605,8 @@ CHECK (password_hash IS NOT NULL OR state = 'invited')  -- ADR-018, platform_con
 id              UUID PRIMARY KEY
 tenant_id       UUID NOT NULL (FK tenants)
 email           VARCHAR NOT NULL
-role            VARCHAR NOT NULL (CHECK IN ('admin','specialist'))
+role            VARCHAR NOT NULL (CHECK IN ('admin','deputy','specialist'))  -- deputy: ADR-023
+permissions     JSONB NOT NULL (CHECK jsonb_typeof = 'object'; ADR-023: повний знімок прав, обрізаний стелею запрошувача; міграція backfill-ить пресет ролі; DEFAULT '{}' лишено для сумісності зі старими образами API, див. known-issues)
 specialist_id   UUID (nullable, FK beauty_specialists, TASK-691)
 token_hash      VARCHAR NOT NULL (SHA-256, one-time)
 is_used         BOOLEAN DEFAULT false
@@ -622,6 +624,40 @@ UNIQUE (tenant_id, email) PARTIAL WHERE is_used=false AND status='pending'
 - One active per specialist_id (new invite revokes pending for same profile, advisory lock)
 
 **RLS Policy:** `tenant_isolation`.
+
+#### user_permissions (ADR-023, міграція 20261115120000)
+```sql
+tenant_id          UUID NOT NULL
+user_id            UUID NOT NULL
+permission         TEXT NOT NULL      -- 'calendar.view'; CHECK ^[a-z_]{1,32}\.[a-z_]{1,32}$
+level              TEXT NOT NULL      -- 'own'; CHECK ^[a-z_]{1,16}$
+updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+updated_by_user_id UUID NULL          -- NULL = міграція/система; FK RESTRICT
+PRIMARY KEY (tenant_id, user_id, permission)
+FK (tenant_id, user_id) -> users (tenant_id, id) ON DELETE CASCADE
+```
+- Матеріалізовані значення: що в БД, те й діє. Для owner рядків немає (права неявні). Валідність ключів і рівнів перевіряє Application за каталогом; БД перевіряє лише формат.
+- **RLS:** ENABLE + FORCE, `tenant_isolation` (`app.tenant_id`).
+
+#### user_access_audit (ADR-023, append-only)
+```sql
+id              UUID PRIMARY KEY
+tenant_id       UUID NOT NULL
+actor_user_id   UUID NULL      -- NULL = міграція/система; FK RESTRICT
+target_user_id  UUID NULL      -- NULL для подій запрошення (Q-C2); FK RESTRICT
+invite_id       UUID NULL      -- FK invites (tenant_id, id) RESTRICT
+action          VARCHAR(32) NOT NULL  -- permissions_changed|role_changed|preset_reset|invited|invite_revoked|invite_accepted|activated|deactivated|migrated
+changes         JSONB NOT NULL        -- array або object (diff: [{permission, from, to}] / {role:{from,to}})
+created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+CHECK (target_user_id IS NOT NULL OR invite_id IS NOT NULL)
+```
+- **RLS:** ENABLE + FORCE, `tenant_isolation`. Додатково політики `audit_purge_select` і `audit_purge_delete` лише `TO beautycrm_audit_purge` (`USING (true)`, для retention між tenant-ами).
+- **Append-only:** `BEFORE UPDATE OR DELETE` (row) і `BEFORE TRUNCATE` (statement) тригер `user_access_audit_block_mutation`, що кидає `42501`. Єдиний виняток: рядковий `DELETE`, коли `current_user = 'beautycrm_audit_purge'`. Роль застосунку має лише `SELECT, INSERT` (`REVOKE UPDATE, DELETE` у `grants.sql`).
+- Індекси: `(tenant_id, target_user_id, created_at DESC)`, `(tenant_id, created_at DESC, id DESC)`, `(tenant_id, actor_user_id)`, часткові `(tenant_id, invite_id, created_at DESC) WHERE invite_id IS NOT NULL`.
+- **Journal не містить ПІІ клієнтів, паролів, токенів чи email.**
+
+#### beauty_appointments.created_by_user_id (ADR-023)
+`uuid NULL`, композитний FK `(tenant_id, created_by_user_id) -> users` RESTRICT, частковий індекс `(tenant_id, created_by_user_id) WHERE NOT NULL`. Наявні рядки NULL. Використовується scope `clients.view = own` (автор скасованого запису scope не розширює). Заповнює `POST /appointments` (TASK-852).
 
 #### refresh_tokens
 ```sql
@@ -773,6 +809,17 @@ Adds beauty_specialists.practice_start_year, bio (+ CHECKs). Creates beauty_spec
 
 `beauty_cancellation_settings` + `show_terms_to_client boolean NOT NULL DEFAULT true`, `custom_terms_text text NULL`, CHECK `ck_beauty_cancellation_settings_terms_text` (≤ 500). `ADD COLUMN IF NOT EXISTS`; наявні рядки = true/NULL. Down видаляє CHECK і колонки. Покрито `CancellationTermsMigrationTests`.
 
+### 16. `20261115120000_auth_user_permissions` (TASK-849, ADR-023; написана вручну)
+
+- `users.access_version` (DEFAULT 1); `ck_users_role` + `deputy`. `invites.role` CHECK + `deputy`; `invites.permissions jsonb` (спочатку NULL, після backfill NOT NULL, `DEFAULT '{}'`, `ck_invites_permissions` jsonb object).
+- `beauty_appointments.created_by_user_id` (див. розділ 2).
+- Таблиці `user_permissions`, `user_access_audit` (див. розділ 2), тригер append-only, RLS FORCE.
+- Backfill: для кожного `admin` і `specialist` вставляються рядки пресету (`ON CONFLICT DO NOTHING`); у журнал `migrated` (`actor = NULL`) лише за фактично вставлені рядки, тож повторний запуск нічого не дублює. Наявні запрошення отримують знімок пресету своєї ролі (лише `permissions IS NULL`). Для owner нічого не пишеться.
+- Роль `beautycrm_audit_purge` (NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT): створюється міграцією, якщо мігратор має `CREATEROLE`; інакше міграція падає з інструкцією ops. Мігратор має бути членом `WITH INHERIT FALSE, SET TRUE` (міграція видає членство сама, якщо може).
+- Функція `public.purge_user_access_audit(p_before timestamptz) RETURNS bigint`, `SECURITY DEFINER`, `search_path = pg_catalog, pg_temp`, власник `beautycrm_audit_purge`. Відмовляє (`22023`), якщо `p_before IS NULL` або `p_before > now() - interval '3 years'`. `REVOKE ALL ... FROM PUBLIC`; EXECUTE лише `beautycrm_worker` (`grants.sql`, `setup-db.ps1`). Викликів з воркера ще немає (див. known-issues).
+- GRANT для `beautycrm_audit_purge`: `USAGE` на schema `public`, `SELECT, DELETE` на `user_access_audit`.
+- **Down (human gate):** `RAISE EXCEPTION` (відкат цілком), якщо є користувачі або запрошення `deputy`, запрошення з нестандартним знімком, права користувачів, що відрізняються від пресетів, або права owner/невідомі ключі. Інакше видаляє таблиці, функцію, тригер, колонки й CHECK-и, повертає `ck_users_role`/`ck_invites_role` до старого набору. Роль `beautycrm_audit_purge` не видаляється (кластерна).
+
 ### 15. `20261104182836_platform_control_plane` (TASK-816, ADR-018; за часом застосування стоїть між marketing і chat_booking_flow)
 
 - `tenants`: `external_ref varchar(64) NULL`, `external_source varchar(16) NULL` ('shelfguard'), `suspended_at`, `suspended_reason varchar(500)`. Partial `UNIQUE (external_source, external_ref) WHERE external_ref IS NOT NULL` (`ux_tenants_external_ref`). CHECK: ref format `^[A-Za-z0-9_-]{1,64}$`, source in ('shelfguard'), ref and source set together, `suspended_*` only while `status = 'suspended'`. Policy `tenants_control_lookup` (see section 3).
@@ -848,6 +895,12 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO beautycrm_app;
 - Down drops functions/policies/privileges but does **not** drop the cluster-level role.
 
 ---
+
+### Role `beautycrm_audit_purge` (ADR-023)
+- `NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT`; власник `purge_user_access_audit`. Мігратор (`beautycrm_owner`) членство `WITH INHERIT FALSE, SET TRUE`.
+- Створюється до міграції `20261115120000`: staging — `deploy/staging/db/init-catalog-role.sql` від superuser (ідемпотентний, також видає членство); локально — `scripts/dev/setup-db.ps1`.
+- GRANT-и: `grants.sql` / `setup-db.ps1`: `REVOKE UPDATE, DELETE ON user_access_audit FROM beautycrm_app`; `REVOKE ALL ON FUNCTION public.purge_user_access_audit(timestamptz) FROM PUBLIC`; `GRANT EXECUTE ... TO beautycrm_worker`. `user_permissions` для app: повний набір DML. Воркер і control plane до `user_permissions` і `user_access_audit` доступу не мають.
+- Тригер append-only, а не лише GRANT, захищає журнал (defense in depth).
 
 ## 6. Local Setup
 

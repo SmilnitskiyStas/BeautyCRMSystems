@@ -23,7 +23,7 @@ const STEPS = ["Акція", "Аудиторія", "Текст", "Купон", "
  */
 export function CampaignWizard({ campaign, presetPromotionId }: { campaign?: CampaignDto; presetPromotionId?: string }) {
   const { user } = useAuth();
-  const allowed = canUseMarketing(user.role);
+  const allowed = canUseMarketing(user);
   const router = useRouter();
   const availability = useMarketingAvailability(allowed);
   const promos = usePromotions(allowed);

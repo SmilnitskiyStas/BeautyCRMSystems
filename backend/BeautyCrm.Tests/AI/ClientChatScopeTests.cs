@@ -195,7 +195,8 @@ public class ClientChatScopeTests
     public async Task chat_only_tools_do_not_exist_outside_client_chat(AiScope scope)
     {
         var rig = new Rig();
-        var ctx = new AiToolContext(Tenant, Guid.NewGuid(), AiMode.Auto, scope);
+        var ctx = new AiToolContext(Tenant, Guid.NewGuid(), AiMode.Auto, scope,
+            Actor: scope == AiScope.Manager ? BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: Tenant) : null);
         foreach (var tool in new[] { "list_locations", "prepare_booking", "request_handoff", "find_slots" })
         {
             var r = await rig.Tools.ExecuteAsync(ctx, tool, J(new { }), default);

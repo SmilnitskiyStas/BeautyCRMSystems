@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useState } from "react";
 import { useAuth } from "@/features/beauty-auth/components/auth-provider";
 import { BeautyApiError, humanizeError } from "@/features/beauty-auth/errors";
-import { canSeeClosureReason } from "../closed-days";
+import { accessOf } from "@/features/beauty-auth/access";
+import { canEditLocations, canEditStaff } from "@/features/beauty-auth/permissions";
 import { useLocations, useManagedLocations, useSetLocationWorkingHours, useStaff } from "../hooks/use-beauty-admin";
 import { closedWeekdaysLabel, mapUrl, staffOfLocation } from "../location-hours";
 import type { BeautyLocation, OutsideHoursConflict, WorkingHours } from "../types";
@@ -213,10 +214,10 @@ function ClosedSection({ location, canEdit, showReason }: { location: BeautyLoca
   );
 }
 
-function StaffSection({ location, role, selfId }: { location: BeautyLocation; role: string; selfId: string | null }) {
+function StaffSection({ location, canManage, selfId }: { location: BeautyLocation; canManage: boolean; selfId: string | null }) {
   const q = useStaff();
   const rows = staffOfLocation(q.data ?? [], location.id);
-  const manager = role !== "specialist";
+  const manager = canManage;
   return (
     <Card className="flex min-w-0 flex-col gap-4">
       <h2 className="text-lg font-semibold">Спеціалісти закладу</h2>
@@ -264,7 +265,8 @@ function StaffSection({ location, role, selfId }: { location: BeautyLocation; ro
 
 export function LocationDetailScreen({ id }: { id: string }) {
   const { user } = useAuth();
-  const isManager = user.role !== "specialist";
+  const isManager = accessOf(user).can("locations.access", "all");
+  const canEdit = canEditLocations(user);
   // Керівники бачать і неактивні заклади; specialist - довідник активних (§16).
   const managed = useManagedLocations(isManager);
   const active = useLocations(!isManager);
@@ -285,12 +287,12 @@ export function LocationDetailScreen({ id }: { id: string }) {
               <h1 className="beauty-display min-w-0 text-[26px] font-semibold break-words">{location.name}</h1>
               {location.isActive !== false ? <Badge tone="ok">Активний</Badge> : <Badge tone="neutral">Неактивний</Badge>}
             </div>
-            {!isManager ? <p className="text-sm text-(--muted)">Перегляд: змінювати налаштування закладу можуть власник і адміністратор.</p> : null}
-            <BasicSection location={location} canEdit={isManager} />
+            {!canEdit ? <p className="text-sm text-(--muted)">Перегляд: змінювати налаштування закладу може лише користувач із відповідним правом.</p> : null}
+            <BasicSection location={location} canEdit={canEdit} />
             <LocationInviteLink location={location} />
-            <HoursSection location={location} canEdit={isManager} />
-            <ClosedSection location={location} canEdit={isManager} showReason={canSeeClosureReason(user.role)} />
-            <StaffSection location={location} role={user.role} selfId={user.specialistId ?? null} />
+            <HoursSection location={location} canEdit={canEdit} />
+            <ClosedSection location={location} canEdit={canEdit} showReason={canEdit} />
+            <StaffSection location={location} canManage={canEditStaff(user)} selfId={user.specialistId ?? null} />
           </>
         )}
       </QueryState>

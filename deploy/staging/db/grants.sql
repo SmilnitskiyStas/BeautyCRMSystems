@@ -9,6 +9,9 @@ REVOKE UPDATE, DELETE ON beauty_ai_settings_audit FROM beautycrm_app;
 REVOKE UPDATE, DELETE ON beauty_marketing_consent_events FROM beautycrm_app;
 -- Журнал platform-дій control plane (ADR-018, TASK-816) append-only для app-ролі: лише SELECT/INSERT
 REVOKE UPDATE, DELETE ON platform_audit_log FROM beautycrm_app;
+-- Права доступу користувачів (ADR-023, TASK-849): user_permissions - SELECT/INSERT/UPDATE/DELETE (ALL TABLES); журнал user_access_audit append-only: лише SELECT/INSERT
+-- Воркер і control plane не мають доступу до user_permissions та user_access_audit
+REVOKE UPDATE, DELETE ON user_access_audit FROM beautycrm_app;
 
 -- Роль воркера: мінімальні права (runbook §6/§11; контракти §22.3, §22.5, §23)
 GRANT USAGE ON SCHEMA public TO beautycrm_worker;
@@ -41,3 +44,6 @@ REVOKE ALL ON FUNCTION public.beauty_public_search_locations_by_city(text, integ
 GRANT EXECUTE ON FUNCTION public.beauty_public_resolve_location(text) TO beautycrm_app;
 GRANT EXECUTE ON FUNCTION public.beauty_public_nearby_locations(double precision, double precision, double precision, integer) TO beautycrm_app;
 GRANT EXECUTE ON FUNCTION public.beauty_public_search_locations_by_city(text, integer) TO beautycrm_app;
+-- Retention журналу доступу (ADR-023, Q7): SECURITY DEFINER-функція (власник beautycrm_audit_purge), EXECUTE лише воркеру, не PUBLIC і не app
+REVOKE ALL ON FUNCTION public.purge_user_access_audit(timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.purge_user_access_audit(timestamptz) TO beautycrm_worker;

@@ -131,7 +131,7 @@ public sealed class CampaignTests(AuthApiFixture fx) : IClassFixture<AuthApiFixt
         Guid ServiceX, Guid ServiceY, Guid Loc2, Guid ChannelId)
     {
         public Guid Id => Seed.TenantId;
-        public Actor OwnerActor => new(Seed.OwnerId, Seed.TenantId, Roles.Owner, null);
+        public Actor OwnerActor => Actor.ForTest(Roles.Owner, null, Seed.OwnerId, Seed.TenantId);
     }
 
     private async Task<World> NewWorldAsync(bool marketingModule = true)

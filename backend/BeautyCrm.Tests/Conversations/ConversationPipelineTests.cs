@@ -633,7 +633,7 @@ public sealed class ConversationPipelineTests : IClassFixture<PostgresRlsFixture
         using (var scope = h.Sp.CreateScope())
         {
             scope.ServiceProvider.GetRequiredService<TenantContext>().SetTenant(s.TenantId);
-            var res = await scope.ServiceProvider.GetRequiredService<AiToolExecutor>().ConfirmAsync(s.TenantId, action.Id, default);
+            var res = await scope.ServiceProvider.GetRequiredService<AiToolExecutor>().ConfirmAsync(BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: s.TenantId), action.Id, default);
             Assert.False(res.IsError);
         }
         Assert.Equal("Чернетка для менеджера.", Assert.Single(h.Bot.Messages).Text);

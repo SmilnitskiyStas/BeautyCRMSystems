@@ -121,7 +121,7 @@ function InboxView() {
 
 export function InboxScreen() {
   const { user } = useAuth();
-  if (!canUseInbox(user.role)) {
+  if (!canUseInbox(user)) {
     return (
       <>
         <PageHeader title="Розмови" />

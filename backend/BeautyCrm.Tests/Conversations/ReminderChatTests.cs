@@ -596,7 +596,7 @@ public sealed class ReminderChatTests : IClassFixture<PostgresRlsFixture>
         var user = new User { Id = Guid.NewGuid(), Email = $"{Guid.NewGuid():N}@t.test", FullName = "Олена Адмін", PasswordHash = "x", Role = Roles.Admin };
         ctx.Add(user);
         await ctx.SaveChangesAsync();
-        return new Actor(user.Id, s.TenantId, Roles.Admin, null);
+        return Actor.ForTest(Roles.Admin, null, user.Id, s.TenantId);
     }
 
     private static async Task<T> InboxAsync<T>(ChatHarness h, ChatSeed s, Func<InboxService, Task<T>> f)

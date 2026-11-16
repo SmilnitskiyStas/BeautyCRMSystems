@@ -84,7 +84,7 @@ describe("§24.8.2: список послуг", () => {
   it("specialist не бачить розділ і запитів не робить", async () => {
     role.current = "specialist";
     renderScreen();
-    expect(screen.getByRole("note")).toHaveTextContent("лише власнику й адміністратору");
+    expect(screen.getByRole("note")).toHaveTextContent("за відповідним правом");
     await Promise.resolve();
     expect(getServiceCosts).not.toHaveBeenCalled();
     expect(getServiceCostDetail).not.toHaveBeenCalled();

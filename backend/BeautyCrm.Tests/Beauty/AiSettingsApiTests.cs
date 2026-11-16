@@ -760,16 +760,21 @@ public sealed class AiSettingsApiTests(AuthApiFixture fx) : IClassFixture<AuthAp
         var a = await NewTenantAsync();
         var b = await NewTenantAsync();
 
-        var no = await Call(e, HttpMethod.Put, "/settings", a.Admin, Body(d => d["mode"] = "auto"));
+        // TASK-853 (§30.6.10): ввімкнути auto може лише owner; admin -> 403 forbidden_role
+        var adminTry = await Call(e, HttpMethod.Put, "/settings", a.Admin, Body(d => { d["mode"] = "auto"; d["acknowledgeAutoMode"] = true; }));
+        Assert.Equal(HttpStatusCode.Forbidden, adminTry.StatusCode);
+        Assert.Equal("forbidden_role", await Code(adminTry));
+
+        var no = await Call(e, HttpMethod.Put, "/settings", a.Owner, Body(d => d["mode"] = "auto"));
         Assert.Equal(HttpStatusCode.UnprocessableEntity, no.StatusCode);
         Assert.Equal("auto_mode_ack_required", await Code(no));
         Assert.Equal("confirm", (await J(await Call(e, HttpMethod.Get, "/settings", a.Owner))).GetProperty("mode").GetString());
 
-        var yes = await Call(e, HttpMethod.Put, "/settings", a.Admin, Body(d => { d["mode"] = "auto"; d["acknowledgeAutoMode"] = true; }));
+        var yes = await Call(e, HttpMethod.Put, "/settings", a.Owner, Body(d => { d["mode"] = "auto"; d["acknowledgeAutoMode"] = true; }));
         Assert.Equal(HttpStatusCode.OK, yes.StatusCode);
         Assert.Equal("auto", (await J(yes)).GetProperty("mode").GetString());
         // вже auto: повторний збір без ack не потрібен; повернення на suggest/confirm теж
-        Assert.Equal(HttpStatusCode.OK, (await Call(e, HttpMethod.Put, "/settings", a.Admin, Body(d => d["mode"] = "auto"))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await Call(e, HttpMethod.Put, "/settings", a.Owner, Body(d => d["mode"] = "auto"))).StatusCode);
 
         // режим береться per tenant (рантайм, яким користуються assistant і /ai/actions)
         await Call(e, HttpMethod.Put, "/settings", b.Owner, Body(d => d["mode"] = "suggest"));

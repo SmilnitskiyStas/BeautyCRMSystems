@@ -4,6 +4,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 import { z } from "zod";
 import { useAuth } from "@/features/beauty-auth/components/auth-provider";
+import { accessOf } from "@/features/beauty-auth/access";
+import { canEditStaff, canSeeMyRevenue } from "@/features/beauty-auth/permissions";
+import { MyRevenueCard } from "./my-revenue-card";
 import { humanizeError } from "@/features/beauty-auth/errors";
 import {
   useAbsences,
@@ -243,7 +246,7 @@ function StaffCard({ m, absentType, pending }: { m: StaffMember; absentType: str
 export function StaffListScreen() {
   const { user } = useAuth();
   const router = useRouter();
-  const isManager = user.role !== "specialist";
+  const isManager = accessOf(user).can("staff.access", "all");
   const staff = useStaff(isManager);
   const today = todayIso();
   const absences = useAbsences({ from: today, to: addDaysIso(today, 90) }, isManager);
@@ -563,7 +566,8 @@ function ScheduleTab({ m, canEdit }: { m: StaffMember; canEdit: boolean }) {
 export function StaffProfileScreen({ id }: { id: string }) {
   const { user } = useAuth();
   const router = useRouter();
-  const isManager = user.role !== "specialist";
+  const isManager = accessOf(user).can("staff.access", "all");
+  const canEdit = canEditStaff(user);
   const isSelf = !isManager && user.specialistId === id;
   const [tab, setTab] = useState<Tab>("profile");
   const [absFormOpen, setAbsFormOpen] = useState(false);
@@ -589,6 +593,7 @@ export function StaffProfileScreen({ id }: { id: string }) {
 
   return (
     <>
+      {isSelf && canSeeMyRevenue(user) ? <MyRevenueCard /> : null}
       {fromLocationId || isManager ? (
         <div className="flex flex-wrap gap-x-5">
           {fromLocationId ? <TextLink href={`/beauty/locations/${encodeURIComponent(fromLocationId)}`}>← Заклад</TextLink> : null}
@@ -649,11 +654,11 @@ export function StaffProfileScreen({ id }: { id: string }) {
                   { id: "abs", label: "Відсутність" },
                 ]}
               />
-              {tab === "profile" ? <ProfileTab m={m} canEdit={isManager} /> : null}
-              {tab === "svc" ? <ServicesTab m={m} canEdit={isManager} /> : null}
-              {tab === "sch" ? <ScheduleTab m={m} canEdit={isManager} /> : null}
+              {tab === "profile" ? <ProfileTab m={m} canEdit={canEdit} /> : null}
+              {tab === "svc" ? <ServicesTab m={m} canEdit={canEdit} /> : null}
+              {tab === "sch" ? <ScheduleTab m={m} canEdit={canEdit} /> : null}
               {tab === "abs" ? (
-                <AbsencesTab member={m} isManager={isManager} isSelf={isSelf} formOpen={absFormOpen} onFormOpenChange={setAbsFormOpen} />
+                <AbsencesTab member={m} isManager={canEdit} isSelf={isSelf} formOpen={absFormOpen} onFormOpenChange={setAbsFormOpen} />
               ) : null}
             </Card>
           </>

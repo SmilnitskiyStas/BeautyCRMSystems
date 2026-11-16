@@ -74,6 +74,9 @@ public class BeautyDbContext : DbContext
     public DbSet<User> Users => Set<User>();
     public DbSet<Invite> Invites => Set<Invite>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    // права доступу користувачів (ADR-023, TASK-849)
+    public DbSet<UserPermission> UserPermissions => Set<UserPermission>();
+    public DbSet<UserAccessAuditRow> UserAccessAudit => Set<UserAccessAuditRow>();
 
     // control plane ShelfGuard (TASK-816, ADR-018)
     public DbSet<PlatformOwnerInvite> PlatformOwnerInvites => Set<PlatformOwnerInvite>();
@@ -399,6 +402,10 @@ public class BeautyDbContext : DbContext
             b.Property(x => x.CancelReason).HasMaxLength(300);
             b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.CancelledByUserId })
                 .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            // ADR-023: автор запису (scope own); частковий індекс, бо переважна більшість рядків NULL
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.CreatedByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.CreatedByUserId }).HasFilter("created_by_user_id IS NOT NULL");
             // maintained by trigger beauty_appointments_set_ends_at (migration SQL)
             b.Property(x => x.EndsAt).ValueGeneratedOnAddOrUpdate();
 
@@ -1278,7 +1285,7 @@ public class BeautyDbContext : DbContext
         {
             Base(b, "users", t =>
             {
-                t.HasCheckConstraint("ck_users_role", "role IN ('owner', 'admin', 'specialist')");
+                t.HasCheckConstraint("ck_users_role", "role IN ('owner', 'admin', 'deputy', 'specialist')");
                 // ADR-018 §4: password_hash може бути NULL лише в стані invited
                 t.HasCheckConstraint("ck_users_state", "state IN ('active', 'invited')");
                 t.HasCheckConstraint("ck_users_password_or_invited", "password_hash IS NOT NULL OR state = 'invited'");
@@ -1290,6 +1297,7 @@ public class BeautyDbContext : DbContext
             b.Property(x => x.Role).HasMaxLength(16);
             b.Property(x => x.IsActive).HasDefaultValue(true);
             b.Property(x => x.FailedLoginCount).HasDefaultValue(0);
+            b.Property(x => x.AccessVersion).HasDefaultValue(1); // ADR-023
             b.HasOne<Tenant>().WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
             TenantFk(b, x => x.Specialist, x => new { x.TenantId, x.SpecialistId }, DeleteBehavior.Restrict);
             b.HasIndex(x => new { x.TenantId, x.Email }).IsUnique();
@@ -1298,7 +1306,13 @@ public class BeautyDbContext : DbContext
 
         mb.Entity<Invite>(b =>
         {
-            Base(b, "invites", t => t.HasCheckConstraint("ck_invites_role", "role IN ('admin', 'specialist')"));
+            Base(b, "invites", t =>
+            {
+                t.HasCheckConstraint("ck_invites_role", "role IN ('admin', 'deputy', 'specialist')");
+                // ADR-023 (B1): повний знімок прав {ключ: рівень}
+                t.HasCheckConstraint("ck_invites_permissions", "jsonb_typeof(permissions) = 'object'");
+            });
+            b.Property(x => x.Permissions).HasColumnType("jsonb").HasDefaultValueSql("'{}'::jsonb");
             b.Property(x => x.Email).HasMaxLength(320);
             b.Property(x => x.Role).HasMaxLength(16);
             b.Property(x => x.TokenHash).HasMaxLength(64);
@@ -1318,6 +1332,50 @@ public class BeautyDbContext : DbContext
             TenantFk(b, x => x.User, x => new { x.TenantId, x.UserId }, DeleteBehavior.Cascade);
             b.HasIndex(x => new { x.TenantId, x.TokenHash }).IsUnique();
             b.HasIndex(x => new { x.TenantId, x.UserId });
+        });
+
+        // ADR-023 §2.4: матеріалізовані права користувача (RLS FORCE + tenant_isolation у міграції auth_user_permissions)
+        mb.Entity<UserPermission>(b =>
+        {
+            b.ToTable("user_permissions", t =>
+            {
+                t.HasCheckConstraint("ck_user_permissions_permission", "permission ~ '^[a-z_]{1,32}\\.[a-z_]{1,32}$'");
+                t.HasCheckConstraint("ck_user_permissions_level", "level ~ '^[a-z_]{1,16}$'");
+            });
+            b.HasKey(x => new { x.TenantId, x.UserId, x.Permission });
+            b.Property(x => x.UpdatedAt).HasDefaultValueSql("now()");
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.UserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.UpdatedByUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.UpdatedByUserId });
+        });
+
+        // ADR-023 §2.8 / §30.9.6 (Q-C2): append-only журнал змін доступу (тригер + GRANT SELECT/INSERT)
+        mb.Entity<UserAccessAuditRow>(b =>
+        {
+            b.ToTable("user_access_audit", t =>
+            {
+                t.HasCheckConstraint("ck_user_access_audit_action",
+                    "action IN ('permissions_changed', 'role_changed', 'preset_reset', 'invited', 'invite_revoked', 'invite_accepted', 'activated', 'deactivated', 'migrated')");
+                t.HasCheckConstraint("ck_user_access_audit_target_or_invite", "target_user_id IS NOT NULL OR invite_id IS NOT NULL");
+                t.HasCheckConstraint("ck_user_access_audit_changes", "jsonb_typeof(changes) IN ('array', 'object')");
+            });
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            b.Property(x => x.Action).HasMaxLength(32);
+            b.Property(x => x.Changes).HasColumnType("jsonb");
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.ActorUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<User>().WithMany().HasForeignKey(x => new { x.TenantId, x.TargetUserId })
+                .HasPrincipalKey(u => new { u.TenantId, u.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<Invite>().WithMany().HasForeignKey(x => new { x.TenantId, x.InviteId })
+                .HasPrincipalKey(i => new { i.TenantId, i.Id }).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.TargetUserId, x.CreatedAt }).IsDescending(false, false, true);
+            b.HasIndex(x => new { x.TenantId, x.CreatedAt, x.Id }).IsDescending(false, true, true);
+            b.HasIndex(x => new { x.TenantId, x.InviteId, x.CreatedAt }).IsDescending(false, false, true)
+                .HasFilter("invite_id IS NOT NULL");
         });
 
         // Відгуки: FK на запис/клієнта (композитні, tenant-safe; Restrict — історія відгуків не губиться разом із записом).

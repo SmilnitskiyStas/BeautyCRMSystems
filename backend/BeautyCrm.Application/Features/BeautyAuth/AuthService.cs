@@ -56,7 +56,7 @@ public sealed class AuthService(
 
         var tenant = await store.GetTenantAsync(ct);
         var user = await store.GetUserAsync(record.UserId, ct);
-        if (tenant is not { IsActive: true } || user is not { IsActive: true }) return AuthError.InvalidToken;
+        if (tenant is not { IsActive: true } || user is not { IsActive: true, State: UserStates.Active }) return AuthError.InvalidToken;
         return await IssueAsync(user, now, ct);
     }
 
@@ -84,7 +84,7 @@ public sealed class AuthService(
             return InviteInvalid;
 
         var (outcome, user) = await store.AcceptInviteAsync(
-            invite.Id, new NewUser(invite.Email, req.FullName.Trim(), hasher.Hash(req.Password), invite.Role, invite.SpecialistId), now, ct);
+            invite, new NewUser(invite.Email, req.FullName.Trim(), hasher.Hash(req.Password), invite.Role, invite.SpecialistId), now, ct);
         return outcome switch
         {
             WriteOutcome.Ok => ToDto(user!),

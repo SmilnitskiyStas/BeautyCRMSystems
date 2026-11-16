@@ -1,3 +1,15 @@
+import type { AccessCatalog } from "@/features/beauty-auth/access";
+import type {
+  AccessSaveInput,
+  AccessSaveResult,
+  AuditPage,
+  MyRevenue,
+  TeamInvite,
+  TeamInviteCreated,
+  TeamInviteInput,
+  TeamUser,
+  UserAccess,
+} from "../team/types";
 import type {
   AiCatalog,
   AiChat,
@@ -122,6 +134,8 @@ export interface BeautyAdminApi {
   addClosure(id: LocationId, input: ClosureInput): Promise<LocationClosure>;
   /** DELETE /locations/{id}/closures/{closureId} (owner, admin) */
   deleteClosure(id: LocationId, closureId: string): Promise<void>;
+  /** GET /api/access/catalog (§30.9.2): каталог прав, пресети, обмеження; однаковий для всіх ролей (кеш 5 хв на клієнті). */
+  getAccessCatalog(): Promise<AccessCatalog>;
   /** GET /overview?date&locationId (§14.5, owner/admin) + /clients (останні) */
   getOverview(locationId: LocationId | null): Promise<Overview>;
   /**
@@ -152,6 +166,25 @@ export interface BeautyAdminApi {
   getClient(id: string): Promise<ClientProfile | null>;
   /** POST /clients/{id}/notes */
   addClientNote(id: string, text: string): Promise<void>;
+  // ---- «Команда й доступи» (ADR-023, §30.9; team.manage = manage, журнал - лише owner) ----
+  /** GET /api/users: + accessVersion, manageable. */
+  getTeamUsers(): Promise<TeamUser[]>;
+  /** GET /api/invites: усі запрошення з permissions (знімок). */
+  getTeamInvites(): Promise<TeamInvite[]>;
+  /** GET /api/users/{id}/access: 404 user_not_found, 403 forbidden_role. */
+  getUserAccess(id: string): Promise<UserAccess>;
+  /** PUT /api/users/{id}/access (dryRun = лише обчислення): 409 access_version_conflict {currentVersion}, 403 permission_ceiling, 422 permission_inconsistent|module_disabled|... */
+  saveUserAccess(id: string, input: AccessSaveInput): Promise<AccessSaveResult>;
+  /** POST /api/users/{id}/access/reset: скидання до пресету ролі. */
+  resetUserAccess(id: string, input: { expectedVersion: number; dryRun?: boolean }): Promise<AccessSaveResult>;
+  /** PATCH /api/users/{id}/status {isActive, expectedVersion?} */
+  setUserActive(id: string, isActive: boolean, expectedVersion?: number): Promise<void>;
+  /** POST /api/invites {email, role, specialistId?, permissions?}: токен показується один раз; clamped - обрізані стелею ключі. */
+  createTeamInvite(input: TeamInviteInput): Promise<TeamInviteCreated>;
+  /** GET /api/users/access-audit?userId&cursor&take (лише owner). */
+  getAccessAudit(q?: { userId?: string; cursor?: string; take?: number }): Promise<AuditPage>;
+  /** GET /api/beauty/me/revenue?from&to (§30.9.7): лише власний виторг; потрібен revenue.view >= own. */
+  getMyRevenue(q: { from: string; to: string }): Promise<MyRevenue>;
   /** GET /api/invites (§10) - лише незакриті (pending) запрошення цього працівника */
   getStaffInvites(staffId: string): Promise<PendingInvite[]>;
   /** DELETE /api/invites/{id} (§10) - відкликати запрошення */

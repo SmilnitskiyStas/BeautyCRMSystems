@@ -14,10 +14,8 @@ namespace BeautyCrm.Api.Auth;
 
 public static class AuthPolicies
 {
-    /// <summary>owner | admin | specialist.</summary>
+    /// <summary>owner | admin | deputy | specialist: лише автентифікація ролі tenant (ADR-023, §30.5 п.5); права перевіряє [RequirePermission].</summary>
     public const string Staff = "Staff";
-    /// <summary>owner | admin.</summary>
-    public const string Management = "Management";
     /// <summary>лише owner.</summary>
     public const string Owner = "Owner";
     public const string PlatformOperator = "PlatformOperator";
@@ -76,9 +74,8 @@ public static class AuthSetup
         {
             // Публічний ендпоінт — явний [AllowAnonymous]; усе інше вимагає токен.
             o.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build();
-            o.AddPolicy(AuthPolicies.Staff, p => p.RequireRole(Roles.Owner, Roles.Admin, Roles.Specialist));
+            o.AddPolicy(AuthPolicies.Staff, p => p.RequireRole(Roles.Owner, Roles.Admin, Roles.Deputy, Roles.Specialist));
             o.AddPolicy(AuthPolicies.Owner, p => p.RequireRole(Roles.Owner));
-            o.AddPolicy(AuthPolicies.Management, p => p.RequireRole(Roles.Owner, Roles.Admin));
             o.AddPolicy(AuthPolicies.PlatformOperator, p => p
                 .AddAuthenticationSchemes(PlatformKeyHandler.Scheme)
                 .RequireRole(Roles.PlatformOperator));
@@ -122,6 +119,8 @@ public static class AuthSetup
         services.AddSingleton(new ServiceCostThrottle(config.GetValue("ServiceCosts:WritePerUserPerMinute", ServiceCostThrottle.Default)));
         services.AddSingleton(config.GetSection("Staff").Get<StaffOptions>() ?? new StaffOptions());
         services.AddScoped<ActiveSpecialistFilter>();
+        services.AddScoped<AccessContext>(); // ADR-023: заповнюється AccessContextMiddleware
+        services.AddScoped<IAccessContext>(sp => sp.GetRequiredService<AccessContext>());
         return services;
     }
 }
@@ -136,6 +135,8 @@ public static class ActorExtensions
         var role = user.FindFirst(JwtTokenIssuer.RoleClaim)?.Value;
         if (!Roles.IsTenantRole(role)) return null;
         Guid? specialistId = Guid.TryParse(user.FindFirst(JwtTokenIssuer.SpecialistClaim)?.Value, out var s) ? s : null;
-        return new Actor(userId, tenantId, role!, specialistId);
+        // B2: AccessSet лише з IAccessContext запиту (identity-носій додає AccessContextMiddleware); без нього AccessSet.None (fail-closed).
+        var access = user.Identities.OfType<AccessIdentity>().FirstOrDefault()?.Context is { IsLoaded: true } ctx ? ctx.Access : AccessSet.None;
+        return new Actor(userId, tenantId, role!, specialistId, access);
     }
 }

@@ -21,7 +21,7 @@ export function ClientPhoneCard({ clientId, info }: { clientId: string; info: Cl
   const [confirming, setConfirming] = useState<PhonePendingAction | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  if (!canSeeFullPhone(user.role)) return null;
+  if (!canSeeFullPhone(user)) return null;
 
   const pending = info.phonePending;
   function run(action: PhonePendingAction) {

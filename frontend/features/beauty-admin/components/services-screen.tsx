@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useAuth } from "@/features/beauty-auth/components/auth-provider";
-import { canEditCosts, canManageCatalog } from "@/features/beauty-auth/permissions";
+import { canManageCatalog, canSeeCosts } from "@/features/beauty-auth/permissions";
 import { durationLabel, moneyExact } from "../format";
 import { usePriceList } from "../hooks/use-beauty-admin";
 import { useServiceCosts } from "../hooks/use-finance";
@@ -42,7 +42,7 @@ function ServicesView() {
         title="Послуги"
         subtitle="Собівартість і виплата майстру: для чистого доходу в аналітиці. Бачать і змінюють лише власник та адміністратор."
         actions={
-          canManageCatalog(user.role) && !adding ? (
+          canManageCatalog(user) && !adding ? (
             <PrimaryButton
               ref={addButton}
               onClick={() => {
@@ -99,13 +99,13 @@ function ServicesView() {
 
 export function ServicesScreen() {
   const { user } = useAuth();
-  if (!canEditCosts(user.role)) {
+  if (!canSeeCosts(user)) {
     return (
       <>
         <PageHeader title="Послуги" />
         <Card>
           <p role="note" className="text-sm">
-            Собівартість послуг доступна лише власнику й адміністратору.
+            Собівартість послуг доступна лише за відповідним правом.
           </p>
         </Card>
       </>

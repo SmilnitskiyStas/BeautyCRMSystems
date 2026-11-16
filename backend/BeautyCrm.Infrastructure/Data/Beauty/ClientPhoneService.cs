@@ -168,7 +168,7 @@ public sealed class ClientPhoneService(
     public async Task<Result<PhonePendingResolvedDto>> ResolvePendingAsync(Actor actor, Guid clientId, string? action, CancellationToken ct)
     {
         TenantGuard.Ensure(tenant, actor.TenantId);
-        if (actor.Role is not (Roles.Owner or Roles.Admin))
+        if (!actor.Access.AtLeast(PermissionKeys.ClientsEdit, PermissionLevels.Own) || !ContactMasking.CanSeeContacts(actor))
             return Error.Forbidden(ClientPhoneErrors.ForbiddenRole, "This action is not available for your role.");
         var act = action?.Trim().ToLowerInvariant();
         if (act is not ("accept" or "reject"))

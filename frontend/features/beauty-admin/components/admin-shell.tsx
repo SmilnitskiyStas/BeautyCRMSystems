@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, Suspense, useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthGate, useAuth } from "@/features/beauty-auth/components/auth-provider";
-import { NAV_GROUPS, canUseInbox, canUseMarketing, navFor, type NavItem } from "@/features/beauty-auth/permissions";
+import { canUseAi, canUseInbox, canUseMarketing, navFor, navGroupsFor, type NavItem } from "@/features/beauty-auth/permissions";
 import { ROLE_LABEL } from "@/features/beauty-auth/types";
 import { useAiPanel } from "../hooks/use-ai-panel";
 import { useNeedsReplyCount } from "../hooks/use-inbox";
@@ -21,7 +21,7 @@ function isActive(pathname: string, href: string) {
 /** Бейдж «потрібна відповідь» біля пункту «Розмови» (§22.11): число для зору, повний підпис для скрінрідера. */
 function InboxBadge() {
   const { user } = useAuth();
-  const count = useNeedsReplyCount(canUseInbox(user.role)).data ?? 0;
+  const count = useNeedsReplyCount(canUseInbox(user)).data ?? 0;
   if (count <= 0) return null;
   return (
     <span data-testid="inbox-badge" className="ml-2 inline-flex min-w-6 items-center justify-center rounded-full bg-white px-1.5 text-[13px] font-bold text-(--ink)">
@@ -34,7 +34,7 @@ function InboxBadge() {
 /** Підсумковий індикатор на заголовку згорнутого блоку, що містить «Розмови». */
 function InboxDot() {
   const { user } = useAuth();
-  const count = useNeedsReplyCount(canUseInbox(user.role)).data ?? 0;
+  const count = useNeedsReplyCount(canUseInbox(user)).data ?? 0;
   if (count <= 0) return null;
   return (
     <span data-testid="inbox-group-dot" className="ml-2 inline-flex size-2.5 rounded-full bg-white">
@@ -179,7 +179,7 @@ function MenuButton({
   buttonRef: React.RefObject<HTMLButtonElement | null>;
 }) {
   const { user } = useAuth();
-  const count = useNeedsReplyCount(canUseInbox(user.role)).data ?? 0;
+  const count = useNeedsReplyCount(canUseInbox(user)).data ?? 0;
   return (
     <button
       ref={buttonRef}
@@ -260,13 +260,17 @@ export function SideNav() {
   const toggle = (id: string) =>
     writeCollapsed(collapsedIds.includes(id) ? collapsedIds.filter((x) => x !== id) : [...collapsedIds, id]);
   // §26.11.1: розсилки вимкнено (`marketing_disabled` / `module_disabled`) - пункт меню не показуємо.
-  const marketing = useMarketingAvailability(canUseMarketing(user.role));
-  const isSpecialist = user.role === "specialist";
+  const marketing = useMarketingAvailability(canUseMarketing(user));
+  // Меню за правами (§30.8); короткий перелік (майстер) показуємо плоским списком без заголовків груп.
   const visible = (n: NavItem) => !(n.href === "/beauty/campaigns" && marketing.disabled);
-  const flat = isSpecialist ? navFor(user.role).filter(visible) : [];
+  const items = navFor(user).filter(visible);
+  const isSpecialist = items.length <= 4;
+  const flat = isSpecialist ? items : [];
   const groups = isSpecialist
     ? []
-    : NAV_GROUPS.map((g) => ({ ...g, items: g.items.filter(visible) })).filter((g) => g.items.length > 0);
+    : navGroupsFor(user)
+        .map((g) => ({ ...g, items: g.items.filter(visible) }))
+        .filter((g) => g.items.length > 0);
   const Panel = drawer ? "div" : "nav";
   const panelProps = drawer
     ? ({ role: "dialog", "aria-modal": true } as const)
@@ -334,7 +338,7 @@ export function SideNav() {
       <div className="mt-auto flex flex-col gap-2 border-t border-white/20 pt-4">
         <div className="text-sm text-white">
           <div className="font-semibold break-words">{user.fullName}</div>
-          <div className="text-[13px] text-[#D9D4E4]">{ROLE_LABEL[user.role]}</div>
+          <div className="text-[13px] text-[#D9D4E4]">{ROLE_LABEL[user.role] ?? user.role}</div>
         </div>
         <button
           type="button"
@@ -368,7 +372,7 @@ export function SideNav() {
 
 function AiFab() {
   const { user } = useAuth();
-  if (user.role === "specialist") return null;
+  if (!canUseAi(user)) return null;
   return <AiFabPanel />;
 }
 

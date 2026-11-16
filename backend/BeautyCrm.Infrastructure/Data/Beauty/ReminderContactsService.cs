@@ -30,18 +30,20 @@ public sealed class ReminderContactsService(
 
     private int MaxUpcomingReplan => Math.Clamp(int.TryParse(config["Reminders:MaxUpcomingReplan"], CultureInfo.InvariantCulture, out var n) ? n : 50, 1, 500);
 
-    private Error? Guard(Actor actor, bool ownerOnly = false)
+    /// <summary>Право перевіряється за <see cref="AccessSet"/> актора (§30.6); контролер уже відсік раніше, це захист у глибину.</summary>
+    private Error? Guard(Actor actor, string permission, string level)
     {
         TenantGuard.Ensure(tenant, actor.TenantId);
-        var allowed = ownerOnly ? actor.Role == Roles.Owner : actor.Role is Roles.Owner or Roles.Admin;
-        return allowed ? null : Error.Forbidden(ReminderContactsErrors.ForbiddenRole, "This action is not available for your role.");
+        return actor.Access.AtLeast(permission, level)
+            ? null
+            : Error.Forbidden(ReminderContactsErrors.ForbiddenRole, "This action is not available for your access level.");
     }
 
     // ------------------------------------------------------------------ вподобання клієнта (§22.6.2)
 
     public async Task<Result<ContactPreferencesDto>> GetPreferencesAsync(Actor actor, Guid clientId, CancellationToken ct)
     {
-        if (Guard(actor) is { } denied) return denied;
+        if (Guard(actor, PermissionKeys.ClientsView, PermissionLevels.Own) is { } denied) return denied;
         var client = await db.Clients.AsNoTracking().Where(c => c.Id == clientId && c.DeletedAt == null)
             .Select(c => new { c.Phone }).FirstOrDefaultAsync(ct);
         if (client is null) return ClientNotFound();
@@ -50,7 +52,7 @@ public sealed class ReminderContactsService(
 
     public async Task<Result<ContactPreferencesDto>> PutPreferencesAsync(Actor actor, Guid clientId, PutContactPreferencesRequest req, CancellationToken ct)
     {
-        if (Guard(actor) is { } denied) return denied;
+        if (Guard(actor, PermissionKeys.ClientsEdit, PermissionLevels.Own) is { } denied) return denied;
         var client = await db.Clients.AsNoTracking().Where(c => c.Id == clientId && c.DeletedAt == null)
             .Select(c => new { c.Phone }).FirstOrDefaultAsync(ct);
         if (client is null) return ClientNotFound();
@@ -144,7 +146,7 @@ public sealed class ReminderContactsService(
     public async Task<Result<CallTaskListDto>> ListCallTasksAsync(
         Actor actor, string? day, string? to, string? status, Guid? locationId, int? take, CancellationToken ct)
     {
-        if (Guard(actor) is { } denied) return denied;
+        if (Guard(actor, PermissionKeys.ClientsCalls, PermissionLevels.All) is { } denied) return denied;
         day = string.IsNullOrWhiteSpace(day) ? "today" : day.Trim().ToLowerInvariant();
         status = string.IsNullOrWhiteSpace(status) ? Open : status.Trim().ToLowerInvariant();
         if (Array.IndexOf(StatusFilters, status) < 0)
@@ -196,7 +198,7 @@ public sealed class ReminderContactsService(
 
     public async Task<Result<CallTaskDto>> PatchCallTaskAsync(Actor actor, Guid id, PatchCallTaskRequest req, CancellationToken ct)
     {
-        if (Guard(actor) is { } denied) return denied;
+        if (Guard(actor, PermissionKeys.ClientsCalls, PermissionLevels.All) is { } denied) return denied;
         var target = req.Status?.Trim().ToLowerInvariant();
         if (target is not (Open or Done or Skipped))
             return Error.Validation("invalid_status", "status must be done, skipped or open.");
@@ -315,13 +317,13 @@ public sealed class ReminderContactsService(
 
     public async Task<Result<ReminderSettingsDto>> GetSettingsAsync(Actor actor, CancellationToken ct)
     {
-        if (Guard(actor) is { } denied) return denied;
+        if (Guard(actor, PermissionKeys.SettingsGeneral, PermissionLevels.View) is { } denied) return denied;
         return ToDto(await LoadSettingsAsync(ct));
     }
 
     public async Task<Result<ReminderSettingsDto>> PutSettingsAsync(Actor actor, ReminderSettingsDto req, CancellationToken ct)
     {
-        if (Guard(actor, ownerOnly: true) is { } denied) return denied;
+        if (Guard(actor, PermissionKeys.SettingsGeneral, PermissionLevels.Edit) is { } denied) return denied;
         if (req.TelegramEnabled is null || req.CallEnabled is null || req.QuietHoursStart is null || req.QuietHoursEnd is null)
             return Error.Validation("settings_incomplete", "telegramEnabled, callEnabled, quietHoursStart and quietHoursEnd are required.");
         if (!TimeOnly.TryParseExact(req.QuietHoursStart, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var start)

@@ -13,7 +13,11 @@ using Microsoft.AspNetCore.Mvc;
 var builder = WebApplication.CreateBuilder(args);
 
 // Application має бути зареєстровано разом з Data/Channels/Ai: вони реалізують порти одне одного.
-builder.Services.AddControllers(o => o.Filters.Add<BeautyCrm.Api.Tenancy.TenantActiveFilter>()) // призупинений tenant: 403 навіть з чинним токеном (M3)
+builder.Services.AddControllers(o =>
+    {
+        o.Filters.Add(typeof(BeautyCrm.Api.Tenancy.TenantActiveFilter), BeautyCrm.Api.Tenancy.TenantActiveFilter.FilterOrder); // призупинений tenant: 403 навіть з чинним токеном (M3); Order -3200 (Add<T>() дав би 0: порядок береться з фабрики, а не з типу)
+        o.Filters.Add<BeautyCrm.Api.Infrastructure.ActiveSpecialistFilter>(); // ADR-023 M7: 403 specialist_inactive на всіх tenant-ендпоінтах
+    })
     .ConfigureApiBehaviorOptions(o =>
 {
     // Помилки валідації на межі API -> 422 (контракт beauty-contracts.md §3).
@@ -120,6 +124,7 @@ app.UseRateLimiter();
 app.UseAuthentication();
 app.UseControlPlane(); // /api/control/*: лише ControlPlaneHmac (ADR-018); після UseAuthentication, щоб JWT не підміняв principal
 app.UseMiddleware<TenantMiddleware>(); // після автентифікації (claim tenant_id), до авторизації й контролерів
+app.UseMiddleware<AccessContextMiddleware>(); // ADR-023 §30.5 п.4: роль/права з БД, заміна claims, X-Access-Version; fail-closed
 app.UseAuthorization();
 
 app.MapControllers();

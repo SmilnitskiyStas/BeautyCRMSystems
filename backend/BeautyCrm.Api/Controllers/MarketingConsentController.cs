@@ -16,31 +16,38 @@ namespace BeautyCrm.Api.Controllers;
 [ApiController]
 [Route("api/beauty/clients/{clientId:guid}/marketing-consent")]
 [RequireModule("beauty_clients")]
-[Authorize(Policy = AuthPolicies.Staff)] // автентифікація; роль перевіряє ReminderRolesAttribute, щоб віддати {code: forbidden_role}
-[ReminderRoles(Roles.Owner, Roles.Admin)]
+[Authorize(Policy = AuthPolicies.Staff)]
+[RequirePermission(PermissionKeys.ClientsView, PermissionLevels.Own)]
 [InboxNoStore]
 [ProducesResponseType(StatusCodes.Status401Unauthorized)]
 [ProducesResponseType(StatusCodes.Status403Forbidden)]
-public sealed class MarketingConsentController(MarketingConsentService service) : ControllerBase
+public sealed class MarketingConsentController(MarketingConsentService service, IClientScope scope) : ControllerBase
 {
     private const int BodyLimit = 2 * 1024;
 
     [HttpGet]
     [ProducesResponseType<MarketingConsentDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Get(Guid clientId, CancellationToken ct) =>
-        User.ToActor() is { } actor ? this.ToResult(await service.GetAsync(actor, clientId, ct)) : Unauthorized();
+    public async Task<IActionResult> Get(Guid clientId, CancellationToken ct)
+    {
+        if (await this.OutOfScopeAsync(scope, clientId, ct) is { } denied) return denied;
+        return this.ToResult(await service.GetAsync(User.ToActor()!, clientId, ct));
+    }
 
     /// <summary>
     /// 404 client_not_found; 422 invalid_level | channel_unsupported | basis_required | invalid_basis | invalid_basis_note;
     /// 409 admin_grant_disabled (підвищення за <c>Marketing:AdminGrantEnabled=false</c>).
     /// </summary>
     [HttpPut]
+    [RequirePermission(PermissionKeys.ClientsEdit, PermissionLevels.Own)]
     [RequestSizeLimit(BodyLimit)]
     [ProducesResponseType<MarketingConsentDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
-    public async Task<IActionResult> Put(Guid clientId, [FromBody] PutMarketingConsentRequest request, CancellationToken ct) =>
-        User.ToActor() is { } actor ? this.ToResult(await service.PutAsync(actor, clientId, request, ct)) : Unauthorized();
+    public async Task<IActionResult> Put(Guid clientId, [FromBody] PutMarketingConsentRequest request, CancellationToken ct)
+    {
+        if (await this.OutOfScopeAsync(scope, clientId, ct) is { } denied) return denied;
+        return this.ToResult(await service.PutAsync(User.ToActor()!, clientId, request, ct));
+    }
 }

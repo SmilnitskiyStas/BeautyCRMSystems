@@ -1,3 +1,6 @@
+import { mockAccessCatalog } from "@/features/beauty-auth/access";
+import { canSeeFinance } from "@/features/beauty-auth/permissions";
+import type { Role } from "@/features/beauty-auth/types";
 import { BeautyApiError } from "@/features/beauty-auth/errors";
 import { CLIENT_TG_REASON } from "../cancellation";
 import { money, dayIndex, weekDayLabels, weekRangeLabel } from "../format";
@@ -17,6 +20,7 @@ import { createMockAnalytics } from "./mock-analytics";
 import { createMockCosts } from "./mock-costs";
 import { createMockInbox } from "./mock-inbox";
 import { createMockMarketing } from "./mock-marketing";
+import { createMockTeam } from "./mock-team";
 import { createMockPhones } from "./mock-phone";
 import {
   AI_GOALS,
@@ -121,7 +125,7 @@ function viewOf(a: Appointment): Appointment {
   const cp = mockMarketing.couponFor(a);
   const priced = cp
     ? (() => {
-        const original = a.priceOriginal ?? PRICE_LIST.find((s) => s.serviceId === a.serviceId)?.price ?? a.priceFinal;
+        const original = a.priceOriginal ?? PRICE_LIST.find((s) => s.serviceId === a.serviceId)?.price ?? (a.priceFinal ?? 0);
         return { coupon: cp.coupon, priceOriginal: original, priceFinal: Math.round((original * (100 - cp.discountPercent)) / 100) };
       })()
     : {};
@@ -293,6 +297,9 @@ function freeSlotsToday(locationId: LocationId | null): number {
   }
   return total;
 }
+
+/** «Команда й доступи» (§30.9) у демо-режимі; роль актора - `NEXT_PUBLIC_MOCK_ROLE`. */
+const mockTeam = createMockTeam({ role: () => mockRole(), wait, today: () => demoToday() });
 
 /** §26: згода, розсилки, купони. Прапорці mock: `NEXT_PUBLIC_MOCK_MARKETING=off` (marketing_disabled), `NEXT_PUBLIC_MOCK_ADMIN_GRANT=0`. */
 const mockMarketing = createMockMarketing({
@@ -508,18 +515,24 @@ export const mockBeautyApi: BeautyAdminApi = {
     await wait(null);
   },
 
+  getAccessCatalog: () => wait(mockAccessCatalog()),
+  ...mockTeam,
+
   getOverview: (locationId) => {
     const today = demoToday();
     const todays = allMockAppointments()
       .filter((a) => a.startsAt.slice(0, 10) === today && a.status !== "cancelled" && (!locationId || a.locationId === locationId))
       .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
-    const revenue = todays.filter((a) => a.status === "completed").reduce((sum, a) => sum + a.priceFinal, 0);
+    const revenue = todays.filter((a) => a.status === "completed").reduce((sum, a) => sum + (a.priceFinal ?? 0), 0);
     const dateLabel = new Date(`${today}T00:00:00Z`).toLocaleDateString("uk-UA", { day: "numeric", month: "long", timeZone: "UTC" });
     const overview: Overview = {
       dateLabel: locationId ? `${locationName(locationId)} · ${dateLabel}` : `Мережа закладів · ${dateLabel}`,
       kpis: [
         { label: "Записів сьогодні", value: String(todays.length), note: `завершено: ${todays.filter((a) => a.status === "completed").length}` },
-        { label: "Виручка за день", value: money(revenue), note: "завершені візити" },
+        // Як у реальному API (§30.5): без `revenue.view = all` плитки виручки немає (роль демо - `NEXT_PUBLIC_MOCK_ROLE`).
+        ...(canSeeFinance((process.env.NEXT_PUBLIC_MOCK_ROLE as Role | undefined) ?? "owner")
+          ? [{ label: "Виручка за день", value: money(revenue), note: "завершені візити" }]
+          : []),
         { label: "Нові клієнти", value: String(new Set(todays.filter((a) => a.kind === "new").map((a) => a.clientId)).size), note: "за добу" },
         { label: "Вільних слотів", value: String(freeSlotsToday(locationId)), note: "до кінця дня" },
       ],

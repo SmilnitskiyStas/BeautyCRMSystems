@@ -5,7 +5,9 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useAuth } from "@/features/beauty-auth/components/auth-provider";
 import { BeautyApiError, humanizeError } from "@/features/beauty-auth/errors";
 import { useAbsences, useCalendarWeek, useCancelAppointment, useLocations, useMoveAppointment, useSetAppointmentStatus } from "../hooks/use-beauty-admin";
-import { canSeeClosureReason, closedDayLabel } from "../closed-days";
+import { accessOf } from "@/features/beauty-auth/access";
+import { canEditLocations, seesOnlyOwnCalendar } from "@/features/beauty-auth/permissions";
+import { closedDayLabel } from "../closed-days";
 import { CLIENT_TG_CANCEL_EVENT, MAX_CANCEL_REASON, cancelledByLabel, cancelledByShort, isClientTelegramCancel } from "../cancellation";
 import { ConfirmedBadge } from "./client-confirmed-badge";
 import { CouponBadge } from "./coupon-badge";
@@ -203,7 +205,8 @@ function AppointmentPanel({
       <div className="text-sm text-(--muted)">
         {dayLabel}, {timeRange(appt)} ({durationLabel(appt.durationMinutes)})
       </div>
-      <div className="text-sm font-semibold">{money(appt.priceFinal)}</div>
+      {/* Ціни немає у відповіді без права (§30.5): рядок не показуємо, а не пишемо 0 ₴. */}
+      {typeof appt.priceFinal === "number" ? <div className="text-sm font-semibold" data-testid="appt-price">{money(appt.priceFinal)}</div> : null}
       <Badge tone={STATUS_VIEW[appt.status].tone} className="self-start">
         <span data-testid="appt-status">{STATUS_VIEW[appt.status].label}</span>
       </Badge>
@@ -289,7 +292,7 @@ function AppointmentPanel({
           {ask === "completed" ? (
             <>
               <p className="text-sm">
-                Цим фіксується ціна візиту ({money(appt.priceFinal)}) і собівартість послуги на сьогодні: вони потраплять у звіт і більше не
+                Цим фіксується ціна візиту{typeof appt.priceFinal === "number" ? ` (${money(appt.priceFinal)})` : ""} і собівартість послуги на сьогодні: вони потраплять у звіт і більше не
                 зміняться. Після завершення запис не можна перенести чи скасувати.
               </p>
               {notStarted ? (
@@ -399,7 +402,8 @@ function availabilityAria(day: string, a: DayAvailability): string {
 
 export function CalendarScreen() {
   const { user } = useAuth();
-  const isSpecialist = user.role === "specialist";
+  const isSpecialist = seesOnlyOwnCalendar(user);
+  const canManageAll = accessOf(user).can("calendar.manage", "all");
   // Порожній id = «перший майстер»; specialist бачить лише власний календар.
   const fromLink = useSearchParams().get("specialist") ?? "";
   const [chosenId, setChosenId] = useState<string>(isSpecialist ? (user.specialistId ?? "") : fromLink);
@@ -427,7 +431,7 @@ export function CalendarScreen() {
     );
   };
   // Закритий день закладу (§17): причину закриття бачать лише керівники.
-  const showReason = canSeeClosureReason(user.role);
+  const showReason = canEditLocations(user);
   const closedDay = (d: number) => data?.closedDays?.[d] ?? null;
   const avail = data?.availability;
   // Затверджена відсутність блокує день (запит `requested` ні, §13).
@@ -725,7 +729,7 @@ export function CalendarScreen() {
                     dayLabel={data.days[dayIndex(selected.startsAt, data.weekStart)] ?? ""}
                     moveProblem={moveProblem}
                     outOfHours={outOfHours(selected)}
-                    canChangeStatus={!isSpecialist || selected.specialistId === user.specialistId}
+                    canChangeStatus={canManageAll || selected.specialistId === user.specialistId}
                     onStatusChanged={(message) => setNotice(message)}
                     onMoved={(newStart) => {
                       setSelectedId(null);

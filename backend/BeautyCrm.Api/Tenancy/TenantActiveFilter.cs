@@ -14,8 +14,13 @@ namespace BeautyCrm.Api.Tenancy;
 /// ControlPlaneHmac, webhook) і tenant, якого не видно під RLS (нічого не поверне й так). Без кешу: один запит
 /// до tenants за PK на запит, тож resume діє одразу.
 /// </summary>
-public sealed class TenantActiveFilter : IAsyncAuthorizationFilter
+public sealed class TenantActiveFilter : IAsyncAuthorizationFilter, IOrderedFilter
 {
+    /// <summary>Першим серед authorization-фільтрів: -3200 &lt; RequireModule (-3100) &lt; RequirePermission (-3000), §30.5 п.6.</summary>
+    public const int FilterOrder = -3200;
+
+    public int Order => FilterOrder;
+
     public async Task OnAuthorizationAsync(AuthorizationFilterContext context)
     {
         var http = context.HttpContext;

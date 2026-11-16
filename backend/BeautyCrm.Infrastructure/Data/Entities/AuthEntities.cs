@@ -28,7 +28,7 @@ public class Tenant
     public string? SuspendedReason { get; set; }
 }
 
-/// <summary>Користувач tenant. Роль: owner | admin | specialist. Пароль зберігається лише як хеш.</summary>
+/// <summary>Користувач tenant. Роль: owner | admin | deputy | specialist. Пароль зберігається лише як хеш.</summary>
 public class User : TenantEntity
 {
     /// <summary>Нормалізований (trim + lower) email; унікальний у межах tenant.</summary>
@@ -45,11 +45,48 @@ public class User : TenantEntity
     public int FailedLoginCount { get; set; }
     public DateTimeOffset? LockoutUntil { get; set; }
     public DateTimeOffset? LastLoginAt { get; set; }
+    /// <summary>ADR-023: +1 за кожної зміни ролі, прав і активності (оптимістичне блокування й синхронізація UI). Починається з 1.</summary>
+    public int AccessVersion { get; set; } = 1;
 
     public Specialist? Specialist { get; set; }
 }
 
-/// <summary>Запрошення адміністратора/спеціаліста. У БД лише SHA-256 хеш токена.</summary>
+/// <summary>
+/// ADR-023 §2.4: поточне (матеріалізоване) значення права користувача. Ключ <c>блок.підпункт</c>, рівень з каталогу в коді;
+/// БД перевіряє лише формат. Для owner рядків немає (всі права неявні). Відсутній рядок = найнижчий рівень.
+/// </summary>
+public class UserPermission : ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid UserId { get; set; }
+    public string Permission { get; set; } = null!;
+    public string Level { get; set; } = null!;
+    public DateTimeOffset UpdatedAt { get; set; }
+    /// <summary>NULL = система/міграція.</summary>
+    public Guid? UpdatedByUserId { get; set; }
+}
+
+/// <summary>
+/// ADR-023 §2.8 + §30.9.6 (Q-C2): append-only журнал змін доступу. Рядок має цільового користувача або запрошення
+/// (CHECK). Без ПІІ клієнтів, паролів, токенів і email запрошених. UPDATE/DELETE заборонені тригером і GRANT-ами.
+/// </summary>
+public class UserAccessAuditRow : ITenantEntity
+{
+    public Guid Id { get; set; }
+    public Guid TenantId { get; set; }
+    /// <summary>NULL = міграція/система.</summary>
+    public Guid? ActorUserId { get; set; }
+    /// <summary>NULL лише для рядків запрошення (тоді заповнено <see cref="InviteId"/>).</summary>
+    public Guid? TargetUserId { get; set; }
+    public Guid? InviteId { get; set; }
+    /// <summary>permissions_changed | role_changed | preset_reset | invited | invite_revoked | invite_accepted | activated | deactivated | migrated.</summary>
+    public string Action { get; set; } = null!;
+    /// <summary>jsonb: масив [{permission, from, to}] або об'єкт {role: {from, to}}.</summary>
+    public string Changes { get; set; } = null!;
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+/// <summary>Запрошення адміністратора/заступника/спеціаліста. У БД лише SHA-256 хеш токена.</summary>
 public class Invite : TenantEntity
 {
     public string Email { get; set; } = null!;
@@ -60,6 +97,9 @@ public class Invite : TenantEntity
     public DateTimeOffset? AcceptedAt { get; set; }
     public DateTimeOffset? RevokedAt { get; set; }
     public Guid? InvitedByUserId { get; set; }
+    /// <summary>ADR-023 (B1): jsonb-об'єкт {ключ: рівень}, ПОВНИЙ матеріалізований знімок прав, обрізаний стелею запрошувача. NOT NULL;
+    /// "{}" (за замовчуванням БД) = усі найнижчі рівні (fail-closed).</summary>
+    public string Permissions { get; set; } = "{}";
 
     public User? InvitedBy { get; set; }
 }

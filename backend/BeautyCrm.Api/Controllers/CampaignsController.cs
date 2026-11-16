@@ -19,7 +19,7 @@ namespace BeautyCrm.Api.Controllers;
 [RequireModule("beauty_marketing")]
 [RequireMarketingEnabled]
 [Authorize(Policy = AuthPolicies.Staff)]
-[ReminderRoles(Roles.Owner, Roles.Admin)]
+[RequirePermission(PermissionKeys.MarketingCampaigns, PermissionLevels.Edit)]
 [InboxNoStore]
 [ProducesResponseType(StatusCodes.Status401Unauthorized)]
 [ProducesResponseType(StatusCodes.Status403Forbidden)]

@@ -118,11 +118,11 @@ public sealed partial class LocationService(ILocationStore store, TimeProvider c
 
     /// <summary>Керівники бачать усе й можуть просити неактивні; specialist лише читає (includeInactive ігнорується).</summary>
     public async Task<IReadOnlyList<LocationDto>> ListAsync(Actor actor, bool includeInactive, CancellationToken ct) =>
-        await store.ListAsync(includeInactive && StaffRoles.IsManager(actor), ct);
+        await store.ListAsync(includeInactive && StaffRoles.CanEditLocations(actor), ct);
 
     public async Task<Result<LocationDto>> CreateAsync(Actor actor, LocationRequest req, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditLocations(actor)) return Forbidden;
         var change = Validate(req);
         if (!change.IsOk) return change.Error!;
         return Map(await store.CreateAsync(change.Value! with { IsActive = true }, ct));
@@ -130,7 +130,7 @@ public sealed partial class LocationService(ILocationStore store, TimeProvider c
 
     public async Task<Result<LocationDto>> UpdateAsync(Actor actor, Guid id, LocationRequest req, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditLocations(actor)) return Forbidden;
         var change = Validate(req);
         if (!change.IsOk) return change.Error!;
         return Map(await store.UpdateAsync(id, change.Value!, clock.GetUtcNow(), ct));
@@ -140,7 +140,7 @@ public sealed partial class LocationService(ILocationStore store, TimeProvider c
 
     public async Task<Result<LocationDto>> SetClosedWeekdaysAsync(Actor actor, Guid id, ClosedWeekdaysRequest req, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditLocations(actor)) return Forbidden;
         if (req.ClosedWeekdays is null) return Error.Validation("invalid_closed_weekdays", "closedWeekdays is required.");
         var set = new HashSet<string>();
         foreach (var raw in req.ClosedWeekdays)
@@ -165,7 +165,7 @@ public sealed partial class LocationService(ILocationStore store, TimeProvider c
 
     public async Task<Result<LocationDto>> SetWorkingHoursAsync(Actor actor, Guid id, WorkingHoursRequest req, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditLocations(actor)) return Forbidden;
         string? normalized = null;
         switch (req.WorkingHours.ValueKind)
         {
@@ -201,12 +201,12 @@ public sealed partial class LocationService(ILocationStore store, TimeProvider c
             return Error.Validation("invalid_range", $"from..to must be a valid range of at most {MaxClosureDays} days.");
         var rows = await store.ListClosuresAsync(locationId, start, end, ct);
         return Result<IReadOnlyList<ClosureDto>>.Ok(
-            StaffRoles.IsManager(actor) ? rows : rows.Select(c => c with { Reason = null }).ToList());
+            StaffRoles.CanEditLocations(actor) ? rows : rows.Select(c => c with { Reason = null }).ToList());
     }
 
     public async Task<Result<ClosureDto>> AddClosureAsync(Actor actor, Guid locationId, ClosureRequest req, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditLocations(actor)) return Forbidden;
         if (await store.GetAsync(locationId, ct) is not { } location) return LocationNotFound;
 
         if (req.DateFrom is not { } from || req.DateTo is not { } to)
@@ -231,7 +231,7 @@ public sealed partial class LocationService(ILocationStore store, TimeProvider c
 
     public async Task<Result<bool>> DeleteClosureAsync(Actor actor, Guid locationId, Guid closureId, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditLocations(actor)) return Forbidden;
         return await store.DeleteClosureAsync(locationId, closureId, ct)
             ? true
             : Error.NotFound("closure_not_found", "Closure not found.");

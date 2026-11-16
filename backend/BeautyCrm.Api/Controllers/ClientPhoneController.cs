@@ -16,12 +16,13 @@ namespace BeautyCrm.Api.Controllers;
 [ApiController]
 [Route("api/beauty/clients/{clientId:guid}/phone-pending")]
 [RequireModule("beauty_clients")]
-[Authorize(Policy = AuthPolicies.Staff)] // автентифікація; роль перевіряє ReminderRolesAttribute (код forbidden_role)
-[ReminderRoles(Roles.Owner, Roles.Admin)]
+[Authorize(Policy = AuthPolicies.Staff)]
+[RequirePermission(PermissionKeys.ClientsEdit, PermissionLevels.Own)]
+[RequirePermission(PermissionKeys.ClientsContacts, PermissionLevels.Full)] // рішення розкриває номер -> лише з повним доступом до контактів
 [InboxNoStore]
 [ProducesResponseType(StatusCodes.Status401Unauthorized)]
 [ProducesResponseType(StatusCodes.Status403Forbidden)]
-public sealed class ClientPhoneController(ClientPhoneService service) : ControllerBase
+public sealed class ClientPhoneController(ClientPhoneService service, IClientScope scope) : ControllerBase
 {
     /// <summary>accept: phone = phone_pending (джерело й згода переходять), pending очищується; reject: pending очищується.</summary>
     [HttpPost]
@@ -30,6 +31,11 @@ public sealed class ClientPhoneController(ClientPhoneService service) : Controll
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
-    public async Task<IActionResult> Resolve(Guid clientId, [FromBody] PhonePendingRequest? request, CancellationToken ct) =>
-        User.ToActor() is { } actor ? this.ToResult(await service.ResolvePendingAsync(actor, clientId, request?.Action, ct)) : Unauthorized();
+    public async Task<IActionResult> Resolve(Guid clientId, [FromBody] PhonePendingRequest? request, CancellationToken ct)
+    {
+        if (User.ToActor() is not { } actor) return Unauthorized();
+        // поза scope clients.view -> 404 client_not_found (існування не розкривається)
+        if (!await scope.InScopeAsync(actor, clientId, ct)) return NotFound(new ApiError("client_not_found", "Client not found."));
+        return this.ToResult(await service.ResolvePendingAsync(actor, clientId, request?.Action, ct));
+    }
 }
