@@ -1,7 +1,8 @@
 import { BeautyApiError } from "@/features/beauty-auth/errors";
 import { apiJson, getUser } from "@/features/beauty-auth/session";
 import { mastersForCalendar } from "../calendar-masters";
-import { dateTimeLabel, money, weekDayLabels, weekRangeLabel } from "../format";
+import { toAccessCatalog } from "@/features/beauty-auth/access";
+import { dateTimeLabel, money, moneyOrDash, weekDayLabels, weekRangeLabel } from "../format";
 import { isLinkActive } from "../staff-links";
 import { safeMask } from "../phone";
 import { normalizeHours } from "../working-hours";
@@ -69,6 +70,7 @@ import type {
 } from "../types";
 import type { BeautyAdminApi } from "./client";
 import { DEFAULT_GREETING, INITIAL_CHANNELS } from "./mock-data";
+import { httpTeamApi } from "./http-team";
 import { httpMarketingApi, toAppointmentCoupon } from "./http-marketing";
 import { maskCouponCodes } from "../marketing/logic";
 
@@ -104,8 +106,9 @@ interface AppointmentDto {
   durationMinutes: number;
   status: string;
   source: string;
-  priceOriginal: number;
-  priceFinal: number;
+  /** Відсутні в списках без `revenue.view = all` (§30.5 M4): не підставляти 0. */
+  priceOriginal?: number;
+  priceFinal?: number;
   promotionId: string | null;
   cancellation?: CancellationSettings | null;
   /** IANA-зона закладу (§14.5). */
@@ -134,7 +137,8 @@ interface OverviewResponse {
   date: string;
   timezone: string;
   appointments: AppointmentDto[];
-  kpi: { appointmentsCount: number; revenue: number; newClients: number; freeSlots: number };
+  /** `revenue` відсутня без `revenue.view = all` (§30.5): плитку виручки не показуємо. */
+  kpi: { appointmentsCount: number; revenue?: number | null; newClients: number; freeSlots: number };
 }
 interface LocationDto {
   id: string;
@@ -166,8 +170,11 @@ interface ClosureDto {
 interface ClientDto {
   id: string;
   fullName: string;
-  phone: string | null;
-  email: string | null;
+  /** Без `clients.contacts = full` (§30.5) `phone`/`email` відсутні, натомість маска. */
+  phone?: string | null;
+  email?: string | null;
+  phoneMasked?: string | null;
+  emailMasked?: string | null;
   visits: number;
   lastVisitAt: string | null;
   /** §16 (звірено з ClientDto backend): зведення скасувань - усі / ініційовані клієнтом. */
@@ -534,7 +541,8 @@ function toAppointment(a: AppointmentDto, fallbackZone?: string): Appointment {
     status: statusOf(a.status),
     source: (["admin", "online", "telegram", "instagram"].includes(a.source) ? a.source : "admin") as Appointment["source"],
     kind: kindOf(a),
-    priceFinal: a.priceFinal,
+    ...(typeof a.priceFinal === "number" ? { priceFinal: a.priceFinal } : {}),
+    ...(typeof a.priceOriginal === "number" ? { priceOriginal: a.priceOriginal } : {}),
     promotionId: a.promotionId,
     promotionName: a.promotionId ? "Акція" : undefined,
     cancellation: a.cancellation ?? undefined,
@@ -781,6 +789,7 @@ async function loadClosures(locationId: string, weekStart: string, weekEnd: stri
 
 export const httpBeautyApi: BeautyAdminApi = {
   ...httpMarketingApi,
+  ...httpTeamApi,
   // `GET /locations` (§14.5/§16) доступний усім ролям; без `includeInactive` віддає лише активні.
   getLocations: async () => (await get<LocationDto[]>("/locations")).map(toLocation),
 
@@ -844,6 +853,8 @@ export const httpBeautyApi: BeautyAdminApi = {
     await apiJson<void>(`${B}/locations/${encodeURIComponent(id)}/closures/${encodeURIComponent(closureId)}`, { method: "DELETE" });
   },
 
+  getAccessCatalog: async () => toAccessCatalog(await apiJson<unknown>("/api/access/catalog")),
+
   getOverview: async (locationId: LocationId | null) => {
     // F9: `GET /overview` (§14.5) віддає записи доби в зоні закладу й KPI з урахуванням годин/вихідних/відсутностей.
     // Доступний owner/admin - саме їм належить екран «Огляд» (specialist на нього не потрапляє, див. `canOpen`).
@@ -855,7 +866,7 @@ export const httpBeautyApi: BeautyAdminApi = {
       dateLabel: new Date(`${o.date.slice(0, 10)}T00:00:00Z`).toLocaleDateString("uk-UA", { day: "numeric", month: "long", timeZone: "UTC" }),
       kpis: [
         { label: "Записів сьогодні", value: String(o.kpi.appointmentsCount), note: `завершено: ${completed}` },
-        { label: "Виручка за день", value: money(o.kpi.revenue), note: "завершені візити" },
+        ...(typeof o.kpi.revenue === "number" ? [{ label: "Виручка за день", value: money(o.kpi.revenue), note: "завершені візити" }] : []),
         { label: "Нові клієнти", value: String(o.kpi.newClients), note: "за добу" },
         { label: "Вільних слотів", value: String(o.kpi.freeSlots), note: "до кінця дня" },
       ],
@@ -980,10 +991,14 @@ export const httpBeautyApi: BeautyAdminApi = {
       id: d.client.id,
       name: d.client.fullName,
       tag: clientTag(d.client),
-      contactLine: [d.client.phone, d.client.email].filter(Boolean).join(" · ") || "Контакти не вказано",
+      // `clients.contacts = masked` (§30.5): `phone`/`email` відсутні, є `phoneMasked`/`emailMasked`.
+      contactLine: [d.client.phone ?? d.client.phoneMasked, d.client.email ?? d.client.emailMasked].filter(Boolean).join(" · ") || "Контакти не вказано",
       kpis: [
         { label: "Візитів", value: String(d.client.visits), note: "завершених" },
-        { label: "Витрачено", value: money(done.reduce((s, a) => s + a.priceFinal, 0)), note: "за весь час" },
+        // Без цін у відповіді (немає права, §30.5) суму не вигадуємо: плитку не показуємо.
+        ...(done.every((a) => typeof a.priceFinal === "number")
+          ? [{ label: "Витрачено", value: money(done.reduce((s, a) => s + (a.priceFinal ?? 0), 0)), note: "за весь час" }]
+          : []),
         {
           label: "Останній візит",
           value: d.client.lastVisitAt ? dayLabel(d.client.lastVisitAt) : "—",
@@ -1001,11 +1016,11 @@ export const httpBeautyApi: BeautyAdminApi = {
         specialistId: a.specialistId,
         specialistName: a.specialistName,
         locationName: a.locationName,
-        sum: money(a.priceFinal),
+        sum: moneyOrDash(a.priceFinal),
         status: a.status === "completed" ? "completed" : a.status === "cancelled" ? "cancelled" : a.status === "no_show" ? "no_show" : "planned",
         viaPromo: !!a.promotionId,
         ...(toAppointmentCoupon(a.coupon)
-          ? { viaCoupon: true, couponName: toAppointmentCoupon(a.coupon)!.promotionName, couponDiscount: `−${money(Math.max(0, a.priceOriginal - a.priceFinal))}` }
+          ? { viaCoupon: true, couponName: toAppointmentCoupon(a.coupon)!.promotionName, couponDiscount: typeof a.priceOriginal === "number" && typeof a.priceFinal === "number" ? `−${money(Math.max(0, a.priceOriginal - a.priceFinal))}` : "—" }
           : {}),
         ...(a.status === "cancelled"
           ? {
@@ -1017,13 +1032,13 @@ export const httpBeautyApi: BeautyAdminApi = {
       })),
       promos: d.history
         .filter((a) => a.promotionId && a.status === "completed")
-        .map((a) => ({ id: a.id, name: a.serviceName, when: dayLabel(a.startsAt), saved: money(a.priceOriginal - a.priceFinal) })),
+        .map((a) => ({ id: a.id, name: a.serviceName, when: dayLabel(a.startsAt), saved: typeof a.priceOriginal === "number" && typeof a.priceFinal === "number" ? money(a.priceOriginal - a.priceFinal) : "—" })),
       notes: d.notes.map((n) => ({ id: n.id, text: n.body, meta: dayLabel(n.createdAt) })),
       preferences: [],
       warning: null,
       loyalty: { balance: "—", nextLevel: "Програма лояльності ще не підключена", progressPct: 0 },
       // §25.7: поля можуть бути у `client` або на верхньому рівні відповіді (контракт не уточнює) - беремо обидва.
-      phoneInfo: toPhoneInfo(d.client.phone, { ...d, ...d.client } as ClientPhoneDto),
+      phoneInfo: toPhoneInfo(d.client.phone ?? null, { ...d, ...d.client } as ClientPhoneDto),
     };
     return profile;
   },

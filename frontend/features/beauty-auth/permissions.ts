@@ -1,4 +1,4 @@
-import type { Role } from "./types";
+import { accessOf, type Access, type AccessSubject, type PermissionKey } from "./access";
 
 export interface NavItem {
   label: string;
@@ -49,6 +49,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Канали", href: "/beauty/channels" },
       { label: "Налаштування", href: "/beauty/settings" },
+      { label: "Команда й доступи", href: "/beauty/team" },
     ],
   },
 ];
@@ -56,46 +57,125 @@ export const NAV_GROUPS: NavGroup[] = [
 const ALL_NAV: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 
 /**
- * Узгоджено з матрицею ролей §10/§13: specialist — свій календар і власний профіль (`/beauty/staff` перенаправляє
- * на `/beauty/staff/{specialistId}`); clients/analytics/channels/ai — owner/admin.
+ * Гейтинг меню й маршрутів за правами, а не за роллю (§30.8). Модулі вже враховані в `effective`, але ключі з найнижчим
+ * рівнем без `none` (`services.catalog`, `staff.access`, `locations.access`) модуль не вимикає, тому для них перевіряємо й модуль.
+ * Порядок правил: від конкретніших до загальних. Невідомий `/beauty/*` закритий (fail-closed).
  */
-const SPECIALIST_PATHS = ["/beauty/calendar", "/beauty/staff"];
+interface Rule {
+  /** Точний шлях (`exact`) або префікс (`prefix`). */
+  path: string;
+  mode: "exact" | "prefix";
+  test: (a: Access) => boolean;
+}
 
-export function navFor(role: Role): NavItem[] {
-  if (role !== "specialist") return ALL_NAV;
-  return ALL_NAV.filter((n) => SPECIALIST_PATHS.includes(n.href)).map((n) =>
-    n.href === "/beauty/staff" ? { ...n, label: "Мій профіль" } : n,
+const when = (key: PermissionKey, level: string) => (a: Access) => a.can(key, level);
+
+const RULES: Rule[] = [
+  { path: "/beauty", mode: "exact", test: when("calendar.view", "all") },
+  { path: "/beauty/calendar", mode: "prefix", test: when("calendar.view", "own") },
+  { path: "/beauty/inbox", mode: "prefix", test: when("channels.inbox", "view") },
+  { path: "/beauty/calls", mode: "prefix", test: when("clients.calls", "all") },
+  { path: "/beauty/clients", mode: "prefix", test: when("clients.view", "own") },
+  // Список закладів: `all`; сторінки конкретних закладів (`/beauty/locations/{id}`): `own` (§30.8).
+  { path: "/beauty/locations", mode: "exact", test: (a) => a.hasModule("beauty_booking") && a.can("locations.access", "all") },
+  { path: "/beauty/locations", mode: "prefix", test: (a) => a.hasModule("beauty_booking") && a.can("locations.access", "own") },
+  { path: "/beauty/staff", mode: "prefix", test: (a) => a.hasModule("beauty_booking") && a.can("staff.access", "own") },
+  // Відхилення від §30.8 («завжди»): сторінка «Послуги» - це редактор собівартості (§24.8.2) і створення послуги; без
+  // `revenue.costs >= view` вона порожня, тому пункт показуємо лише тоді, коли сторінка корисна. Знімається разом з read-only каталогом.
+  { path: "/beauty/services", mode: "prefix", test: (a) => a.hasModule("beauty_catalog") && a.can("revenue.costs", "view") },
+  { path: "/beauty/promos", mode: "prefix", test: (a) => a.hasModule("beauty_catalog") && a.can("services.catalog", "view") },
+  { path: "/beauty/campaigns", mode: "prefix", test: when("marketing.campaigns", "edit") },
+  { path: "/beauty/analytics", mode: "prefix", test: when("revenue.view", "all") },
+  { path: "/beauty/ai", mode: "prefix", test: (a) => a.can("ai.settings", "edit") || a.can("ai.use", "use") },
+  { path: "/beauty/channels", mode: "prefix", test: when("channels.settings", "edit") },
+  { path: "/beauty/settings", mode: "prefix", test: (a) => a.isOwner || a.can("settings.general", "view") },
+  { path: "/beauty/team", mode: "prefix", test: when("team.manage", "manage") },
+];
+
+const trimSlash = (p: string) => (p.length > 1 ? p.replace(/\/+$/, "") : p);
+
+function ruleFor(pathname: string): Rule | undefined {
+  const path = trimSlash(pathname.split(/[?#]/)[0] ?? pathname);
+  // Конкретніше правило виграє: exact для списку, інакше найдовший префікс.
+  const exact = RULES.find((r) => r.mode === "exact" && r.path === path);
+  if (exact) return exact;
+  return RULES.filter((r) => r.mode === "prefix" && (path === r.path || path.startsWith(`${r.path}/`))).sort(
+    (a, b) => b.path.length - a.path.length,
+  )[0];
+}
+
+/** Чи може користувач відкрити маршрут (`subject` - користувач сесії; роль лише для тестів/пресету). */
+export function canOpen(subject: AccessSubject, pathname: string): boolean {
+  const path = trimSlash(pathname.split(/[?#]/)[0] ?? pathname);
+  if (!path.startsWith("/beauty")) return true;
+  const rule = ruleFor(path);
+  return rule ? rule.test(accessOf(subject)) : false;
+}
+
+/** Плоский перелік доступних пунктів меню за порядком §30.8; «Спеціалісти» з `staff.access = own` стає «Мій профіль». */
+export function navFor(subject: AccessSubject): NavItem[] {
+  const a = accessOf(subject);
+  return ALL_NAV.filter((n) => canOpen(subject, n.href)).map((n) =>
+    n.href === "/beauty/staff" && !a.can("staff.access", "all") ? { ...n, label: "Мій профіль" } : n,
   );
 }
 
-/** Сторінка конкретного закладу `/beauty/locations/{id}` (§18.3): specialist бачить її без редагування; список - ні. */
-const LOCATION_PAGE = /^\/beauty\/locations\/[^/]+\/?$/;
-
-export function canOpen(role: Role, pathname: string): boolean {
-  if (role !== "specialist") return true;
-  return LOCATION_PAGE.test(pathname) || SPECIALIST_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+/** Групи меню з відфільтрованими пунктами (порожні групи прибираються). */
+export function navGroupsFor(subject: AccessSubject): NavGroup[] {
+  const allowed = new Map(navFor(subject).map((n) => [n.href, n]));
+  return NAV_GROUPS.map((g) => ({ ...g, items: g.items.flatMap((i) => (allowed.has(i.href) ? [allowed.get(i.href)!] : [])) })).filter(
+    (g) => g.items.length > 0,
+  );
 }
 
-export const homeFor = (role: Role) => (role === "specialist" ? "/beauty/calendar" : "/beauty");
+/** `/beauty`, якщо `calendar.view = all`; інакше `/beauty/calendar`; без календаря - перший доступний пункт меню (§30.8). */
+export function homeFor(subject: AccessSubject): string {
+  const a = accessOf(subject);
+  if (a.can("calendar.view", "all")) return "/beauty";
+  if (a.can("calendar.view", "own")) return "/beauty/calendar";
+  return navFor(subject)[0]?.href ?? "/beauty/services";
+}
 
-/** Лише власник змінює налаштування; admin їх бачить (§11). */
-export const canEditSettings = (role: Role) => role === "owner";
+/** Ключ дозволу «Мій профіль» (`staff.access = own`): `/beauty/staff` перенаправляє на власну сторінку. */
+export const isOwnProfileOnly = (subject: AccessSubject) => !accessOf(subject).can("staff.access", "all");
 
-/** §20.9: ключ API провайдера ШІ бачить і змінює лише власник. */
-export const canManageAiKey = (role: Role) => role === "owner";
+// Права на блоки сторінок. Приймають користувача сесії (або роль для пресету), рішення бере `accessOf`.
+const gate = (key: PermissionKey, level: string) => (s: AccessSubject) => accessOf(s).can(key, level);
 
-/** §20.9: налаштування ШІ (моделі, режим, промпт, ліміти) - owner і admin; specialist розділу не бачить. */
-export const canEditAiSettings = (role: Role) => role === "owner" || role === "admin";
-
-/**
- * §22.10: inbox розмов, задачі дзвінків і вподобання нагадувань - лише owner/admin; specialist отримує 403 від API
- * ще до читання, тому ці розділи для нього не показуються й не відкриваються.
- */
-export const canUseInbox = (role: Role) => role === "owner" || role === "admin";
-export const canUseCalls = canUseInbox;
-export const canManageReminderPrefs = canUseInbox;
-/** Налаштування нагадувань (§22.6.4): читають owner/admin, змінює лише owner. */
-export const canEditReminderSettings = (role: Role) => role === "owner";
+/** Лише директор змінює політику скасування (§30.6.6, Q6: зарезервовано). */
+export const canEditSettings = (s: AccessSubject) => accessOf(s).isOwner;
+/** §20.9 / `ai.provider_keys`: ключ API провайдера ШІ - лише директор. */
+export const canManageAiKey = canEditSettings;
+export const canEditAiSettings = gate("ai.settings", "edit");
+export const canUseAi = gate("ai.use", "use");
+/** Розмови: перегляд за `view`, відповідь і «Опрацьовано» за `reply`. */
+export const canUseInbox = gate("channels.inbox", "view");
+export const canReplyInbox = gate("channels.inbox", "reply");
+export const canUseCalls = gate("clients.calls", "all");
+/** Вподобання нагадувань клієнта (§30.6.8): за `clients.view`. */
+export const canManageReminderPrefs = gate("clients.view", "own");
+/** Налаштування нагадувань (§30.6.6): читання `settings.general >= view`, зміна `= edit`. */
+export const canViewReminderSettings = gate("settings.general", "view");
+export const canEditReminderSettings = gate("settings.general", "edit");
+export const canSeeFinance = gate("revenue.view", "all");
+export const canSeeCosts = gate("revenue.costs", "view");
+export const canEditCosts = gate("revenue.costs", "edit");
+/** Повний телефон клієнта: `clients.contacts = full`; інакше лише маска (§30.5). */
+export const canSeeFullPhone = gate("clients.contacts", "full");
+export const canManageCatalog = gate("services.catalog", "edit");
+export const canUseMarketing = gate("marketing.campaigns", "edit");
+export const canManageConsent = gate("clients.view", "own");
+/** `codeHint` купона на записі - лише за `calendar.manage = all` (§30.6.2). */
+export const canSeeCouponHint = gate("calendar.manage", "all");
+/** «Команда й доступи» (§30.8): `team.manage = manage`; журнал змін - лише директор (Q7). */
+export const canManageTeam = gate("team.manage", "manage");
+export const canSeeAccessAudit = (s: AccessSubject) => accessOf(s).isOwner;
+/** «Мій виторг» (§30.8): `revenue.view = own` (повна аналітика - окремо, `revenue.view = all`). */
+export const canSeeMyRevenue = gate("revenue.view", "own");
+export const canEditLocations = gate("locations.access", "edit");
+export const canEditStaff = gate("staff.access", "edit");
+/** Календар: `own` - лише власні записи (майстер у пресеті). */
+export const seesOnlyOwnCalendar = (s: AccessSubject) => !accessOf(s).can("calendar.view", "all");
 
 const CONTROL_CHARS = /[\x00-\x1f\x7f]/;
 /** Умовний origin для розбору відносного шляху: перевіряємо лише, що розбір не виводить за межі сайту. */
@@ -121,23 +201,3 @@ export function safeNext(next: string | null | undefined, fallback = "/beauty"):
   // "/..//evil" нормалізується до "//evil" — це вже protocol-relative URL.
   return path.startsWith("//") ? fallback : path;
 }
-
-/**
- * §24.9: аналітика, фінансові поля (собівартість, виплата, чистий дохід), деталі періоду й редактор собівартості -
- * лише owner/admin; specialist отримує 403 до читання тіла. Повний телефон клієнта (§25.9) - теж лише вони.
- */
-export const canSeeFinance = (role: Role) => role === "owner" || role === "admin";
-export const canEditCosts = canSeeFinance;
-export const canSeeFullPhone = canSeeFinance;
-
-/** Каталог (створення послуг із цінами й призначенням майстрам) - лише owner/admin. */
-export const canManageCatalog = (role: Role) => role === "owner" || role === "admin";
-
-/**
- * §26.11.1: розсилки (кампанії, аудиторії, купони) і згода в картці клієнта - лише owner/admin; specialist отримує 403 до читання,
- * тому розділ для нього не показується й не відкривається, а персональних даних і кодів купонів у його DOM немає.
- */
-export const canUseMarketing = (role: Role) => role === "owner" || role === "admin";
-export const canManageConsent = canUseMarketing;
-/** Код купона (`codeHint`) на записі бачать лише керівники. */
-export const canSeeCouponHint = canUseMarketing;

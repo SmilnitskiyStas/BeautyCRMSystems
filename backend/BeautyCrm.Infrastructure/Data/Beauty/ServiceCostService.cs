@@ -44,12 +44,14 @@ public sealed class ServiceCostService(BeautyDbContext db, TenantContext tenant,
     public const string ForbiddenRole = "forbidden_role";
     private const string FieldCost = "cost_amount", FieldPercent = "master_percent";
 
-    private Error? Guard(Actor actor)
+    /// <summary>ADR-023 (§30.6.3): читання - <c>revenue.costs >= view</c>, запис - <c>revenue.costs = edit</c>.</summary>
+    private Error? Guard(Actor actor, bool write = false)
     {
         TenantGuard.Ensure(tenant, actor.TenantId);
-        return actor.Role is Roles.Owner or Roles.Admin
+        var need = write ? PermissionLevels.Edit : PermissionLevels.View;
+        return actor.Access.AtLeast(PermissionKeys.RevenueCosts, need)
             ? null
-            : Error.Forbidden(ForbiddenRole, "This action is not available for your role.");
+            : Error.ForbiddenPermission(PermissionKeys.RevenueCosts, need);
     }
 
     private static Error ServiceNotFound() => Error.NotFound("service_not_found", "Service not found.");
@@ -105,7 +107,7 @@ public sealed class ServiceCostService(BeautyDbContext db, TenantContext tenant,
 
     public async Task<Result<PutServiceCostResultDto>> PutAsync(Actor actor, Guid serviceId, PutServiceCostRequest req, CancellationToken ct)
     {
-        if (Guard(actor) is { } denied) return denied;
+        if (Guard(actor, write: true) is { } denied) return denied;
         if (req.CostAmount is not { } cost || cost < 0 || cost > MaxCost || decimal.Round(cost, 2) != cost)
             return Error.Validation("invalid_cost", "costAmount is required: 0..1,000,000 with at most 2 decimal places.");
         if (req.MasterPercent is { } pct && (pct < 0 || pct > 100 || decimal.Round(pct, 2) != pct))
@@ -175,7 +177,7 @@ public sealed class ServiceCostService(BeautyDbContext db, TenantContext tenant,
 
     public async Task<Result<bool>> DeleteAsync(Actor actor, Guid serviceId, Guid? locationId, CancellationToken ct)
     {
-        if (Guard(actor) is { } denied) return denied;
+        if (Guard(actor, write: true) is { } denied) return denied;
         if (!await db.Services.AsNoTracking().AnyAsync(s => s.Id == serviceId, ct)) return ServiceNotFound();
         if (locationId is { } loc && !await db.Locations.AsNoTracking().AnyAsync(l => l.Id == loc, ct)) return LocationNotFound();
 

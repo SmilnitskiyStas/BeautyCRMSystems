@@ -22,16 +22,16 @@ public sealed partial class StaffService(IStaffStore store, TimeProvider clock)
 
     /// <summary>Довідник для всіх ролей персоналу; phone і hasAccount лише для керівників.</summary>
     public async Task<IReadOnlyList<SpecialistDto>> ListAsync(Actor actor, CancellationToken ct) =>
-        (await store.ListSpecialistsAsync(ct)).Select(r => ToDto(r, StaffRoles.IsManager(actor))).ToList();
+        (await store.ListSpecialistsAsync(ct)).Select(r => ToDto(r, StaffRoles.CanEditStaff(actor))).ToList();
 
     public async Task<Result<SpecialistDto>> GetAsync(Actor actor, Guid id, CancellationToken ct) =>
-        await store.GetSpecialistAsync(id, ct) is { } r ? ToDto(r, StaffRoles.IsManager(actor)) : NotFound;
+        await store.GetSpecialistAsync(id, ct) is { } r ? ToDto(r, StaffRoles.CanEditStaff(actor)) : NotFound;
 
     // ---------- зміни ----------
 
     public async Task<Result<SpecialistDto>> CreateAsync(Actor actor, CreateSpecialistRequest req, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditStaff(actor)) return Forbidden;
         if (ValidateProfile(req.Name, req.Phone, req.Position) is { } invalid) return invalid;
         if (ValidatePublicProfile(req.PracticeStartYear, req.Bio, req.PhotoUrl, allowClear: false) is { } invalidPublic) return invalidPublic;
 
@@ -59,14 +59,21 @@ public sealed partial class StaffService(IStaffStore store, TimeProvider clock)
 
     public async Task<Result<SpecialistDto>> UpdateAsync(Actor actor, Guid id, UpdateSpecialistRequest req, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditStaff(actor)) return Forbidden;
         if (ValidateProfile(req.Name, req.Phone, req.Position) is { } invalid) return invalid;
         if (ValidatePublicProfile(req.PracticeStartYear, req.Bio, req.PhotoUrl, allowClear: true) is { } invalidPublic) return invalidPublic;
         if (await Guard(actor, id, ct) is { } denied) return denied;
+        // M1 (§30.6.4): деактивація профілю з прив'язаним користувачем - це вимкнення користувача: team.manage + ранг (CanManage)
+        if (req.IsActive == false && await store.GetSpecialistLinkAsync(id, ct) is { IsActive: true, LinkedUserRole: { } linkedRole })
+        {
+            if (!actor.Access.AtLeast(PermissionKeys.TeamManage, PermissionLevels.Manage))
+                return Error.ForbiddenPermission(PermissionKeys.TeamManage, PermissionLevels.Manage);
+            if (!RolePolicy.CanManage(actor.Role, linkedRole)) return Error.Forbidden("forbidden_role", "You cannot manage this specialist.");
+        }
 
         // isActive = false каскадно (в одній транзакції) вимикає прив'язаного користувача, відкликає його refresh-токени й
         // pending-запрошення. Повторна активація доступ НЕ повертає: користувача вмикають явно (PATCH /api/users/{id}/status).
-        await store.UpdateSpecialistAsync(id, req.Name.Trim(), Clean(req.Phone), Clean(req.Position), req.IsActive, clock.GetUtcNow(), ct);
+        await store.UpdateSpecialistAsync(id, req.Name.Trim(), Clean(req.Phone), Clean(req.Position), req.IsActive, clock.GetUtcNow(), actor.UserId, ct);
         if (req.PracticeStartYear is not null || req.Bio is not null || req.PhotoUrl is not null)
             await store.UpdateSpecialistProfileAsync(id, new SpecialistProfilePatch(
                 req.PracticeStartYear is not null, req.PracticeStartYear is null or 0 ? null : req.PracticeStartYear,
@@ -77,7 +84,7 @@ public sealed partial class StaffService(IStaffStore store, TimeProvider clock)
 
     public async Task<Result<SpecialistDto>> SetServicesAsync(Actor actor, Guid id, SetSpecialistServicesRequest req, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditStaff(actor)) return Forbidden;
         if (await Guard(actor, id, ct) is { } denied) return denied;
         var serviceIds = req.ServiceIds.Distinct().ToList();
         if (serviceIds.Count > 500) return Error.Validation("too_many_items", "Too many services.");
@@ -90,7 +97,7 @@ public sealed partial class StaffService(IStaffStore store, TimeProvider clock)
 
     public async Task<Result<SpecialistDto>> SetScheduleAsync(Actor actor, Guid id, SetScheduleRequest req, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditStaff(actor)) return Forbidden;
         if (await Guard(actor, id, ct) is { } denied) return denied;
         var hours = WorkingHoursValidator.TryNormalize(req.WorkingHours);
         if (hours is null) return InvalidHours;
@@ -104,7 +111,7 @@ public sealed partial class StaffService(IStaffStore store, TimeProvider clock)
     /// <summary>Додати заклад (з графіком, якщо передано). 409 location_already_assigned; 404 location_not_found.</summary>
     public async Task<Result<SpecialistDto>> AssignLocationAsync(Actor actor, Guid id, AssignLocationRequest req, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditStaff(actor)) return Forbidden;
         if (await Guard(actor, id, ct) is { } denied) return denied;
         string? hours = null;
         if (req.WorkingHours is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) })
@@ -123,7 +130,7 @@ public sealed partial class StaffService(IStaffStore store, TimeProvider clock)
     /// <summary>Прибрати заклад: лише без майбутніх активних записів (409 has_future_appointments); 404 location_not_assigned.</summary>
     public async Task<Result<SpecialistDto>> RemoveLocationAsync(Actor actor, Guid id, Guid locationId, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditStaff(actor)) return Forbidden;
         if (await Guard(actor, id, ct) is { } denied) return denied;
         switch (await store.RemoveLocationAsync(id, locationId, clock.GetUtcNow(), ct))
         {
@@ -146,7 +153,7 @@ public sealed partial class StaffService(IStaffStore store, TimeProvider clock)
     {
         var link = await store.GetSpecialistLinkAsync(id, ct);
         if (link is null) return NotFound;
-        return StaffRoles.CanModify(actor, link.LinkedUserRole)
+        return StaffRoles.CanModify(actor, link.LinkedUserRole, link.LinkedUserId)
             ? null
             : Error.Forbidden("forbidden_role", "You cannot manage this specialist.");
     }

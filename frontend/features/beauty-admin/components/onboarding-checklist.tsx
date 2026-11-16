@@ -9,7 +9,7 @@ import { Card } from "./ui";
 /** «З чого почати» (owner/admin): кроки початкового налаштування зі станом; зникає, коли всі виконано. */
 export function OnboardingChecklist() {
   const { user } = useAuth();
-  const allowed = user ? canManageCatalog(user.role) : false;
+  const allowed = user ? canManageCatalog(user) : false;
   const locations = useLocations(allowed);
   const staff = useStaff(allowed);
   const services = useServices(allowed);

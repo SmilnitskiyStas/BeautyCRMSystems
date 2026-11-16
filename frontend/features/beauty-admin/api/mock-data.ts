@@ -100,10 +100,10 @@ export function clientProfileFor(id: string, appts: Appointment[]): Omit<ClientP
       specialistId: a.specialistId,
       specialistName: staffName(a.specialistId),
       locationName: locName(a.locationId),
-      sum: money(a.priceFinal),
+      sum: money((a.priceFinal ?? 0)),
       status: (a.status === "completed" ? "completed" : a.status === "cancelled" ? "cancelled" : a.status === "no_show" ? "no_show" : "planned") as ClientProfile["visits"][number]["status"],
       viaPromo: !!a.promotionId,
-      ...(a.coupon ? { viaCoupon: true, couponName: a.coupon.promotionName, couponDiscount: `−${money((a.priceOriginal ?? a.priceFinal) - a.priceFinal)}` } : {}),
+      ...(a.coupon ? { viaCoupon: true, couponName: a.coupon.promotionName, couponDiscount: `−${money((a.priceOriginal ?? (a.priceFinal ?? 0)) - (a.priceFinal ?? 0))}` } : {}),
       ...(a.status === "cancelled"
         ? { ...(a.cancelledAt ? { cancelledAtLabel: dateTimeLabel(a.cancelledAt) } : {}), ...(a.cancelledBy ? { cancelledBy: a.cancelledBy } : {}), ...(a.cancelReason ? { cancelReason: a.cancelReason } : {}) }
         : {}),
@@ -125,12 +125,12 @@ export function clientProfileFor(id: string, appts: Appointment[]): Omit<ClientP
     ],
     visits,
     promos: promoUses.map((a) => {
-      const base = CATALOG.find((s) => s.id === a.serviceId)?.price ?? a.priceFinal;
+      const base = CATALOG.find((s) => s.id === a.serviceId)?.price ?? a.priceFinal ?? 0;
       return {
         id: `promo-${a.id}`,
         name: a.promotionName ?? "Акція",
         when: a.status === "completed" ? `використано ${shortDate(a.startsAt.slice(0, 10))}` : `заплановано на ${shortDate(a.startsAt.slice(0, 10))}`,
-        saved: `−${money(base - a.priceFinal)}`,
+        saved: `−${money(base - (a.priceFinal ?? 0))}`,
       };
     }),
     notes:

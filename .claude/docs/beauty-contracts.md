@@ -115,6 +115,7 @@ public interface IPaymentService {
 
 - Access JWT (HS256, 15 хв): `sub`, `tenant_id`, `role`, `specialist_id` (для specialist). `Authorization: Bearer`. Refresh — непрозорий токен (14 днів), у БД лише SHA-256.
 - Матриця beauty-ендпоінтів: booking (`slots`, `appointments*`) — усі ролі, specialist бачить/змінює лише записи свого `specialist_id` (чужий запис = 404, створення для чужого майстра = 403, `specialistId` у запитах підміняється власним); catalog — читання всі ролі, зміни owner/admin; clients, analytics, channels, ai — owner/admin; webhooks — публічні (підпис).
+- **Уточнено §30 (ADR-023):** додано роль `deputy`, доступ визначають права користувача (каталог і пресети — §30.2–30.3), карта «ендпоінт → право» — §30.6. Після TASK-852/853 рольова матриця вище є лише історичною довідкою.
 - Блокування: 5 невдалих входів -> 423 на 15 хв (навіть із правильним паролем); rate limit 10 запитів/хв на IP для login/refresh/accept/platform.
 - Модулі: `tenants.modules`; призупинений tenant (`status=suspended`) -> `403 module_disabled`, логін/refresh -> 401.
 - Схема (міграція `auth_tenants_users_invites`): `tenants`, `users` (унікальний email per tenant, `specialist_id` -> `beauty_specialists`), `invites`, `refresh_tokens`; RLS на users/invites/refresh_tokens (`tenant_isolation`), на tenants — `tenant_self` + SELECT-політика `tenants_login_lookup` (за транзакційним `app.tenant_slug`). Runtime-роль потребує GRANT на нові таблиці.
@@ -3910,3 +3911,646 @@ TASK-817 (схема HMAC, вектор), TASK-818 (§27.3–§27.5, §27.7), TA
 - `backend/BeautyCrm.Tests/PublicBooking/PublicCatalogApiTests.cs` — HTTP-конвеєр на PostgreSQL: resolve (нормалізація, однаковий 404, ізоляція), nearby (фільтри, радіус, ліміт 10 між tenant-ами, 422, логи без координат і міста), search (точний збіг, 422), зарезервовані slug-и, окремі rate-limit політики, адмін-геополя (валідація, незмінний `publicCode`, ізоляція tenant-ів, specialist не пише), openapi.
 - `backend/BeautyCrm.Tests/Data/PublicCatalogRlsTests.cs` — рівень даних: `public_code` (унікальність, формат, CHECK координат), definer-функції, ролі.
 - `backend/BeautyCrm.Tests/PublicBooking/PublicBookingApiTests.cs` — 426 (`old_app_version_gets_426_everywhere_on_public_api_but_labels_never_block_otherwise`), `integrity_failed` для ios/android (`X-Client-Integrity`), per-location ліміт (`MaxPublicCreatesPerLocationPerHour`, 0 = вимкнено).
+
+## §30. Права доступу користувачів: ролі, каталог прав, «Команда й доступи» (ADR-023, v0.33, 2026-11-15)
+
+Артефакт `API-CONTRACT-ACCESS-V1` (TASK-846). Джерело рішень: ADR-023 (accepted 2026-11-15; Q1–Q11 прийнято з рекомендованими дефолтами, див. §30.12). Уточнює §10 (ролі, матриця ендпоінтів), §13/§15 (керування працівниками), §20 (налаштування ШІ), §22.6, §24.6, §25.9, §26. Де §30 суперечить попереднім розділам щодо **доступу**, діє §30. Бізнес-логіка тих розділів не змінюється.
+
+**v0.33.1 (2026-11-15): внесено правки security-рев'ю TASK-848.** Блокери B1, B2; major M1–M7, M4 за рішенням людини; однозначні minor. Q-C1…Q-C4 прийнято, нові тест-вимоги в §30.13. Розділи, яких торкнулися правки, позначено «(TASK-848)».
+
+Споживачі: TASK-847 (базова матриця), TASK-848 (threat-model), TASK-849 (БД), TASK-850 (ядро), TASK-851 (team API), TASK-852/853 (переведення ендпоінтів), TASK-854/855 (frontend), TASK-856/857 (QA, security).
+
+### 30.1 Ролі, ранги, хто ким керує
+
+| Код | UI | Ранг | Створюється | Керує (роль/права/статус/запрошення) |
+|---|---|---|---|---|
+| `owner` | Директор | 4 | лише control plane (ADR-018, §27) | admin, deputy, specialist |
+| `admin` | Адміністратор | 3 | запрошення від owner | deputy, specialist (за наявності `team.manage = manage`) |
+| `deputy` | Заступник | 2 | запрошення від owner або admin (Q1: нижче admin) | нікого (`team.manage` для deputy заборонено стелею ролі) |
+| `specialist` | Майстер | 1 | запрошення від owner або admin | нікого |
+
+- `RolePolicy.CanManage(actor, target) = rank(actor) > rank(target) && target.role != owner`. Нові пари: owner→deputy, admin→deputy. Наявні пари не змінюються.
+- `RolePolicy.CanInvite(actor, role)` = `CanManage` для ролі запрошеного. Допустимі значення `role` у tenant API: `admin | deputy | specialist`. `owner` дає `422 invalid_role`.
+- **Зміна ролі у V1 (рішення контракту, Q-C1):** дозволено лише `admin ↔ deputy`. Перехід до `specialist` або від нього дає `422 role_change_not_supported`, бо прив'язка `users.specialist_id` у V1 існує лише для `specialist` (Q5). Майстру з ширшим доступом видають права (§30.2), роль не змінюють.
+- `owner` має всі права неявно. Рядків `user_permissions` для нього немає, через tenant API він незмінний.
+- **`StaffRoles.CanModify(actor, specialist)` (TASK-848, M2)** = `linkedUser == null || (linkedUser.id != actor.UserId && rank(actor) > rank(linkedUser.role))`.
+  - Профіль без користувача змінює будь-хто з потрібним правом.
+  - Профіль, прив'язаний до користувача, змінює лише актор вищого рангу. Власний профіль цим правилом не змінюється (зміна себе поза правами йде лише шляхами самообслуговування §30.6.4).
+  - Діє для всіх ендпоінтів §30.6.4 з позначкою `CanModify`.
+- **Самопогодження заборонене (TASK-848, M2).** Актор, у якого `specialist_id = absence.specialist_id`, навіть зі `staff.access = edit`:
+  - не може затвердити (`approve`) чи відхилити (`reject`) власну відсутність: `403 forbidden_self_approval`;
+  - для власного профілю створює відсутність лише зі статусом `requested`, як без права `edit`.
+
+### 30.2 Каталог прав (`catalogVersion = 1`)
+
+Каталог живе в коді (`PermissionCatalog`, Application). Рівні в кожному ключі впорядковані за зростанням. Перший рівень є **найнижчим**, він же діє за замовчуванням (fail-closed). «≥ X» означає «індекс ефективного рівня ≥ індексу X».
+
+| Блок | Ключ | Рівні (зростання) | Модулі (усі мають бути ввімкнені) | Обмеження |
+|---|---|---|---|---|
+| `calendar` | `calendar.view` | `none` · `own` · `all` | `beauty_booking` | — |
+| | `calendar.manage` | `none` · `own` · `all` | `beauty_booking` | `lte calendar.view` |
+| `clients` | `clients.view` | `none` · `own` · `all` | `beauty_clients` | — |
+| | `clients.edit` | `none` · `own` · `all` | `beauty_clients` | `lte clients.view` |
+| | `clients.contacts` | `masked` · `full` | `beauty_clients` | — |
+| | `clients.calls` | `none` · `all` | `beauty_clients` | `requires clients.view = all` |
+| `revenue` | `revenue.view` | `none` · `own` · `all` | `beauty_analytics` | — |
+| | `revenue.costs` | `none` · `view` · `edit` | `beauty_analytics` (ендпоінти §24.6.1 додатково мають `[RequireModule("beauty_catalog")]`) | `requires revenue.view = all` |
+| `channels` | `channels.inbox` | `none` · `view` · `reply` | `beauty_channels` | — |
+| | `channels.settings` | `none` · `edit` | `beauty_channels` | — |
+| `ai` | `ai.use` | `none` · `use` | `beauty_ai` | — |
+| | `ai.settings` | `none` · `edit` | `beauty_ai` | ключі провайдера й `keySource` зарезервовані за owner (§30.6.10) |
+| `services` | `services.catalog` | `view` · `edit` | `beauty_catalog` | — |
+| `marketing` | `marketing.campaigns` | `none` · `edit` | `beauty_marketing` | `requires clients.view = all` (TASK-848: аудиторії містять ПІІ всієї бази); також потрібен `Marketing:Enabled` (§26.2) |
+| `staff` | `staff.access` | `own` · `all` · `edit` | `beauty_booking` | `scope: "menu"` для `own`/`all` (Q-C3) |
+| `locations` | `locations.access` | `own` · `all` · `edit` | `beauty_booking` | `scope: "menu"` для `own`/`all` (Q-C3) |
+| `settings` | `settings.general` | `none` · `view` · `edit` | — | політика скасування зарезервована за owner (Q6) |
+| `team` | `team.manage` | `none` · `manage` | — | `roleCeiling [admin]`; видає лише owner |
+
+**Семантика обмежень** (перевіряються на повному результуючому наборі під час запису; порушення дає `422 permission_inconsistent`, автоматичного виправлення немає):
+- `lte A`: `index(key) ≤ index(A)`. Набори рівнів однакові.
+- `requires B = L`: якщо `key` вище найнижчого рівня, то `B ≥ L`.
+- `roleCeiling [roles]`: значення вище найнижчого дозволене лише ролям зі списку. Інакше `422 permission_not_allowed_for_role`.
+
+**Семантика `own`** (через `users.specialist_id`; без прив'язки `own` дає порожню вибірку, як `EffectiveSpecialistId → Guid.Empty`):
+
+| Ключ | `own` на backend |
+|---|---|
+| `calendar.view` | записи з `specialist_id = own`; у `slots`/`appointments` параметр `specialistId` підміняється власним; чужий запис дає `404 appointment_not_found` |
+| `calendar.manage` | створення лише для власного `specialistId` (інакше `403 forbidden`, як зараз); PATCH і cancel лише власних записів |
+| `clients.view` | клієнти, що мають ≥ 1 запис з `specialist_id = own`, **крім** скасованих записів, створених самим актором (`created_by_user_id = actor`). Так власноруч створений і одразу скасований запис не відкриває чужого клієнта (TASK-848, M3). Колонку `beauty_appointments.created_by_user_id uuid NULL` додано міграцією TASK-849 (композитний FK на `users` RESTRICT, частковий індекс; наявні рядки `NULL`, тобто «не актор»); заповнювати її при створенні запису має TASK-852. Пошук іде всередині цієї множини. Чужий клієнт дає `404 client_not_found`. У картці `history` і лічильники (`visits`, `lastVisitAt`, `cancelledCount`, `cancelledByClientCount`) рахуються лише за власними записами. Нотатки видно всі |
+| `clients.edit` | ті самі клієнти, що й `clients.view = own` |
+| `revenue.view` | лише `GET /api/beauty/me/revenue` (§30.9.7). `/analytics/*` і `kpi.revenue` недоступні |
+| `staff.access` | V1 (Q-C3 прийнято): довідник спеціалістів (`GET /specialists*`) той самий, що для `all` (поточна поведінка майстра). Різниця між `own` і `all` є лише в меню: «Мій профіль» або «Спеціалісти». Каталог позначає це як `scope: "menu"` (§30.9.2), і UI пояснює, що рівень не приховує даних |
+| `locations.access` | V1 (Q-C3 прийнято): довідник закладів (`GET /locations`, `GET /closures`) той самий, що для `all`, `scope: "menu"`. Різниця лише в меню: сторінки своїх закладів або список |
+
+**Інші правила:**
+- Відсутній рядок, невідомий ключ або невідомий рівень у БД означають найнижчий рівень. Такі значення ігноруються під час читання.
+- **Регістр (TASK-848).** Ключі й рівні порівнюються **точно**, з урахуванням регістру (ordinal). Нормалізації (`ToLower`, trim) немає ні в API, ні під час читання БД. `"Calendar.View"` у запиті дає `422 invalid_permission`, а такий рядок у БД вважається невідомим ключем, тобто найнижчим рівнем.
+- Новий ключ з'являється лише разом із міграцією backfill за пресетами (§30.3). `catalogVersion` збільшується за будь-якої зміни каталогу.
+- Підписи українською (назви блоків, рівнів, пояснення) живуть у frontend content-шарі, а не в API.
+
+### 30.3 Пресети ролей
+
+| Ключ | owner (неявно) | admin | deputy (Q2) | specialist (Q3: без «свого виторгу») |
+|---|---|---|---|---|
+| `calendar.view` | all | all | all | own |
+| `calendar.manage` | all | all | all | own |
+| `clients.view` | all | all | all | none |
+| `clients.edit` | all | all | all | none |
+| `clients.contacts` | full | full | full | masked |
+| `clients.calls` | all | all | all | none |
+| `revenue.view` | all | all | none | none |
+| `revenue.costs` | edit | edit | none | none |
+| `channels.inbox` | reply | reply | reply | none |
+| `channels.settings` | edit | edit | none | none |
+| `ai.use` | use | use | use | none |
+| `ai.settings` | edit | edit | none | none |
+| `services.catalog` | edit | edit | view | view |
+| `marketing.campaigns` | edit | edit | none | none |
+| `staff.access` | edit | edit | all | own |
+| `locations.access` | edit | edit | all | own |
+| `settings.general` | edit | view | none | none |
+| `team.manage` | manage | manage | none | none |
+
+- Пресет застосовується під час прийняття запрошення, зміни ролі та скидання до пресету. Далі рядки є звичайними значеннями: зміна пресету в коді **не** переписує наявних користувачів.
+- Backfill (TASK-849) пише пресет для кожного наявного `admin` і `specialist` (`ON CONFLICT DO NOTHING`), для `owner` нічого не пише.
+- Пресети admin/specialist точно відтворюють поточну матрицю (доводить TASK-847 → TASK-852/853).
+- **Ціни в списках (M4, TASK-848; правило §30.5).** У пресетах це виглядає так:
+  - admin (`revenue.view = all`) бачить ціни в усіх списках, як і зараз;
+  - specialist бачить ціни лише на власних записах, а інших у його списках і так немає, тож поведінка не змінюється;
+  - deputy (`revenue.view = none`) бачить ціни в списках лише для записів свого майстра (без прив'язки до профілю — ніде), а в деталі запису бачить завжди.
+  Для owner/admin/specialist відхилення від базової матриці немає.
+
+### 30.4 Ефективні права
+
+- `effective(key) = усі modules(key) ввімкнені для tenant ? granted(key) : lowest(key)`. Рядки БД при цьому не змінюються: після повторного ввімкнення модуля права повертаються.
+- Для `owner`: `granted(key) = max(key)`.
+- **Обмеження діють і під час обчислення (TASK-848).** Після застосування модулів `effective` проходить обмеження §30.2 (`lte`, `requires`, `roleCeiling`). Якщо обмеження порушене (дані змінено в БД напряму, змінився каталог, вимкнено модуль ключа-передумови), **залежний** ключ отримує найнижчий рівень (`lte`: до рівня передумови). Приклади: вимкнений `beauty_clients` робить `marketing.campaigns = none`, рядок `team.manage = manage` у deputy дає `none`. Під час запису порушення, як і раніше, відхиляється з `422`. «Тихе виправлення» стосується лише читання, у БД нічого не пишеться.
+- `Marketing:Enabled = false` не змінює `effective`, бо це конфіг інстансу. Ендпоінти маркетингу віддають `403 marketing_disabled`, як і раніше (§26.2).
+- `GET /api/auth/me` віддає `effective`. `GET /api/users/{id}/access` віддає `granted`, `effective` і `moduleDisabled[]`.
+
+### 30.5 Механізм перевірки на backend
+
+**Конвеєр запиту співробітника (порядок обов'язковий):**
+1. `UseBeautyCors`. `WithExposedHeaders` доповнюється `X-Access-Version` (без цього frontend з іншого origin заголовка не побачить).
+2. `UseAuthentication` (JWT). Немає токена або він невірний: `401 invalid_token` (як зараз).
+3. `UseControlPlane`, потім `TenantMiddleware` (`app.tenant_id`), без змін.
+4. **`AccessContextMiddleware` (новий)** для JWT користувача tenant. Одним запитом під RLS читає `users.role, is_active, state, specialist_id, access_version`, `beauty_specialists.is_active` прив'язаного профілю (LEFT JOIN) і рядки `user_permissions`.
+   - **Схеми (TASK-848, M6).** Middleware діє лише для principal, автентифікованого схемою `JwtBearer`. Principal схем `PlatformKey` і `ControlPlaneHmac` він пропускає без змін (там своя авторизація). Анонімні запити теж пропускає: публічні маршрути працюють як раніше.
+   - **Fail-closed (M6):**
+     - JWT-principal без валідних `sub` або `tenant_id` (не GUID, `Guid.Empty`) або з `tenant_id`, що не збігається з tenant-контекстом: `401 invalid_token`;
+     - помилка, таймаут або недоступність БД під час читання: `503 access_unavailable` (з `Retry-After: 5`); запит **не** продовжується з claims токена, і запасного варіанта «пресет за роллю з JWT» немає;
+     - будь-який виняток middleware дає відмову, а не пропуск.
+   - Користувача не знайдено (зокрема для чужого tenant), `is_active = false`, `state ≠ active` або роль не є tenant-роллю: `401 session_revoked`.
+   - Claims `role` і `specialist_id` **замінюються** значеннями з БД (M6): з **усіх** identity principal видаляються **всі** claims типів `role` і `specialist_id` (зокрема дублікати й мапнуті `ClaimTypes.Role`). Потім в основну identity додається рівно по одному значенню з БД; `specialist_id` додається, лише якщо прив'язка є.
+   - **Неактивний профіль майстра (TASK-848, M7).** Якщо прив'язаний профіль `is_active = false`:
+     - в `AccessSet` позначається `SpecialistInactive`, і всі `own`-scope Application повертають порожню вибірку (`EffectiveSpecialistId → Guid.Empty`; `own`-клієнти, `/me/revenue` дають порожньо);
+     - `ActiveSpecialistFilter` стає глобальним для tenant-ендпоінтів §30.6 (а не лише booking/absences) і віддає `403 specialist_inactive`. Винятки: `GET /api/auth/me`, `GET /api/access/catalog`, `POST /feedback`.
+   - Scoped `IAccessContext` = `AccessSet` (effective, §30.4). Завантажується один раз за запит.
+   - Заголовок `X-Access-Version: {accessStamp}` (§30.9.1) додається до **кожної** відповіді автентифікованого запиту співробітника (2xx/4xx/5xx), окрім `401`. Публічні, control-plane і platform маршрути заголовка не мають.
+5. `UseAuthorization`. Політика `Staff` = `owner|admin|deputy|specialist` (лише автентифікація ролі tenant). `Owner` лишається для зарезервованих дій. `Management` після TASK-852/853 на tenant-ендпоінтах не використовується. До переведення `deputy` поза `Management` (fail-closed).
+6. `TenantActiveFilter` (глобальний `IAsyncAuthorizationFilter`), без змін. Призупинений tenant: `403 tenant_suspended`, як у поточному коді (виправлено TASK-848; раніше тут помилково стояло `module_disabled`).
+   **Обов'язковий порядок authorization- і action-фільтрів:** `TenantActiveFilter` → `[RequireModule]` → `[RequirePermission]` → `[CouponsMarketingGate]` → `ModelStateInvalidFilter` → `ActiveSpecialistFilter`. Його фіксує тест TASK-856: ендпоінт з усіма умовами відмови віддає код **першої** за цим порядком.
+7. **`[RequireModule]` отримує `IOrderedFilter.Order = -3100`** (зараз порядок 0, тобто після `ReminderRoles` з -3000). Вимкнений модуль дає `403 module_disabled`.
+8. **`[RequirePermission(key, minLevel)]`**, `Order = -3000`, AND-семантика за кількох атрибутів.
+   - Якщо `effective < minLevel` і причина у вимкненому модулі ключа (granted вистачило б): `403 module_disabled`. Так frontend не вважатиме це зміною доступу.
+   - Інакше: `403 {code: "forbidden_role", message, permission, required}`.
+   - Тіло запиту не читається, 422 не повертається.
+9. `[CouponsMarketingGate]` (-2900) → `403 marketing_disabled`, без змін.
+10. `ModelStateInvalidFilter` (-2000): `422` прив'язки, без змін.
+11. `ActiveSpecialistFilter`: **порядок не змінюється** (0, після 422, як зараз). Застосовується глобально (M7, п.4) до будь-якого користувача з `specialist_id`, чий профіль неактивний (у V1 це лише майстри): `403 specialist_inactive`. Ознаку бере з `IAccessContext`, окремого запиту до БД не робить.
+12. Action → Application. Scope (`own/all`), формування полів і правила рангу виконує Application через `Actor.Access` (`AccessSet`), а не `Actor.Role`.
+
+**Правила для Application:**
+- `Actor.Access.Level(key)` і `Actor.Access.AtLeast(key, level)`.
+- **`Actor.Access` обов'язковий (TASK-848, B2):**
+  - у production-коді немає дефолту «пресет за роллю»: `Actor` без `Access` не компілюється (обов'язковий параметр або `required init`);
+  - `ToActor()` бере `AccessSet` лише з `IAccessContext`. Якщо контексту немає (middleware не відпрацював, фоновий код), він повертає `AccessSet.None`: усі ключі найнижчі, `own` порожній;
+  - пресет для тестів дає лише тестова фабрика `TestActors.WithPreset(role, specialistId?)` у `BeautyCrm.Tests`;
+  - архітектурний тест (TASK-850) перевіряє, що `PermissionPresets.For(...)` викликається в Api, Application і Infrastructure лише з `AccessAdminService` (запис пресету), `AcceptInvite` і міграційного/backfill-коду, і ніколи як джерело `Actor.Access`. Наявні тести з `new Actor(..., role, specialistId)` переводяться на фабрику.
+- Заміни: `StaffRoles.IsManager(actor)` замінюється перевіркою конкретного ключа за §30.6. `AppointmentAccessService.EffectiveSpecialistId/CanCreateFor/CanAccessAsync` дивляться на `calendar.view`/`calendar.manage`. `InboxService` (рядок перевірки ролі) дивиться на `channels.inbox`. `AiSettingsService` (`keys` і `keySource` лише для owner) не змінюється.
+- **Поле без права відсутнє** в JSON (`JsonIgnore WhenWritingNull` або `null`) і ніколи не замінюється на `0`.
+- **Маскування контактів** за `clients.contacts = masked`, однаково в усіх staff-DTO, де є контакт клієнта (`ClientDto`, `ClientPhonePendingDto`, `call-tasks`, вкладені об'єкти клієнта):
+  - `phone` відсутнє, натомість `phoneMasked` = `+` і останні 2 цифри, решта `•` (формат §25.7, напр. `+••••••••••33`);
+  - `email` відсутнє, натомість `emailMasked` = перший символ локальної частини + `•••@` + домен;
+  - `phonePending.phone` замінюється на `phonePending.phoneMasked`.
+  Inbox **завжди** показує лише маску, незалежно від права (§25.9).
+- **Ціни записів (рішення людини M4, TASK-848; замінює попередню редакцію «ціна видима всім»):**
+  - **Списки** (`GET /appointments`, `overview.appointments[]` і будь-які інші списки записів у staff-API): `priceOriginal` і `priceFinal` повертаються лише якщо `revenue.view = all` **або** `appointment.specialist_id` дорівнює власному `specialist_id` актора (і профіль активний). Інакше поля відсутні (`JsonIgnore(WhenWritingNull)`), бо зі списку інакше можна підсумувати чужий виторг;
+  - **Деталь** `GET /appointments/{id}`: ціна повертається всім, хто бачить запис за `calendar.view`, бо вона потрібна для оплати й скасування;
+  - **`/overview`**: `OverviewKpi.Revenue` стає `decimal?` з `JsonIgnore(WhenWritingNull)` і заповнюється лише за `revenue.view = all`. Ціни в `appointments[]` підпорядковані правилу списків;
+  - агрегати виторгу: `/analytics/*`, `kpi.revenue`, `/me/revenue`.
+- **Логи:** `access_denied permission={key} required={level} user={id} route={template}` без тіла й query. Набори прав разом із ПІІ не логуються.
+
+### 30.6 Карта «ендпоінт → право» (обов'язкова для TASK-852/853/851)
+
+**Позначення:**
+- «≥ L» — `[RequirePermission(key, L)]`;
+- «= L» — те саме з найвищим рівнем ключа;
+- «—» — без ключа, достатньо політики `Staff`;
+- «owner» — зарезервовано, `[Authorize(Policy = Owner)]` або наявний `[AiOwnerOnly]`;
+- «Було» — поточний механізм;
+- «Scope / поля» — що робить Application.
+
+Шляхи без префікса починаються з `/api/beauty`. `[RequireModule]` на контролерах лишається без змін, окрім нових контролерів. Кожен рядок є і рядком базової матриці TASK-847.
+
+#### 30.6.1 Команда й доступи, автентифікація (TASK-851; `me` і `catalog` — TASK-850)
+| Метод | Шлях | Було | Право | Scope / поля |
+|---|---|---|---|---|
+| POST | `/api/auth/login`, `/api/auth/refresh`, `/api/auth/logout` | публічний | поза картою | refresh видає роль з БД (як зараз) |
+| POST | `/api/auth/invites/accept` | публічний | поза картою | матеріалізує права (§30.9.5) |
+| GET | `/api/auth/me` | Staff | — | + `accessVersion`, `accessStamp`, `catalogVersion`, `modules`, `permissions` (§30.9.1) |
+| GET | `/api/access/catalog` (новий) | — | — | §30.9.2 |
+| GET | `/api/users` | Management | `team.manage = manage` | + `accessVersion`, `manageable` |
+| PATCH | `/api/users/{id}/status` | Management | `team.manage = manage` | ранг (§30.10); `expectedVersion?`; `access_version + 1`; аудит `activated`/`deactivated` |
+| GET | `/api/users/{id}/access` (новий) | — | `team.manage = manage` | §30.9.3 |
+| PUT | `/api/users/{id}/access` (новий) | — | `team.manage = manage` | §30.9.4, §30.10 |
+| POST | `/api/users/{id}/access/reset` (новий) | — | `team.manage = manage` | §30.9.4 |
+| POST | `/api/invites` | Management | `team.manage = manage` | + `role: deputy`, `permissions?` (§30.9.5) |
+| GET | `/api/invites` | Management | `team.manage = manage` | + `permissions` (перевизначення або `null`) |
+| DELETE | `/api/invites/{id}` | Management | `team.manage = manage` | ранг за роллю запрошення; аудит `invite_revoked` |
+| GET | `/api/users/access-audit` (новий) | — | owner | §30.9.6 (Q7) |
+
+#### 30.6.2 Календар і записи (TASK-852; `BookingController`, `CouponCheckController`)
+| Метод | Шлях | Було | Право | Scope / поля |
+|---|---|---|---|---|
+| GET | `/slots` | Staff + підміна `specialistId` | `calendar.view ≥ own` | `own`: `specialistId` = власний |
+| GET | `/appointments` | Staff + підміна | `calendar.view ≥ own` | `own`: лише власні. Поля `cancelledBy.name/id`, `cancelReason`, `coupon.codeHint` віддаються лише за `calendar.manage = all` (було `IsManager`). **`priceOriginal/priceFinal`** — правило списків §30.5 (M4) |
+| GET | `/appointments/{id}` | Staff + `CanAccessAsync` | `calendar.view ≥ own` | поза scope перегляду: `404 appointment_not_found`; поля як вище, **ціна повертається завжди** (потрібна для оплати, M4) |
+| POST | `/appointments` | Staff + `CanCreateFor` | `calendar.manage ≥ own` | `own`: чужий `specialistId` дає `403 forbidden` (код без змін). **Клієнт (TASK-848, M3):** `client.id` приймається лише зі scope `clients.view` актора; поза scope (зокрема за `clients.view = none`) відповідь `404 client_not_found`, як і для неіснуючого. Якщо клієнта передано даними (ім'я, телефон) і знайдено існуючого за телефоном, запис прив'язується до нього, але відповідь **не розкриває** його збережених ім'я, нотаток і контактів: у `AppointmentDto.client` повертаються передані актором дані плюс маска телефону. Якщо клієнт був поза scope актора, пишеться подія безпеки `client_scope_expanded {actorUserId, clientId, appointmentId}` (структурований лог і метрика, без ПІІ). Скасовані записи, створені самим актором, scope не розширюють (§30.2) |
+| PATCH | `/appointments/{id}` | Staff + `CanAccessAsync` | `calendar.manage ≥ own` | поза scope `calendar.view`: `404`; видимий, але поза scope `calendar.manage`: `403 forbidden_role {permission: calendar.manage, required: all}` |
+| POST | `/appointments/{id}/cancel` | Staff + `CanAccessAsync` | `calendar.manage ≥ own` | як PATCH |
+| POST | `/coupons/check` | Staff (усі ролі) | `calendar.manage ≥ own` | детальні причини `coupon_*` лише за `calendar.manage = all` (було `IsManager`), інакше узагальнена `coupon_invalid` |
+
+#### 30.6.3 Огляд, аналітика, собівартість, «свій виторг» (TASK-852)
+| Метод | Шлях | Було | Право | Scope / поля |
+|---|---|---|---|---|
+| GET | `/overview` | Management | `calendar.view = all` | `kpi.revenue` (`decimal?`, `JsonIgnore WhenWritingNull`) лише за `revenue.view = all`, інакше поле відсутнє. Ціни в `appointments[]` за правилом списків (M4). Інші поля записів як у §30.6.2 |
+| GET | `/analytics/network` | Management | `revenue.view = all` | поля §24.6.2 (`cost, masterPayout, netIncome, marginPercent, withoutCost, revenueWithoutCost`) лише за `revenue.costs ≥ view` |
+| GET | `/analytics/network/series` | Management | `revenue.view = all` | `points[].cost/masterPayout/netIncome/withoutCost` лише за `revenue.costs ≥ view` |
+| GET | `/analytics/network/details` | Management | `revenue.view = all` | поля собівартості в `summary`, `locations[]`, `items[]` (`cost, masterPercent, masterPayout, net, netIncome, marginPercent, withoutCost, revenueWithoutCost, costMissing`) лише за `revenue.costs ≥ view` |
+| GET | `/analytics/locations` | Management | `revenue.view = all` | як `network` |
+| GET | `/analytics/locations/{locationId}/breakdown` | Management | `revenue.view = all` | — |
+| GET | `/analytics/promotions` | Management | `revenue.view = all` | — |
+| GET | `/me/revenue` (новий, `[RequireModule("beauty_analytics")]`) | — | `revenue.view ≥ own` | §30.9.7; лише власні записи (і для `all` теж) |
+| GET | `/service-costs` | ReminderRoles(owner, admin) | `revenue.costs ≥ view` | — |
+| GET | `/services/{id}/costs` | ReminderRoles(owner, admin) | `revenue.costs ≥ view` | — |
+| PUT | `/services/{id}/costs` | ReminderRoles(owner, admin) | `revenue.costs = edit` | — |
+| DELETE | `/services/{id}/costs` | ReminderRoles(owner, admin) | `revenue.costs = edit` | — |
+
+#### 30.6.4 Спеціалісти й відсутності (TASK-852; `StaffController`, `AbsencesController`)
+| Метод | Шлях | Було | Право | Scope / поля |
+|---|---|---|---|---|
+| GET | `/specialists` | Staff | — | довідник; `phone`, `hasAccount` лише за `staff.access = edit` (було `IsManager`) |
+| GET | `/specialists/{id}` | Staff | — | як список |
+| POST | `/specialists` | Management | `staff.access = edit` | — |
+| PUT | `/specialists/{id}` | Management | `staff.access = edit` | + `CanModify` (§30.1). **`isActive: false` для профілю з прив'язаним користувачем (TASK-848, M1)** додатково вимагає `team.manage = manage` і `RolePolicy.CanManage(actor, linkedUser.role)`, інакше `403 forbidden_role {permission: team.manage, required: manage}` або `403 forbidden_role` (ранг). Каскад ADR-008 (вимкнення користувача, відкликання refresh-токенів і pending-запрошень) іде в тій самій транзакції: `users.access_version + 1`, аудит `deactivated` (`changes: {"cause": "specialist_profile_deactivated", "specialistId": …}`) і `invite_revoked` на кожне відкликане запрошення. Профіль без користувача вимикається з одним лише `staff.access = edit` |
+| PUT | `/specialists/{id}/services` | Management | `staff.access = edit` | + `CanModify` |
+| PUT | `/specialists/{id}/schedule` | Management | `staff.access = edit` | + `CanModify` |
+| POST | `/specialists/{id}/locations` | Management | `staff.access = edit` | + `CanModify` |
+| DELETE | `/specialists/{id}/locations/{locationId}` | Management | `staff.access = edit` | + `CanModify` |
+| POST | `/specialists/{id}/invite` | Management | `team.manage = manage` | + `CanModify`; правила `POST /api/invites` з `role=specialist` (ранг, стеля для `permissions?`) |
+| GET | `/absences` | Staff | — | `staff.access = edit`: усі. Інакше: затверджені чужі, усі власні та створені собою. `note` лише за `edit` або для автора (ADR-008). **`type` чужих відсутностей** (`sick` належить до даних про здоров'я) лише за `edit`. Іншим поле відсутнє, і UI показує «Недоступний» (дозволене відхилення D7, §30.7) |
+| POST | `/specialists/{id}/absences` | Staff + `IsManager`/role | — | `edit` + `CanModify`: будь-кому, `approved`, `conflicts[]`. **Для власного профілю актора статус завжди `requested`, навіть за `edit` (M2).** Без `edit`: лише `id = own specialist_id`, статус `requested`. Чужий профіль: `403 forbidden` (код без змін) |
+| POST | `/absences/{id}/approve` | Management | `staff.access = edit` | + `CanModify`. Власна відсутність актора: `403 forbidden_self_approval` (M2) |
+| POST | `/absences/{id}/reject` | Management | `staff.access = edit` | + `CanModify`. Власна відсутність: `403 forbidden_self_approval` (M2) |
+| POST | `/absences/{id}/cancel` | Staff + `IsManager` | — | `edit`: `requested`/`approved` (+ `CanModify`). Інакше автор лише свій `requested`. Чужа відсутність: `404` |
+
+#### 30.6.5 Заклади (TASK-852; `LocationsController`)
+| Метод | Шлях | Було | Право | Scope / поля |
+|---|---|---|---|---|
+| GET | `/locations` | Staff | — | довідник; `includeInactive=true` діє лише за `locations.access = edit` |
+| POST | `/locations` | Management | `locations.access = edit` | геополя §29.8 |
+| PUT | `/locations/{id}` | Management | `locations.access = edit` | — |
+| PUT | `/locations/{id}/closed-weekdays` | Management | `locations.access = edit` | — |
+| PUT | `/locations/{id}/working-hours` | Management | `locations.access = edit` | — |
+| GET | `/locations/{id}/closures` | Staff | — | `reason` лише за `locations.access = edit` |
+| POST | `/locations/{id}/closures` | Management | `locations.access = edit` | — |
+| DELETE | `/locations/{id}/closures/{closureId}` | Management | `locations.access = edit` | — |
+
+#### 30.6.6 Налаштування (скасування — TASK-852; нагадування — TASK-853)
+| Метод | Шлях | Було | Право | Примітка |
+|---|---|---|---|---|
+| GET | `/settings/cancellation` | Staff | — | умови потрібні UI скасування |
+| PUT | `/settings/cancellation` | Owner | owner | зарезервовано (A2, Q6) |
+| GET | `/settings/reminders` | ReminderRoles(owner, admin) | `settings.general ≥ view` | — |
+| PUT | `/settings/reminders` | ReminderRoles(owner) | `settings.general = edit` | пресет admin = `view` дає ту саму відповідь 403 |
+
+#### 30.6.7 Послуги, ціни, акції (TASK-853; `CatalogController`)
+| Метод | Шлях | Було | Право |
+|---|---|---|---|
+| GET | `/services`, `/services/{id}/prices`, `/promotions`, `/promotions/preview` | Staff | `services.catalog ≥ view` (найнижчий рівень, тобто фактично будь-хто) |
+| POST | `/services` | Management | `services.catalog = edit` |
+| PUT | `/services/{id}` | Management | `services.catalog = edit` |
+| PUT | `/services/{id}/prices` | Management | `services.catalog = edit` |
+| POST | `/promotions` | Management | `services.catalog = edit` |
+| PUT | `/promotions/{id}` | Management | `services.catalog = edit` |
+
+#### 30.6.8 Клієнти, вподобання, згода, телефон, купони клієнта, дзвінки (TASK-853)
+| Метод | Шлях | Було | Право | Scope / поля |
+|---|---|---|---|---|
+| GET | `/clients` | Management | `clients.view ≥ own` | `own`-множина (§30.2); маскування за `clients.contacts` |
+| GET | `/clients/{id}` | Management | `clients.view ≥ own` | поза scope: `404 client_not_found`; `history` і лічильники за `own`; маскування (`phone`, `email`, `phonePending`) |
+| POST | `/clients` | Management | `clients.edit = all` | новий клієнт ще не має записів, тож поза будь-яким `own` |
+| POST | `/clients/{id}/notes` | Management | `clients.edit ≥ own` | scope як у `clients.edit` |
+| GET | `/clients/{clientId}/contact-preferences` | ReminderRoles(owner, admin) | `clients.view ≥ own` | scope |
+| PUT | `/clients/{clientId}/contact-preferences` | ReminderRoles(owner, admin) | `clients.edit ≥ own` | scope |
+| GET | `/clients/{clientId}/marketing-consent` | ReminderRoles(owner, admin) | `clients.view ≥ own` | scope |
+| PUT | `/clients/{clientId}/marketing-consent` | ReminderRoles(owner, admin) | `clients.edit ≥ own` | scope |
+| POST | `/clients/{clientId}/phone-pending` | ReminderRoles(owner, admin) | `clients.edit ≥ own` **і** `clients.contacts = full` | scope |
+| GET | `/clients/{clientId}/coupons` | ReminderRoles(owner, admin) | `clients.view ≥ own` | scope; кодів немає (як зараз) |
+| GET | `/call-tasks` | ReminderRoles(owner, admin) | `clients.calls = all` | `client.phonePending` за `clients.contacts` |
+| PATCH | `/call-tasks/{id}` | ReminderRoles(owner, admin) | `clients.calls = all` | — |
+
+#### 30.6.9 Розмови й канали (TASK-853)
+| Метод | Шлях | Було | Право | Примітка |
+|---|---|---|---|---|
+| GET | `/conversations`, `/conversations/{id}` | InboxManagementOnly + сервіс | `channels.inbox ≥ view` | телефон лише маскою (§25.9) |
+| POST | `/conversations/{id}/read` | те саме | `channels.inbox ≥ view` | — |
+| POST | `/conversations/{id}/reply` | те саме | `channels.inbox = reply` | — |
+| POST | `/conversations/{id}/resume-ai` | те саме | `channels.inbox = reply` | — |
+| POST | `/conversations/{id}/resolve` | те саме | `channels.inbox = reply` | — |
+| GET | `/channels` | Management | `channels.settings = edit` | — |
+| PUT | `/channels/{id}` | Management | `channels.settings = edit` | — |
+| POST | `/channels/{id}/telegram/sync-commands` | Management | `channels.settings = edit` | — |
+
+`InboxManagementOnlyAttribute` видаляється разом з `ReminderRolesAttribute` після TASK-853.
+
+#### 30.6.10 ШІ (TASK-853, skill `ai-business-assistant`)
+| Метод | Шлях | Було | Право | Примітка |
+|---|---|---|---|---|
+| GET | `/ai/settings` | Management | `ai.settings = edit` | `keys` лише для owner (без змін) |
+| PUT | `/ai/settings` | Management | `ai.settings = edit` | зміна `keySource` лише для owner (`403 forbidden_role`, без змін). **Режим `auto` (ШІ діє без підтвердження, ADR-005) зарезервовано за owner (TASK-848):** встановити `mode = auto` може лише owner. Іншим відповідь `403 forbidden_role` без `permission`, як для зарезервованих дій. Перемикання з `auto` на `confirm`/`suggest` доступне за `ai.settings = edit` |
+| GET | `/ai/models` | Management | `ai.settings = edit` | — |
+| GET | `/ai/usage` | Management | `ai.settings = edit` | — |
+| PUT | `/ai/settings/key-source` | Management + `[AiOwnerOnly]` | owner | зарезервовано (§20.9) |
+| PUT | `/ai/settings/keys/{provider}` | Management + `[AiOwnerOnly]` | owner | зарезервовано |
+| DELETE | `/ai/settings/keys/{provider}` | Management + `[AiOwnerOnly]` | owner | зарезервовано |
+| POST | `/ai/settings/keys/{provider}/test` | Management + `[AiOwnerOnly]` | owner | зарезервовано |
+| GET | `/ai/actions` | Management | `ai.use = use` | **Фільтр (TASK-848):** повертаються лише дії, на tool яких актор **зараз** має право за таблицею нижче. Решта не потрапляє в список і не дає 403. Вкладені дані клієнта маскуються за `clients.contacts` |
+| POST | `/ai/actions` | Management | `ai.use = use` + право tool (таблиця нижче) | tool без права: `403 forbidden_role {permission, required}` |
+| POST | `/ai/actions/{id}/approve` | Management | `ai.use = use` + право tool дії | підтвердження виконує дію |
+| POST | `/ai/actions/{id}/reject` | Management | `ai.use = use` + право tool дії | — |
+| POST | `/ai/actions/{id}/revert` | Management | `ai.use = use` + право tool дії | — |
+
+**Права staff-tools ШІ** (`AiScope.Manager`; tools виконуються від імені актора). `AiToolContext` отримує `AccessSet` актора. Tool без права не потрапляє в перелік для моделі й відхиляється під час виконання. Scope `own` у tools у V1 не підтримується, тож вимагається `all`.
+
+**Executor (TASK-848):**
+- `AiToolExecutor` приймає `Actor` (з `Access`) як обов'язковий параметр для `AiScope.Manager`. Для staff-scope виклику без актора: виняток, fail-closed.
+- Право tool перевіряється **в момент виконання** за поточним `AccessSet` того, хто виконує: для `approve` це той, хто підтверджує, а не автор чернетки. Отже, дію, підготовлену до відкликання права, після відкликання виконати не можна: `403 forbidden_role {permission, required}`, дія лишається pending.
+- `revert` підпорядкований тому самому правилу.
+
+| Tool | Право |
+|---|---|
+| `find_free_slots` | `calendar.view = all` |
+| `create_appointment` | `calendar.manage = all` |
+| `get_prices`, `get_active_promotions` | `services.catalog ≥ view` |
+| `get_client_context` | `clients.view = all`; контакти маскуються за `clients.contacts` |
+| `draft_reply` | `channels.inbox = reply` |
+| `suggest_promotion`, `build_audience` | `marketing.campaigns = edit` |
+
+Клієнтський чат (`AiScope.ClientChat`, §21/§28) не має актора-співробітника й не змінюється.
+
+#### 30.6.11 Розсилки й купони (TASK-853)
+| Метод | Шлях | Було | Право |
+|---|---|---|---|
+| POST | `/marketing/audience/preview` | ReminderRoles(owner, admin) | `marketing.campaigns = edit` |
+| GET, POST | `/campaigns` | ReminderRoles(owner, admin) | `marketing.campaigns = edit` |
+| GET, PUT, DELETE | `/campaigns/{id}` | ReminderRoles(owner, admin) | `marketing.campaigns = edit` |
+| GET, POST | `/campaigns/{id}/preview` | ReminderRoles(owner, admin) | `marketing.campaigns = edit` |
+| POST | `/campaigns/{id}/confirm`, `/campaigns/{id}/cancel` | ReminderRoles(owner, admin) | `marketing.campaigns = edit` |
+| GET | `/campaigns/{id}/stats`, `/campaigns/{id}/coupons/summary` | ReminderRoles(owner, admin) | `marketing.campaigns = edit` |
+| GET, POST | `/coupons` | ReminderRoles(owner, admin) + MarketingGate | `marketing.campaigns = edit` |
+| PATCH | `/coupons/{id}` | ReminderRoles(owner, admin) + MarketingGate | `marketing.campaigns = edit` |
+
+#### 30.6.12 Інше
+| Метод | Шлях | Було | Право |
+|---|---|---|---|
+| POST | `/feedback` | Staff | — |
+
+#### 30.6.13 Поза картою (без JWT співробітника, не змінюються)
+`/api/public/**` (§12, §29), `/api/beauty/webhooks/**`, `/api/auth/invite/inspect|accept` (запрошення власника, §27), `/api/control/v1/**` (HMAC, ADR-018), `/api/platform/**` (`X-Platform-Key`), `/healthz`, `/readyz`. Mobile (ADR-021/022) і worker не зачіпаються.
+
+**Критерій завершення TASK-853:** `grep` у `backend/BeautyCrm.Api/Controllers` не знаходить `AuthPolicies.Management`, `ReminderRoles`, `InboxManagementOnly`. `StaffRoles.IsManager` не використовується. Новий tenant-ендпоінт без `[RequirePermission]` або явного «—» у цій карті валить тест TASK-847 (перелік маршрутів через `EndpointDataSource`).
+
+### 30.7 Дозволені відхилення від базової матриці (TASK-847)
+Усе, чого немає в цьому переліку, вважається регресією.
+
+| # | Що змінюється | Чому |
+|---|---|---|
+| D1 | Користувач без права на ендпоінті вимкненого модуля отримує `403 module_disabled` замість `403 forbidden_role` (колишні `ReminderRoles` та `InboxManagementOnly`) | `RequireModule` іде першим (§30.5 п.7) |
+| D2 | `/service-costs`, `/services/{id}/costs` у tenant без `beauty_analytics` (але з `beauty_catalog`): `403 module_disabled` (було 200 для owner/admin) | `revenue.costs` прив'язано до `beauty_analytics` (ADR-023 §2.7) |
+| D3 | Ендпоінти колишньої `Management` віддають `403` з тілом `{code: forbidden_role, permission, required}` замість порожнього тіла політики | статус той самий; тіло адитивне |
+| D4 | (уточнено TASK-848) **Вимкнення** користувача діє з наступного запиту: `401 session_revoked`. **Зміна ролі або прав** не дає 401: наступний запит оцінюється за новою роллю й правами (`403 forbidden_role` там, де доступ втрачено, і новий `X-Access-Version`). Раніше вікно для обох випадків сягало 15 хв. Неактивний профіль майстра з активним користувачем дає `403 specialist_inactive` на всіх tenant-ендпоінтах (M7), а не лише на booking/absences | ADR-023 §2.5 |
+| D5 | Нова роль `deputy`: базової поведінки немає, очікування задає пресет §30.3 | — |
+| D6 | Кожна автентифікована відповідь співробітника має заголовок `X-Access-Version` | — |
+| D7 | `GET /absences`: користувачі без `staff.access = edit` (майстер у пресеті) не отримують `type` чужих відсутностей. Поле відсутнє, бо `sick` належить до даних про здоров'я. Затверджену чужу відсутність видно лише як інтервал «Недоступний» | приватність, TASK-848 (Q-C3) |
+| D8 | Помилка або недоступність БД під час перевірки доступу дає `503 access_unavailable` замість обробки запиту за claims токена | fail-closed, M6 |
+
+### 30.8 Гейтинг меню й маршрутів (frontend, TASK-854)
+Frontend відповідає лише за видимість. Хелпер `can(permissions, key, level)` бере `permissions` з `me`. Модулі вже враховані в `effective`.
+
+| Пункт / маршрут | Умова видимості |
+|---|---|
+| «Огляд» `/beauty` | `calendar.view = all` |
+| «Записи» `/beauty/calendar` | `calendar.view ≥ own` |
+| «Розмови» `/beauty/inbox` | `channels.inbox ≥ view` (кнопки відповіді й «Опрацьовано» за `reply`) |
+| «Дзвінки» `/beauty/calls` | `clients.calls = all` |
+| «Клієнти» `/beauty/clients` | `clients.view ≥ own` |
+| «Заклади» `/beauty/locations` | список: `locations.access ≥ all`; сторінки своїх закладів `/beauty/locations/{id}`: `≥ own`; редагування: `edit` |
+| «Спеціалісти» / «Мій профіль» `/beauty/staff` | `staff.access ≥ all`: «Спеціалісти»; `own`: «Мій профіль» (перенаправлення на `/beauty/staff/{specialistId}`) |
+| «Послуги», «Ціни та акції» | завжди (`services.catalog ≥ view`); редагування за `edit`; вкладка собівартості за `revenue.costs ≥ view` |
+| «Розсилки» `/beauty/campaigns` | `marketing.campaigns = edit` |
+| «Аналітика» `/beauty/analytics` | `revenue.view = all`; колонки собівартості за `revenue.costs ≥ view` |
+| «Мій виторг» | `revenue.view = own` (картка на сторінці «Мій профіль»; розміщення уточнює TASK-855) |
+| «AI-асистент» `/beauty/ai` | налаштування: `ai.settings = edit`; журнал дій і підтвердження: `ai.use = use`; віджет: `ai.use = use` |
+| «Канали» `/beauty/channels` | `channels.settings = edit` |
+| «Налаштування» `/beauty/settings` | `settings.general ≥ view` **або** owner (політика скасування) |
+| «Команда й доступи» `/beauty/team` | `team.manage = manage`; вкладка «Журнал змін» лише для owner |
+
+`homeFor`: `/beauty`, якщо `calendar.view = all`, інакше `/beauty/calendar`. Якщо `calendar.view = none`, перший доступний пункт меню за порядком.
+
+**Синхронізація.** Frontend перечитує `GET /api/auth/me`:
+- коли `X-Access-Version` розходиться з `accessStamp` у пам'яті;
+- після `403 forbidden_role` з полем `permission`;
+- після `403 module_disabled`;
+- коли вкладка повертає фокус.
+
+`403 forbidden_role` без `permission` (ранг, owner) перечитування не викликає. `401 session_revoked` вилоговує без спроби refresh. Відкрита сторінка без доступу показує «Доступ змінено керівником».
+
+### 30.9 DTO й ендпоінти
+
+Помилка завжди має форму `{code, message, ...}`. Відповіді `GET /api/auth/me` (TASK-848), `/api/users/**/access*`, `/api/users/access-audit`, `/api/beauty/me/revenue` мають `Cache-Control: no-store`. `[RequestSizeLimit(8 КБ)]` діє на PUT/POST тіла доступів і запрошень.
+
+#### 30.9.1 `GET /api/auth/me` (розширення `UserDto`)
+```json
+{
+  "id": "uuid", "email": "a@salon.ua", "fullName": "…", "role": "owner|admin|deputy|specialist",
+  "specialistId": "uuid|null", "isActive": true, "lastLoginAt": "…",
+  "accessVersion": 7,
+  "accessStamp": "7.3f9a1c2e",
+  "catalogVersion": 1,
+  "modules": ["beauty_booking", "beauty_clients"],
+  "permissions": { "calendar.view": "all", "calendar.manage": "all", "clients.contacts": "full", "…": "…" }
+}
+```
+- `permissions` містить **усі** ключі каталогу (effective, §30.4). Для owner це максимальні рівні з урахуванням модулів.
+- `accessStamp` = `{users.access_version}.{hex8 хешу відсортованого переліку ввімкнених модулів}`. Він збігається із заголовком `X-Access-Version`. Frontend порівнює його як непрозорий рядок. Модуль у stamp потрібен тому, що зміна модулів через control plane змінює `effective` без зміни `access_version`.
+
+#### 30.9.2 `GET /api/access/catalog`
+```json
+{
+  "catalogVersion": 1,
+  "roles": [ {"code": "owner", "rank": 4, "tenantAssignable": false}, {"code": "admin", "rank": 3, "tenantAssignable": true},
+             {"code": "deputy", "rank": 2, "tenantAssignable": true}, {"code": "specialist", "rank": 1, "tenantAssignable": true} ],
+  "blocks": [
+    { "block": "calendar", "routes": ["/beauty", "/beauty/calendar"],
+      "permissions": [ {"key": "calendar.view", "levels": ["none","own","all"], "modules": ["beauty_booking"]},
+                       {"key": "calendar.manage", "levels": ["none","own","all"], "modules": ["beauty_booking"]} ] }
+  ],
+  "constraints": [
+    {"type": "lte", "key": "calendar.manage", "other": "calendar.view"},
+    {"type": "lte", "key": "clients.edit", "other": "clients.view"},
+    {"type": "requires", "key": "clients.calls", "other": "clients.view", "level": "all"},
+    {"type": "requires", "key": "revenue.costs", "other": "revenue.view", "level": "all"},
+    {"type": "requires", "key": "marketing.campaigns", "other": "clients.view", "level": "all"},
+    {"type": "roleCeiling", "key": "team.manage", "roles": ["admin"]}
+  ],
+  "presets": { "admin": {"calendar.view": "all", "…": "…"}, "deputy": {"…": "…"}, "specialist": {"…": "…"} },
+  "reservedToOwner": ["ai.provider_keys", "ai.mode_auto", "cancellation.policy", "team.admins", "access.audit"]
+}
+```
+Об'єкт ключа може мати `"scope": "menu", "menuLevels": ["own", "all"]` (Q-C3, для `staff.access` і `locations.access`). Це означає, що перелічені рівні впливають лише на меню, а backend віддає ті самі дані. Решта рівнів (`edit`) перевіряються на backend як звичайно. UI показує біля цих рівнів підказку «Впливає лише на меню». Приклад: `{"key": "staff.access", "levels": ["own","all","edit"], "modules": ["beauty_booking"], "scope": "menu", "menuLevels": ["own","all"]}`.
+
+Блоки йдуть у порядку меню §30.8. Відповідь однакова для всіх ролей. `Cache-Control: private, max-age=300`.
+
+#### 30.9.3 `GET /api/users/{id}/access` → `UserAccessDto`
+```json
+{
+  "userId": "uuid", "role": "deputy", "isActive": true, "specialistId": null, "accessVersion": 4,
+  "editable": true, "notEditableReason": null,
+  "roleOptions": ["admin", "deputy"],
+  "granted":   { "calendar.view": "all", "…": "…" },
+  "effective": { "calendar.view": "all", "…": "…" },
+  "assignable": { "calendar.view": ["none","own","all"], "revenue.costs": ["none"], "team.manage": [] },
+  "locked": ["revenue.view"],
+  "moduleDisabled": ["marketing.campaigns"],
+  "ownWithoutSpecialist": false
+}
+```
+- `notEditableReason`: `owner | self | rank | null`. Для owner `granted = {}`, `effective` максимальний, `editable = false`.
+- `assignable[key]` — рівні, які актор може виставити: ≤ його ефективного рівня, з урахуванням стелі ролі цілі. Ключ із `locked` має `[]`.
+- `locked` — ключі, де поточне значення вище стелі актора (видав owner, Q9). Актор не може змінити їх ні вгору, ні вниз.
+- **`locked` проти `moduleDisabled` (TASK-848).** Ключ може бути в обох списках одночасно. Пріоритет має `locked`:
+  - `assignable[key] = []`;
+  - запит на зміну дає `403 permission_ceiling`, а не `422 module_disabled` (крок 11 §30.10 іде раніше за 13);
+  - UI показує причину «Видано директором» першою, «Модуль вимкнено» другою.
+- `roleOptions` — ролі, які актор може призначити цілі за §30.1 (V1: лише `admin ↔ deputy`). `[]` = зміна ролі недоступна.
+- `ownWithoutSpecialist = true`, якщо якийсь ключ має `own`, а `specialistId = null` (UI показує попередження).
+- Помилки: `404 user_not_found` (зокрема чужий tenant), `403 forbidden_role` (без `team.manage`). Читання owner або себе дозволене, `editable = false`.
+
+#### 30.9.4 `PUT /api/users/{id}/access`, `POST /api/users/{id}/access/reset`
+```json
+PUT  { "expectedVersion": 4, "role": "admin", "permissions": { "revenue.view": "all", "clients.contacts": "masked" }, "dryRun": false }
+POST /reset { "expectedVersion": 4, "dryRun": false }
+→ 200 UserAccessDto & {
+  "changes": [ {"permission": "revenue.view", "from": "none", "to": "all"} ],
+  "roleChange": {"from": "deputy", "to": "admin"} | null,
+  "clamped": [ {"permission": "settings.general", "requested": "edit", "applied": "view", "reason": "ceiling|locked"} ]
+}
+```
+- `permissions` має PATCH-семантику: ключі, не вказані в запиті, не змінюються.
+- `role` (необов'язкове) спершу застосовує пресет нової ролі, потім накладає `permissions`.
+- Пресет обрізається стелею актора: `min(preset, ceiling)`. Ключі з `locked` зберігають поточне значення. Обидва випадки потрапляють у `clamped`.
+- `reset` застосовує пресет поточної ролі за тими самими правилами.
+- `dryRun: true` обчислює результат (`changes`, `clamped`, перевірки) без запису й без зміни версії. UI використовує це для діалогу diff перед підтвердженням.
+- Без фактичних змін: `200`, версія та сама, рядка аудиту немає.
+- Під час запису: `users.access_version + 1`, один рядок аудиту (`permissions_changed`, `role_changed` з `{role, permissions}` або `preset_reset`) у тій самій транзакції. Порядок перевірок і коди — §30.10.
+
+#### 30.9.5 Запрошення
+- `POST /api/invites` `{email, role: "admin"|"deputy"|"specialist", specialistId?, permissions?: {key: level}}` → `201 {invite: InviteDto, token}` (форма й `no-store` без змін, §10/§15).
+  - `permissions` — перевизначення поверх пресету ролі. Перевіряються: ранг, `team.manage`, стеля ролі, модуль (`422 module_disabled`), обмеження на результуючому наборі (`422 permission_inconsistent`). Явно запитаний рівень вище стелі актора дає `403 permission_ceiling`.
+  - **Повний матеріалізований набір (TASK-848, B1).** Сервер будує набір з **усіх** ключів каталогу: пресет ролі, на нього перевизначення, далі **кожен** ключ обрізається до ефективного рівня запрошувача (`min(value, ceiling(actor, key))`). Обрізання пресетних значень (не запитаних явно) не є помилкою: такі ключі повертаються в `201 {invite, token, clamped: [{permission, requested, applied, reason: "ceiling"}]}`. Так адміністратор без `revenue.view` запрошує адміністратора без виторгу, а не з виторгом за пресетом.
+  - `invites.permissions` = цей повний знімок, **`NOT NULL`**. Міграція TASK-849 записує наявним pending-запрошенням пресет ролі як знімок.
+  - `specialistId` обов'язковий лише для `specialist`. Для `admin|deputy` його передача дає `422 invalid_specialist`.
+- `InviteDto` отримує `permissions: {…}` (повний знімок) і `invitedByUserId`.
+- **Прийняття** (`POST /api/auth/invites/accept`, форма для клієнта без змін). Одна транзакція з `FOR SHARE` рядка запрошувача:
+  1. **Перевірка запрошувача (TASK-848, M5).** Запрошувач існує, активний, `state = active`, для ролі запрошення має `team.manage = manage` (owner неявно) і `rank(inviter) > rank(invite.role)`. Інакше запрошення відкликається в тій самій транзакції (аудит `invite_revoked`, `actor = null`, `changes: {"cause": "inviter_lost_rights"}`), а відповідь `404 invite_invalid`. Код і тіло ті самі, що для простроченого чи використаного запрошення (`AuthService.InviteInvalid`): причину анонімному клієнту не розкриваємо.
+  2. Права = знімок `invites.permissions`, невідомі ключі й рівні відкидаються (дають найнижчий рівень).
+  3. **Обрізання поточною стелею запрошувача (M5):** кожен ключ стає `min(snapshot, ceiling(inviter_now, key))`. Обрізані ключі записуються в аудит `invite_accepted` (`changes.clamped[]`).
+  4. Якщо результат порушує обмеження (каталог змінився), залежні ключі знижуються до найнижчого рівня за правилом §30.4.
+  5. Аудит `invite_accepted` (§30.9.6), `access_version = 1`.
+- **Авто-відкликання pending-запрошень (M5).** У тій самій транзакції, що й подія, відкликаються всі pending-запрошення, де користувач є запрошувачем. Аудит `invite_revoked` на кожне, `actor` = той, хто спричинив подію. Події:
+  - його вимкнення (`deactivated`, включно з каскадом M1);
+  - зміна його ролі (`role_changed`);
+  - зниження його `team.manage` до `none`.
+  Зниження інших ключів запрошувача запрошень не відкликає: їх обрізає крок 3 при прийнятті.
+
+#### 30.9.6 `GET /api/users/access-audit?userId=&inviteId=&cursor=&take=` (лише owner)
+```json
+{ "items": [ { "id": "uuid", "createdAt": "…", "action": "permissions_changed",
+               "actor": {"id": "uuid", "fullName": "…"} | null,
+               "target": {"id": "uuid", "fullName": "…"} | null, "inviteId": "uuid|null",
+               "changes": [ {"permission": "revenue.view", "from": "none", "to": "own"} ] } ],
+  "nextCursor": "…" | null }
+```
+- `action`: `permissions_changed | role_changed | preset_reset | invited | invite_revoked | invite_accepted | activated | deactivated | migrated`.
+- `actor = null` позначає систему або міграцію.
+- Сортування `(created_at desc, id desc)`, keyset-курсор (base64url). `take` за замовчуванням 50, допустимо 1..100. Невалідний курсор дає `422 invalid_cursor`.
+- Журнал не містить ПІІ клієнтів, паролів, токенів і email запрошених. Є лише id, імена співробітників, ключі й рівні.
+- Строк зберігання 3 роки (Q7). Очищення робить окрема задача воркера.
+- **Для TASK-849 (уточнення схеми ADR-023 §2.4, Q-C2 прийнято):** рядки запрошень не мають користувача, тому `target_user_id` стає `NULL`-able і додається `invite_id uuid NULL` з `CHECK (target_user_id IS NOT NULL OR invite_id IS NOT NULL)`. До CHECK `action` додається `invite_accepted`.
+- **Цілісність і retention (TASK-848):**
+  - композитні FK `(tenant_id, target_user_id)`, `(tenant_id, actor_user_id)` → `users(tenant_id, id)` і `(tenant_id, invite_id)` → `invites(tenant_id, id)`, усі **`ON DELETE RESTRICT`** (журнал не зникає каскадом; за потреби TASK-849 додає `UNIQUE (tenant_id, id)` в `invites`);
+  - роль застосунку має лише `INSERT, SELECT`;
+  - очищення старших за 3 роки рядків (Q7) іде **лише** через `SECURITY DEFINER`-функцію `purge_user_access_audit(p_before timestamptz) RETURNS bigint`. Власник функції — окрема `NOLOGIN`-роль, `search_path` зафіксовано, а функція відмовляє, якщо `p_before > now() - interval '3 years'`;
+  - `EXECUTE` має лише роль воркера, прямого `DELETE` немає ні в кого;
+  - виклик з воркера — окрема задача (поза TASK-849…858).
+
+#### 30.9.7 `GET /api/beauty/me/revenue?from=yyyy-MM-dd&to=yyyy-MM-dd` (Q4, Q8)
+```json
+{ "fromDate": "2026-11-01", "toDate": "2026-11-15", "specialistId": "uuid|null",
+  "completed": 12, "revenue": 8400.00,
+  "byLocation": [ {"locationId": "uuid", "name": "…", "completed": 12, "revenue": 8400.00} ] }
+```
+- **Виторг** = Σ `price_final` записів **власного** `specialist_id` зі статусом `completed`. Запис належить дню за локальною датою свого закладу (§19.1).
+- Не входять: скасовані (зокрема їхні передоплати й повернення), `no_show`, собівартість, виплата майстру, чистий дохід, дані інших майстрів, загальна сума tenant.
+- Валідація: `from` і `to` обов'язкові, `to ≥ from`, `to − from + 1 ≤ 92`, рік 2000..2100. Порушення дає `422 invalid_range`.
+- Без прив'язки до майстра: `200` з `specialistId: null`, нулями й `byLocation: []`.
+- Модуль `beauty_analytics` обов'язковий, без винятків (Q8).
+
+### 30.10 Правила зміни доступу й порядок перевірок (`AccessAdminService`, TASK-851)
+Одна транзакція з фіксованим порядком блокувань (TASK-848):
+1. рядок **актора** `SELECT … FOR SHARE`: поки триває запис, актора не можна паралельно знизити чи вимкнути. Його права й активність перечитуються з БД під цим блокуванням, і неактивний актор отримує `401 session_revoked`;
+2. рядок **цілі** `SELECT … FOR UPDATE`.
+Рядки двох різних акторів у зворотному порядку ніхто не блокує, бо ранг суворо зростає, тож дедлоку немає. Перевірки йдуть у такому порядку, зупинка на першій помилці:
+
+| # | Перевірка | Помилка |
+|---|---|---|
+| 1 | `[RequirePermission("team.manage", "manage")]` (для audit — owner) | `403 forbidden_role {permission: team.manage, required: manage}` |
+| 2 | ціль існує в tenant | `404 user_not_found` |
+| 3 | ціль ≠ актор | `422 cannot_modify_self` |
+| 4 | ціль ≠ owner і `rank(actor) > rank(target)` | `403 forbidden_role` (без `permission`) |
+| 5 | тіло: `expectedVersion` — ціле ≥ 1 (для PATCH status необов'язкове) | `422 expected_version_required` |
+| 6 | `expectedVersion = users.access_version` | `409 access_version_conflict {currentVersion}` |
+| 7 | `role ∈ {admin, deputy, specialist}` | `422 invalid_role` |
+| 8 | нова роль має ранг < рангу актора | `403 forbidden_role` |
+| 9 | перехід ролі дозволено у V1 (`admin ↔ deputy`) | `422 role_change_not_supported` |
+| 10 | кожен ключ є в каталозі, кожен рівень є в ключі | `422 invalid_permission {permission}` / `422 invalid_level {permission, level}` |
+| 11 | нове значення ≤ ефективного рівня актора; ключ не в `locked` | `403 permission_ceiling {permissions: [...]}` |
+| 12 | стеля ролі (`team.manage` лише для `admin`; видає лише owner) | `422 permission_not_allowed_for_role {permission, role}` |
+| 13 | підвищення ключа вимкненого модуля (зниження дозволене) | `422 module_disabled {permissions: [...]}` |
+| 14 | обмеження на результуючому наборі (§30.2) | `422 permission_inconsistent {violations: [{permission, rule, other, level}]}` |
+
+- **Конкурентність:** гонка двох керівників дає рівно один успіх і один `409`.
+- **Owner:** через tenant API незмінний ні за яких умов, тож у tenant завжди лишається директор.
+- **Наслідок вимкнення** (`PATCH status {isActive:false}` або каскад M1 через профіль майстра): refresh-токени відкликаються (як зараз), `access_version + 1`, pending-запрошення цілі як запрошувача відкликаються (M5), аудит `deactivated`. Наступний запит цілі отримує `401 session_revoked`.
+- **Зміна ролі або зниження `team.manage` цілі** також відкликає її pending-запрошення (M5, §30.9.5).
+- **Зарезервовано за owner, через права не делегується:** ключ і джерело ключа ШІ (§20.9), режим ШІ `auto` (TASK-848), керування адміністраторами (ранг), політика скасування й повернень (Q6), журнал доступу (Q7), дії control plane.
+
+### 30.11 Коди помилок (зведення)
+| Статус | `code` | Додаткові поля | Де |
+|---|---|---|---|
+| 401 | `session_revoked` | — | middleware: користувача вимкнено або видалено, неактивний стан, чужий tenant |
+| 401 | `invalid_token` | — | як зараз; також JWT без валідних `sub`/`tenant_id` (M6) |
+| 503 | `access_unavailable` | заголовок `Retry-After` | middleware: БД недоступна під час перевірки доступу (M6, fail-closed) |
+| 403 | `tenant_suspended` | — | `TenantActiveFilter`, без змін |
+| 403 | `forbidden_self_approval` | — | approve/reject власної відсутності (M2) |
+| 404 | `client_not_found` | — | `POST /appointments` з `client.id` поза scope (M3) |
+| 404 | `invite_invalid` | — | прийняття: прострочене, використане, відкликане або запрошувач утратив права (M5) |
+| 403 | `forbidden_role` | `permission`, `required` (якщо причина у праві); без них, якщо причина в ранзі або owner | `[RequirePermission]`, `AccessAdminService` |
+| 403 | `permission_ceiling` | `permissions[]` | запис доступу, запрошення |
+| 403 | `module_disabled` | — | `[RequireModule]`; `[RequirePermission]`, коли право відсутнє через модуль |
+| 403 | `marketing_disabled`, `specialist_inactive`, `forbidden` | — | без змін |
+| 404 | `user_not_found` | — | `/api/users/{id}/**` |
+| 409 | `access_version_conflict` | `currentVersion` | PUT/reset доступу, PATCH status з `expectedVersion` |
+| 422 | `invalid_permission` | `permission` | |
+| 422 | `invalid_level` | `permission`, `level` | |
+| 422 | `permission_inconsistent` | `violations[]` | |
+| 422 | `permission_not_allowed_for_role` | `permission`, `role` | |
+| 422 | `module_disabled` | `permissions[]` | запис доступу (відрізняється від 403 статусом) |
+| 422 | `cannot_modify_self` | — | наявний код |
+| 422 | `invalid_role`, `role_change_not_supported`, `expected_version_required`, `invalid_specialist`, `invalid_range`, `invalid_cursor` | — | |
+
+### 30.12 Відповіді на Q1–Q11 (прийняті дефолти ADR-023 §7) і нові питання
+
+| # | Рішення |
+|---|---|
+| Q1 | `deputy` ранг 2, нижче admin. Admin запрошує заступника й керує ним |
+| Q2 | Пресет deputy — §30.3 |
+| Q3 | «Свій виторг» у пресеті майстра вимкнено (`revenue.view = none`) |
+| Q4 | Визначення в §30.9.7 |
+| Q5 | V1: `specialist_id` лише для `specialist`. Звідси Q-C1 |
+| Q6 | Політика скасування й повернень лише для owner |
+| Q7 | Журнал бачить лише owner, зберігання 3 роки |
+| Q8 | `/me/revenue` без `beauty_analytics` недоступний |
+| Q9 | Admin не змінює ключі, видані owner вище його стелі (`locked`) |
+| Q10 | Кілька директорів і передача ролі поза tenant API |
+| Q11 | `clients.view = own` у V1 |
+
+**Питання контракту Q-C1…Q-C4: прийнято людиною 2026-11-15 так, як рекомендувало рев'ю TASK-848** (Q-C3 — з позначкою `scope: "menu"` у каталозі, §30.9.2, і відхиленням D7 для `type` чужих відсутностей). Текст нижче зберігається як обґрунтування.
+- **M4 (ціни в списках): вирішено людиною 2026-11-15**, правило в §30.5.
+- **Q-C1.** Зміна ролі у V1 лише `admin ↔ deputy`. Ролі `specialist` не змінюються, майстру розширюють права. Інакше потрібна прив'язка `specialist_id` для інших ролей (Q5 V2).
+- **Q-C2.** Схема аудиту для запрошень: `target_user_id NULL` + `invite_id` + дія `invite_accepted` (§30.9.6). Це уточнення §2.4 ADR-023 без зміни семантики. Підтверджує `database-engineer` у TASK-849.
+- **Q-C3.** У V1 `staff.access own/all` і `locations.access own/all` дають однакові backend-відповіді: довідники потрібні календарю, різниця лише в меню. Звуження довідника для `own` змінило б поведінку майстра (відхилення від базової матриці). Рекомендація: лишити, оцінити в TASK-848.
+- **Q-C4.** `POST /clients` вимагає `clients.edit = all`, тож майстер з `clients.edit = own` не створює нового клієнта окремо. Створення клієнта разом із записом іде шляхом `POST /appointments` і правилами `calendar.manage`. Рекомендація: лишити.
+
+### 30.13 Тест-вимоги (TASK-848 → TASK-849/850/851/852/853/856)
+
+Обов'язкові автоматичні тести. Кожен пункт має щонайменше один тест, і TASK-857 перевіряє покриття за цим списком. Список зведено з висновків рев'ю (B1, B2, M1–M7, minor). Звіт рев'ю у файлах репозиторію не збережено, тож нумерацію треба звірити з ним, коли його буде збережено в `docs/reviews/`.
+
+1. **Запрошення, повний знімок (B1).** Admin без `revenue.view` запрошує admin: у знімку `revenue.view = none`, у відповіді `clamped[]`, `invites.permissions` не `NULL`. Явний запит вище стелі дає `403 permission_ceiling`.
+2. **Запрошення, прийняття (M5).** Запрошувача вимкнено, знижено йому роль або `team.manage` до прийняття: pending-запрошення відкликано, а accept дає `404 invite_invalid`. Іншу стелю запрошувача знижено: при прийнятті ключі обрізаються, `clamped` потрапляє в аудит `invite_accepted`.
+3. **`Actor.Access` fail-closed (B2).** Архітектурний тест на відсутність пресет-дефолту в production-збірках. `ToActor()` без `IAccessContext` дає `AccessSet.None`. Ендпоінт, викликаний в обхід middleware (тестовий host без нього), не повертає даних.
+4. **Middleware fail-closed (M6).** JWT без `sub` або `tenant_id` чи з невалідними значеннями дає `401 invalid_token`. Збій БД (fault injection) дає `503 access_unavailable`, а не 200 чи 500 з даними. Дублікати claims `role` у токені (`role=specialist` і `role=owner`, `ClaimTypes.Role`) після middleware замінено одним значенням з БД. Principal `PlatformKey`/`ControlPlaneHmac` middleware не змінює.
+5. **Миттєвість (D4).** Зміна прав дає 403 вже на наступному запиті з тим самим access-токеном. Зміна ролі веде до оцінки за новою роллю без 401. Вимкнення дає `401 session_revoked`. `X-Access-Version` змінюється, у тому числі при зміні модулів через control plane.
+6. **Деактивація профілю з користувачем (M1).** Без `team.manage` або без вищого рангу: 403. З правом: каскад в одній транзакції, `access_version + 1`, аудит `deactivated` і `invite_revoked`.
+7. **`CanModify` і самопогодження (M2).** Admin не змінює профіль, прив'язаний до admin чи owner, і власний профіль. Актор зі `staff.access = edit` створює власну відсутність лише як `requested`, а approve/reject власної дає `403 forbidden_self_approval`.
+8. **Scope клієнтів (M3).** `POST /appointments` з `client.id` поза scope дає `404 client_not_found`. Збіг за телефоном не повертає збережене ім'я, нотатки й контакти та пише подію `client_scope_expanded`. Запис, створений актором і скасований, не додає клієнта в `own`.
+9. **Ціни (M4).** Користувач без `revenue.view = all` не отримує `priceOriginal/priceFinal` у списку `/appointments` і в `overview.appointments[]` для чужих записів, а для своїх отримує. Деталь запису завжди містить ціну. `kpi.revenue` відсутній у JSON (саме відсутній, а не `0` чи `null`).
+10. **Неактивний профіль (M7).** `own`-вибірки порожні, tenant-ендпоінти дають `403 specialist_inactive`, крім `me`, `catalog`, `feedback`.
+11. **Порядок фільтрів.** Ендпоінт з кількома причинами відмови віддає першу за порядком `tenant_suspended` → `module_disabled` → `forbidden_role` → `marketing_disabled` → `422` → `specialist_inactive`.
+12. **Обмеження в `effective`.** Невідповідні рядки, вставлені в БД напряму (`team.manage = manage` у deputy, `revenue.costs = edit` за `revenue.view = none`, `marketing.campaigns = edit` за `clients.view = own`), не діють. Вимкнення `beauty_clients` знімає `marketing.campaigns`.
+13. **Запис доступу.** Пріоритет `locked` над `module_disabled`. Ключі з точним регістром (`Calendar.View` дає `422 invalid_permission`). Гонка двох керівників: один успіх і один `409`. Паралельне зниження актора під час запису серіалізується через `FOR SHARE`, і застосовується стан після блокування.
+14. **ШІ.** Для staff-scope без актора executor відмовляє. Право перевіряється під час `approve` за правами того, хто підтверджує (відкликане право дає 403, дія лишається pending). `GET /ai/actions` не показує дій tools без права. `mode = auto` встановлює лише owner.
+15. **Аудит і `no-store`.** Роль застосунку не може `UPDATE/DELETE` в `user_access_audit`. Видалення користувача з рядками аудиту блокує `RESTRICT`. `purge_user_access_audit` відмовляє для `p_before` молодших за 3 роки. `GET /api/auth/me` і відповіді доступів мають `Cache-Control: no-store`. Аудит не містить ПІІ клієнтів.

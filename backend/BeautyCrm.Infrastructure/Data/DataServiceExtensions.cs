@@ -52,6 +52,8 @@ public static class DataServiceExtensions
         services.AddScoped<ICatalogStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<ICancellationSettingsStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<IClientStore>(sp => sp.GetRequiredService<EfBeautyStore>());
+        services.AddScoped<BeautyCrm.Application.Features.BeautyAnalytics.IMyRevenueStore>(sp => sp.GetRequiredService<EfBeautyStore>());
+        services.AddScoped<BeautyCrm.Application.Features.BeautyAuth.IClientScope>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<IAnalyticsStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<IAnalyticsDetailsStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<IChannelSettingsStore>(sp => sp.GetRequiredService<EfBeautyStore>());

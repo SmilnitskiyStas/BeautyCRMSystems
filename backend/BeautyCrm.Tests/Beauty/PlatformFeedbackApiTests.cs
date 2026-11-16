@@ -382,7 +382,7 @@ public sealed class PlatformFeedbackApiTests(AuthApiFixture fx) : IClassFixture<
     }
 
     [SkippableFact]
-    public async Task deactivated_user_with_a_live_token_gets_403()
+    public async Task deactivated_user_with_a_live_token_gets_401_session_revoked()
     {
         NeedDb();
         var t = await NewTenantAsync();
@@ -390,7 +390,7 @@ public sealed class PlatformFeedbackApiTests(AuthApiFixture fx) : IClassFixture<
         Assert.Equal(HttpStatusCode.OK, off.StatusCode);
 
         var r = await Post(t.Spec, Valid());
-        Assert.Equal(HttpStatusCode.Forbidden, r.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, r.StatusCode); // ADR-023 D4: session_revoked з наступного запиту (раніше 403)
         Assert.Empty(await RowsAsync(t.Id));
     }
 

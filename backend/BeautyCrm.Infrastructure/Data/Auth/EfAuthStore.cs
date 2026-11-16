@@ -88,14 +88,6 @@ public sealed class EfAuthStore(BeautyDbContext db, TenantContext tenant, IConfi
             .SetProperty(u => u.FailedLoginCount, 0)
             .SetProperty(u => u.LockoutUntil, (DateTimeOffset?)null), ct);
 
-    public async Task<bool> SetUserActiveAsync(Guid userId, bool active, DateTimeOffset now, CancellationToken ct)
-    {
-        var n = await Db.Users.Where(u => u.Id == userId).ExecuteUpdateAsync(s => s
-            .SetProperty(u => u.IsActive, active).SetProperty(u => u.UpdatedAt, now), ct);
-        if (n > 0 && !active) await RevokeAllRefreshTokensAsync(userId, now, ct);
-        return n > 0;
-    }
-
     // ---------- refresh tokens ----------
 
     public async Task AddRefreshTokenAsync(Guid userId, string tokenHash, DateTimeOffset expiresAt, CancellationToken ct)
@@ -133,23 +125,31 @@ public sealed class EfAuthStore(BeautyDbContext db, TenantContext tenant, IConfi
     {
         await using var tx = await Db.Database.BeginTransactionAsync(ct);
         var now = DateTimeOffset.UtcNow;
+        var replaced = new List<Guid>();
         // Для specialist: lock профілю + відкликання попередніх pending з тим самим specialist_id (рівно одне активне запрошення
         // на профіль, навіть для іншого email і при паралельних запитах).
         if (invite.SpecialistId is { } specialistId)
         {
             await SpecialistLock.AcquireForInvitesAsync(db, specialistId, ct);
             if (!await db.Specialists.AnyAsync(s => s.Id == specialistId && s.IsActive, ct)) return null; // деактивовано паралельно
+            replaced.AddRange(await db.Invites.Where(i => i.SpecialistId == specialistId && i.AcceptedAt == null && i.RevokedAt == null).Select(i => i.Id).ToListAsync(ct));
             await db.Invites.Where(i => i.SpecialistId == specialistId && i.AcceptedAt == null && i.RevokedAt == null)
                 .ExecuteUpdateAsync(s => s.SetProperty(i => i.RevokedAt, now), ct);
         }
+        replaced.AddRange(await db.Invites.Where(i => i.Email == invite.Email && i.AcceptedAt == null && i.RevokedAt == null).Select(i => i.Id).ToListAsync(ct));
         await db.Invites.Where(i => i.Email == invite.Email && i.AcceptedAt == null && i.RevokedAt == null)
             .ExecuteUpdateAsync(s => s.SetProperty(i => i.RevokedAt, now), ct);
         var entity = new Invite
         {
             Email = invite.Email, Role = invite.Role, SpecialistId = invite.SpecialistId, TokenHash = invite.TokenHash,
-            ExpiresAt = invite.ExpiresAt, InvitedByUserId = invite.InvitedByUserId,
+            ExpiresAt = invite.ExpiresAt, InvitedByUserId = invite.InvitedByUserId, Permissions = invite.PermissionsJson,
         };
         db.Invites.Add(entity);
+        await db.SaveChangesAsync(ct);
+        // аудит у тій самій транзакції (без email запрошених): запрошення й відкликані ним попередні
+        AccessAuditWriter.Add(db, "invited", invite.InvitedByUserId, null, entity.Id, invite.AuditChangesJson);
+        foreach (var id in replaced.Distinct())
+            AccessAuditWriter.Add(db, "invite_revoked", invite.InvitedByUserId, null, id, "{\"cause\":\"replaced\"}");
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
         return ToRecord(entity);
@@ -161,20 +161,59 @@ public sealed class EfAuthStore(BeautyDbContext db, TenantContext tenant, IConfi
     public async Task<InviteRecord?> FindInviteByHashAsync(string tokenHash, CancellationToken ct) =>
         await Db.Invites.AsNoTracking().Where(i => i.TokenHash == tokenHash).FirstOrDefaultAsync(ct) is { } i ? ToRecord(i) : null;
 
-    public async Task<bool> RevokeInviteAsync(Guid inviteId, DateTimeOffset now, CancellationToken ct) =>
-        await Db.Invites.Where(i => i.Id == inviteId && i.AcceptedAt == null && i.RevokedAt == null)
-            .ExecuteUpdateAsync(s => s.SetProperty(i => i.RevokedAt, now), ct) == 1;
-
-    public async Task<(WriteOutcome, UserRecord?)> AcceptInviteAsync(Guid inviteId, NewUser user, DateTimeOffset now, CancellationToken ct)
+    public async Task<bool> RevokeInviteAsync(Guid inviteId, DateTimeOffset now, Guid actorUserId, CancellationToken ct)
     {
         await using var tx = await Db.Database.BeginTransactionAsync(ct);
+        var n = await db.Invites.Where(i => i.Id == inviteId && i.AcceptedAt == null && i.RevokedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(i => i.RevokedAt, now.ToUniversalTime()), ct);
+        if (n != 1) return false;
+        AccessAuditWriter.Add(db, "invite_revoked", actorUserId, null, inviteId, "{\"cause\":\"revoked\"}");
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return true;
+    }
+
+    public async Task<(WriteOutcome, UserRecord?)> AcceptInviteAsync(InviteRecord invite, NewUser user, DateTimeOffset now, CancellationToken ct)
+    {
+        await using var tx = await Db.Database.BeginTransactionAsync(ct);
+
+        // M5: FOR SHARE рядка запрошувача, поки триває прийняття (його не можна паралельно знизити чи вимкнути)
+        InviterState? inviter = null;
+        if (invite.InvitedByUserId is { } inviterId
+            && (await db.Database.SqlQuery<Guid>($"SELECT id AS \"Value\" FROM users WHERE id = {inviterId} FOR SHARE").ToListAsync(ct)).Count > 0)
+        {
+            var u = await db.Users.AsNoTracking().Where(x => x.Id == inviterId).Select(x => new { x.Role, x.IsActive, x.State }).FirstAsync(ct);
+            var rows = await db.UserPermissions.AsNoTracking().Where(p => p.UserId == inviterId).Select(p => new { p.Permission, p.Level }).ToListAsync(ct);
+            var t = await db.Tenants.AsNoTracking().Where(x => x.Id == tenant.TenantId).Select(x => new { x.Modules, x.Status }).FirstOrDefaultAsync(ct);
+            inviter = new InviterState(u.Role, u.IsActive, u.State, rows.ToDictionary(r => r.Permission, r => r.Level, StringComparer.Ordinal),
+                t is { Status: "active" } ? t.Modules : []);
+        }
+
+        var at = now.ToUniversalTime();
         var claimed = await db.Invites
-            .Where(i => i.Id == inviteId && i.AcceptedAt == null && i.RevokedAt == null && i.ExpiresAt > now)
-            .ExecuteUpdateAsync(s => s.SetProperty(i => i.AcceptedAt, now), ct);
+            .Where(i => i.Id == invite.Id && i.AcceptedAt == null && i.RevokedAt == null && i.ExpiresAt > at)
+            .ExecuteUpdateAsync(s => s.SetProperty(i => i.AcceptedAt, at), ct);
         if (claimed != 1) return (WriteOutcome.Unavailable, null);
+
+        var plan = AccessPolicy.PlanAccept(invite.Role, invite.PermissionsJson, inviter);
+        if (plan.Revoke)
+        {
+            // запрошувач утратив права: відкликаємо в тій самій транзакції; клієнт бачить звичайне invite_invalid
+            await db.Invites.Where(i => i.Id == invite.Id).ExecuteUpdateAsync(s => s
+                .SetProperty(i => i.AcceptedAt, (DateTimeOffset?)null).SetProperty(i => i.RevokedAt, at), ct);
+            AccessAuditWriter.Add(db, "invite_revoked", null, null, invite.Id, "{\"cause\":\"inviter_lost_rights\"}");
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+            return (WriteOutcome.Unavailable, null);
+        }
 
         var entity = NewUserEntity(user);
         db.Users.Add(entity);
+        foreach (var (key, level) in plan.Permissions)
+            db.UserPermissions.Add(new UserPermission { UserId = entity.Id, Permission = key, Level = level, UpdatedByUserId = invite.InvitedByUserId });
+        AccessAuditWriter.Add(db, "invite_accepted", null, entity.Id, invite.Id,
+            System.Text.Json.JsonSerializer.Serialize(new { role = invite.Role, clamped = plan.Clamped },
+                new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
         try
         {
             await db.SaveChangesAsync(ct);
@@ -235,7 +274,7 @@ public sealed class EfAuthStore(BeautyDbContext db, TenantContext tenant, IConfi
 
     private static readonly System.Linq.Expressions.Expression<Func<User, UserRecord>> Project = u =>
         new UserRecord(u.Id, u.TenantId, u.Email, u.FullName, u.PasswordHash, u.Role, u.SpecialistId, u.IsActive,
-            u.FailedLoginCount, u.LockoutUntil, u.LastLoginAt, u.State);
+            u.FailedLoginCount, u.LockoutUntil, u.LastLoginAt, u.State, u.AccessVersion);
 
     private static User NewUserEntity(NewUser u) => new()
     {
@@ -245,7 +284,7 @@ public sealed class EfAuthStore(BeautyDbContext db, TenantContext tenant, IConfi
     private static UserRecord ToRecord(User u) => Project.Compile()(u);
 
     private static InviteRecord ToRecord(Invite i) =>
-        new(i.Id, i.Email, i.Role, i.SpecialistId, i.ExpiresAt, i.AcceptedAt, i.RevokedAt);
+        new(i.Id, i.Email, i.Role, i.SpecialistId, i.ExpiresAt, i.AcceptedAt, i.RevokedAt, i.Permissions, i.InvitedByUserId);
 
     private static bool IsUniqueViolation(DbUpdateException ex) =>
         (ex.InnerException as PostgresException)?.SqlState == PostgresErrorCodes.UniqueViolation;

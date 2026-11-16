@@ -45,8 +45,8 @@ public sealed class InboxServiceTests : IClassFixture<PostgresRlsFixture>
         var admin = U(Roles.Admin, "Олена Адмін"); var owner = U(Roles.Owner, "Іван Власник"); var spec = U(Roles.Specialist, "Марина");
         ctx.AddRange(admin, owner, spec);
         await ctx.SaveChangesAsync();
-        return new Env(h, s, new Actor(admin.Id, s.TenantId, Roles.Admin, null), new Actor(owner.Id, s.TenantId, Roles.Owner, null),
-            new Actor(spec.Id, s.TenantId, Roles.Specialist, s.SpecialistId));
+        return new Env(h, s, Actor.ForTest(Roles.Admin, null, admin.Id, s.TenantId), Actor.ForTest(Roles.Owner, null, owner.Id, s.TenantId),
+            Actor.ForTest(Roles.Specialist, s.SpecialistId, spec.Id, s.TenantId));
     }
 
     private static async Task<T> Svc<T>(Env e, Guid tenantId, Func<InboxService, Task<T>> f)

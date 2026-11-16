@@ -79,7 +79,7 @@ public static class HostingSetup
             p.WithOrigins(origins)
                 .WithMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
                 .WithHeaders("Authorization", "Content-Type", "Idempotency-Key", "X-Captcha-Token")
-                .WithExposedHeaders("Idempotent-Replayed")
+                .WithExposedHeaders("Idempotent-Replayed", "X-Access-Version")
                 .SetPreflightMaxAge(TimeSpan.FromMinutes(10));
             // AllowCredentials навмисно не викликається.
         }));

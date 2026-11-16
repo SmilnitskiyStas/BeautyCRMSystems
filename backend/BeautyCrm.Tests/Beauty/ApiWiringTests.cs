@@ -88,13 +88,9 @@ public class RequireModuleTests
             .AddSingleton<ITenantContext>(tenantId is null ? new TenantContext() : new TenantContext(tenantId.Value))
             .AddSingleton<ITenantModuleProvider>(new ConfigTenantModuleProvider(cfg)).BuildServiceProvider();
         var http = new DefaultHttpContext { RequestServices = services };
-        var ctx = new ActionExecutingContext(new ActionContext(http, new RouteData(), new ActionDescriptor()), [], new Dictionary<string, object?>(), new object());
-        var called = false;
-        await new RequireModuleAttribute("beauty_booking").OnActionExecutionAsync(ctx, () =>
-        {
-            called = true;
-            return Task.FromResult<ActionExecutedContext>(null!);
-        });
+        var ctx = new AuthorizationFilterContext(new ActionContext(http, new RouteData(), new ActionDescriptor()), []);
+        await new RequireModuleAttribute("beauty_booking").OnAuthorizationAsync(ctx); // authorization-фільтр (Order -3100, ADR-023)
+        var called = ctx.Result is null; // без результату фільтра запит іде далі
         return (ctx.Result, called);
     }
 

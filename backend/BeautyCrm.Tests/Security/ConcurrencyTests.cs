@@ -262,7 +262,7 @@ public sealed class ConcurrencyTests(AuthApiFixture fx) : IClassFixture<AuthApiF
         var id = await PendingActionAsync(tenantId);
 
         var results = await Task.WhenAll(Enumerable.Range(0, 6).Select(_ =>
-            Task.Run(() => NewExecutor(tenantId, ports).ConfirmAsync(tenantId, id, default))));
+            Task.Run(() => NewExecutor(tenantId, ports).ConfirmAsync(BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: tenantId), id, default))));
 
         Assert.Single(results, r => !r.IsError);
         Assert.All(results.Where(r => r.IsError), r => Assert.Equal("action_not_pending", r.Content));
@@ -283,8 +283,8 @@ public sealed class ConcurrencyTests(AuthApiFixture fx) : IClassFixture<AuthApiF
             var ports = new RacePorts();
             var id = await PendingActionAsync(tenantId);
 
-            var tasks = Enumerable.Range(0, 3).Select(_ => Task.Run(() => NewExecutor(tenantId, ports).ConfirmAsync(tenantId, id, default)))
-                .Concat(Enumerable.Range(0, 3).Select(_ => Task.Run(() => NewExecutor(tenantId, ports).RejectPendingAsync(tenantId, id, default))));
+            var tasks = Enumerable.Range(0, 3).Select(_ => Task.Run(() => NewExecutor(tenantId, ports).ConfirmAsync(BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: tenantId), id, default)))
+                .Concat(Enumerable.Range(0, 3).Select(_ => Task.Run(() => NewExecutor(tenantId, ports).RejectPendingAsync(BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: tenantId), id, default))));
             var results = await Task.WhenAll(tasks);
 
             Assert.Equal(1, results.Count(r => !r.IsError));
@@ -305,7 +305,7 @@ public sealed class ConcurrencyTests(AuthApiFixture fx) : IClassFixture<AuthApiF
         var tenantId = Guid.NewGuid();
         var id = await PendingActionAsync(tenantId);
         var results = await Task.WhenAll(Enumerable.Range(0, 5).Select(_ =>
-            Task.Run(() => NewExecutor(tenantId, new RacePorts()).RejectPendingAsync(tenantId, id, default))));
+            Task.Run(() => NewExecutor(tenantId, new RacePorts()).RejectPendingAsync(BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: tenantId), id, default))));
         Assert.Single(results, r => !r.IsError);
         Assert.Equal(AiStatus.Rejected, (await RecordAsync(tenantId, id)).Status);
     }
@@ -317,10 +317,10 @@ public sealed class ConcurrencyTests(AuthApiFixture fx) : IClassFixture<AuthApiF
         var tenantId = Guid.NewGuid();
         var ports = new RacePorts();
         var id = await PendingActionAsync(tenantId);
-        Assert.False((await NewExecutor(tenantId, ports).ConfirmAsync(tenantId, id, default)).IsError);
+        Assert.False((await NewExecutor(tenantId, ports).ConfirmAsync(BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: tenantId), id, default)).IsError);
 
         var results = await Task.WhenAll(Enumerable.Range(0, 6).Select(_ =>
-            Task.Run(() => NewExecutor(tenantId, ports).RevertAsync(tenantId, id, default))));
+            Task.Run(() => NewExecutor(tenantId, ports).RevertAsync(BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: tenantId), id, default))));
 
         Assert.Single(results, r => !r.IsError);
         Assert.All(results.Where(r => r.IsError), r => Assert.Equal("not_revertible", r.Content));
@@ -338,12 +338,12 @@ public sealed class ConcurrencyTests(AuthApiFixture fx) : IClassFixture<AuthApiF
         var id = await PendingActionAsync(tenantId);
         var broken = new RacePorts { FailCreate = true };
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => NewExecutor(tenantId, broken).ConfirmAsync(tenantId, id, default));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => NewExecutor(tenantId, broken).ConfirmAsync(BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: tenantId), id, default));
         Assert.Equal(AiStatus.PendingConfirmation, (await RecordAsync(tenantId, id)).Status);
         Assert.Equal(0, broken.Created);
 
         var ok = new RacePorts();
-        Assert.False((await NewExecutor(tenantId, ok).ConfirmAsync(tenantId, id, default)).IsError);
+        Assert.False((await NewExecutor(tenantId, ok).ConfirmAsync(BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: tenantId), id, default)).IsError);
         Assert.Equal(1, ok.Created);
         Assert.Equal(AiStatus.Done, (await RecordAsync(tenantId, id)).Status);
     }
@@ -355,7 +355,7 @@ public sealed class ConcurrencyTests(AuthApiFixture fx) : IClassFixture<AuthApiF
         var tenantId = Guid.NewGuid();
         var id = await PendingActionAsync(tenantId);
         var foreignTenant = Guid.NewGuid();
-        Assert.True((await NewExecutor(foreignTenant, new RacePorts()).RejectPendingAsync(foreignTenant, id, default)).IsError); // RLS ховає рядок
+        Assert.True((await NewExecutor(foreignTenant, new RacePorts()).RejectPendingAsync(BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: foreignTenant), id, default)).IsError); // RLS ховає рядок
         Assert.Equal(AiStatus.PendingConfirmation, (await RecordAsync(tenantId, id)).Status);
 
         var journalTenant = new TenantContext(tenantId);

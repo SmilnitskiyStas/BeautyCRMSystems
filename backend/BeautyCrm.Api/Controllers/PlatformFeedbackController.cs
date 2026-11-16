@@ -24,6 +24,7 @@ public sealed class PlatformFeedbackController(PlatformFeedbackService feedback)
 
     /// <summary>202 { id }; 422 invalid_type | invalid_severity | invalid_message | invalid_page_url; 429 rate_limited + Retry-After; 403 tenant_suspended.</summary>
     [HttpPost("feedback")]
+    [AllowInactiveSpecialist] // M7: зворотний зв'язок доступний і з неактивним профілем
     [RequestSizeLimit(BodyLimit)]
     [ProducesResponseType<FeedbackAcceptedDto>(StatusCodes.Status202Accepted)]
     [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]

@@ -119,7 +119,7 @@ function PrefsForm({ clientId, prefs }: { clientId: string; prefs: ContactPrefer
 /** Картка «Нагадування й зв'язок» у профілі клієнта (§22.11): спосіб, точки, джерело й автор останньої зміни. */
 export function ContactPreferencesCard({ clientId }: { clientId: string }) {
   const { user } = useAuth();
-  const allowed = canManageReminderPrefs(user.role);
+  const allowed = canManageReminderPrefs(user);
   const q = useContactPreferences(clientId, allowed);
   if (!allowed) return null;
   const p = q.data;

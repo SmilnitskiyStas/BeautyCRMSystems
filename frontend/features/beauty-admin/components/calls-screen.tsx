@@ -209,7 +209,7 @@ function CallsView() {
 
 export function CallsScreen() {
   const { user } = useAuth();
-  if (!canUseCalls(user.role)) {
+  if (!canUseCalls(user)) {
     return (
       <>
         <PageHeader title="Дзвінки" />

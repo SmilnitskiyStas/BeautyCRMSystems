@@ -115,7 +115,11 @@ export interface Appointment {
   status: AppointmentStatus;
   source: AppointmentSource;
   kind: CalendarKind;
-  priceFinal: number;
+  /**
+   * Ціна запису. У списках відсутня без права `revenue.view = all` (і не на власному записі, §30.5 M4): тоді поля немає,
+   * це НЕ 0. Показувати лише `typeof priceFinal === "number"`.
+   */
+  priceFinal?: number;
   /** Ціна до знижки/акції (§24): якщо відсутня, вважається рівною `priceFinal`. */
   priceOriginal?: number;
   promotionId: string | null;

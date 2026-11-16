@@ -229,24 +229,24 @@ public sealed class MarketingConsentService(
 
     // ------------------------------------------------------------------ staff API (owner/admin)
 
-    private Error? Guard(Actor actor)
+    private Error? Guard(Actor actor, string permission)
     {
         TenantGuard.Ensure(tenant, actor.TenantId);
-        return actor.Role is Roles.Owner or Roles.Admin
+        return actor.Access.AtLeast(permission, PermissionLevels.Own)
             ? null
-            : Error.Forbidden(MarketingConsentErrors.ForbiddenRole, "This action is not available for your role.");
+            : Error.Forbidden(MarketingConsentErrors.ForbiddenRole, "This action is not available for your access level.");
     }
 
     public async Task<Result<MarketingConsentDto>> GetAsync(Actor actor, Guid clientId, CancellationToken ct)
     {
-        if (Guard(actor) is { } denied) return denied;
+        if (Guard(actor, PermissionKeys.ClientsView) is { } denied) return denied;
         return await GetConsentAsync(clientId, includeBasisNote: actor.Role == Roles.Owner, ct);
     }
 
     /// <summary>PUT картки: source=admin, via=api. Зниження - завжди; підвищення - лише з підставою й <c>Marketing:AdminGrantEnabled=true</c>.</summary>
     public async Task<Result<MarketingConsentDto>> PutAsync(Actor actor, Guid clientId, PutMarketingConsentRequest req, CancellationToken ct)
     {
-        if (Guard(actor) is { } denied) return denied;
+        if (Guard(actor, PermissionKeys.ClientsEdit) is { } denied) return denied;
         if (!await ClientExistsAsync(clientId, ct)) return ClientNotFound();
         if (req.Channel != MarketingConsentChannels.Telegram)
             return Error.Validation(MarketingConsentErrors.ChannelUnsupported, "Only the telegram channel is supported.");

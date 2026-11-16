@@ -20,7 +20,8 @@ public interface IStaffStore
     /// користувача (крім owner) вимкнено; його refresh-токени відкликано; pending-запрошення з цим specialist_id відкликано.
     /// Повторна активація (true) користувача НЕ вмикає.
     /// </summary>
-    Task UpdateSpecialistAsync(Guid id, string name, string? phone, string? position, bool? isActive, DateTimeOffset now, CancellationToken ct);
+    /// <param name="actorUserId">Хто змінює (для аудиту каскаду деактивації користувача, M1).</param>
+    Task UpdateSpecialistAsync(Guid id, string name, string? phone, string? position, bool? isActive, DateTimeOffset now, Guid actorUserId, CancellationToken ct);
     /// <summary>Частково оновлює публічний профіль (рік практики, bio, photoUrl); значення вже перевірені сервісом.</summary>
     Task UpdateSpecialistProfileAsync(Guid id, SpecialistProfilePatch patch, CancellationToken ct);
     /// <summary>Повна заміна переліку призначених послуг.</summary>

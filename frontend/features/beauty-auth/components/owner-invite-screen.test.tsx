@@ -14,6 +14,8 @@ const SESSION = {
   expiresInSeconds: 900,
   user: { id: "u1", email: "owner@x.test", fullName: "Власник", role: "owner", specialistId: null },
 };
+/** `GET /api/auth/me` після прийняття запрошення: права беруться звідси (§30.9.1). */
+const ME = { ...SESSION.user, accessVersion: 1, accessStamp: "1.00000000", catalogVersion: 1, modules: [], permissions: { "calendar.view": "all" } };
 const INFO = { tenantName: "Salon X", email: "o***@x.test", expiresAt: "2026-11-07T10:00:00Z" };
 
 function json(body: unknown, status = 200, headers: Record<string, string> = {}) {
@@ -28,14 +30,14 @@ function mockFetch(handler: Handler) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init: RequestInit) => {
-      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      const body = (init.body ? JSON.parse(String(init.body)) : {}) as Record<string, unknown>;
       calls.push({ path: url, body });
       return handler(url, body);
     }),
   );
 }
 
-const happy: Handler = (path) => (path.endsWith("/inspect") ? json(INFO) : json(SESSION));
+const happy: Handler = (path) => (path.endsWith("/inspect") ? json(INFO) : path.endsWith("/api/auth/me") ? json(ME) : json(SESSION));
 
 function openWithHash(hash: string) {
   window.history.replaceState(null, "", `/invite${hash}`);
@@ -124,6 +126,7 @@ describe("OwnerInviteScreen", () => {
     let accepts = 0;
     mockFetch((path) => {
       if (path.endsWith("/inspect")) return json(INFO);
+      if (path.endsWith("/api/auth/me")) return json(ME);
       accepts++;
       return accepts === 1 ? json({ code: "weak_password" }, 422) : json(SESSION);
     });

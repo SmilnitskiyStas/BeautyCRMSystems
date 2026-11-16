@@ -162,6 +162,30 @@ describe("F2: реальний режим - час у зоні закладу", 
     expect(o.dateLabel).toBe("28 жовтня");
   });
 
+  it("§30.5: без kpi.revenue плитки виручки немає (не 0 ₴); ціни записів без значення лишаються відсутніми", async () => {
+    overview = {
+      date: "2026-10-28",
+      timezone: KYIV,
+      kpi: { appointmentsCount: 1, newClients: 0, freeSlots: 3 },
+      appointments: [appt("b1", "2026-10-28T08:00:00+00:00", { priceFinal: undefined, priceOriginal: undefined })],
+    };
+    const o = await httpBeautyApi.getOverview(null);
+    expect(o.kpis.map((k) => k.label)).toEqual(["Записів сьогодні", "Нові клієнти", "Вільних слотів"]);
+    expect(JSON.stringify(o)).not.toContain("0 ₴");
+  });
+
+  it("§30.5: маскований контакт у картці клієнта; відсутні ціни історії не дають суми 0", async () => {
+    clientDetail = {
+      client: { id: "c1", fullName: "Олена", phoneMasked: "+••••••••••33", emailMasked: "o•••@x.ua", visits: 1, lastVisitAt: null },
+      notes: [],
+      history: [appt("h1", "2026-10-25T22:30:00+00:00", { status: "completed", priceFinal: undefined, priceOriginal: undefined })],
+    };
+    const c = await httpBeautyApi.getClient("c1");
+    expect(c!.contactLine).toBe("+••••••••••33 · o•••@x.ua");
+    expect(c!.kpis.map((k) => k.label)).not.toContain("Витрачено");
+    expect(c!.visits[0].sum).toBe("—");
+  });
+
   it("огляд для закладу передає locationId", async () => {
     overview = { date: "2026-10-28", timezone: KYIV, kpi: { appointmentsCount: 0, revenue: 0, newClients: 0, freeSlots: 0 }, appointments: [] };
     await httpBeautyApi.getOverview("L1");

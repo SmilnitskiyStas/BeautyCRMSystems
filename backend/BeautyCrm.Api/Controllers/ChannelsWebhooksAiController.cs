@@ -2,6 +2,7 @@ using System.Text.Json;
 using BeautyCrm.Api.Auth;
 using BeautyCrm.Api.Infrastructure;
 using BeautyCrm.Api.Tenancy;
+using BeautyCrm.Application.Features.BeautyAuth;
 using BeautyCrm.Application.Features.BeautyChannels;
 using BeautyCrm.Infrastructure.AI.Beauty;
 using BeautyCrm.Infrastructure.AI.Beauty.Adapters;
@@ -15,7 +16,8 @@ namespace BeautyCrm.Api.Controllers;
 [ApiController]
 [Route("api/beauty/channels")]
 [RequireModule("beauty_channels")]
-[Authorize(Policy = AuthPolicies.Management)]
+[Authorize(Policy = AuthPolicies.Staff)]
+[RequirePermission(PermissionKeys.ChannelsSettings, PermissionLevels.Edit)]
 public sealed class ChannelsController(
     ChannelSettingsService channels, IChannelSettingsStore store, TelegramCommandsService commands) : ControllerBase
 {
@@ -100,39 +102,52 @@ public sealed record AiActionResponse(string Content, bool IsError, string? Stat
 [ApiController]
 [Route("api/beauty/ai/actions")]
 [RequireModule("beauty_ai")]
-[Authorize(Policy = AuthPolicies.Management)]
+[Authorize(Policy = AuthPolicies.Staff)]
+[RequirePermission(PermissionKeys.AiUse, PermissionLevels.Use)]
 public sealed class AiActionsController(IAiActionReader reader, AiToolExecutor executor, AiTenantRuntime runtime) : ControllerBase
 {
+    /// <summary>Журнал: дії, tool яких поточний користувач не має права виконувати, приховані (§30.6.10).</summary>
     [HttpGet]
-    public async Task<IActionResult> List([FromQuery] int take = 100, [FromQuery] string? status = null, CancellationToken ct = default) =>
-        Ok((await reader.ListAsync(take, status, ct))
+    public async Task<IActionResult> List([FromQuery] int take = 100, [FromQuery] string? status = null, CancellationToken ct = default)
+    {
+        if (User.ToActor() is not { } actor) return Unauthorized();
+        return Ok((await reader.ListAsync(take, status, ct))
+            .Where(a => AiToolPermissions.Allows(actor.Access, a.Action))
             .Select(a => new { a.Id, a.Action, a.Target, a.CreatedAt, a.Status, a.Revertible, mode = a.Mode.ToString().ToLowerInvariant() }));
+    }
 
-    /// <summary>Запуск tool менеджером; режим автономності — з налаштувань tenant (немає рядка = confirm; auto лише за збереженою згодою).</summary>
+    /// <summary>Запуск tool менеджером; режим автономності - з налаштувань tenant (немає рядка = confirm; auto лише за збереженою згодою).</summary>
     [HttpPost]
     public async Task<IActionResult> Run([FromBody] RunAiToolRequest request, CancellationToken ct)
     {
-        var tenantId = this.TenantId();
-        var mode = await runtime.GetModeAsync(tenantId, ct);
-        return Map(await executor.ExecuteAsync(new AiToolContext(tenantId, request.ClientId, mode, AiScope.Manager),
+        if (User.ToActor() is not { } actor) return Unauthorized();
+        var mode = await runtime.GetModeAsync(actor.TenantId, ct);
+        return Map(await executor.ExecuteAsync(new AiToolContext(actor.TenantId, request.ClientId, mode, AiScope.Manager, Actor: actor),
             request.Tool, request.Input, ct), StatusCodes.Status422UnprocessableEntity);
     }
 
     [HttpPost("{id:guid}/approve")]
     public async Task<IActionResult> Approve(Guid id, CancellationToken ct) =>
-        Map(await executor.ConfirmAsync(this.TenantId(), id, ct), StatusCodes.Status409Conflict);
+        User.ToActor() is not { } actor ? Unauthorized() : Map(await executor.ConfirmAsync(actor, id, ct), StatusCodes.Status409Conflict);
 
     [HttpPost("{id:guid}/reject")]
     public async Task<IActionResult> Reject(Guid id, CancellationToken ct) =>
-        Map(await executor.RejectPendingAsync(this.TenantId(), id, ct), StatusCodes.Status409Conflict);
+        User.ToActor() is not { } actor ? Unauthorized() : Map(await executor.RejectPendingAsync(actor, id, ct), StatusCodes.Status409Conflict);
 
     [HttpPost("{id:guid}/revert")]
     public async Task<IActionResult> Revert(Guid id, CancellationToken ct) =>
-        Map(await executor.RevertAsync(this.TenantId(), id, ct), StatusCodes.Status409Conflict);
+        User.ToActor() is not { } actor ? Unauthorized() : Map(await executor.RevertAsync(actor, id, ct), StatusCodes.Status409Conflict);
 
     private IActionResult Map(AiToolResult r, int errorStatus)
     {
+        if (r.Denied is { } d)
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                code = "forbidden_role", message = "This action is not available for your access level.",
+                permission = d.Permission, required = d.Required,
+            });
         var body = new AiActionResponse(r.Content, r.IsError, r.ActionStatus);
         return r.IsError ? StatusCode(errorStatus, body) : Ok(body);
     }
 }
+

@@ -15,7 +15,13 @@ public static class ResultMapping
     /// <summary>Типізовані помилки: 422 валідація, 404, 409 конфлікт (перетин слоту), 402 платіж.</summary>
     public static IActionResult ToError(this ControllerBase c, Error e)
     {
-        var body = new ApiError(e.Code, e.Message, e.Conflicts);
+        object body = new ApiError(e.Code, e.Message, e.Conflicts);
+        if (e.Extras is { Count: > 0 })
+        {
+            var map = new Dictionary<string, object?> { ["code"] = e.Code, ["message"] = e.Message };
+            foreach (var (k, v) in e.Extras) map[k] = v;
+            body = map;
+        }
         return e.Kind switch
         {
             ErrorKind.NotFound => c.NotFound(body),

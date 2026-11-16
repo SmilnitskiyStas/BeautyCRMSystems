@@ -29,6 +29,7 @@ public static class BeautyServiceExtensions
         services.AddScoped<BeautyCrm.Application.Features.BeautyCoupons.CouponService>();
         services.AddScoped<ClientService>();
         services.AddScoped<AnalyticsService>();
+        services.AddScoped<MyRevenueService>(); // ADR-023 (TASK-852): GET /me/revenue
         services.AddScoped<AnalyticsDetailsService>();
         services.AddScoped<ChannelSettingsService>();
         services.AddScoped<StaffService>();

@@ -14,8 +14,10 @@ import { Badge } from "./ui";
 export function CouponBadge({ appt }: { appt: Pick<Appointment, "coupon" | "priceFinal" | "priceOriginal"> }) {
   const { user } = useAuth();
   if (!appt.coupon || appt.coupon.outcome !== "applied") return null;
-  const saved = Math.max(0, (appt.priceOriginal ?? appt.priceFinal) - appt.priceFinal);
-  const hint = canSeeCouponHint(user.role) ? appt.coupon.codeHint : undefined;
+  // Без цін (немає права на списку, §30.5) знижку не рахуємо й не показуємо.
+  const original = appt.priceOriginal ?? appt.priceFinal;
+  const saved = typeof original === "number" && typeof appt.priceFinal === "number" ? Math.max(0, original - appt.priceFinal) : 0;
+  const hint = canSeeCouponHint(user) ? appt.coupon.codeHint : undefined;
   return (
     <div data-testid="coupon-badge" className="flex flex-col gap-0.5">
       <Badge tone="vip" className="self-start">Записано за купоном</Badge>

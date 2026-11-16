@@ -141,6 +141,7 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
             Source = EnumText<AppointmentSource>.FromDb(a.Source), PriceOriginal = a.PriceOriginal, PriceFinal = a.PriceFinal,
             PromotionId = a.PromotionId, CouponId = a.Coupon?.CouponId, CampaignId = a.Coupon?.CampaignId, ReminderOption = EnumText<ReminderOption>.FromDb(a.ReminderOption),
             PaymentMethod = EnumText<Ent.PaymentMethod>.FromDb(a.PaymentMethod),
+            CreatedByUserId = a.CreatedByUserId,
             PublicTokenHash = a.Public?.TokenHash, IdempotencyKeyHash = a.Public?.IdempotencyKeyHash, IdempotencyRequestHash = a.Public?.RequestHash,
         });
         if (a.Plan is { } plan) AddPlanRows(id, a.ClientId, a.LocationId, plan);

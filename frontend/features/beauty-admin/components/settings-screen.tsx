@@ -357,7 +357,7 @@ function summary(d: Draft, inWindow: boolean): string {
 export function SettingsScreen() {
   const { user } = useAuth();
   const q = useCancellationSettings();
-  const canEdit = canEditSettings(user.role);
+  const canEdit = canEditSettings(user);
 
   // Посилання /beauty/settings#ai (банер в «AI-асистент»): секція з'являється після завантаження, тож прокручуємо вручну.
   useEffect(() => {

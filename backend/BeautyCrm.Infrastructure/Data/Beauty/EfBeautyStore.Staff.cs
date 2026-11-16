@@ -1,3 +1,4 @@
+using BeautyCrm.Infrastructure.Data.Auth;
 using BeautyCrm.Application.Features.BeautyAuth;
 using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Application.Features.BeautyStaff;
@@ -48,8 +49,8 @@ public sealed partial class EfBeautyStore : IStaffStore
     {
         var s = await db.Specialists.AsNoTracking().Where(x => x.Id == id).Select(x => new { x.Id, x.IsActive }).FirstOrDefaultAsync(ct);
         if (s is null) return null;
-        var role = await db.Users.AsNoTracking().Where(u => u.SpecialistId == id).Select(u => u.Role).FirstOrDefaultAsync(ct);
-        return new SpecialistLink(s.Id, s.IsActive, role);
+        var linked = await db.Users.AsNoTracking().Where(u => u.SpecialistId == id).Select(u => new { u.Id, u.Role }).FirstOrDefaultAsync(ct);
+        return new SpecialistLink(s.Id, s.IsActive, linked?.Role, linked?.Id);
     }
 
     public async Task<IReadOnlySet<Guid>> ExistingServiceIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct) =>
@@ -80,7 +81,7 @@ public sealed partial class EfBeautyStore : IStaffStore
     }
 
     public async Task UpdateSpecialistAsync(
-        Guid id, string name, string? phone, string? position, bool? isActive, DateTimeOffset now, CancellationToken ct)
+        Guid id, string name, string? phone, string? position, bool? isActive, DateTimeOffset now, Guid actorUserId, CancellationToken ct)
     {
         // Одна транзакція під advisory-lock майстра: профіль + (при деактивації) користувач, refresh-токени, запрошення.
         await using var tx = await db.Database.BeginTransactionAsync(ct);
@@ -98,11 +99,26 @@ public sealed partial class EfBeautyStore : IStaffStore
             var at = now.ToUniversalTime();
             // Порядок важливий (READ COMMITTED): спершу запрошення — паралельне прийняття, що вже тримає рядок, дочекається
             // коміту/відхилення, а наступний UPDATE користувачів побачить щойно створеного користувача.
+            var specInvites = await db.Invites.Where(i => i.SpecialistId == id && i.AcceptedAt == null && i.RevokedAt == null).Select(i => i.Id).ToListAsync(ct);
             await db.Invites.Where(i => i.SpecialistId == id && i.AcceptedAt == null && i.RevokedAt == null)
                 .ExecuteUpdateAsync(x => x.SetProperty(i => i.RevokedAt, at), ct);
+            foreach (var inviteId in specInvites)
+                AccessAuditWriter.Add(db, "invite_revoked", actorUserId, null, inviteId, "{\"cause\":\"specialist_profile_deactivated\"}");
             // owner не вимикається разом із профілем (інакше власник міг би замкнути себе); ним керує /api/users/{id}/status.
-            await db.Users.Where(u => u.SpecialistId == id && u.Role != Roles.Owner && u.IsActive)
-                .ExecuteUpdateAsync(x => x.SetProperty(u => u.IsActive, false).SetProperty(u => u.UpdatedAt, at), ct);
+            // M1: каскад - це вимкнення користувача: access_version + 1, аудит deactivated, відкликання його pending-запрошень (M5).
+            var cascaded = await db.Users.Where(u => u.SpecialistId == id && u.Role != Roles.Owner && u.IsActive).ToListAsync(ct);
+            foreach (var u in cascaded)
+            {
+                u.IsActive = false;
+                u.UpdatedAt = at;
+                u.AccessVersion += 1;
+                AccessAuditWriter.Add(db, "deactivated", actorUserId, u.Id, null,
+                    System.Text.Json.JsonSerializer.Serialize(new { cause = "specialist_profile_deactivated", specialistId = id }));
+            }
+            await db.SaveChangesAsync(ct);
+            foreach (var u in cascaded)
+                await AccessAuditWriter.RevokeInvitesOfInviterAsync(db, u.Id, actorUserId, "deactivated", at, ct);
+            await db.SaveChangesAsync(ct);
             await db.RefreshTokens
                 .Where(t => t.RevokedAt == null && db.Users.Any(u => u.Id == t.UserId && u.SpecialistId == id && u.Role != Roles.Owner))
                 .ExecuteUpdateAsync(x => x.SetProperty(t => t.RevokedAt, at), ct);

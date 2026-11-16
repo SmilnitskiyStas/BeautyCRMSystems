@@ -95,7 +95,8 @@ public sealed class BookingService(
     // ---------- створення ----------
 
     public async Task<Result<AppointmentDto>> CreateAsync(
-        CreateAppointmentRequest req, CancellationToken ct, PublicCreateOptions? publicOptions = null, CouponUse? couponUse = null)
+        CreateAppointmentRequest req, CancellationToken ct, PublicCreateOptions? publicOptions = null, CouponUse? couponUse = null,
+        Guid? createdByUserId = null)
     {
         var source = req.Source ?? "online";
         if (!BookingValues.Sources.Contains(source)) return Error.Validation("invalid_source", "Unknown source.");
@@ -175,7 +176,7 @@ public sealed class BookingService(
         var added = await store.AddAppointmentAsync(new NewAppointment(
             req.LocationId, req.SpecialistId, req.ServiceId, clientId.Value, req.StartsAt, duration, source,
             quote.Original, quote.Final, quote.PromotionId, plan.Mirror, req.PaymentMethod, plan.LegacyReminderAt,
-            quote.Final > 0 ? new NewPayment(req.PaymentMethod, quote.Final) : null, publicOptions, plan, redemption), ct);
+            quote.Final > 0 ? new NewPayment(req.PaymentMethod, quote.Final) : null, publicOptions, plan, redemption, createdByUserId), ct);
         if (added.CouponUnavailable)
             return Error.Conflict(couponUse!.Scope == CouponScope.Public ? CouponService.Invalid : "coupon_unavailable", "The coupon is no longer available.");
         if (added.Duplicate) return Error.Conflict("idempotency_conflict", "A request with this idempotency key is already being processed.");

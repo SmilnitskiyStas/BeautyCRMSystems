@@ -304,7 +304,7 @@ public sealed partial class PublicBookingService(
 
     private async Task<PublicAppointmentDto> ToPublicAsync(AppointmentDto a, CancellationToken ct) => new(
         a.LocationId, a.LocationName, a.SpecialistId, a.SpecialistName, a.ServiceId, a.ServiceName,
-        a.StartsAt, a.EndsAt, a.DurationMinutes, a.Status, a.PriceOriginal, a.PriceFinal, a.PromotionId,
+        a.StartsAt, a.EndsAt, a.DurationMinutes, a.Status, a.PriceOriginal ?? 0m, a.PriceFinal ?? 0m, a.PromotionId,
         a.ReminderOption, a.PaymentMethod, (await store.GetPaymentAsync(a.Id, ct))?.Status,
         a.Cancellation ?? await settings.GetTermsAsync(ct),
         a.Reminders is { } r ? new PublicRemindersDto(r.Method, r.OffsetsMinutes) : null, a.Coupon is { Outcome: CouponOutcomes.Applied });

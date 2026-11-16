@@ -10,6 +10,11 @@ SELECT 'CREATE ROLE beautycrm_catalog NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT'
 -- PG16: передача власності функцій ролі каталогу потребує членства з опцією SET.
 GRANT beautycrm_catalog TO beautycrm_owner WITH INHERIT FALSE, SET TRUE;
 
+-- ADR-023 (TASK-849): власник SECURITY DEFINER-функції purge_user_access_audit. Така сама роль і членство; виконати ДО міграції 20261115120000.
+SELECT 'CREATE ROLE beautycrm_audit_purge NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'beautycrm_audit_purge') \gexec
+GRANT beautycrm_audit_purge TO beautycrm_owner WITH INHERIT FALSE, SET TRUE;
+
 -- Перевірка: рівно один рядок, rolcanlogin=f, rolsuper=f, rolbypassrls=f, rolinherit=f
 SELECT rolname, rolcanlogin, rolsuper, rolbypassrls, rolinherit FROM pg_roles WHERE rolname = 'beautycrm_catalog';
 -- Перевірка членства: inherit_option=f, set_option=t

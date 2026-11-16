@@ -77,7 +77,9 @@ public sealed record AppointmentDto(
     Guid Id, Guid LocationId, string LocationName, Guid SpecialistId, string SpecialistName,
     Guid ServiceId, string ServiceName, Guid ClientId, string ClientName,
     DateTimeOffset StartsAt, DateTimeOffset EndsAt, int DurationMinutes, string Status, string Source,
-    decimal PriceOriginal, decimal PriceFinal, Guid? PromotionId, string ReminderOption, string? PaymentMethod,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? PriceOriginal,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? PriceFinal,
+    Guid? PromotionId, string ReminderOption, string? PaymentMethod,
     CancellationTerms? Cancellation = null, string? Timezone = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? CancelledAt = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] CancelledByDto? CancelledBy = null,
@@ -90,7 +92,7 @@ public sealed record AppointmentDto(
     /// <summary>
     /// Видимість деталей скасування (§16): ім'я автора й причину бачать лише керівники; specialist бачить лише тип і час.
     /// </summary>
-    public AppointmentDto ForViewer(Actor actor) => StaffRoles.IsManager(actor)
+    public AppointmentDto ForViewer(Actor actor) => actor.Access.AtLeast(PermissionKeys.CalendarManage, PermissionLevels.All)
         ? this
         // TASK-790 (L8): codeHint купона (останні 3 символи коду) бачить лише owner/admin; майстру - порожній рядок (купон і результат лишаються)
         : this with
@@ -98,6 +100,20 @@ public sealed record AppointmentDto(
             CancelledBy = CancelledBy is null ? null : new CancelledByDto(CancelledBy.Type), CancelReason = null,
             Coupon = Coupon is null ? null : Coupon with { CodeHint = "" },
         };
+}
+
+/// <summary>
+/// Ціни у списках (M4, §30.5): <c>priceOriginal/priceFinal</c> лише за <c>revenue.view = all</c> або для записів власного
+/// (активного) профілю актора; інакше поля відсутні, бо зі списку можна підсумувати чужий виторг. Деталь запису ціну віддає завжди.
+/// </summary>
+public static class AppointmentListView
+{
+    public static AppointmentDto ForList(this AppointmentDto a, Actor actor)
+    {
+        var v = a.ForViewer(actor);
+        var own = !actor.Access.SpecialistInactive && actor.SpecialistId is { } sp && sp == a.SpecialistId;
+        return own || actor.Access.AtLeast(PermissionKeys.RevenueView, PermissionLevels.All) ? v : v with { PriceOriginal = null, PriceFinal = null };
+    }
 }
 
 /// <summary>§22.6.1: план нагадувань запису. Points - лише для staff-DTO (публічний бачить method + offsetsMinutes).</summary>
@@ -150,7 +166,8 @@ public sealed record NewAppointment(
     Guid LocationId, Guid SpecialistId, Guid ServiceId, Guid ClientId, DateTimeOffset StartsAt, int DurationMinutes,
     string Source, decimal PriceOriginal, decimal PriceFinal, Guid? PromotionId, string ReminderOption,
     string PaymentMethod, DateTimeOffset? ReminderAt, NewPayment? Payment, PublicCreateOptions? Public = null,
-    PlannedReminders? Plan = null, NewCouponRedemption? Coupon = null); // §22.4: план нагадувань (null = спадковий шлях: лише ReminderAt)
+    PlannedReminders? Plan = null, NewCouponRedemption? Coupon = null,
+    Guid? CreatedByUserId = null); // M3 (§30.2): співробітник-автор (staff-шлях); публічні/чат - null. //  // §22.4: план нагадувань (null = спадковий шлях: лише ReminderAt)
 
 /// <summary>Публічний запис (TASK-688): id наперед (токен виводиться з нього), хеші токена й Idempotency-Key. TokenHash = null для запису з чату (§21.6).</summary>
 public sealed record PublicCreateOptions(Guid AppointmentId, string? TokenHash, string IdempotencyKeyHash, string RequestHash);

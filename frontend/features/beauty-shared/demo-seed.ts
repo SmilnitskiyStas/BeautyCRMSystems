@@ -506,7 +506,7 @@ export function costSnapshotFor(a: Pick<Appointment, "status" | "serviceId" | "l
     SERVICE_COSTS_SEED.find((c) => c.serviceId === a.serviceId && c.locationId === a.locationId) ??
     SERVICE_COSTS_SEED.find((c) => c.serviceId === a.serviceId && c.locationId === null);
   if (!eff) return null;
-  return { cost: eff.costAmount, masterPercent: eff.masterPercent, masterPayout: payoutOf(a.priceFinal, eff.masterPercent) };
+  return { cost: eff.costAmount, masterPercent: eff.masterPercent, masterPayout: payoutOf((a.priceFinal ?? 0), eff.masterPercent) };
 }
 
 

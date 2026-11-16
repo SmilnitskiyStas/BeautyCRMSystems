@@ -86,8 +86,8 @@ public sealed class MarketingSecurityUnitTests
         var dto = new AppointmentDto(Guid.NewGuid(), Guid.NewGuid(), "L", Guid.NewGuid(), "S", Guid.NewGuid(), "Svc", Guid.NewGuid(), "C",
             DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1), 60, "confirmed", "admin", 500m, 400m, null, "none", null,
             Coupon: new AppointmentCouponDto(Guid.NewGuid(), "shared", "A12", "Акція", "applied"));
-        var owner = new Actor(Guid.NewGuid(), Guid.NewGuid(), Roles.Owner, null);
-        var spec = new Actor(Guid.NewGuid(), owner.TenantId, Roles.Specialist, Guid.NewGuid());
+        var owner = Actor.ForTest(Roles.Owner, null, Guid.NewGuid(), Guid.NewGuid());
+        var spec = Actor.ForTest(Roles.Specialist, Guid.NewGuid(), Guid.NewGuid(), owner.TenantId);
         Assert.Equal("A12", dto.ForViewer(owner).Coupon!.CodeHint);
         var seen = dto.ForViewer(spec).Coupon!;
         Assert.Equal("", seen.CodeHint);
@@ -365,7 +365,7 @@ public sealed class ChatMarketingSecurityTests : IClassFixture<PostgresRlsFixtur
                 Kind = "text", SentAt = DateTimeOffset.UtcNow, Status = "sent",
             });
             await ctx.SaveChangesAsync();
-            var actor = new Actor(owner.Id, e.Tenant, Roles.Owner, null);
+            var actor = Actor.ForTest(Roles.Owner, null, owner.Id, e.Tenant);
             using var scope = e.H.Sp.CreateScope();
             scope.ServiceProvider.GetRequiredService<TenantContext>().SetTenant(e.Tenant);
             var inbox = scope.ServiceProvider.GetRequiredService<InboxService>();

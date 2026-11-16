@@ -3,6 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useAuth } from "@/features/beauty-auth/components/auth-provider";
+import { accessOf } from "@/features/beauty-auth/access";
+import { canEditLocations } from "@/features/beauty-auth/permissions";
 import { useManagedLocations, useStaff } from "../hooks/use-beauty-admin";
 import { closedWeekdaysLabel, countActiveStaff, locationHoursLabel } from "../location-hours";
 import type { BeautyLocation, StaffMember } from "../types";
@@ -55,7 +57,8 @@ function LocationCard({ l, staff }: { l: BeautyLocation; staff: StaffMember[] | 
 export function LocationsScreen() {
   const { user } = useAuth();
   const router = useRouter();
-  const isManager = user.role !== "specialist";
+  const isManager = accessOf(user).can("locations.access", "all");
+  const canEdit = canEditLocations(user);
   const q = useManagedLocations(isManager);
   const staff = useStaff(isManager);
   const [adding, setAdding] = useState(false);
@@ -65,7 +68,7 @@ export function LocationsScreen() {
       <>
         <PageHeader title="Заклади" />
         <Card>
-          <p className="text-sm">Керувати закладами можуть лише власник і адміністратор.</p>
+          <p className="text-sm">Список закладів недоступний для вашого рівня доступу. Свій заклад відкривайте зі сторінки «Мій профіль».</p>
         </Card>
       </>
     );
@@ -80,7 +83,7 @@ export function LocationsScreen() {
       <PageHeader
         title="Заклади"
         subtitle="Філії мережі: адреса, години роботи й вихідні. Налаштування — на сторінці закладу"
-        actions={adding ? null : <PrimaryButton onClick={() => setAdding(true)}>Додати заклад</PrimaryButton>}
+        actions={adding || !canEdit ? null : <PrimaryButton onClick={() => setAdding(true)}>Додати заклад</PrimaryButton>}
       />
       {adding ? (
         <LocationForm

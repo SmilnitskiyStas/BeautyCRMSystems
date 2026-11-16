@@ -6,6 +6,7 @@ using BeautyCrm.Infrastructure.Data.Entities;
 using BeautyCrm.Tests.Data;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
 
 namespace BeautyCrm.Tests.Auth;
 
@@ -102,6 +103,59 @@ public sealed class AuthApiFixture : IAsyncLifetime
         var accepted = await Send(HttpMethod.Post, "/api/auth/invites/accept", new { token = invite.Token, fullName = role, password = Password });
         Assert.Equal(System.Net.HttpStatusCode.Created, accepted.StatusCode);
         return await LoginAsync(t.Slug, email);
+    }
+
+    /// <summary>
+    /// ADR-023: користувач будь-якої ролі НАПРЯМУ в БД (без запрошення; запрошення deputy з'являється у TASK-851) з пресетом ролі
+    /// (або явними <paramref name="permissions"/>), потім логін через API. Для owner рядків прав немає.
+    /// </summary>
+    public async Task<(Guid UserId, string Email, TokenResponse Tokens)> CreateUserAsync(
+        TenantSeed t, string role, Guid? specialistId = null, IReadOnlyDictionary<string, string>? permissions = null)
+    {
+        var email = $"{role}-{Guid.NewGuid():N}"[..20] + "@" + t.Slug + ".test";
+        var id = Guid.NewGuid();
+        await using (var ctx = Db.CreateContext(t.TenantId))
+        {
+            ctx.Users.Add(new User
+            {
+                Id = id, Email = email, FullName = role, Role = role, SpecialistId = specialistId,
+                PasswordHash = BCrypt.Net.BCrypt.EnhancedHashPassword(Password, 4),
+            });
+            if (role != Roles.Owner)
+                foreach (var (key, level) in permissions ?? PermissionPresets.For(role))
+                    ctx.UserPermissions.Add(new UserPermission { UserId = id, Permission = key, Level = level });
+            await ctx.SaveChangesAsync();
+        }
+        return (id, email, await LoginAsync(t.Slug, email));
+    }
+
+    /// <summary>deputy з пресетом §30.3 (хелпер токенів для тестів ядра доступу).</summary>
+    public async Task<(Guid UserId, string Email, TokenResponse Tokens)> CreateDeputyAsync(
+        TenantSeed t, IReadOnlyDictionary<string, string>? permissions = null) =>
+        await CreateUserAsync(t, Roles.Deputy, null, permissions);
+
+    /// <summary>Пряма зміна користувача в БД (роль, активність, версія доступу, права) без перелогіну.</summary>
+    public async Task MutateUserAsync(Guid tenantId, Guid userId, Action<User> change, IReadOnlyDictionary<string, string>? setPermissions = null)
+    {
+        await using var ctx = Db.CreateContext(tenantId);
+        var u = await ctx.Users.FirstAsync(x => x.Id == userId);
+        change(u);
+        u.AccessVersion++;
+        if (setPermissions is not null)
+        {
+            ctx.UserPermissions.RemoveRange(ctx.UserPermissions.Where(p => p.UserId == userId));
+            await ctx.SaveChangesAsync();
+            foreach (var (key, level) in setPermissions)
+                ctx.UserPermissions.Add(new UserPermission { UserId = userId, Permission = key, Level = level });
+        }
+        await ctx.SaveChangesAsync();
+    }
+
+    /// <summary>Змінює модулі tenant через API оператора платформи.</summary>
+    public async Task SetModulesAsync(Guid tenantId, params string[] modules)
+    {
+        var r = await Send(HttpMethod.Patch, $"/api/platform/tenants/{tenantId}", new { modules }, platformKey: PlatformKey);
+        Assert.Equal(System.Net.HttpStatusCode.NoContent, r.StatusCode);
     }
 
     public sealed record BeautySeed(Guid LocationId, Guid SpecialistA, Guid SpecialistB, Guid AppointmentA, Guid AppointmentB, Guid ServiceId, Guid ClientId);

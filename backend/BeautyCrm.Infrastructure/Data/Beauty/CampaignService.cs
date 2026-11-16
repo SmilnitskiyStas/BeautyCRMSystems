@@ -50,9 +50,9 @@ public sealed class CampaignService(
     private Error? Guard(Actor actor)
     {
         TenantGuard.Ensure(tenant, actor.TenantId);
-        return actor.Role is Roles.Owner or Roles.Admin
+        return actor.Access.AtLeast(PermissionKeys.MarketingCampaigns, PermissionLevels.Edit)
             ? null
-            : Error.Forbidden(ReminderContactsErrors.ForbiddenRole, "This action is not available for your role.");
+            : Error.Forbidden(ReminderContactsErrors.ForbiddenRole, "This action is not available for your access level.");
     }
 
     private Error? RateWrite(Actor a) =>

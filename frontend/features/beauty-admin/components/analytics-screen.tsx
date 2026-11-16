@@ -250,7 +250,7 @@ function writeUrl(state: RangeState) {
 export function AnalyticsScreen() {
   const { user } = useAuth();
   // Фінансові поля й деталі періоду - лише owner/admin (§24.9); specialist отримує 403 від API, тож розділ йому не показується.
-  if (!canSeeFinance(user.role)) {
+  if (!canSeeFinance(user)) {
     return (
       <>
         <PageHeader title="Аналітика" />

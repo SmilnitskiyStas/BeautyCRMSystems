@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { BeautyApiError, humanizeError, retryWaitText } from "../errors";
 import { inspectOwnerInvite, MAX_PASSWORD, MIN_PASSWORD, takeTokenFromHash, type OwnerInviteInfo } from "../owner-invite";
+import { homeFor } from "../permissions";
 import { acceptOwnerInvite } from "../session";
 import { AuthCard, FormAlert, SubmitButton } from "./auth-card";
 
@@ -245,7 +246,7 @@ function SetPasswordForm({
     setPending(true);
     try {
       const user = await acceptOwnerInvite({ token, password });
-      onAccepted(user.role === "specialist" ? "/beauty/calendar" : "/beauty");
+      onAccepted(homeFor(user));
     } catch (err) {
       setPending(false);
       if (err instanceof BeautyApiError) {

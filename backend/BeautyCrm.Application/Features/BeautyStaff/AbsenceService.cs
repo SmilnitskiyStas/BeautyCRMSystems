@@ -28,7 +28,7 @@ public sealed class AbsenceService(IStaffStore store, TimeProvider clock, StaffO
         if (end < start || end.DayNumber - start.DayNumber > AbsenceValues.MaxSpanDays)
             return Error.Validation("invalid_range", $"from..to must be a valid range of at most {AbsenceValues.MaxSpanDays} days.");
 
-        var manager = StaffRoles.IsManager(actor);
+        var manager = StaffRoles.CanEditStaff(actor);
         var rows = await store.ListAbsencesAsync(start, end, specialistId, ct);
         // Мінімум розкриття: працівник бачить чужі лише затверджені відсутності (тип і дати), свої — усі.
         var visible = manager
@@ -41,9 +41,10 @@ public sealed class AbsenceService(IStaffStore store, TimeProvider clock, StaffO
 
     public async Task<Result<AbsenceDto>> CreateAsync(Actor actor, Guid specialistId, CreateAbsenceRequest req, CancellationToken ct)
     {
-        var manager = StaffRoles.IsManager(actor);
+        // M2 (§30.1): для власного профілю актора відсутність завжди requested, навіть за staff.access = edit (не керівник цього профілю)
+        var manager = StaffRoles.CanEditStaff(actor) && actor.SpecialistId != specialistId;
         // IDOR: працівник створює запит лише собі; про існування чужого профілю не повідомляємо.
-        if (!manager && (actor.Role != Roles.Specialist || actor.SpecialistId != specialistId))
+        if (!manager && actor.SpecialistId != specialistId)
             return Error.Forbidden("forbidden", "Specialists can only request absences for themselves.");
 
         var type = req.Type?.Trim().ToLowerInvariant();
@@ -59,7 +60,7 @@ public sealed class AbsenceService(IStaffStore store, TimeProvider clock, StaffO
 
         var link = await store.GetSpecialistLinkAsync(specialistId, ct);
         if (link is null) return SpecialistNotFound;
-        if (manager && !StaffRoles.CanModify(actor, link.LinkedUserRole))
+        if (manager && !StaffRoles.CanModify(actor, link.LinkedUserRole, link.LinkedUserId))
             return Error.Forbidden("forbidden_role", "You cannot manage this specialist.");
         // Деактивований профіль: працівник не діє від його імені (токен міг пережити деактивацію).
         if (!manager && !link.IsActive) return InactiveProfile;
@@ -89,7 +90,10 @@ public sealed class AbsenceService(IStaffStore store, TimeProvider clock, StaffO
 
     private async Task<Result<AbsenceDto>> DecideAsync(Actor actor, Guid id, string target, bool withConflicts, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return ManagersOnly;
+        if (!StaffRoles.CanEditStaff(actor)) return ManagersOnly;
+        // M2: самопогодження заборонене - власну відсутність (за specialist_id актора) не затверджує й не відхиляє він сам
+        if (actor.SpecialistId is { } own && await store.GetAbsenceAsync(id, ct) is { } existing && existing.SpecialistId == own)
+            return Error.Forbidden("forbidden_self_approval", "You cannot approve or reject your own absence.");
         var loaded = await LoadManagedAsync(actor, id, ct);
         if (loaded.Absence is not { } current) return loaded.Failure!;
 
@@ -103,13 +107,13 @@ public sealed class AbsenceService(IStaffStore store, TimeProvider clock, StaffO
     /// <summary>Скасування: керівник (requested/approved) або автор запиту (лише поки requested).</summary>
     public async Task<Result<AbsenceDto>> CancelAsync(Actor actor, Guid id, CancellationToken ct)
     {
-        var manager = StaffRoles.IsManager(actor);
         var current = await store.GetAbsenceAsync(id, ct);
         if (current is null) return NotFound;
+        var manager = StaffRoles.CanEditStaff(actor) && current.SpecialistId != actor.SpecialistId;
         if (manager)
         {
             var link = await store.GetSpecialistLinkAsync(current.SpecialistId, ct);
-            if (!StaffRoles.CanModify(actor, link?.LinkedUserRole)) return Error.Forbidden("forbidden_role", "You cannot manage this specialist.");
+            if (!StaffRoles.CanModify(actor, link?.LinkedUserRole, link?.LinkedUserId)) return Error.Forbidden("forbidden_role", "You cannot manage this specialist.");
         }
         else
         {
@@ -136,7 +140,7 @@ public sealed class AbsenceService(IStaffStore store, TimeProvider clock, StaffO
         var a = await store.GetAbsenceAsync(id, ct);
         if (a is null) return new Loaded(null, NotFound);
         var link = await store.GetSpecialistLinkAsync(a.SpecialistId, ct);
-        return StaffRoles.CanModify(actor, link?.LinkedUserRole)
+        return StaffRoles.CanModify(actor, link?.LinkedUserRole, link?.LinkedUserId)
             ? new Loaded(a, null)
             : new Loaded(null, Error.Forbidden("forbidden_role", "You cannot manage this specialist."));
     }
@@ -160,9 +164,15 @@ public sealed class AbsenceService(IStaffStore store, TimeProvider clock, StaffO
             .Select(c => new AbsenceConflictDto(c.AppointmentId, c.StartsAt, c.ServiceName))
             .ToList();
 
-    /// <summary>Нотатку бачать лише керівники й автор запиту.</summary>
-    private static AbsenceDto ToDto(Actor actor, AbsenceRecord a, IReadOnlyList<AbsenceConflictDto>? conflicts = null) => new(
-        a.Id, a.SpecialistId, a.Type, a.DateFrom, a.DateTo, a.Status,
-        StaffRoles.IsManager(actor) || a.RequestedByUserId == actor.UserId ? a.Note : null,
-        conflicts);
+    /// <summary>
+    /// Нотатку бачать лише керівники й автор запиту. Тип відсутності (sick - дані про здоров'я, D7) - керівники, автор і власник
+    /// профілю; для решти поле відсутнє, і UI показує «Недоступний».
+    /// </summary>
+    private static AbsenceDto ToDto(Actor actor, AbsenceRecord a, IReadOnlyList<AbsenceConflictDto>? conflicts = null)
+    {
+        var editor = StaffRoles.CanEditStaff(actor);
+        var mine = a.RequestedByUserId == actor.UserId || (actor.SpecialistId is { } own && a.SpecialistId == own);
+        return new(a.Id, a.SpecialistId, editor || mine ? a.Type : null, a.DateFrom, a.DateTo, a.Status,
+            editor || a.RequestedByUserId == actor.UserId ? a.Note : null, conflicts);
+    }
 }

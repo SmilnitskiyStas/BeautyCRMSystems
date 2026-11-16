@@ -19,7 +19,8 @@ namespace BeautyCrm.Infrastructure.AI.Beauty;
 public sealed record AssistantRequest(
     Guid TenantId, Guid? ClientId, string ClientMessage, AiMode? Mode = null, AiScope Scope = AiScope.Client,
     Guid? ConversationId = null, IReadOnlyList<ChatHistoryItem>? History = null, Guid? DefaultLocationId = null,
-    bool RetryEmptyReply = false, ChatFlowTurnInfo? Flow = null, string? FlowStateBlock = null);
+    bool RetryEmptyReply = false, ChatFlowTurnInfo? Flow = null, string? FlowStateBlock = null,
+    BeautyCrm.Application.Features.BeautyAuth.Actor? Actor = null);
 
 /// <param name="Chat">Підсумок ходу ClientChat (підсумок запису від коду, handoff моделі, помилки tools, чернетка); null в інших scope.</param>
 /// <param name="LlmCalls">Скільки запитів до провайдера зроблено за хід (облік ліміту розмови, M2).</param>
@@ -92,11 +93,13 @@ public sealed class BeautyAssistant
         // Tenant, розмова й клієнт - лише з запиту (контекст ходу). Стан ходу ClientChat збирається виконавцем tools.
         var flow = chat ? req.Flow : null;
         var turn = chat ? new ChatTurnState { Flow = flow } : null;
-        var ctx = new AiToolContext(req.TenantId, req.ClientId, mode, req.Scope, req.ConversationId, req.DefaultLocationId, turn);
+        var ctx = new AiToolContext(req.TenantId, req.ClientId, mode, req.Scope, req.ConversationId, req.DefaultLocationId, turn, req.Actor);
 
         var messages = ChatHistory.Build(req.History, _chatOptions);
         ChatHistory.AddUser(messages, PromptInjectionGuard.Wrap(clientText));
-        var defs = AiToolCatalog.For(req.Scope, flow is not null, flow?.LlmPrepare ?? false);
+        var defs = req is { Scope: AiScope.Manager, Actor: { } staff }
+            ? AiToolCatalog.ForManager(staff.Access)
+            : AiToolCatalog.For(req.Scope, flow is not null, flow?.LlmPrepare ?? false);
         // Службовий блок ходу (дата/час закладу, каталог): формує код з довіреного порту, поза <client_message>.
         string? turnContext = null;
         if (chat && _chatContext is not null)

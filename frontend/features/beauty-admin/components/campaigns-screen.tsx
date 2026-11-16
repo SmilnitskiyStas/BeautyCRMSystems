@@ -15,7 +15,7 @@ type Filter = CampaignStatus | "all";
 /** `/beauty/campaigns` (§26.12): список розсилок зі статусами; специфікація - лише owner/admin. */
 export function CampaignsScreen() {
   const { user } = useAuth();
-  const allowed = canUseMarketing(user.role);
+  const allowed = canUseMarketing(user);
   const [filter, setFilter] = useState<Filter>("all");
   const q = useCampaigns(filter, allowed);
 

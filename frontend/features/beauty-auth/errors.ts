@@ -19,6 +19,10 @@ export class BeautyApiError extends Error {
     public readonly affectedRoles?: string[],
     /** 409 task_already_closed (§22.6.3): поточний стан задачі дзвінка. Лише для UI-оновлення рядка. */
     public readonly task?: unknown,
+    /** 403 forbidden_role (§30.5 п.8): ключ права, якого бракує. Відсутній для рангу/owner-only (перечитування `me` не потрібне). */
+    public readonly permission?: string,
+    /** Розібране JSON-тіло помилки (§30.11: `currentVersion`, `permissions[]`, `violations[]`...). Без ПІІ. */
+    public readonly body?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "BeautyApiError";
@@ -35,6 +39,16 @@ const BY_CODE: Record<string, string> = {
   no_session: "Сесія завершилась. Увійдіть знову.",
   forbidden_role: "У вас немає прав на цю дію.",
   module_disabled: "Цей розділ не підключено для вашого бізнесу.",
+  specialist_inactive: "Ваш профіль майстра вимкнено. Зверніться до керівника.",
+  session_revoked: "Сесію завершено. Увійдіть знову.",
+  access_version_conflict: "Права цього користувача щойно змінили. Ми оновили дані: перегляньте їх і повторіть зміну.",
+  cannot_modify_self: "Власні права й статус змінювати не можна.",
+  user_not_found: "Користувача не знайдено.",
+  permission_ceiling: "Не можна видати більше, ніж маєте самі, або змінити права, видані директором.",
+  role_change_not_supported: "Зміна ролі на таку не підтримується: доступна лише пара «Адміністратор» і «Заступник».",
+  permission_not_allowed_for_role: "Це право не можна видати цій ролі.",
+  permission_inconsistent: "Налаштування суперечать одне одному. Перевірте підсвічені права.",
+  access_unavailable: "Не вдалося перевірити права доступу. Спробуйте за хвилину.",
   invite_invalid: "Запрошення недійсне або термін його дії минув. Попросіть надіслати нове.",
   invite_closed: "Це запрошення вже використано або скасовано.",
   user_exists: "Користувач із такою поштою вже існує.",
@@ -282,8 +296,12 @@ export async function readApiError(res: Response): Promise<BeautyApiError> {
   let conflicts: ApiConflict[] | undefined;
   let affectedRoles: string[] | undefined;
   let task: unknown;
+  let permission: string | undefined;
+  let parsed: Record<string, unknown> | undefined;
   try {
-    const body = (await res.json()) as { code?: unknown; message?: unknown; conflicts?: unknown; affectedRoles?: unknown; task?: unknown };
+    const body = (await res.json()) as { code?: unknown; message?: unknown; conflicts?: unknown; affectedRoles?: unknown; task?: unknown; permission?: unknown };
+    if (typeof body.permission === "string" && body.permission) permission = body.permission;
+    if (body && typeof body === "object") parsed = body as Record<string, unknown>;
     if (typeof body.code === "string") code = body.code;
     if (typeof body.message === "string") message = body.message;
     if (Array.isArray(body.conflicts)) conflicts = body.conflicts.flatMap(parseConflict);
@@ -293,5 +311,5 @@ export async function readApiError(res: Response): Promise<BeautyApiError> {
     /* не JSON */
   }
   const retry = Number(res.headers.get("Retry-After"));
-  return new BeautyApiError(res.status, code, message, Number.isFinite(retry) && retry > 0 ? retry : undefined, conflicts, affectedRoles, task);
+  return new BeautyApiError(res.status, code, message, Number.isFinite(retry) && retry > 0 ? retry : undefined, conflicts, affectedRoles, task, permission, parsed);
 }

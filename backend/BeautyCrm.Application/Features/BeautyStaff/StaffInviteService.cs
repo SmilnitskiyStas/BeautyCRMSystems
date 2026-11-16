@@ -8,12 +8,14 @@ public sealed class StaffInviteService(IStaffStore store, UserAdminService users
     /// <summary>Запрошення працівника на вхід: існуючий потік invites (role=specialist, specialist_id профілю).</summary>
     public async Task<AuthResult<InviteCreatedDto>> InviteAsync(Actor actor, Guid id, InviteSpecialistRequest req, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return AuthError.Forbidden("forbidden", "Only owner or admin can invite staff.");
+        // team.manage (§30.6.4); решта ендпоінтів - за правами (ADR-023) ендпоінтів до переведення (TASK-852)
+        if (!actor.Access.AtLeast(PermissionKeys.TeamManage, PermissionLevels.Manage))
+            return AuthError.ForbiddenPermission(PermissionKeys.TeamManage, PermissionLevels.Manage);
         var link = await store.GetSpecialistLinkAsync(id, ct);
         if (link is null) return AuthError.NotFound("specialist_not_found", "Specialist not found.");
-        if (!StaffRoles.CanModify(actor, link.LinkedUserRole)) return AuthError.Forbidden("forbidden_role", "You cannot manage this specialist.");
+        if (!StaffRoles.CanModify(actor, link.LinkedUserRole, link.LinkedUserId)) return AuthError.Forbidden("forbidden_role", "You cannot manage this specialist.");
         if (!link.IsActive) return AuthError.Conflict("specialist_inactive", "The specialist profile is deactivated; reactivate it first.");
-        return await users.CreateInviteAsync(actor, new CreateInviteRequest(req.Email, Roles.Specialist, id), ct);
+        return await users.CreateInviteAsync(actor, new CreateInviteRequest(req.Email, Roles.Specialist, id, req.Permissions), ct);
     }
 
 }

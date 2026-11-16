@@ -11,32 +11,42 @@ public sealed partial class EfBeautyStore : IAnalyticsDetailsStore
 {
     // ---------- клієнти ----------
 
-    public async Task<IReadOnlyList<ClientDto>> ListAsync(string? search, int skip, int take, CancellationToken ct)
+    public async Task<IReadOnlyList<ClientDto>> ListAsync(string? search, int skip, int take, ClientScopeFilter? own, bool searchContacts, CancellationToken ct)
     {
         var q = db.Clients.AsNoTracking().Where(c => c.DeletedAt == null);
+        if (own is { } o)
+        {
+            var sp = o.SpecialistId;
+            var me = o.ActorUserId;
+            q = q.Where(c => db.Appointments.Any(a => a.ClientId == c.Id && a.SpecialistId == sp
+                && !(a.Status == AppointmentStatus.Cancelled && a.CreatedByUserId == me)));
+        }
         if (!string.IsNullOrEmpty(search))
         {
             var pattern = $"%{search.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_")}%";
-            q = q.Where(c => EF.Functions.ILike(c.FullName, pattern) || (c.Phone != null && EF.Functions.ILike(c.Phone, pattern)));
+            q = q.Where(c => EF.Functions.ILike(c.FullName, pattern) || (searchContacts && c.Phone != null && EF.Functions.ILike(c.Phone, pattern)));
         }
+        Guid? ownSp = own?.SpecialistId;
         var rows = await q.OrderBy(c => c.FullName).Skip(skip).Take(take).Select(c => new
         {
             Client = c,
-            Visits = db.Appointments.Count(a => a.ClientId == c.Id && a.Status == AppointmentStatus.Completed),
-            LastVisit = db.Appointments.Where(a => a.ClientId == c.Id && a.Status == AppointmentStatus.Completed)
+            Visits = db.Appointments.Count(a => a.ClientId == c.Id && a.Status == AppointmentStatus.Completed && (ownSp == null || a.SpecialistId == ownSp)),
+            LastVisit = db.Appointments.Where(a => a.ClientId == c.Id && a.Status == AppointmentStatus.Completed && (ownSp == null || a.SpecialistId == ownSp))
                 .Max(a => (DateTimeOffset?)a.StartsAt),
-            Cancelled = db.Appointments.Count(a => a.ClientId == c.Id && a.Status == AppointmentStatus.Cancelled),
+            Cancelled = db.Appointments.Count(a => a.ClientId == c.Id && a.Status == AppointmentStatus.Cancelled && (ownSp == null || a.SpecialistId == ownSp)),
             CancelledByClient = db.Appointments.Count(a => a.ClientId == c.Id && a.Status == AppointmentStatus.Cancelled
-                && a.CancelledByType == CancelledByTypes.Client),
+                && a.CancelledByType == CancelledByTypes.Client && (ownSp == null || a.SpecialistId == ownSp)),
         }).ToListAsync(ct);
         return rows.Select(r => ToDto(r.Client, r.Visits, r.LastVisit, r.Cancelled, r.CancelledByClient)).ToList();
     }
 
-    public async Task<ClientDetailDto?> GetDetailAsync(Guid id, CancellationToken ct)
+    public async Task<ClientDetailDto?> GetDetailAsync(Guid id, ClientScopeFilter? own, CancellationToken ct)
     {
         var c = await db.Clients.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id && x.DeletedAt == null, ct);
         if (c is null) return null;
-        var history = await ProjectAsync(db.Appointments.Where(a => a.ClientId == id).OrderByDescending(a => a.StartsAt), ct);
+        var historyQuery = db.Appointments.Where(a => a.ClientId == id);
+        if (own is { } o) { var sp = o.SpecialistId; historyQuery = historyQuery.Where(a => a.SpecialistId == sp); } // own: лише записи власного профілю
+        var history = await ProjectAsync(historyQuery.OrderByDescending(a => a.StartsAt), ct);
         var completed = history.Where(h => h.Status == "completed").ToList();
         var cancelled = history.Where(h => h.Status == "cancelled").ToList(); // історія містить і скасовані (§16), дані не видаляються
         var notes = await db.ClientNotes.AsNoTracking().Where(n => n.ClientId == id).OrderByDescending(n => n.CreatedAt)
@@ -44,8 +54,17 @@ public sealed partial class EfBeautyStore : IAnalyticsDetailsStore
         // TASK-769 (§25.7): статус телефону, джерело, згода, pending, можливий дубль (видалений не віддається)
         ClientDuplicateDto? duplicate = null;
         if (c.DuplicateOfClientId is { } dupId)
-            duplicate = await db.Clients.AsNoTracking().Where(x => x.Id == dupId && x.DeletedAt == null)
-                .Select(x => new ClientDuplicateDto(x.Id, x.FullName)).FirstOrDefaultAsync(ct);
+        {
+            var dups = db.Clients.AsNoTracking().Where(x => x.Id == dupId && x.DeletedAt == null);
+            if (own is { } oo) // clients.view = own: дублікат поза scope не розкривається (id/ім'я)
+            {
+                var osp = oo.SpecialistId;
+                var me = oo.ActorUserId;
+                dups = dups.Where(x => db.Appointments.Any(a => a.ClientId == x.Id && a.SpecialistId == osp
+                    && !(a.Status == AppointmentStatus.Cancelled && a.CreatedByUserId == me)));
+            }
+            duplicate = await dups.Select(x => new ClientDuplicateDto(x.Id, x.FullName)).FirstOrDefaultAsync(ct);
+        }
         var pending = c.PhonePending is not null && c.PhonePendingSource is not null && c.PhonePendingAt is not null
             ? new ClientPhonePendingDto(c.PhonePending, c.PhonePendingSource, c.PhonePendingAt.Value) : null;
         var consent = await db.MarketingConsents.AsNoTracking().Where(m => m.ClientId == id && m.Channel == "telegram")

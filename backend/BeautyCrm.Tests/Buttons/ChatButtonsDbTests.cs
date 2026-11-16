@@ -1234,7 +1234,7 @@ public sealed class ChatButtonsDbTests : IClassFixture<PostgresRlsFixture>
             var admin = new User { Id = Guid.NewGuid(), Email = $"{Guid.NewGuid():N}@t.test", FullName = "Олена", PasswordHash = "x", Role = Roles.Admin };
             ctx.Add(admin);
             await ctx.SaveChangesAsync();
-            var actor = new Actor(admin.Id, e.Tenant, Roles.Admin, null);
+            var actor = Actor.ForTest(Roles.Admin, null, admin.Id, e.Tenant);
             var detail = await Scope(e, sp => sp.GetRequiredService<InboxService>().GetAsync(actor, e.Conv, null, null, default));
             Assert.True(detail.IsOk, detail.Error?.Code);
             var d = detail.Value!;
@@ -1270,7 +1270,7 @@ public sealed class ChatButtonsDbTests : IClassFixture<PostgresRlsFixture>
         ctx.Add(admin);
         await ctx.SaveChangesAsync();
 
-        var detail = await Scope(e, sp => sp.GetRequiredService<InboxService>().GetAsync(new Actor(admin.Id, e.Tenant, Roles.Admin, null), e.Conv, null, null, default));
+        var detail = await Scope(e, sp => sp.GetRequiredService<InboxService>().GetAsync(Actor.ForTest(Roles.Admin, null, admin.Id, e.Tenant), e.Conv, null, null, default));
 
         var a = detail.Value!.UpcomingAppointments.Single();
         Assert.NotNull(a.ClientConfirmedAt);

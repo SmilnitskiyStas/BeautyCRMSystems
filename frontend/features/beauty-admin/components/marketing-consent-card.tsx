@@ -31,7 +31,7 @@ const RANK: Record<ConsentLevel, number> = { none: 0, selective: 1, full: 2 };
  */
 export function MarketingConsentCard({ clientId }: { clientId: string }) {
   const { user } = useAuth();
-  const allowed = canManageConsent(user.role);
+  const allowed = canManageConsent(user);
   const q = useMarketingConsent(clientId, allowed);
   const set = useSetMarketingConsent(clientId);
   const [lower, setLower] = useState<ConsentLevel | null>(null);
@@ -246,7 +246,7 @@ function RaiseForm({
 /** «Купони клієнта» (§26.12): лише `codeHint`, акція, строк, статус. Ховається, якщо розсилки вимкнено. */
 export function ClientCouponsCard({ clientId }: { clientId: string }) {
   const { user } = useAuth();
-  const allowed = canManageConsent(user.role);
+  const allowed = canManageConsent(user);
   const q = useClientCoupons(clientId, allowed);
   const [nowMs] = useState(() => Date.now());
   if (!allowed || (q.isError && isMarketingDisabled(q.error))) return null;

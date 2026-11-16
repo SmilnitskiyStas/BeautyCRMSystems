@@ -4,6 +4,11 @@ export function money(n: number): string {
   return `${n.toLocaleString("uk-UA").replace(/ | /g, " ")} ₴`;
 }
 
+/** Сума або `fallback` (за замовчуванням «—»), коли поле відсутнє через права (§30.5): відсутнє не дорівнює 0. */
+export function moneyOrDash(n: number | null | undefined, fallback = "—"): string {
+  return typeof n === "number" && Number.isFinite(n) ? money(n) : fallback;
+}
+
 export function durationLabel(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;

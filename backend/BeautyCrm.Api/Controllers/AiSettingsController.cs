@@ -19,7 +19,8 @@ namespace BeautyCrm.Api.Controllers;
 [ApiController]
 [Route("api/beauty/ai")]
 [RequireModule("beauty_ai")]
-[Authorize(Policy = AuthPolicies.Management)]
+[Authorize(Policy = AuthPolicies.Staff)]
+[RequirePermission(PermissionKeys.AiSettings, PermissionLevels.Edit)] // ключі й keySource - додатково [AiOwnerOnly] (§20.9)
 [ProducesResponseType(StatusCodes.Status401Unauthorized)]
 [ProducesResponseType(StatusCodes.Status403Forbidden)]
 public sealed class AiSettingsController(AiSettingsService settings, AiKeyThrottle throttle) : ControllerBase

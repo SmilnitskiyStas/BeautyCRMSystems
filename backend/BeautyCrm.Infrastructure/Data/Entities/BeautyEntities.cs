@@ -284,6 +284,8 @@ public class Appointment : TenantEntity
     public string? CancelledByType { get; set; }
     /// <summary>Користувач-керівник/працівник, що скасував (лише для staff).</summary>
     public Guid? CancelledByUserId { get; set; }
+    /// <summary>ADR-023 (§30.2, M3): співробітник, що створив запис; NULL для публічних/чат/старих записів. Заповнює TASK-852.</summary>
+    public Guid? CreatedByUserId { get; set; }
     /// <summary>Необов'язкова причина скасування (до 300 символів); чутливе — лише керівникам.</summary>
     public string? CancelReason { get; set; }
     /// <summary>SHA-256 (hex) публічного токена перегляду/скасування запису (TASK-688); сам токен не зберігається.</summary>

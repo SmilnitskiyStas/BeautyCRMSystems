@@ -50,6 +50,35 @@ docker exec beautycrm psql -U postgres -d beautycrm \
   -c "GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO beautycrm_app"
 ```
 
+### 2a. ADR-023: права доступу (міграція `20261115120000_auth_user_permissions`)
+
+**Вимоги до середовищ (обов'язково до міграції):**
+- Роль `beautycrm_audit_purge` має існувати до міграції (NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT). Міграція створює її лише якщо мігратор має `CREATEROLE`, інакше падає з інструкцією.
+- Мігратор (`beautycrm_owner`) має бути членом `beautycrm_audit_purge` `WITH INHERIT FALSE, SET TRUE`. Міграція видає членство сама, якщо може; інакше — ops вручну. `INHERIT TRUE` небезпечний: політики `TO beautycrm_audit_purge` діяли б на всіх, хто успадковує роль.
+- **Локально:** `scripts\dev\setup-db.ps1` створює роль і членство; після міграції повторіть скрипт (GRANT-и ідемпотентні).
+- **Staging:** виконати `deploy/staging/db/init-catalog-role.sql` від superuser Postgres **ПЕРЕД** міграцією (роль і членство для `beautycrm_owner`). Далі міграції (`migrations-<SHA>`) під `beautycrm_owner`, потім `deploy/staging/db/grants.sql`.
+- Крок «GRANT після міграції» (`grants.sql`) обов'язковий: без нього `beautycrm_app` не має прав на `user_permissions`, а воркер не має `EXECUTE` на `purge_user_access_audit`.
+
+**Backfill:** міграція ідемпотентна (одна транзакція). Для кожного `admin` і `specialist` записує пресет (`ON CONFLICT DO NOTHING`) і `migrated` в журнал. Поведінка не змінюється, бо пресет дорівнює поточній матриці. Застосування на staging/prod — human gate.
+
+**Перевірки після деплою:**
+1. `SELECT rolname, rolcanlogin, rolsuper, rolbypassrls, rolinherit FROM pg_roles WHERE rolname='beautycrm_audit_purge'` → `f, f, f, f, f`.
+2. `SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname IN ('user_permissions','user_access_audit')` → обидві `t, t`. Виконувати від superuser (FORCE RLS приховує рядки без `app.tenant_id`).
+3. `SELECT has_table_privilege('beautycrm_app','user_access_audit','UPDATE')` → `f`; `has_function_privilege('beautycrm_worker','public.purge_user_access_audit(timestamptz)','EXECUTE')` → `t`; `has_function_privilege('public','public.purge_user_access_audit(timestamptz)','EXECUTE')` → `f`.
+4. Backfill: кожен `admin`/`specialist` має рядки в `user_permissions` (`SELECT count(*)` з `NOT EXISTS` → `0`), у журналі є `migrated`.
+5. API: `GET /api/auth/me` повертає `accessVersion`, `permissions`, `modules`; відповідь має заголовок `X-Access-Version`. `GET /api/access/catalog` → `200`. `GET /api/users/access-audit` від адміністратора → `403 forbidden_role`.
+6. Смоук майстра: `GET /api/beauty/me/revenue?from=…&to=…` → `200`; `GET /api/beauty/analytics/network` → `403 forbidden_role`.
+7. Воркер: `user_permissions` і `user_access_audit` недоступні (`42501`).
+
+**Відкат міграції `20261115120000` (human gate):**
+1. Резервна копія БД (`pg_dump`, див. `deploy/staging/README.md`).
+2. Перевірити передумови `Down`: немає користувачів і запрошень `deputy`, немає запрошень з нестандартним знімком, права всіх admin/specialist відповідають пресетам. `Down` **відмовляє** (RAISE EXCEPTION), якщо є відмінності. Не обходити: рішення про втрату налаштувань приймає людина (export або reset через API спочатку).
+3. Старий образ API сумісний зі схемою, поки лишається `invites.permissions DEFAULT '{}'`. Спочатку відкотити образи, потім схему.
+4. Відкат: `dotnet ef database update 20261110090000_beauty_cancellation_terms_visibility --project BeautyCrm.Infrastructure --startup-project BeautyCrm.Infrastructure` (під `beautycrm_owner`).
+5. Роль `beautycrm_audit_purge` не видаляється (кластерна). Після відкату GRANT-и `grants.sql` для видалених таблиць неактуальні.
+
+**Відомі обмеження:** `DbRoleGuard` не перевіряє роль `beautycrm_audit_purge`; retention-job воркера для `purge_user_access_audit` ще не реалізовано (known-issues KI-006).
+
 ## 3. Секрети й змінні середовища
 Згенеруйте (`openssl rand`): `Auth__JwtSigningKey` (`-base64 48`), `Auth__PlatformKey` (`-base64 36`), `Channels__EncryptionKey` (`-base64 32`, base64 від 32 байт; при заміні ключа вже збережені секрети каналів перестануть розшифровуватись). Файл `.env` у `.gitignore`, комітити заборонено. Повний перелік змінних і коментарі: `.env.example`.
 
@@ -147,7 +176,7 @@ cd frontend; npm.cmd test; npx tsc --noEmit; npm.cmd run lint
 - Платіжний провайдер не обрано: `MockPaymentService`.
 - Лічильник блокувань входу для невідомих email зберігається в пам'яті процесу (при кількох екземплярах API рахується окремо).
 - CSP у frontend без nonce: `script-src` і `style-src` містять `'unsafe-inline'` (потрібно для Next.js), `default-src 'self'`.
-- Access-токен деактивованого користувача діє до закінчення (15 хв) на ендпоінтах поза записами й відсутностями.
+- Access-токен деактивованого користувача більше не діє до 15 хв: з ADR-023 кожен запит перевіряє активність у БД (`401 session_revoked`). Сесія access-токена 15 хв лишається для зміни пароля й «вийти з усіх пристроїв» (known-issues KI-001).
 - Немає журналу дій персоналу (аудит).
 
 ## 11. Локальний smoke Telegram (scripts/dev)

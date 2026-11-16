@@ -333,9 +333,9 @@ public static class ChatTemplates
         string C(string? v) => AiTextNormalizer.NeutralizeTags(AiTextNormalizer.Clean(v)).Trim();
         var inv = CultureInfo.InvariantCulture;
         var local = ToLocal(a.StartsAt, a.Timezone);
-        var price = a.PriceFinal < a.PriceOriginal || a.PromotionId is not null
-            ? $"{Money(a.PriceOriginal)} → {Money(a.PriceFinal)} {currencyLabel}"
-            : $"{Money(a.PriceFinal)} {currencyLabel}";
+        var price = (a.PriceFinal ?? 0m) < (a.PriceOriginal ?? 0m) || a.PromotionId is not null
+            ? $"{Money((a.PriceOriginal ?? 0m))} → {Money((a.PriceFinal ?? 0m))} {currencyLabel}"
+            : $"{Money((a.PriceFinal ?? 0m))} {currencyLabel}";
         var sb = new StringBuilder();
         sb.AppendLine(ConfirmedHeader);
         sb.AppendLine($"Послуга: {C(a.ServiceName)}");

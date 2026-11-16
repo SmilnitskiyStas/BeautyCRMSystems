@@ -1,6 +1,7 @@
 using BeautyCrm.Api.Auth;
 using BeautyCrm.Api.Infrastructure;
 using BeautyCrm.Api.Tenancy;
+using BeautyCrm.Application.Features.BeautyAuth;
 using BeautyCrm.Application.Features.BeautyCommon;
 using BeautyCrm.Infrastructure.Integrations.Channels.Inbox;
 using Microsoft.AspNetCore.Authorization;
@@ -19,8 +20,8 @@ public sealed record InboxReadRequest(Guid? UpToMessageId);
 [ApiController]
 [Route("api/beauty/conversations")]
 [RequireModule("beauty_channels")]
-[Authorize(Policy = AuthPolicies.Staff)] // автентифікація; роль перевіряє InboxManagementOnly, щоб віддати {code: forbidden_role}
-[InboxManagementOnly]
+[Authorize(Policy = AuthPolicies.Staff)]
+[RequirePermission(PermissionKeys.ChannelsInbox, PermissionLevels.View)]
 [InboxNoStore]
 [ProducesResponseType(StatusCodes.Status401Unauthorized)]
 [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -63,6 +64,7 @@ public sealed class InboxController(InboxService inbox) : ControllerBase
     /// channel_unsupported | idempotency_conflict; 422 invalid_text; 429 rate_limited.
     /// </summary>
     [HttpPost("{id:guid}/reply")]
+    [RequirePermission(PermissionKeys.ChannelsInbox, PermissionLevels.Reply)]
     [RequestSizeLimit(ReplyBody)]
     [ProducesResponseType<InboxReplyAcceptedDto>(StatusCodes.Status202Accepted)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -81,6 +83,7 @@ public sealed class InboxController(InboxService inbox) : ControllerBase
 
     /// <summary>Ідемпотентно: 204 також, коли ШІ вже активний.</summary>
     [HttpPost("{id:guid}/resume-ai")]
+    [RequirePermission(PermissionKeys.ChannelsInbox, PermissionLevels.Reply)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> ResumeAi(Guid id, CancellationToken ct) =>
@@ -88,6 +91,7 @@ public sealed class InboxController(InboxService inbox) : ControllerBase
 
     /// <summary>«Опрацьовано» (TASK-793): закриває розмову без відповіді клієнту. Ідемпотентно: 204 також, коли вже закрита.</summary>
     [HttpPost("{id:guid}/resolve")]
+    [RequirePermission(PermissionKeys.ChannelsInbox, PermissionLevels.Reply)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Resolve(Guid id, CancellationToken ct) =>
@@ -102,27 +106,6 @@ public sealed class InboxController(InboxService inbox) : ControllerBase
 
     private static bool ValidKey(string? key) =>
         key is { Length: >= 8 and <= 128 } && key.All(c => c is >= '!' and <= '~');
-}
-
-/// <summary>specialist -> 403 {code: forbidden_role} до виконання дії (політика Staff лише автентифікує).</summary>
-[AttributeUsage(AttributeTargets.Class | AttributeTargets.Method)]
-public sealed class InboxManagementOnlyAttribute : Attribute, IActionFilter, IOrderedFilter
-{
-    public int Order => -3000; // раніше за ModelStateInvalidFilter (-2000) і [RequireModule]: specialist не бачить навіть 422
-
-    public void OnActionExecuting(ActionExecutingContext context)
-    {
-        if (context.HttpContext.User.ToActor() is { Role: BeautyCrm.Application.Features.BeautyAuth.Roles.Owner or BeautyCrm.Application.Features.BeautyAuth.Roles.Admin })
-            return;
-        context.Result = new ObjectResult(new ApiError(InboxErrors.ForbiddenRole, "Inbox is available to the owner and admin only."))
-        {
-            StatusCode = StatusCodes.Status403Forbidden,
-        };
-    }
-
-    public void OnActionExecuted(ActionExecutedContext context)
-    {
-    }
 }
 
 /// <summary>Cache-Control: no-store на всіх відповідях inbox (тексти розмов, §22.6/§22.10).</summary>

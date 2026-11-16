@@ -1,4 +1,5 @@
 using System.Text.Json;
+using BeautyCrm.Application.Features.BeautyAuth;
 using Microsoft.Extensions.Logging;
 
 namespace BeautyCrm.Infrastructure.AI.Beauty;
@@ -11,8 +12,40 @@ public enum AiScope { Client, Manager, ClientChat }
 /// <param name="Turn">Стан ходу ClientChat (підсумок запису, handoff моделі, помилки tools); null поза ClientChat.</param>
 public sealed record AiToolContext(
     Guid TenantId, Guid? ClientId, AiMode Mode, AiScope Scope,
-    Guid? ConversationId = null, Guid? DefaultLocationId = null, ChatTurnState? Turn = null);
-public sealed record AiToolResult(string Content, bool IsError, string? ActionStatus = null);
+    Guid? ConversationId = null, Guid? DefaultLocationId = null, ChatTurnState? Turn = null, Actor? Actor = null);
+
+/// <summary>Відмова за правом (§30.6.10): tool/дія вимагає <c>permission &gt;= required</c>; API віддає 403 forbidden_role {permission, required}.</summary>
+public sealed record AiToolDenied(string Permission, string Required);
+
+public sealed record AiToolResult(string Content, bool IsError, string? ActionStatus = null, AiToolDenied? Denied = null);
+
+/// <summary>Права staff-tools ШІ (§30.6.10): scope own у V1 не підтримується, тож вимагається all. Перевіряється в момент виконання.</summary>
+public static class AiToolPermissions
+{
+    private static readonly Dictionary<string, (string Key, string Level)> Map = new(StringComparer.Ordinal)
+    {
+        [AiToolNames.FindFreeSlots] = (PermissionKeys.CalendarView, PermissionLevels.All),
+        [AiToolNames.CreateAppointment] = (PermissionKeys.CalendarManage, PermissionLevels.All),
+        [AiToolNames.GetPrices] = (PermissionKeys.ServicesCatalog, PermissionLevels.View),
+        [AiToolNames.GetActivePromotions] = (PermissionKeys.ServicesCatalog, PermissionLevels.View),
+        [AiToolNames.GetClientContext] = (PermissionKeys.ClientsView, PermissionLevels.All),
+        [AiToolNames.DraftReply] = (PermissionKeys.ChannelsInbox, PermissionLevels.Reply),
+        [AiToolNames.SuggestPromotion] = (PermissionKeys.MarketingCampaigns, PermissionLevels.Edit),
+        [AiToolNames.BuildAudience] = (PermissionKeys.MarketingCampaigns, PermissionLevels.Edit),
+    };
+
+    public static bool IsKnown(string tool) => Map.ContainsKey(tool);
+
+    /// <summary>null - право є; для невідомого tool - відмова (fail-closed).</summary>
+    public static AiToolDenied? Check(AccessSet access, string tool)
+    {
+        if (!Map.TryGetValue(tool, out var need)) return new AiToolDenied("ai.use", PermissionLevels.Use);
+        return access.AtLeast(need.Key, need.Level) ? null : new AiToolDenied(need.Key, need.Level);
+    }
+
+    /// <summary>Чи може актор зараз виконувати tool (для фільтра GET /ai/actions і переліку tools моделі).</summary>
+    public static bool Allows(AccessSet access, string tool) => Check(access, tool) is null;
+}
 
 public static class AiToolNames
 {
@@ -101,6 +134,10 @@ public static class AiToolCatalog
         !flowAvailable ? ClientChat
             : ClientChat.Where(t => llmPrepare || t.Name != ClientChatToolNames.PrepareBooking).Append(StartBookingFlow).ToList();
 
+    /// <summary>Tools для менеджерського scope з урахуванням прав актора: tool без права моделі не показується (§30.6.10).</summary>
+    public static IReadOnlyList<AiToolDefinition> ForManager(AccessSet access) =>
+        All.Where(t => AiToolPermissions.Allows(access, t.Name)).ToList();
+
     public static IReadOnlyList<AiToolDefinition> For(AiScope scope, bool flowAvailable = false, bool llmPrepare = false) => scope switch
     {
         AiScope.ClientChat => ClientChatFor(flowAvailable, llmPrepare),
@@ -146,6 +183,13 @@ public sealed class AiToolExecutor
 
     public async Task<AiToolResult> ExecuteAsync(AiToolContext ctx, string tool, JsonElement input, CancellationToken ct)
     {
+        // §30.6.10 (fail-closed): менеджерський scope без актора не виконується; право tool - за поточними правами цього актора
+        if (ctx.Scope == AiScope.Manager)
+        {
+            if (ctx.Actor is null) throw new InvalidOperationException("Manager scope requires an actor.");
+            if (AiToolPermissions.IsKnown(tool) && AiToolPermissions.Check(ctx.Actor.Access, tool) is { } denied)
+                return new AiToolResult("forbidden_role", true, null, denied);
+        }
         try
         {
             // ClientChat: окремий закритий набір. Усе поза ним (create_appointment, get_client_context, draft_reply, confirm_booking...)
@@ -201,11 +245,14 @@ public sealed class AiToolExecutor
     }
 
     // ---- підтвердження / скасування людиною ----
-    public async Task<AiToolResult> ConfirmAsync(Guid tenantId, Guid actionId, CancellationToken ct)
+    public async Task<AiToolResult> ConfirmAsync(Actor actor, Guid actionId, CancellationToken ct)
     {
+        var tenantId = actor.TenantId;
         var rec = await _journal.GetAsync(tenantId, actionId, ct);
         if (rec is null || rec.Status != AiActionStatus.PendingConfirmation)
             return new AiToolResult("action_not_pending", true);
+        // право tool - за ПОТОЧНИМИ правами того, хто підтверджує (не автора чернетки); відмова лишає дію pending
+        if (AiToolPermissions.Check(actor.Access, rec.Action) is { } denied) return new AiToolResult("forbidden_role", true, null, denied);
 
         // Атомарний CAS pending -> executing: паралельний approve/reject отримає action_not_pending, дія виконується один раз.
         if (!await _journal.TryTransitionAsync(tenantId, actionId, AiActionStatus.PendingConfirmation, AiActionStatus.Executing, ct))
@@ -260,21 +307,25 @@ public sealed class AiToolExecutor
         }
     }
 
-    public async Task<AiToolResult> RejectPendingAsync(Guid tenantId, Guid actionId, CancellationToken ct)
+    public async Task<AiToolResult> RejectPendingAsync(Actor actor, Guid actionId, CancellationToken ct)
     {
+        var tenantId = actor.TenantId;
         var rec = await _journal.GetAsync(tenantId, actionId, ct);
         if (rec is null || rec.Status != AiActionStatus.PendingConfirmation) return new AiToolResult("action_not_pending", true);
+        if (AiToolPermissions.Check(actor.Access, rec.Action) is { } denied) return new AiToolResult("forbidden_role", true, null, denied);
         // CAS: reject проти паралельного approve/reject — переможе один.
         if (!await _journal.TryTransitionAsync(tenantId, actionId, AiActionStatus.PendingConfirmation, AiActionStatus.Rejected, ct))
             return new AiToolResult("action_not_pending", true);
         return new AiToolResult("rejected", false, AiActionStatus.Rejected);
     }
 
-    public async Task<AiToolResult> RevertAsync(Guid tenantId, Guid actionId, CancellationToken ct)
+    public async Task<AiToolResult> RevertAsync(Actor actor, Guid actionId, CancellationToken ct)
     {
+        var tenantId = actor.TenantId;
         var rec = await _journal.GetAsync(tenantId, actionId, ct);
         if (rec is null || !rec.Revertible || rec.Status != AiActionStatus.Done || !rec.Target.StartsWith("appointment:"))
             return new AiToolResult("not_revertible", true);
+        if (AiToolPermissions.Check(actor.Access, rec.Action) is { } denied) return new AiToolResult("forbidden_role", true, null, denied);
         // CAS done -> reverting: двічі паралельний revert скасовує запис один раз.
         if (!await _journal.TryTransitionAsync(tenantId, actionId, AiActionStatus.Done, AiActionStatus.Reverting, ct))
             return new AiToolResult("not_revertible", true);

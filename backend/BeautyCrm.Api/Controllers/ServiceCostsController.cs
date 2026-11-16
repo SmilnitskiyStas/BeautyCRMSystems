@@ -16,8 +16,8 @@ namespace BeautyCrm.Api.Controllers;
 [ApiController]
 [Route("api/beauty")]
 [RequireModule("beauty_catalog")]
-[Authorize(Policy = AuthPolicies.Staff)] // автентифікація; роль перевіряє ReminderRolesAttribute, щоб віддати {code: forbidden_role}
-[ReminderRoles(Roles.Owner, Roles.Admin)]
+[Authorize(Policy = AuthPolicies.Staff)] // автентифікація; право - [RequirePermission] (§30.6.3)
+[RequirePermission(PermissionKeys.RevenueCosts, PermissionLevels.View)]
 [InboxNoStore]
 [ProducesResponseType(StatusCodes.Status401Unauthorized)]
 [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -38,6 +38,7 @@ public sealed class ServiceCostsController(ServiceCostService costs, ServiceCost
 
     /// <summary>404 service_not_found | location_not_found; 422 invalid_cost | invalid_master_percent; 429 rate_limited.</summary>
     [HttpPut("services/{id:guid}/costs")]
+    [RequirePermission(PermissionKeys.RevenueCosts, PermissionLevels.Edit)]
     [RequestSizeLimit(BodyLimit)]
     [ProducesResponseType<PutServiceCostResultDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -52,6 +53,7 @@ public sealed class ServiceCostsController(ServiceCostService costs, ServiceCost
 
     /// <summary>Без locationId видаляється мережевий рядок. 404 service_not_found | location_not_found | cost_not_found.</summary>
     [HttpDelete("services/{id:guid}/costs")]
+    [RequirePermission(PermissionKeys.RevenueCosts, PermissionLevels.Edit)]
     [RequestSizeLimit(BodyLimit)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

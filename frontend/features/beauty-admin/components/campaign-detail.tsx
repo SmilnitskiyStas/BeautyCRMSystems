@@ -73,7 +73,7 @@ function StatsBlock({ stats, coupons }: { stats: CampaignStats; coupons?: { issu
 /** `/beauty/campaigns/{id}`: чернетка відкривається в майстрі, решта - статус, прогрес і статистика (§26.11.5). */
 export function CampaignDetailScreen({ id }: { id: string }) {
   const { user } = useAuth();
-  const allowed = canUseMarketing(user.role);
+  const allowed = canUseMarketing(user);
   const q = useCampaign(id, allowed);
   const promos = usePromotions(allowed);
   const locations = useLocations(allowed);

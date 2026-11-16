@@ -123,12 +123,12 @@ export function createMockAnalytics(ctx: AnalyticsCtx) {
       completed: completed.length,
       cancelled: list.filter((a) => a.status === "cancelled").length,
       noShow: list.filter((a) => a.status === "no_show").length,
-      revenue: completed.reduce((s, a) => s + a.priceFinal, 0),
+      revenue: completed.reduce((s, a) => s + (a.priceFinal ?? 0), 0),
     };
   }
 
   const snapOf = (a: Appointment) => ctx.snapshotOf?.(a) ?? null;
-  const originalOf = (a: Appointment) => a.priceOriginal ?? CATALOG.find((x) => x.id === a.serviceId)?.price ?? a.priceFinal;
+  const originalOf = (a: Appointment) => a.priceOriginal ?? CATALOG.find((x) => x.id === a.serviceId)?.price ?? (a.priceFinal ?? 0);
 
   /** Фінанси §24.5 лише за `completed`; суми в копійках, відсоток - з 1 знаком. */
   function finance(list: Appointment[]) {
@@ -141,14 +141,14 @@ export function createMockAnalytics(ctx: AnalyticsCtx) {
     for (const a of list) {
       if (a.status !== "completed") continue;
       const snap = snapOf(a);
-      revenue += toCents(a.priceFinal);
-      discount += toCents(originalOf(a)) - toCents(a.priceFinal);
+      revenue += toCents((a.priceFinal ?? 0));
+      discount += toCents(originalOf(a)) - toCents((a.priceFinal ?? 0));
       if (snap) {
         cost += toCents(snap.cost);
         payout += toCents(snap.masterPayout);
       } else {
         withoutCost += 1;
-        revenueWithoutCost += toCents(a.priceFinal);
+        revenueWithoutCost += toCents((a.priceFinal ?? 0));
       }
     }
     const net = revenue - cost - payout;
@@ -328,7 +328,7 @@ export function createMockAnalytics(ctx: AnalyticsCtx) {
       const items = page.map<DetailsItem>((a) => {
         const snap = snapOf(a);
         const original = originalOf(a);
-        const net = fromCents(toCents(a.priceFinal) - toCents(snap?.cost ?? 0) - toCents(snap?.masterPayout ?? 0));
+        const net = fromCents(toCents((a.priceFinal ?? 0)) - toCents(snap?.cost ?? 0) - toCents(snap?.masterPayout ?? 0));
         return {
           appointmentId: a.id,
           localDate: a.startsAt.slice(0, 10),
@@ -337,9 +337,9 @@ export function createMockAnalytics(ctx: AnalyticsCtx) {
           service: { id: a.serviceId, name: a.serviceName },
           specialist: { id: a.specialistId, name: ctx.staff.find((m) => m.id === a.specialistId)?.name ?? "" },
           priceOriginal: original,
-          discount: fromCents(toCents(original) - toCents(a.priceFinal)),
+          discount: fromCents(toCents(original) - toCents((a.priceFinal ?? 0))),
           ...(a.promotionName ? { promotion: { id: a.promotionId ?? `promo-${a.promotionName}`, name: a.promotionName } } : {}),
-          priceFinal: a.priceFinal,
+          priceFinal: (a.priceFinal ?? 0),
           cost: snap ? snap.cost : null,
           masterPercent: snap ? snap.masterPercent : null,
           masterPayout: snap ? snap.masterPayout : null,
@@ -387,7 +387,7 @@ export function createMockAnalytics(ctx: AnalyticsCtx) {
       for (const a of within(r, (x) => x.locationId === loc.id && x.status === "completed")) {
         const e = byService.get(a.serviceId) ?? { name: a.serviceName, completed: 0, revenue: 0 };
         e.completed += 1;
-        e.revenue += a.priceFinal;
+        e.revenue += (a.priceFinal ?? 0);
         byService.set(a.serviceId, e);
       }
       return {
@@ -417,8 +417,8 @@ export function createMockAnalytics(ctx: AnalyticsCtx) {
           e.uses += 1;
           e.locations.add(a.locationId);
           if (a.status === "completed") {
-            e.revenue += a.priceFinal;
-            e.discountTotal += Math.max(0, (CATALOG.find((s) => s.id === a.serviceId)?.price ?? a.priceFinal) - a.priceFinal);
+            e.revenue += (a.priceFinal ?? 0);
+            e.discountTotal += Math.max(0, (CATALOG.find((s) => s.id === a.serviceId)?.price ?? (a.priceFinal ?? 0)) - (a.priceFinal ?? 0));
           }
           m.set(a.promotionName!, e);
         }

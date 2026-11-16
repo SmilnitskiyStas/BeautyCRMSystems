@@ -3,7 +3,7 @@
 import { useId, useState, type FormEvent } from "react";
 import { useAuth } from "@/features/beauty-auth/components/auth-provider";
 import { humanizeError } from "@/features/beauty-auth/errors";
-import { canEditReminderSettings, canManageReminderPrefs } from "@/features/beauty-auth/permissions";
+import { canEditReminderSettings, canViewReminderSettings } from "@/features/beauty-auth/permissions";
 import { validateQuietHours } from "../reminders";
 import { useReminderSettings, useSaveReminderSettings } from "../hooks/use-reminders";
 import type { ReminderSettings } from "../types";
@@ -101,14 +101,14 @@ function ReminderForm({ initial, canEdit }: { initial: ReminderSettings; canEdit
 /** Секція «Нагадування» в Налаштуваннях (§22.6.4): owner редагує, admin читає; specialist її не бачить. */
 export function ReminderSettingsSection() {
   const { user } = useAuth();
-  const allowed = canManageReminderPrefs(user.role);
+  const allowed = canViewReminderSettings(user);
   const q = useReminderSettings(allowed);
   if (!allowed) return null;
   return (
     <Card>
       <h2 className="mb-4 text-lg font-semibold">Нагадування клієнтам</h2>
       <QueryState isPending={q.isPending} isError={q.isError} onRetry={() => q.refetch()}>
-        {q.data ? <ReminderForm initial={q.data} canEdit={canEditReminderSettings(user.role)} /> : null}
+        {q.data ? <ReminderForm initial={q.data} canEdit={canEditReminderSettings(user)} /> : null}
       </QueryState>
     </Card>
   );
