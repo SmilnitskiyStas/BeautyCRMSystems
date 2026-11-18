@@ -225,6 +225,29 @@ public sealed class InventoryMigrationTests
             Assert.Equal(0L, await Scalar(conn, "SELECT count(*) FROM beauty_stock_movements")); // fail-closed без контексту
             await Exec(conn, $"SELECT set_config('app.tenant_id', '{tenantA}', false)");
 
+            // ---- hardening: CHECK, узгодженість рух↔партія, append-only тригер (діє й на власника) ----
+            await Rejects(conn, $"INSERT INTO beauty_products (tenant_id, name, unit, purpose, updated_by_user_id) VALUES ('{tenantA}', '   ', 'pcs', 'sale', '{userA}')", "ck_beauty_products_name");
+            await Rejects(conn, $"INSERT INTO beauty_stocktake_lines (tenant_id, stocktake_id, product_id, expected_quantity) VALUES ('{tenantA}', '{stocktake}', '{productB}', -1)", "ck_beauty_stocktake_lines_expected");
+            const string mvFk = "fk_beauty_stock_movements_beauty_stock_batches_tenant_id_batch";
+            await Rejects(conn, $"INSERT INTO beauty_stock_movements (tenant_id, operation_id, location_id, product_id, batch_id, type, quantity) VALUES ('{tenantA}', '{receipt}', '{locA}', '{productB}', '{batch}', 'receipt', 1)", mvFk); // інший товар
+            await Rejects(conn, $"INSERT INTO beauty_stock_movements (tenant_id, operation_id, location_id, product_id, batch_id, type, quantity) VALUES ('{tenantA}', '{receipt}', '{locB}', '{product}', '{batch}', 'receipt', 1)", mvFk); // інший заклад
+            Assert.Equal(1L, await Scalar(conn, "SELECT count(*) FROM pg_trigger WHERE tgname = 'beauty_stock_movements_no_truncate' AND NOT tgisinternal"));
+            foreach (var sql in new[]
+                     {
+                         "UPDATE beauty_stock_movements SET created_by_user_id = NULL", "DELETE FROM beauty_stock_movements", "TRUNCATE beauty_stock_movements",
+                         "UPDATE beauty_stock_operations SET created_by_user_id = NULL", "DELETE FROM beauty_stock_operations", "TRUNCATE beauty_stock_operations",
+                     })
+            {
+                var blocked = await Assert.ThrowsAsync<PostgresException>(() => Exec(conn, sql));
+                if (sql == "TRUNCATE beauty_stock_operations") // таблиця під FK рухів/партій: TRUNCATE відхиляє сам PostgreSQL ще до тригера
+                {
+                    Assert.Equal("0A000", blocked.SqlState);
+                    continue;
+                }
+                Assert.Equal("42501", blocked.SqlState);
+                Assert.Contains("append-only", blocked.MessageText);
+            }
+
             // ---- append-only для app-ролі: ті самі GRANT/REVOKE, що в scripts/dev/setup-db.ps1 і deploy/staging/db/grants.sql ----
             await using (var admin = new NpgsqlConnection(new NpgsqlConnectionStringBuilder(adminCs) { Database = db }.ConnectionString))
             {
@@ -263,6 +286,8 @@ public sealed class InventoryMigrationTests
             Assert.True(await Scalar(conn, "SELECT count(*) FROM beauty_stock_movements") > 0);
 
             // ---- журнал порожній (свідомо): Down проходить, таблиці зникають, дані до міграції цілі; повторний Up ----
+            // Down hardening виконується першим і знімає тригери (окрема міграція, окремий коміт) - навіть коли Down початкової відмовила.
+            Assert.Equal(0L, await Scalar(conn, "SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'beauty_stock_%' AND NOT tgisinternal"));
             await Exec(conn, "ALTER TABLE beauty_stock_movements NO FORCE ROW LEVEL SECURITY");
             await Exec(conn, "DELETE FROM beauty_stock_movements");
             await Exec(conn, "ALTER TABLE beauty_stock_movements FORCE ROW LEVEL SECURITY");
@@ -274,6 +299,7 @@ public sealed class InventoryMigrationTests
             foreach (var table in Tables)
                 Assert.Equal(1L, await Scalar(conn, $"SELECT count(*) FROM pg_class WHERE oid = to_regclass('public.{table}') AND relrowsecurity AND relforcerowsecurity"));
             Assert.Equal(0L, await Scalar(conn, "SELECT count(*) FROM beauty_products"));
+            Assert.Equal(4L, await Scalar(conn, "SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'beauty_stock_%' AND NOT tgisinternal")); // Up відновив тригери
         }
         finally
         {

@@ -6937,3 +6937,85 @@ BEGIN
 END $EF$;
 COMMIT;
 
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261118201522_beauty_inventory_hardening') THEN
+    ALTER TABLE beauty_stock_movements DROP CONSTRAINT fk_beauty_stock_movements_beauty_stock_batches_tenant_id_batch;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261118201522_beauty_inventory_hardening') THEN
+    DROP INDEX ix_beauty_stock_movements_batch;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261118201522_beauty_inventory_hardening') THEN
+    ALTER TABLE beauty_stock_batches ADD CONSTRAINT ak_beauty_stock_batches_tenant_id_id_product_id_location_id UNIQUE (tenant_id, id, product_id, location_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261118201522_beauty_inventory_hardening') THEN
+    ALTER TABLE beauty_stocktake_lines ADD CONSTRAINT ck_beauty_stocktake_lines_expected CHECK (expected_quantity >= 0);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261118201522_beauty_inventory_hardening') THEN
+    CREATE INDEX ix_beauty_stock_movements_batch ON beauty_stock_movements (tenant_id, batch_id, product_id, location_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261118201522_beauty_inventory_hardening') THEN
+    ALTER TABLE beauty_products ADD CONSTRAINT ck_beauty_products_name CHECK (char_length(btrim(name)) BETWEEN 1 AND 200);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261118201522_beauty_inventory_hardening') THEN
+    ALTER TABLE beauty_stock_movements ADD CONSTRAINT fk_beauty_stock_movements_beauty_stock_batches_tenant_id_batch FOREIGN KEY (tenant_id, batch_id, product_id, location_id) REFERENCES beauty_stock_batches (tenant_id, id, product_id, location_id) ON DELETE RESTRICT;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261118201522_beauty_inventory_hardening') THEN
+
+    CREATE FUNCTION beauty_stock_journal_block_mutation() RETURNS trigger
+    LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$
+    BEGIN
+        RAISE EXCEPTION '% is append-only', TG_TABLE_NAME USING ERRCODE = '42501';
+    END
+    $fn$;
+    CREATE TRIGGER beauty_stock_movements_append_only BEFORE UPDATE OR DELETE ON beauty_stock_movements
+        FOR EACH ROW EXECUTE FUNCTION beauty_stock_journal_block_mutation();
+    CREATE TRIGGER beauty_stock_movements_no_truncate BEFORE TRUNCATE ON beauty_stock_movements
+        FOR EACH STATEMENT EXECUTE FUNCTION beauty_stock_journal_block_mutation();
+    CREATE TRIGGER beauty_stock_operations_append_only BEFORE UPDATE OR DELETE ON beauty_stock_operations
+        FOR EACH ROW EXECUTE FUNCTION beauty_stock_journal_block_mutation();
+    CREATE TRIGGER beauty_stock_operations_no_truncate BEFORE TRUNCATE ON beauty_stock_operations
+        FOR EACH STATEMENT EXECUTE FUNCTION beauty_stock_journal_block_mutation();
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261118201522_beauty_inventory_hardening') THEN
+    INSERT INTO "__EFMigrationsHistory" (migration_id, product_version)
+    VALUES ('20261118201522_beauty_inventory_hardening', '8.0.11');
+    END IF;
+END $EF$;
+COMMIT;
+

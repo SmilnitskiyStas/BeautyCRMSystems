@@ -3693,6 +3693,8 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
 
                             t.HasCheckConstraint("ck_beauty_products_min_stock", "min_stock IS NULL OR min_stock >= 0");
 
+                            t.HasCheckConstraint("ck_beauty_products_name", "char_length(btrim(name)) BETWEEN 1 AND 200");
+
                             t.HasCheckConstraint("ck_beauty_products_purchase_price", "purchase_price IS NULL OR purchase_price BETWEEN 0 AND 1000000");
 
                             t.HasCheckConstraint("ck_beauty_products_purpose", "purpose IN ('sale', 'salon_use', 'both')");
@@ -4794,6 +4796,9 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.HasAlternateKey("TenantId", "Id")
                         .HasName("ak_beauty_stock_batches_tenant_id_id");
 
+                    b.HasAlternateKey("TenantId", "Id", "ProductId", "LocationId")
+                        .HasName("ak_beauty_stock_batches_tenant_id_id_product_id_location_id");
+
                     b.HasIndex("TenantId", "OperationId")
                         .HasDatabaseName("ix_beauty_stock_batches_tenant_id_operation_id");
 
@@ -4946,9 +4951,6 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.HasAlternateKey("TenantId", "Id")
                         .HasName("ak_beauty_stock_movements_tenant_id_id");
 
-                    b.HasIndex("TenantId", "BatchId")
-                        .HasDatabaseName("ix_beauty_stock_movements_batch");
-
                     b.HasIndex("TenantId", "CreatedByUserId")
                         .HasDatabaseName("ix_beauty_stock_movements_tenant_id_created_by_user_id")
                         .HasFilter("created_by_user_id IS NOT NULL");
@@ -4959,6 +4961,9 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.HasIndex("TenantId", "ProductId", "OccurredAt")
                         .IsDescending(false, false, true)
                         .HasDatabaseName("ix_beauty_stock_movements_product_occurred");
+
+                    b.HasIndex("TenantId", "BatchId", "ProductId", "LocationId")
+                        .HasDatabaseName("ix_beauty_stock_movements_batch");
 
                     b.HasIndex("TenantId", "LocationId", "OccurredAt", "Id")
                         .IsDescending(false, false, true, true)
@@ -5269,6 +5274,8 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.ToTable("beauty_stocktake_lines", null, t =>
                         {
                             t.HasCheckConstraint("ck_beauty_stocktake_lines_counted", "counted_quantity IS NULL OR counted_quantity >= 0");
+
+                            t.HasCheckConstraint("ck_beauty_stocktake_lines_expected", "expected_quantity >= 0");
 
                             t.HasCheckConstraint("ck_beauty_stocktake_lines_surplus_expires_on", "surplus_expires_on IS NULL OR surplus_expires_on BETWEEN DATE '2000-01-01' AND DATE '2100-12-31'");
                         });
@@ -6956,13 +6963,6 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StockMovement", b =>
                 {
-                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.StockBatch", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId", "BatchId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_beauty_stock_movements_beauty_stock_batches_tenant_id_batch");
-
                     b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
                         .WithMany()
                         .HasForeignKey("TenantId", "CreatedByUserId")
@@ -6993,6 +6993,13 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_beauty_stock_movements_beauty_products_tenant_id_product_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.StockBatch", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "BatchId", "ProductId", "LocationId")
+                        .HasPrincipalKey("TenantId", "Id", "ProductId", "LocationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_stock_movements_beauty_stock_batches_tenant_id_batch");
                 });
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StockOperation", b =>

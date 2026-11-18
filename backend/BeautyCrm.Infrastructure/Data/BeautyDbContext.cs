@@ -717,6 +717,7 @@ public class BeautyDbContext : DbContext
             {
                 Check<ProductUnit>(t, "beauty_products", "unit");
                 Check<ProductPurpose>(t, "beauty_products", "purpose");
+                t.HasCheckConstraint("ck_beauty_products_name", "char_length(btrim(name)) BETWEEN 1 AND 200");
                 t.HasCheckConstraint("ck_beauty_products_barcode", "barcode IS NULL OR barcode ~ '^[0-9A-Za-z._-]{1,64}$'");
                 t.HasCheckConstraint("ck_beauty_products_purchase_price", string.Format(Money, "purchase_price"));
                 t.HasCheckConstraint("ck_beauty_products_min_stock", "min_stock IS NULL OR min_stock >= 0");
@@ -821,6 +822,7 @@ public class BeautyDbContext : DbContext
             b.Property(x => x.InitialQuantity).HasPrecision(14, 3);
             b.Property(x => x.Quantity).HasPrecision(14, 3);
             b.Property(x => x.UnitCost).HasPrecision(12, 2);
+            b.HasAlternateKey("TenantId", "Id", "ProductId", "LocationId"); // ціль складеного FK рухів (рух = партія за товаром/закладом)
             FkTo<StockBatch, Location>(b, "LocationId", DeleteBehavior.Restrict);
             FkTo<StockBatch, Product>(b, "ProductId", DeleteBehavior.Restrict);
             FkTo<StockBatch, StockOperation>(b, "OperationId", DeleteBehavior.Restrict);
@@ -854,14 +856,16 @@ public class BeautyDbContext : DbContext
             FkTo<StockMovement, StockOperation>(b, "OperationId", DeleteBehavior.Restrict);
             FkTo<StockMovement, Location>(b, "LocationId", DeleteBehavior.Restrict);
             FkTo<StockMovement, Product>(b, "ProductId", DeleteBehavior.Restrict);
-            FkTo<StockMovement, StockBatch>(b, "BatchId", DeleteBehavior.Restrict);
+            // рух і його партія збігаються за товаром і закладом: композитний FK (MATCH SIMPLE: batch_id NULL не перевіряється)
+            b.HasOne<StockBatch>().WithMany().HasForeignKey("TenantId", "BatchId", "ProductId", "LocationId")
+                .HasPrincipalKey("TenantId", "Id", "ProductId", "LocationId").OnDelete(DeleteBehavior.Restrict);
             FkTo<StockMovement, User>(b, "CreatedByUserId", DeleteBehavior.Restrict);
             b.HasIndex(x => new { x.TenantId, x.LocationId, x.OccurredAt, x.Id }).IsDescending(false, false, true, true)
                 .HasDatabaseName("ix_beauty_stock_movements_location_occurred");
             b.HasIndex(x => new { x.TenantId, x.ProductId, x.OccurredAt }).IsDescending(false, false, true)
                 .HasDatabaseName("ix_beauty_stock_movements_product_occurred");
             b.HasIndex(x => new { x.TenantId, x.OperationId }).HasDatabaseName("ix_beauty_stock_movements_operation");
-            b.HasIndex(x => new { x.TenantId, x.BatchId }).HasDatabaseName("ix_beauty_stock_movements_batch");
+            b.HasIndex(x => new { x.TenantId, x.BatchId, x.ProductId, x.LocationId }).HasDatabaseName("ix_beauty_stock_movements_batch");
             b.HasIndex(x => new { x.TenantId, x.CreatedByUserId }).HasFilter("created_by_user_id IS NOT NULL");
         });
 
@@ -897,6 +901,7 @@ public class BeautyDbContext : DbContext
             Base(b, "beauty_stocktake_lines", t =>
             {
                 t.HasCheckConstraint("ck_beauty_stocktake_lines_counted", "counted_quantity IS NULL OR counted_quantity >= 0");
+                t.HasCheckConstraint("ck_beauty_stocktake_lines_expected", "expected_quantity >= 0");
                 t.HasCheckConstraint("ck_beauty_stocktake_lines_surplus_expires_on",
                     "surplus_expires_on IS NULL OR surplus_expires_on BETWEEN DATE '2000-01-01' AND DATE '2100-12-31'");
             });
