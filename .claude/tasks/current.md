@@ -128,7 +128,7 @@
 | TASK-832 | integrations-developer | planned | ADR-018 D4 [репозиторій ShelfGuard]: метод клієнта Beauty setModules (підпис v1, actor), тести | .claude/logs/tasks/TASK-832.md |
 | TASK-833 | frontend-developer | planned | ADR-018 D4 [репозиторій ShelfGuard]: UI модулів tenant у картці підприємства (перемикачі, підтвердження, помилки) | .claude/logs/tasks/TASK-833.md |
 | TASK-834 | frontend-developer | review | ADR-018 D2: публічний запис і віджет — екран «Запис тимчасово призупинено» на 403 tenant_suspended, mock, тести | .claude/logs/tasks/TASK-834.md |
-| TASK-875 | project-architect | review | Склад (beauty_inventory) етап 1: ADR-025 (proposed, приймає людина) + контракт §32 v0.35 (модуль, права inventory.*, API, DTO, коди, FEFO, переміщення, інвентаризація) | .claude/logs/tasks/TASK-875.md |
+| TASK-875 | project-architect | done | Склад (beauty_inventory) етап 1: ADR-025 (proposed, приймає людина) + контракт §32 v0.35 (модуль, права inventory.*, API, DTO, коди, FEFO, переміщення, інвентаризація) | .claude/logs/tasks/TASK-875.md |
 | TASK-876 | database-engineer | planned | Склад етап 1: міграція beauty_inventory, RLS FORCE, CHECK, append-only рухи, GRANT (setup-db.ps1 + grants.sql), schema.sql, EF, тести БД | .claude/logs/tasks/TASK-876.md |
 | TASK-877 | backend-developer | planned | Склад етап 1: Features/BeautyInventory, FEFO/переміщення/інвентаризація, InventoryController, PermissionKeys inventory.* + backfill + Version, RequireModule, тести | .claude/logs/tasks/TASK-877.md |
 | TASK-878 | frontend-developer | planned | Склад етап 1 (mock + http): пункт «Склад» у каталозі, товари/залишки/партії/рух/інвентаризація, права (access.ts), коди помилок, vitest | .claude/logs/tasks/TASK-878.md |
