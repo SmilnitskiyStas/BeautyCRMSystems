@@ -115,6 +115,7 @@ public interface IPaymentService {
 
 - Access JWT (HS256, 15 хв): `sub`, `tenant_id`, `role`, `specialist_id` (для specialist). `Authorization: Bearer`. Refresh — непрозорий токен (14 днів), у БД лише SHA-256.
 - Матриця beauty-ендпоінтів: booking (`slots`, `appointments*`) — усі ролі, specialist бачить/змінює лише записи свого `specialist_id` (чужий запис = 404, створення для чужого майстра = 403, `specialistId` у запитах підміняється власним); catalog — читання всі ролі, зміни owner/admin; clients, analytics, channels, ai — owner/admin; webhooks — публічні (підпис).
+- **Уточнено §31 (ADR-024):** `tenant` у логіні необов'язковий і deprecated; вхід у два кроки (`login/select`), `memberships`, `switch`, скидання пароля; блокування на ідентичність; `409 email_in_use` для запрошень і `409 owner_email_in_use` для `/api/platform/tenants`.
 - **Уточнено §30 (ADR-023):** додано роль `deputy`, доступ визначають права користувача (каталог і пресети — §30.2–30.3), карта «ендпоінт → право» — §30.6. Після TASK-852/853 рольова матриця вище є лише історичною довідкою.
 - Блокування: 5 невдалих входів -> 423 на 15 хв (навіть із правильним паролем); rate limit 10 запитів/хв на IP для login/refresh/accept/platform.
 - Модулі: `tenants.modules`; призупинений tenant (`status=suspended`) -> `403 module_disabled`, логін/refresh -> 401.
@@ -219,7 +220,7 @@ public interface IPaymentService {
 - **H3 — проксі й rate limit.** `UseForwardedHeaders` (X-Forwarded-For/Proto) лише з `Beauty:TrustedProxies`; ланцюг розбирається справа наліво до першого недовіреного адреса, спуфлений лівий елемент і XFF від недовіреного піра ігноруються. Rate limit login/accept/logout/platform — 10/хв на IP з довіреного ланцюга (кошик `login:`). Refresh — окрема політика `auth-refresh` (за замовч. 120/хв на IP, кошик `refresh:`, не витрачає login-кошик) + ліміт на токен (5/хв) і tenant (600/хв, з префікса токена) -> `429 rate_limited`.
 - **M1 — скасування атомарне** (`CancellationService`, обидва шляхи: staff і публічний за токеном; AI revert теж). Порядок: розрахунок -> **умовний UPDATE** `status = cancelled WHERE status IN (pending, confirmed)` (`IBookingStore.TryClaimCancelAsync`) -> повернення коштів -> фіналізація (нагадування). Програвший claim отримує `409 already_cancelled` (або `422 cannot_cancel`/`404`) без повернення коштів. **Ключ ідемпотентності повернення = `payment.Id`** (`IPaymentService.RefundAsync(paymentId, ...)`; реальний провайдер має передавати його як Idempotency-Key). Якщо повернення не вдалося (`402 refund_failed`) — claim скасовується (`ReleaseCancelAsync`: статус повертається, запис лишається активним, платіж `paid`); якщо слот за цей час зайнято, запис лишається скасованим, а платіж `paid` — потрібна ручна обробка.
 - **M2 — AI approve/reject/revert** через атомарний compare-and-swap статусу в журналі (`IAiActionJournal.TryTransitionAsync`, `UPDATE ... WHERE result->>'Status' = from`): `pending_confirmation -> executing` (approve), `-> rejected` (reject), `done -> reverting` (revert). Паралельні дублі отримують `action_not_pending` / `not_revertible`; дія виконується один раз. Якщо виконання кинуло виняток — статус повертається (`executing -> pending_confirmation`, `reverting -> done`) і виняток піднімається. `executing`/`reverting` — внутрішні статуси (в колонці `status` = `executed`).
-- **M3 — lockout не розкриває існування акаунта.** Невідомий tenant/email після `Auth:MaxFailedAttempts` (5) спроб отримує **ту саму** `423 account_locked` (однакові `code` і `message`), що й справжній заблокований акаунт, на `Auth:LockoutMinutes`; заблокований ключ відповідає без bcrypt (як і справжній). Лічильник за ключем SHA-256(`slug` + нормалізований `email`) у пам'яті процесу (`LoginAttemptTracker`); при кількох інстанціях API кожна рахує окремо (спільний лічильник — окрема задача). Для наявних користувачів лічильник у БД (без змін).
+- **M3 — lockout не розкриває існування акаунта.** ⚠ **СТАРЕ (ADR-024 E-2, TASK-863):** `LoginAttemptTracker` видалено; блокування тепер у таблиці `auth_login_attempts` (ключ HMAC з pepper), однаково для наявної, невідомої і pending пошти, поріг 5 / 900 с, блокування 15 хв. Актуально див. §31.9. Текст нижче — історичний. Невідомий tenant/email після `Auth:MaxFailedAttempts` (5) спроб отримує **ту саму** `423 account_locked` (однакові `code` і `message`), що й справжній заблокований акаунт, на `Auth:LockoutMinutes`; заблокований ключ відповідає без bcrypt (як і справжній). Лічильник за ключем SHA-256(`slug` + нормалізований `email`) у пам'яті процесу (`LoginAttemptTracker`); при кількох інстанціях API кожна рахує окремо (спільний лічильник — окрема задача). Для наявних користувачів лічильник у БД (без змін).
 - **M4 — tenant context.** Лишається **сесійним** (`set_config('app.tenant_id', ..., false)` при відкритті з'єднання). Транзакційний варіант відхилено: він вимагає однієї транзакції на запит, а наявні шляхи ловлять `23P01`/`23505` (перетин слоту, Idempotency-Key, колізія id каналу) і продовжують читати — у вже перерваній транзакції Postgres відхилить подальші запити. **Вимога до інфраструктури: прямі з'єднання або session pooling; PgBouncer у transaction pooling і Npgsql `Multiplexing=true` заборонені** (API при старті відхиляє `Multiplexing=true`). Npgsql скидає сесійний стан при поверненні з'єднання в пул (`DISCARD ALL`), а tenant перевстановлюється при кожному відкритті.
 - **M5 — Instagram.** Окремі секрети в зашифрованих credentials каналу: `appSecret` — лише ключ HMAC `X-Hub-Signature-256` для POST; `verifyToken` — лише для GET handshake (`hub.verify_token`); `webhookSecret` для Instagram більше **не** використовується (раніше був і ключем HMAC, і verify token). Без `appSecret` підпис завжди відхиляється, без `verifyToken` handshake завжди `403`. Наявні Instagram-канали треба перезберегти з обома новими полями.
 - **L3.** Ключ дедуплікації вхідних: `{channel}:{channelId:N}:{externalMessageId}` (було `{channel}:{externalMessageId}`; Telegram `chat_id:message_id` не збігається між ботами одного tenant). Повідомлення, збережені зі старими ключами, при повторній доставці дублюються один раз.
@@ -3352,7 +3353,7 @@ BCRM-HMAC-SHA256-v1
   "invite": { "url": "https://app.example/invite#t=<token>", "expiresAt": "2026-11-07T10:00:00Z" } }
 ```
 - **Ідемпотентність:** tenant з цим `externalRef` є, `slug` і `owner.email` (без урахування регістру **[уточнення §27]**) збігаються → `200` з поточним станом (форма як `201`; `status`/`modules`/`owner.state` — поточні), `invite: null`, заголовок `Idempotent-Replayed: true`, аудит `tenant.create_replayed`. Розбіжність → `409 external_ref_conflict`. Паралельні дублікати: унікальний індекс, програвший перечитує стан → `200`.
-- Помилки: `409 tenant_slug_taken` (slug іншого tenant), `422 invalid_slug | unknown_module | invalid_email | invalid_name | invalid_external_ref | actor_required | password_not_allowed`.
+- Помилки: `409 tenant_slug_taken` (slug іншого tenant), `422 invalid_slug | unknown_module | invalid_email | invalid_name | invalid_external_ref | actor_required | password_not_allowed`. **Уточнено §31.8.3 (ADR-024):** `409 owner_email_in_use` — пошта власника вже зайнята в Beauty CRM.
 - `invite.url` віддається лише тут і в §27.7; ShelfGuard показує його адміну один раз і не зберігає відкритим текстом. Аудит `tenant.created`, `owner_invite.issued`.
 
 ### 27.4 `GET /api/control/v1/tenants/{externalRef}`
@@ -3428,7 +3429,7 @@ BCRM-HMAC-SHA256-v1
 | `tenant_not_found` | 404 | get, suspend, resume, modules, owner-invite |
 | `actor_required`, `reason_required`, `modules_required` | 422 | змінні control-запити |
 | `invalid_slug`, `unknown_module`, `invalid_email`, `invalid_name`, `invalid_external_ref`, `password_not_allowed` | 422 | create (і `unknown_module` у modules) |
-| `external_ref_conflict`, `tenant_slug_taken` | 409 | create |
+| `external_ref_conflict`, `tenant_slug_taken`, `owner_email_in_use` (§31.8.3) | 409 | create |
 | `owner_already_active` | 409 | owner-invite |
 | `tenant_suspended` | 409 / 403 | 409 — owner-invite; 403 — invite inspect/accept, публічний запис і віджет, feedback |
 | `user_inactive` | 403 | feedback (користувач неактивний) |
@@ -4100,6 +4101,9 @@ TASK-817 (схема HMAC, вектор), TASK-818 (§27.3–§27.5, §27.7), TA
 | POST | `/api/auth/login`, `/api/auth/refresh`, `/api/auth/logout` | публічний | поза картою | refresh видає роль з БД (як зараз) |
 | POST | `/api/auth/invites/accept` | публічний | поза картою | матеріалізує права (§30.9.5) |
 | GET | `/api/auth/me` | Staff | — | + `accessVersion`, `accessStamp`, `catalogVersion`, `modules`, `permissions` (§30.9.1) |
+| POST | `/api/auth/login/select`, `/api/auth/password/forgot`, `/api/auth/password/reset` (нові, §31) | — | поза картою | публічні |
+| GET | `/api/auth/memberships` (новий, §31.4) | — | — | `[AllowInactiveSpecialist]` |
+| POST | `/api/auth/switch` (новий, §31.5) | — | — | `[AllowInactiveSpecialist]`; права — цільового членства |
 | GET | `/api/access/catalog` (новий) | — | — | §30.9.2 |
 | GET | `/api/users` | Management | `team.manage = manage` | + `accessVersion`, `manageable` |
 | PATCH | `/api/users/{id}/status` | Management | `team.manage = manage` | ранг (§30.10); `expectedVersion?`; `access_version + 1`; аудит `activated`/`deactivated` |
@@ -4554,3 +4558,493 @@ POST /reset { "expectedVersion": 4, "dryRun": false }
 13. **Запис доступу.** Пріоритет `locked` над `module_disabled`. Ключі з точним регістром (`Calendar.View` дає `422 invalid_permission`). Гонка двох керівників: один успіх і один `409`. Паралельне зниження актора під час запису серіалізується через `FOR SHARE`, і застосовується стан після блокування.
 14. **ШІ.** Для staff-scope без актора executor відмовляє. Право перевіряється під час `approve` за правами того, хто підтверджує (відкликане право дає 403, дія лишається pending). `GET /ai/actions` не показує дій tools без права. `mode = auto` встановлює лише owner.
 15. **Аудит і `no-store`.** Роль застосунку не може `UPDATE/DELETE` в `user_access_audit`. Видалення користувача з рядками аудиту блокує `RESTRICT`. `purge_user_access_audit` відмовляє для `p_before` молодших за 3 роки. `GET /api/auth/me` і відповіді доступів мають `Cache-Control: no-store`. Аудит не містить ПІІ клієнтів.
+
+## §31. Глобальна ідентичність: вхід без коду бізнесу, вибір і перемикання бізнесу, скидання пароля (ADR-024, v0.34, 2026-11-17)
+
+Артефакт `API-CONTRACT-IDENTITY-V1` (TASK-859). Джерело рішень: ADR-024 (accepted 2026-11-17; Q1–Q13 прийнято з рекомендованими значеннями, §31.14). Уточнює §10 (логін, запрошення), §27.3 (provisioning власника), §27.8 (прийняття запрошення власника), §30.6.1 (карта автентифікації), §30.9.5 (запрошення персоналу). Де §31 суперечить попереднім розділам щодо **входу, облікових даних і зайнятості пошти**, діє §31. Права, `access_version`, `AccessContextMiddleware` і формат JWT не змінюються (ADR-023, §30).
+
+Пункти з позначкою **[уточнення §31]** — деталі, яких немає в ADR-024. Пункти **Q-C1…Q-C5** — рекомендації контракту, які перевіряє threat-model TASK-860; висновки TASK-860 вносяться правкою §31 до старту TASK-862.
+
+**v0.34.1 (2026-11-17): внесено висновки threat-model TASK-860** (`docs/reviews/identity-threat-model.md`). Рішення людини: Q-C1 (так, errata ADR-024 §2.9), F-2 варіант A (єдина таблиця `auth_login_attempts`), F-4 варіант 1. За рекомендацією рев'ю: Q-C2, Q-C3, Q-C5, F-3, F-5, F-6, F-8, F-9 (і Q-C4 відповідно), F-10, F-11, F-13. F-1 — вимога релізу (§31.9). Відповідні зміни ADR — секція «Errata 2026-11-17» в ADR-024. Розділи, яких торкнулися правки, позначено **(TASK-860)**. Зведені вимоги до БД для TASK-862 — §31.16.
+
+Споживачі: TASK-860 (threat-model), TASK-861/862 (preflight, БД), TASK-863 (логін, сесії), TASK-864 (запрошення, власник), TASK-865 (скидання пароля, воркер), TASK-866 (frontend, BFF), TASK-867/868 (QA, security). Мобільний застосунок (ADR-021) не змінюється: входу персоналу в ньому немає.
+
+### 31.1 Загальне
+
+- Помилка: `{code, message}` (tenant API і `/api/auth/**`); control plane — `{code}` (§27.1). `message` технічний, англійською; тексти для людей живуть у frontend content-шарі (§31.11).
+- **Пошта** нормалізується як зараз: `Trim().ToLowerInvariant()`. Без Unicode-нормалізації й без правил Gmail щодо крапок.
+- **Політика пароля** не змінюється: `PasswordRules` (довжина `Auth:MinPasswordLength`..128, 12 за замовчуванням) → `422 weak_password`.
+- Усі відповіді ендпоінтів §31.2–§31.7 мають `Cache-Control: no-store`. Паролі, квитки, токени скидання й пошта в логи не потрапляють.
+- **Не змінюються:** формат і claims access JWT (`sub` = `users.id` членства, `tenant_id`, `role`, `[specialist_id]`), формат refresh-токена `{tenantId:N}.{random}` і його ротація, `POST /api/auth/logout`, `GET /api/auth/me`, `TokenResponse`, `UserDto`, токен запрошення персоналу `{tenantId:N}.{random}`.
+- **Термінологія:** *ідентичність* — людина (глобальна `identities`: пошта, пароль, стан); *членство* — рядок `users` (роль людини в одному tenant). «Активне членство» = `users.is_active AND users.state = 'active' AND tenants.status = 'active'`. Блокування входу живе не в `identities`, а в `auth_login_attempts` за ключем пошти (§31.2.1, TASK-860 F-2).
+- **Ключ пошти для блокування** `login_key` = `HMAC-SHA256(Auth:LoginAttemptKeyPepper, email_norm)`, 32 байти. Обчислює лише API. Pepper — секрет ≥ 32 байти з env. Поза Development без нього API не стартує. Ротація pepper скидає всі лічильники й блокування, і це прийнятно. **(TASK-860 F-2)**
+- Жоден DTO, query- чи route-параметр, cookie або JWT-claim не містить `identity_id`. Сервер виводить ідентичність лише з `users.identity_id` поточного членства, з квитка або з токена скидання. **(TASK-860 F-8)**
+
+### 31.2 `POST /api/auth/login` (публічний; IP-ліміт `auth`)
+
+Запит:
+```json
+{ "email": "a@salon.ua", "password": "…", "tenant": "salon-x" }
+```
+| Поле | Правила |
+|---|---|
+| `email` | обов'язкове, email, ≤ 320 |
+| `password` | обов'язкове, ≤ 128 (довжину при логіні не перевіряємо проти мінімуму, як зараз) |
+| `tenant` | **необов'язкове, deprecated** (§31.2.3), ≤ 64. `null`, відсутнє або порожнє після `Trim()` означає «нова форма» |
+
+Відсутні або невалідні поля → `422` (ModelState, як зараз).
+
+**Відповідь `200`, варіант A — одне активне членство (або legacy `tenant`):** `TokenResponse` без змін:
+```json
+{ "accessToken": "…", "expiresInSeconds": 900, "refreshToken": "{tenantId}.{random}", "user": { "id": "uuid", "email": "…", "fullName": "…", "role": "admin", "specialistId": null, "isActive": true, "lastLoginAt": "…" } }
+```
+
+**Відповідь `200`, варіант B — ≥ 2 активних членства:**
+```json
+{ "selectionRequired": true,
+  "loginTicket": "<base64url без padding, 43 символи>",
+  "ticketExpiresInSeconds": 180,
+  "businesses": [ { "tenantId": "uuid", "name": "Salon X", "role": "admin" },
+                  { "tenantId": "uuid", "name": "Студія Y", "role": "specialist" } ] }
+```
+- Дискримінатор: `selectionRequired === true`. `TokenResponse` такого поля не має. Клієнт перевіряє його **до** читання `accessToken`.
+- `businesses` — лише активні членства (≥ 2 елементи). Сортування за `name` без урахування регістру (`InvariantCultureIgnoreCase`), за рівності — за `tenantId`. Жодних `slug`, `userId`, модулів, прав. **[уточнення §31]**
+- `ticketExpiresInSeconds` = `Auth:LoginTicketSeconds` (180; допустимо 60..600).
+
+**Помилки** (тіла однакові для всіх причин усередині коду, §31.10):
+| Статус | `code` | Коли |
+|---|---|---|
+| 401 | `invalid_credentials` | пошти немає; ідентичність `pending`; невірний пароль; правильний пароль, але **0 активних членств** (Q13); legacy `tenant` без активного членства в ньому |
+| 423 | `account_locked` | `login_key` пошти заблоковано в `auth_login_attempts`, навіть якщо пароль правильний. Однаково для наявної, невідомої й `pending` пошти **(TASK-860 F-2)** |
+| 429 | `rate_limited` + `Retry-After` | IP-ліміт `auth` або `LoginEmailThrottle` (§31.9) |
+| 422 | ModelState | невалідне тіло |
+
+#### 31.2.1 Порядок дій на сервері (обов'язковий) (TASK-860)
+1. ModelState (`422`); IP-ліміт `auth` (`429`) спрацьовує раніше, на рівні middleware.
+2. Нормалізувати пошту. `LoginEmailThrottle.TryAcquire(sha256(email))` → `429 rate_limited` (незалежно від існування пошти).
+3. Обчислити `login_key` (§31.1). `auth_login_attempt_is_locked(login_key, now)` = true → `423 account_locked`. Перевірка йде **до** пошуку ідентичності, тож шлях `423` однаковий для будь-якої пошти. **(F-2)**
+4. `auth_identity_find(email)` → `identity_id, password_hash, state` (0/1 рядок).
+5. Ідентичності немає або вона `pending` → перевірка фіктивного хешу (F-13: той самий bcrypt cost) → `auth_login_attempt_failed(login_key, NULL, …)` → `401 invalid_credentials`.
+6. `Verify(password, hash)`. Невдача → `auth_login_attempt_failed(login_key, identity_id, …)` → `401 invalid_credentials`.
+7. **Лише після успішної перевірки пароля** — `auth_identity_memberships(identity)`; при legacy `tenant` — фільтр за `tenant_slug = lower(trim(tenant))`.
+8. 0 придатних членств (зокрема legacy `tenant` без членства) → **невдала спроба (Q-C1, рішення людини 2026-11-17, errata ADR-024 §2.9)**: `auth_login_attempt_failed(login_key, identity_id, …)` і `401 invalid_credentials`. `login_succeeded` **не** викликається.
+9. Інакше `auth_login_attempt_reset(login_key)` і `auth_identity_login_succeeded(identity, now)` (лише `identities.last_login_at`).
+10. 1 членство (або legacy) → `UseTenant(tenantId)`, `users.last_login_at`, refresh-токен, JWT (як нинішній `IssueAsync`) → варіант A. ≥ 2 → `auth_login_ticket_issue` → варіант B.
+
+**Семантика лічильника (F-2, одна для всіх шляхів: наявна пошта, невідома, `pending`, Q-C1):**
+- `auth_login_attempt_failed(login_key, identity_id?, max, window_seconds, lockout_seconds, now)` → `locked boolean`. Атомарний upsert одного рядка (`INSERT … ON CONFLICT DO UPDATE … RETURNING`). Якщо вікно спливло (`now - window_started_at ≥ window`), лічильник починається з 1 і вікно з `now`. Інакше лічильник +1. Досягнення `max` → `locked_until = now + lockout`, лічильник 0. Якщо `identity_id` не `NULL`, у тій самій транзакції пишеться `identity.locked` (§31.12). Різниця в одну вставку після bcrypt не вирівнюється (F-7).
+- `auth_login_attempt_is_locked(login_key, now)` → `locked_until > now`. Після спливу блокування лічильник іде з нуля.
+- `auth_login_attempt_reset(login_key)` — видаляє рядок (успішний вхід). Скидання пароля знімає блокування в `auth_password_reset_consume` (§31.7.2).
+- Стан у БД, а не в пам'яті, тож рестарт API і кілька інстансів його не скидають. In-memory `LoginAttemptTracker` для логіну **видаляється**. `identities.failed_login_count/lockout_until` **не створюються** (§31.16). Застарілі `users.failed_login_count/lockout_until` фаза 2 не читає й не пише, видаляє їх фаза 3.
+- Пороги: `Auth:MaxFailedAttempts` (5), `Auth:LoginAttemptWindowSeconds` (900, **нове**), `Auth:LockoutMinutes` (15).
+
+На кожному шляху (невідома пошта, `pending`, невірний пароль, правильний пароль) виконується **рівно одна** перевірка bcrypt. Шлях `423` хешу не рахує (як зараз). Штучну затримку для «правильний пароль, 0 членств» не додаємо: різниця невимірна на тлі bcrypt (F-7).
+
+#### 31.2.2 Квиток входу
+- 32 байти CSPRNG, base64url без padding (43 символи). У `auth_login_tickets` лише `sha256` + `identity_id`, `expires_at`, `consumed_at`.
+- TTL `Auth:LoginTicketSeconds`, одноразовий. Нова видача для тієї ж ідентичності гасить попередні непогашені. Скидання пароля (§31.7.2) гасить усі квитки ідентичності. **[уточнення §31]**
+- Квиток не автентифікує ні для чого, крім `POST /api/auth/login/select`. Браузер його не бачить (BFF, §31.11).
+
+#### 31.2.3 Legacy-поле `tenant` (deprecated)
+- Поле передано → сервер після перевірки пароля обирає членство з `tenant_slug = lower(trim(tenant))` і **завжди** повертає варіант A. Членства немає або воно неактивне → `401 invalid_credentials` за правилом п.8 (Q-C1). Невідомий slug обробляється так само, без окремого коду.
+- Заголовки на **кожній** відповіді запиту з непорожнім `tenant` (2xx і 4xx, крім `429` від IP-middleware): **[уточнення §31, Q-C3 — прийнято TASK-860; errata ADR-024 замінює `Deprecation: true`]**
+  - `Deprecation: @<unix-секунди>` (RFC 9745) з `Auth:LegacyTenantLogin:DeprecatedAt` (дата релізу фази 2);
+  - `Sunset: <HTTP-date>` (RFC 8594) з `Auth:LegacyTenantLogin:SunsetAt` (Q12: реліз фази 2 + 30 днів), напр. `Sunset: Sat, 16 Jan 2027 00:00:00 GMT`.
+  - Поза Development обидва ключі обов'язкові: без них API не стартує (як `Marketing:LegalGateApproved`).
+- Після дати `Sunset` поведінка не змінюється до фази 3 (TASK-870), де поле видаляється (невідоме поле JSON ігнорується, тож запит із `tenant` піде новим шляхом).
+- Лог/метрика `auth_login_legacy_tenant` (без пошти й slug).
+
+### 31.3 `POST /api/auth/login/select` (публічний; IP-ліміт `auth`)
+
+```json
+{ "loginTicket": "<43 символи>", "tenantId": "uuid" }
+```
+- `200` → `TokenResponse` для обраного членства (як варіант A: `users.last_login_at`, refresh, JWT).
+- `401 login_ticket_invalid` — **одна відповідь на всі причини**: формат квитка невірний, квиток невідомий, прострочений, погашений, погашений новою видачею чи скиданням пароля, `tenantId` не належить ідентичності квитка, членство або tenant стали неактивними.
+- `422` — лише ModelState (поле відсутнє, `tenantId` не GUID).
+- **Одна спроба на квиток (Q-C5, прийнято TASK-860):** будь-який запит із чинним квитком погашає його (`consumed_at`), навіть якщо `tenantId` не підійшов. Повторна спроба вимагає нового входу. **[уточнення §31]**
+- `auth_login_ticket_consume(hash, tenantId, now)` атомарно гасить квиток і повторно перевіряє активне членство одним `UPDATE … RETURNING` (F-8). Повертає `user_id` або `NULL`. Блокування ідентичності тут не перевіряється: квиток видано після правильного пароля не раніше ніж `Auth:LoginTicketSeconds` тому.
+
+### 31.4 `GET /api/auth/memberships` (JWT, політика `Staff`, `[AllowInactiveSpecialist]`)
+
+`200`:
+```json
+[ { "tenantId": "uuid", "name": "Salon X", "role": "admin", "current": true },
+  { "tenantId": "uuid", "name": "Студія Y", "role": "specialist", "current": false } ]
+```
+- Ідентичність сервер бере з `users.identity_id` поточного членства (`sub`) під RLS поточного tenant. У JWT її немає.
+- Лише активні членства, сортування як у §31.2. `current = (tenantId == tenant_id з JWT)`.
+- Перемикач у шапці показується, лише якщо елементів ≥ 2.
+- Помилки — стандартні для JWT-ендпоінтів (§30.5): `401 invalid_token | session_revoked`, `503 access_unavailable`, `403 tenant_suspended`.
+- `[RequirePermission]` немає (у карті §30.6.1 — «—»). Виняток з `ActiveSpecialistFilter` (§30.5 п.4, M7), як `me`.
+
+### 31.5 `POST /api/auth/switch` (JWT, політика `Staff`, `[AllowInactiveSpecialist]`; IP-ліміт `auth`)
+
+```json
+{ "tenantId": "uuid", "refreshToken": "{tenantId}.{random}" }
+```
+- `refreshToken` — refresh-токен **поточної** сесії (BFF бере його лише з cookie `beauty_rt`, ніколи з тіла від браузера, §31.11). **[уточнення §31, Q-C2 — прийнято TASK-860]** Без нього викрадений access-токен (15 хв) можна було б обміняти на 14-денний refresh в іншому бізнесі.
+- `200` → `TokenResponse` для цільового членства.
+
+Порядок перевірок:
+| # | Перевірка | Помилка |
+|---|---|---|
+| 1 | JWT, middleware §30.5, `TenantActiveFilter` | `401 invalid_token \| session_revoked`, `403 tenant_suspended`, `503 access_unavailable` |
+| 2 | тіло | `422` (ModelState) |
+| 3 | `tenantId ≠ tenant_id` з JWT | `422 same_tenant` **[уточнення §31]** |
+| 4 | `refreshToken` розбирається, його префікс = поточний tenant, запис існує, не відкликаний, не прострочений, `user_id = sub` | `401 invalid_token` (без каскадного відкликання всіх сесій) |
+| 5 | цільове членство є в `auth_identity_memberships(identity)` | `404 membership_not_found` — одна відповідь для «немає членства», «членство вимкнене», «tenant призупинено або не існує» |
+| 6 | **новий DI-scope** (`IServiceScopeFactory`) з `UseTenant(target)`: перечитати рядок `users` цілі під RLS цілі (`id` з кроку 5, `identity_id` = ідентичність джерела, `is_active`, `state = 'active'`) і `tenants.status = 'active'` **(TASK-860 F-11, TOCTOU)** | `404 membership_not_found` (поточний refresh **не** відкликається) |
+| 7 | `TryRevokeRefreshToken` поточної сесії (атомарно) | `401 invalid_token`, якщо токен паралельно вже відкликано |
+| 8 | видача в scope кроку 6: `users.last_login_at` цілі, refresh, JWT | — |
+
+- `identities.last_login_at` перемикання не змінює. `access_version` не змінюється.
+- Access-токен попереднього tenant живе до 15 хв. BFF і клієнт прибирають його з пам'яті, **очищають усі клієнтські кеші даних попереднього tenant** (F-11, §31.11) і одразу перечитують `GET /api/auth/me` новим токеном. `X-Access-Version` у відповіді `switch` належить **попередньому** tenant, і клієнт його ігнорує.
+
+### 31.6 Refresh, logout і відкликання сесій (дельта) (TASK-860 F-6)
+- `POST /api/auth/refresh`: після наявних перевірок (tenant активний, членство `is_active` і `state = active`) додаються:
+  - `auth_identity_is_active(users.identity_id)`. `false` → `401 invalid_token`;
+  - `refresh_tokens.issued_at < users.sessions_valid_after` → `401 invalid_token` (без каскаду: токен і так відкликано тією самою операцією).
+  Ротація, виявлення повторного використання й ліміти без змін.
+- **`users.sessions_valid_after timestamptz NULL`** (нова колонка, §31.16). Її ставлять у `now()` для **всіх** членств ідентичності `auth_password_reset_consume` (§31.7.2) і злиття в міграції (§31.16, F-5).
+- **`AccessContextMiddleware`** уже читає рядок `users` на кожен запит (ADR-023). Тепер він читає ще й `sessions_valid_after`. Якщо колонка не `NULL` і `iat` токена < `sessions_valid_after`, обрізаного до секунд, → `401 session_revoked` (код §30.5). Другого запиту немає. Токени, видані в ту саму секунду, що й скидання, проходять, і це прийнятно. Права, `access_version` і `X-Access-Version` не змінюються.
+- `POST /api/auth/logout` без змін (відкликає лише свою сесію).
+
+### 31.7 Скидання пароля (Q7: у цьому релізі, TASK-865)
+
+#### 31.7.1 `POST /api/auth/password/forgot` (публічний) (TASK-860 F-3, F-9)
+```json
+{ "email": "a@salon.ua" }
+```
+- Відповідь завжди `202` **без тіла** — для наявної, невідомої, `pending` ідентичності, для пошти, що перевищила ліміт пошти, і при переповненій черзі.
+- `422 invalid_email` — лише синтаксично невалідна пошта або > 320 символів (від існування не залежить).
+- `429 rate_limited` + `Retry-After` — лише IP-ліміт (§31.9). Перевищення ліміту на пошту дає `202` без постановки в чергу (тихо), лічильник у логах без пошти.
+- **`202` віддається до будь-якої роботи з БД (F-3).** Синхронний шлях запиту: валідація → IP-ліміт → ліміт пошти (in-memory) → `TryWrite` нормалізованої пошти в **обмежену in-process чергу** (`Channel`, ємність `Auth:PasswordForgot:QueueCapacity`, 1000; переповнення → запит відкидається, метрика `outcome=dropped`) → `202`. Обробник у фоні (`BackgroundService` API) викликає `auth_password_reset_issue(email, login_key, now + Auth:PasswordResetMinutes)` → **`void`**. Функція створює рядок запиту лише для `active` ідентичності й гасить її попередні непогашені запити. Для невідомої чи `pending` пошти нічого не робить. Час відповіді від існування пошти не залежить. Втрата черги при рестарті API прийнятна: користувач повторить запит.
+- **Токен генерує воркер (F-9, Q-C4).** API сирого токена не бачить, у БД сирого токена немає ніколи, лише `sha256`. Токен: 32 байти CSPRNG, base64url без padding (43 символи). TTL `Auth:PasswordResetMinutes` = 30 від моменту запиту (`expires_at` ставить `issue`). Одноразовий.
+
+**Доставка листа (ADR-003, патерн черги-таблиці).** Загальної outbox-таблиці в схемі немає (`database.md`, `beauty_platform_feedback`), тож чергою доставки є рядок `auth_password_resets`: `delivery_status`, `attempts`, `next_attempt_at`, `last_error` (код без токена й пошти), `token_hash` (`NULL` до першої спроби). Колонки з сирим токеном **немає**. **[уточнення §31, Q-C4 замінено за F-9]**
+- Цикл воркера:
+  1. `auth_password_reset_claim_delivery(now, lease_seconds, batch)` → `reset_id, email, kind` (`FOR UPDATE SKIP LOCKED`, лізинг через `next_attempt_at`). Повертає лише неспливлі й непогашені рядки;
+  2. для `kind = 'reset_link'` воркер генерує токен і викликає `auth_password_reset_attach_token(reset_id, sha256(token), now)` → `bool`. `false` означає, що рядок погашено новою видачею або він спливає, і лист не надсилається. Кожна повторна спроба генерує **новий** токен і замінює `token_hash`, тож старе посилання з невдалої спроби не працює;
+  3. відправка листа; сирий токен живе лише в пам'яті воркера до кінця спроби;
+  4. `auth_password_reset_mark_delivery(reset_id, status, error_code, next_attempt_at)`.
+- Воркер має `EXECUTE` лише на `claim`, `attach_token`, `mark` і `purge_expired`. Прямого доступу до таблиці немає (deny-all). У застосунку (`beautycrm_app`) **немає жодної функції**, що повертає токен, `token_hash` чи пошту з `auth_password_resets`.
+- Лист: наявний email-відправник воркера (SMTP/mock з env). **Посилання будується лише з конфігу воркера** `{PublicAppUrl}/reset-password#t={token}` (токен у фрагменті, як §27.8). Заголовки запиту (`Host`, `X-Forwarded-Host`) у побудові посилання не беруть участі, бо воркер їх не бачить і API URL не передає **(F-10)**. Назви бізнесу немає. Вказано строк дії 30 хв і фразу «Якщо ви не запитували скидання, проігноруйте лист». Адресу відправника задає ops у env воркера (Q7). Остаточний текст листа погоджує людина до релізу TASK-865, до того — плейсхолдер.
+
+**Env воркера (реалізація TASK-865; фактично, TASK-872 без змін):**
+- `PUBLIC_APP_URL` — єдине джерело базової адреси посилання: `https` (`http` лише при `ASPNETCORE_ENVIRONMENT=Development` або loopback), без query, fragment і userinfo; інакше `null`, і воркер не бере рядки скидання (помилка в логах раз за прохід, рядки чекають до TTL). Приклад: `worker/.env.example`, `deploy/staging/.env.worker.example`.
+- `EMAIL_FROM` — адреса відправника; обов'язкова разом із `SMTP_HOST/PORT/USER/PASSWORD` при `EMAIL_MODE=smtp` (інакше worker не стартує). У `EMAIL_MODE=mock` лист не надсилається, його текст доступний у `MockPasswordMailer.outbox` (і в `.txt` у `WORKER_MOCK_MAIL_DIR`, лише Development).
+- Реалізація: `worker/src/auth/password-reset.ts` (`PgPasswordResetStore`: `claim` → новий токен 32 байти CSPRNG → `attach_token(sha256)` → лист → `mark`). Backoff 1..10 хв, не довше TTL; SMTP 5xx → `failed` `smtp_rejected`. Лічильники спроб процес-локальні: після рестарту backoff починається з 1 хв.
+- API: `POST /api/auth/password/forgot` — `IP` 5/900 с (`Auth:PasswordForgot:PerIpPermit`); валідація `422 invalid_email` іде **після** IP-ліміту, а ліміт пошти 3/год тихий (`202`). Черга `Channel` на інстанс (`QueueCapacity` 1000, переповнення → `202`, `outcome=dropped`). `password/reset` → `204` / `410 reset_invalid` / `422 weak_password` (токен не споживається).
+- Повтори: як для заявок (§27.9) — backoff, не довше за TTL. Спливлий рядок не відправляється.
+- `auth_identity_purge_expired(now)` (воркер) видаляє прострочені квитки, рядки скидання (крім тих, де `notice_status = 'pending'`, §31.7.3) і спливлі рядки `auth_login_attempts` (вікно й блокування в минулому).
+- Тихий ліміт на пошту (3 / год) лишається. Те, що атакувальник може «з'їсти» ліміт чужої пошти, — **прийнятий ризик** (F-10).
+
+#### 31.7.2 `POST /api/auth/password/reset` (публічний; IP-ліміт `auth`)
+```json
+{ "token": "<43 символи>", "password": "…" }
+```
+Порядок: `422 weak_password` (до споживання токена, токен лишається чинним, як §27.8) → формат токена → `auth_password_reset_consume(sha256(token), hash(password), now)`.
+- `204` — пароль змінено. Автоматичного входу немає: користувач входить через §31.2.
+- `410 reset_invalid` — одна відповідь для «невідомий, прострочений, використаний, погашений новою видачею, невірний формат, ідентичність не `active`».
+- `auth_password_reset_consume` — **один `UPDATE … RETURNING`** по `token_hash` з умовами «не погашено, не спливло, ідентичність `active`» (F-8). Далі в тій самій транзакції:
+  - `identities.password_hash`, `password_changed_at`;
+  - видалення рядка `auth_login_attempts` за `login_key`, збереженим у рядку скидання (зняття блокування, F-2);
+  - відкликання refresh-токенів **усіх** членств ідентичності й `users.sessions_valid_after = now` для всіх членств (F-6, §31.6);
+  - погашення всіх квитків входу ідентичності;
+  - dual-write `users.password_hash` усіх членств (до фази 3);
+  - `notice_status = 'pending'` для листа «Пароль змінено» (§31.7.3, F-10);
+  - `platform_audit_log`: `identity.password_reset_completed` (`actor_type = identity`, `tenant_id = NULL`, `details = {identityId}`).
+- Видані access-токени перестають діяти на наступному запиті через `sessions_valid_after` (§31.6). Це **замінює** «живуть до 15 хв» з ADR-024 §2.8 (errata).
+- `POST /api/auth/password/change` (зміна з профілю зі старим паролем) — опційна задача, у V1 не входить.
+
+#### 31.7.3 Лист «Пароль змінено» (TASK-860 F-10; реалізація TASK-872)
+- Після успішного `consume` воркер надсилає на пошту ідентичності лист «Пароль вашого акаунта Beauty CRM змінено» з часом зміни (UTC). Без назви бізнесу, без IP і пристрою. Фраза «Якщо це були не ви — скиньте пароль» з посиланням `{PublicAppUrl}/forgot-password` (з конфігу, без токена).
+- Черга: той самий рядок `auth_password_resets` (`notice_status`: `none | pending | sent | failed`, власні `attempts`/`next_attempt_at`). `claim_delivery` повертає `kind = 'changed_notice'`. `attach_token` для цього виду не викликається. Повтори з backoff до 24 год, далі `failed`. Метрика без пошти.
+- Схемні колонки й `kind` закладає TASK-862 (§31.16), щоб не робити окремої міграції. Відправку й шаблон робить TASK-872. Воркер надсилає лист (TASK-872): `sent`, або `failed` (`smtp_rejected`, `retries_exhausted`), тож purge не блокується. Текст листа погоджує людина (як Q7).
+
+**Реалізація TASK-872 і обмеження (фактичні, 2026-11-18):**
+- Лист **без часу зміни**. Контракт вимагає «з часом зміни (UTC)», але `auth_password_reset_claim_delivery` не повертає timestamp, а схема TASK-862 без змін (не вигадувалось). Для часу потрібна окрема зміна claim-функції і міграція. До того — плейсхолдер без часу. Обмеження зафіксоване в known-issues (KI-010).
+- Бюджет повторів 24 год рахується в пам'яті процесу воркера (`NOTICE_MAX_ATTEMPTS = 147`: сумарний backoff 1+2+4+8 хв, далі по 10 хв). Після рестарту відлік починається знову. Рядок у будь-якому разі не живе вічно: після вичерпання стає `failed` `retries_exhausted`.
+- Метрики з воркера немає (воркер лише логує без пошти, токена й тіла). Лічильники лишаються в логах, не в метриках.
+- Мітки `kind` розділені: `reset_link` (`r:`) і `changed_notice` (`n:`) мають окремі лічильники спроб.
+
+### 31.8 Запрошення персоналу й provisioning власника (рішення 3 ADR-024; дельта §10, §15, §27, §30.9.5)
+
+Наявний акаунт **ніколи** не приєднується автоматично. Перевірка іде і при створенні, і при прийнятті (Q2).
+
+#### 31.8.1 Створення запрошення: `POST /api/invites` і `POST /api/beauty/specialists/{id}/invite`
+Після наявних перевірок §30.9.5/§30.10 (ранг, роль, `specialistId`, права, стеля):
+1. Пошта вже є членом **цього** tenant → `409 user_exists` (як зараз).
+2. `InviteEmailCheckThrottle` на tenant (§31.9) → `429 rate_limited` + `Retry-After`. Ліміт витрачає кожен запит, що дійшов до цього кроку, незалежно від результату.
+3. `auth_identity_email_in_use(email)` = true (активна **або** `pending` ідентичність) → `409 email_in_use`.
+   - `message`: `"This email is already used in Beauty CRM."`. UI-текст (Q3): «Ця пошта вже використовується в Beauty CRM. Вкажіть іншу пошту». Назва іншого бізнесу не розкривається ніде.
+   - Лог `invite_email_in_use tenant={id}` без пошти.
+- Pending-запрошення в іншому бізнесі на ту саму пошту зайнятості не створює: ідентичність з'являється лише при прийнятті. Хто прийме першим, той і створить ідентичність; інший отримає `409 email_in_use` при прийнятті.
+
+**Фактична поведінка (реалізація TASK-864, 2026-11-18):**
+- `user_exists` — перевірка цього tenant іде першою, до throttle і до `email_in_use` (порядок §31.8.1). `email_in_use` видається для активної й `pending` ідентичності в будь-якому бізнесі. Текст без назви бізнесу; лог `invite_email_in_use tenant=<id>` без пошти. Покриває і `POST /api/invites`, і `POST /api/beauty/specialists/{id}/invite`.
+- Перевірка пошти при створенні: `InviteEmailCheckThrottle` 30 / год на tenant (in-memory на інстанс, `Auth:InviteEmailCheck:PerTenantPerHour`). Витрачає кожен запит, що дійшов до цього кроку, навіть якщо відповідь `email_in_use`.
+- Прийняття (`EfAuthStore.AcceptInviteAsync`): явна перевірка «пошта вже член цього tenant» → `user_exists`; далі `auth_identity_create` у тій самій транзакції. `unique_violation` → `409 email_in_use` (відкат, запрошення pending). Квота вичерпано → `429 rate_limited` + `Retry-After`: ковзне вікно 24 год, найстаріший `identity.created` + 24 год, округлення вгору до хвилини, діапазон 60..86400 с. Раніше обидва випадки помилково мапилися на `invite_invalid`/`user_exists`; виправлено до мерджу.
+- Квота `Auth:IdentityCreate:PerTenantPerDay`: за замовчуванням 20, обмеження конфігу 1..200 (`Math.Clamp`). Рахує БД, тож рестарт її не скидає.
+- Квота **не діє** на `owner_provisioning` і `platform` (tenant новий, викликач довірений).
+- `owner_email_in_use`: `POST /api/control/v1/tenants` (порядок replay 200 → `external_ref_conflict` → `tenant_slug_taken` → `owner_email_in_use`; tenant зберігається першим, ідентичність `pending` через `auth_identity_create_pending(via='owner_provisioning')`). `POST /api/platform/tenants` — tenant першим (`tenant_slug_taken`), далі ідентичність `active` (`via='platform'`). Гонка двох create на одну пошту: програвший отримує `owner_email_in_use`.
+- Прийняття запрошення власника: `auth_identity_activate_pending` = false → відкат, `410 invite_invalid` (ідентичність уже активна або членств більше одного).
+- Метрики: `identity_created{via}` (без тегу tenant, щоб не роздувати кардинальність; розріз по tenant з `platform_audit_log`, `identity.created`) і `invite_email_in_use`. Алерти (`identity_created{via="staff_invite"}` > 10 / добу на tenant; сплеск `invite_email_in_use`) — для devops, ще не налаштовані.
+- Q8 (погодження з ShelfGuard коду `owner_email_in_use`) лишається gate до мерджу; адитивний код наявні виклики не ламає.
+
+#### 31.8.2 Прийняття запрошення персоналу: `POST /api/auth/invites/accept` (форма запиту й `201 UserDto` без змін)
+Порядок: формат токена (`404 invite_invalid`) → `422 weak_password` → tenant активний, запрошення чинне (`404 invite_invalid`) → **одна транзакція**:
+1. перевірка запрошувача (§30.9.5 п.1, M5) → `404 invite_invalid`;
+2. пошта вже є членом цього tenant → `409 user_exists`;
+3. `auth_identity_create(email, hash, origin_tenant_id, 'staff_invite', Auth:IdentityCreate:PerTenantPerDay)`:
+   - `unique_violation` → **`409 email_in_use`**, транзакція відкочується, запрошення **не** гаситься (лишається pending до строку чи відкликання);
+   - квоту tenant вичерпано (функція кидає `SQLSTATE` `P0001`, повідомлення `identity_quota`) → **`429 rate_limited`** + `Retry-After` (до кінця 24-годинного вікна, з округленням угору до хвилини). Транзакція відкочується, запрошення лишається pending **(TASK-860 F-4)**;
+   - успіх пише `identity.created` у `platform_audit_log` (`tenant_id = origin_tenant_id`, `actor_type = identity`, `details = {identityId, via}`) у тій самій транзакції;
+4. вставка `users` з `identity_id` і dual-write `password_hash`, далі як зараз (`PlanAccept`, `user_permissions`, аудит `invite_accepted`).
+
+`user_access_audit` нових дій не отримує.
+
+#### 31.8.3 Provisioning власника
+- **Control plane `POST /api/control/v1/tenants` (§27.3):** новий `409 { "code": "owner_email_in_use" }` — `owner.email` зайнята (активна або `pending` ідентичність). Tenant, власник і запрошення не створюються. Порядок: ідемпотентний replay за `externalRef` (§27.3, `200`) → `409 external_ref_conflict` → `409 tenant_slug_taken` → `409 owner_email_in_use`. Інакше в тій самій транзакції `auth_identity_create_pending(email)` → `users(owner, invited, identity_id)`. Гонка двох create на одну пошту: програвший отримує `409 owner_email_in_use`. Це зміна контракту для ShelfGuard (Q8: погодити до мерджу TASK-864). Код адитивний і наявні виклики не ламає.
+- **`POST /api/platform/tenants` (§10, власник з паролем):** `409 owner_email_in_use` за тим самим правилом. Інакше `auth_identity_create(email, hash)` (ідентичність одразу `active`) у транзакції створення. **[уточнення §31]** ADR-024 §2.7 згадує `create_pending` для обох шляхів, але цей шлях задає пароль одразу.
+- **Прийняття запрошення власника `POST /api/auth/invite/accept` (§27.8):** у транзакції погашення `auth_identity_activate_pending(identity, hash)`. `false` (ідентичність уже `active` — можливо лише після злиття, або членств більше одного) → `410 invite_invalid`, транзакція відкочується. Інші коди §27.8 без змін.
+- `GET /api/control/v1/tenants/{externalRef}` і перевипуск запрошення (§27.4, §27.7) без змін.
+- Обидва шляхи створення власника пишуть `identity.created` (`tenant_id` = новий tenant, `via = owner_provisioning | platform`). Квота tenant на них не діє: tenant новий, викликач довірений. **(TASK-860 F-4)**
+
+#### 31.8.4 Зайнятість чужої пошти самоприйнятим запрошенням (TASK-860 F-4, рішення людини: варіант 1)
+Запрошувач тримає токен запрошення, тож може сам його прийняти й зайняти чужу пошту на всій платформі. Доказу володіння скринькою V1 не вимагає. Це **прийнятий ризик V1** з такими пом'якшеннями:
+- **Аудит** `identity.created` з `tenant_id` бізнесу, що створив ідентичність (§31.8.2, §31.12). Оператор бачить, звідки взялася пошта.
+- **Квота** нових ідентичностей через запрошення персоналу: `Auth:IdentityCreate:PerTenantPerDay` (20 за замовчуванням, 1..200), ковзне вікно 24 год. Рахує функція в БД (не in-memory), тож рестарт квоту не скидає.
+- **Алерт** (devops): `identity_created{via="staff_invite"}` на tenant > 10 за добу, а також сплеск `invite_email_in_use`.
+- **Процедура оператора «звільнити пошту»** (Q11): `auth_identity_release(identity_id, reason_code)`. Функція `SECURITY DEFINER`. `EXECUTE` має лише ops-роль або мігратор, у застосунку й воркера його **немає**. Виконується за runbook (TASK-869) і лише як human gate: оператор спершу поза системою перевіряє, що заявник володіє скринькою. Дії в одній транзакції:
+  - пошта ідентичності й `users.email` усіх її членств → `released+{identity_id}@released.invalid` (TLD `.invalid` за RFC 2606; тригер узгодженості задоволено, формат нормалізований);
+  - членства → `is_active = false`; refresh-токени відкликано; `sessions_valid_after = now`;
+  - стан `auth_login_attempts` за старим ключем не чіпається, бо він сплине сам;
+  - запис `identity.released` (`tenant_id = NULL`, `details = {identityId, reasonCode}`).
+  Після цього пошту можна запросити знову. Історичні FK на старі членства лишаються.
+- **`identities.email_verified_at`** і спрощене звільнення непідтверджених — **V2** (окремий ADR). Лист запрошення на адресу запрошеного теж V2.
+
+### 31.9 Ліміти й блокування
+
+| Поверхня | Ліміт (за замовчуванням) | Конфіг | Перевищення |
+|---|---|---|---|
+| `login`, `login/select`, `switch`, `password/reset` | 10 / 60 с на IP (політика `auth`, без змін) | `Auth:RateLimit:PermitLimit`, `WindowSeconds` | `429 rate_limited` |
+| `login` за поштою | 20 / 900 с на `sha256(email)`, незалежно від існування | `Auth:LoginEmailThrottle:PermitLimit`, `WindowSeconds` | `429 rate_limited` + `Retry-After` |
+| блокування за ключем пошти (Q10, **F-2**) | 5 невдалих у вікні 900 с → 15 хв. Одна таблиця `auth_login_attempts` (ключ `login_key`) для наявної, невідомої й `pending` пошти та Q-C1. Для наявної діє на **всі** бізнеси людини | `Auth:MaxFailedAttempts`, `Auth:LoginAttemptWindowSeconds`, `Auth:LockoutMinutes`, `Auth:LoginAttemptKeyPepper` | `423 account_locked` |
+| `password/forgot` за IP | 5 / 900 с | `Auth:PasswordForgot:PerIpPermit`, `PerIpWindowSeconds` | `429 rate_limited` + `Retry-After` |
+| `password/forgot` за поштою | 3 / 3600 с на `sha256(email)` | `Auth:PasswordForgot:PerEmailPermit`, `PerEmailWindowSeconds` | `202` без постановки в чергу (тихо) |
+| черга `password/forgot` (**F-3**) | 1000 записів на інстанс | `Auth:PasswordForgot:QueueCapacity` | `202`, запит відкинуто, метрика `dropped` |
+| перевірка пошти при створенні запрошення | 30 / год на tenant | `Auth:InviteEmailCheck:PerTenantPerHour` | `429 rate_limited` + `Retry-After` |
+| нові ідентичності через запрошення персоналу (**F-4**) | 20 / 24 год на tenant (у БД) | `Auth:IdentityCreate:PerTenantPerDay` (1..200) | `429 rate_limited` + `Retry-After` при прийнятті |
+| квиток входу | TTL 180 с, одна спроба | `Auth:LoginTicketSeconds` (60..600) | `401 login_ticket_invalid` |
+| токен скидання | TTL 30 хв, одноразовий | `Auth:PasswordResetMinutes` (10..120) | `410 reset_invalid` |
+| control plane | 60 / хв на `kid` (§27.1, без змін) | — | `429 rate_limited` |
+
+- Троттли (`LoginEmailThrottle`, ліміти `forgot`, `InviteEmailCheckThrottle`) — in-memory, на інстанс (як `OwnerInviteThrottle`). Ключі — лише `sha256` нормалізованої пошти, сирої пошти в пам'яті лімітера немає. Блокування й квота ідентичностей зберігаються в БД.
+- CAPTCHA у V1 немає (Q9). Devops ставить алерт за часткою `invalid_credentials` (§31.12).
+
+**Вимога релізу: справжній IP клієнта за BFF (TASK-860 F-1 [high]; виконує TASK-871).** Вхід персоналу йде через BFF (`web`), тож API бачить IP контейнера `web`, а не клієнта. Без виправлення ліміт `auth` (10/хв) **спільний для всіх користувачів**: будь-хто без автентифікації блокує вхід усім. Поки вимоги нижче не виконано й smoke не пройдено, реліз TASK-866 (і будь-який деплой фази 2) на staging/prod **заблоковано**.
+1. Контейнер `web` має **статичну адресу** в мережі `beauty_staging` (`ipv4_address` у compose, змінна поруч із `BEAUTY_SUBNET`/`BEAUTY_GATEWAY`).
+2. `Beauty__TrustedProxies` = шлюз мережі (nginx) **+ адреса `web`**. Окремі IP, не вся підмережа.
+3. nginx **перезаписує** `X-Forwarded-For $remote_addr` (не `$proxy_add_x_forwarded_for`). BFF пересилає отриманий XFF у backend (`forwardedFor` у `frontend/features/beauty-auth/server.ts`, вже є).
+4. Порт `web` опубліковано лише на `127.0.0.1` і досяжний лише через nginx. Інакше клієнт підробить XFF через BFF.
+5. **Smoke після деплою** (скрипт у runbook): (а) два запити `login` з двох різних клієнтських IP мають незалежні лічильники `auth`, і 11-й запит з IP A дає `429` лише A; (б) підроблений клієнтом `X-Forwarded-For` не змінює ключ; (в) у логах API IP клієнта, а не `web`. Результат smoke фіксується в task log TASK-871.
+
+### 31.10 Однакові відповіді (захист від енумерації)
+
+| Поверхня | Неможливо відрізнити між собою |
+|---|---|
+| `login` | «пошти немає», «ідентичність `pending`», «невірний пароль», «правильний пароль, 0 активних членств», «legacy `tenant` без членства»: той самий `401`, той самий `code` і `message`, одна перевірка bcrypt, однаковий вплив на лічильник блокування (Q-C1) |
+| `login` (блокування) | наявна, невідома, `pending` пошта: та сама таблиця, те саме вікно, той самий поріг, той самий `423`, однакова поведінка після рестарту API **(F-2)** |
+| `login` (ліміт пошти) | діє однаково для наявної й невідомої пошти |
+| `login/select` | усі причини → `401 login_ticket_invalid` |
+| `switch` | «немає членства», «членство вимкнене», «tenant призупинено або не існує» → `404 membership_not_found` |
+| `password/forgot` | наявна, невідома, `pending` пошта, ліміт пошти, переповнена черга → `202` без тіла; `202` до роботи з БД, тож час відповіді від існування не залежить **(F-3)** |
+| `password/reset` | усі причини непридатного токена → `410 reset_invalid` |
+| запрошення | **розкриття за задумом** (рішення 3): `409 email_in_use` каже автентифікованому запрошувачу з `team.manage`, що пошта зареєстрована в Beauty CRM. Пом'якшення: ліміт на tenant, текст без назви бізнесу, лог без пошти |
+| control plane | `owner_email_in_use` для довіреного викликача без пом'якшень |
+
+- Список членств ніколи не впливає на відповідь до успішної перевірки пароля.
+- Відповідь варіанта B (`businesses`) отримує лише той, хто знає пароль.
+
+### 31.11 BFF і frontend (TASK-866)
+
+Усі BFF-маршрути: `isSameOrigin` → `403`, `Cache-Control: no-store`, коди помилок backend пробрасуються без змін (`passError`). BFF пересилає `X-Forwarded-For` у backend, і це працює лише за умов розгортання §31.9 (F-1).
+
+| BFF | Тіло від браузера | Що робить |
+|---|---|---|
+| `POST /api/session/login` | `{email, password, tenant?}` | `tenant` пересилається, лише якщо це непорожній рядок (сумісність із кешованими збірками до фази 3). Варіант A → `{accessToken, expiresInSeconds, user}` + cookie `beauty_rt` (як зараз). Варіант B → `{selectionRequired: true, ticketExpiresInSeconds, businesses}` + cookie квитка; **`loginTicket` у JSON не віддається** |
+| `POST /api/session/login/select` | `{tenantId}` | Читає cookie квитка. Немає cookie → `401 login_ticket_invalid` без виклику backend. Cookie квитка **завжди** видаляється (`Max-Age=0`), за будь-якого результату. `200` → як варіант A + `beauty_rt` |
+| `POST /api/session/switch` | `{tenantId}` + `Authorization: Bearer` | Додає `refreshToken` з `beauty_rt` (немає → `401 invalid_token`). `200` → `{accessToken, expiresInSeconds, user}` + новий `beauty_rt`. `401` → `beauty_rt` видаляється |
+| `POST /api/session/password/forgot` | `{email}` | проксі, `202` |
+| `POST /api/session/password/reset` | `{token, password}` | проксі, `204` |
+
+- **Cookie квитка** **[уточнення §31: ім'я]**: `beauty_lt`, `HttpOnly`, `Secure` (за тим самим правилом, що `beauty_rt`), `SameSite=Strict`, `Path=/api/session/login` (покриває `/login/select`), `Max-Age` = `ticketExpiresInSeconds`.
+- `GET /api/auth/memberships` клієнт викликає так само, як інші staff-запити з access-токеном.
+- **Сторінки:**
+  - форма входу без поля «Код бізнесу»;
+  - екран вибору бізнесу показується завжди, якщо бізнесів ≥ 2 (Q5). Останній обраний `tenantId` (лише він, у `localStorage`) стоїть першим і підсвічений. Керування з клавіатури, фокус на першому елементі. Квиток спливає через `ticketExpiresInSeconds`: екран показує «Час вибору минув, увійдіть ще раз» і повертає до форми (також на `401 login_ticket_invalid`);
+  - перемикач у шапці (Q6), лише якщо `memberships` ≥ 2. Після успішного `switch` клієнт **до** першого запиту з новим токеном очищає всі кеші даних попереднього tenant (стан сторінок, кеш запитів, збережені фільтри й чернетки з даними tenant), потім `GET /api/auth/me` і перехід на стартову сторінку адмінки. Залишки даних бізнесу A на екрані після переходу в B неприпустимі **(TASK-860 F-11)**;
+  - `/forgot-password` і `/reset-password` (токен у фрагменті, прибирається `history.replaceState`; `Referrer-Policy: no-referrer`, `noindex`, як `/invite`, §27.8).
+- **Тексти помилок** (content-шар):
+
+| `code` | Текст |
+|---|---|
+| `invalid_credentials` | «Невірна пошта або пароль» |
+| `account_locked` | «Забагато невдалих спроб. Спробуйте за 15 хвилин або скиньте пароль» |
+| `rate_limited` | «Забагато спроб. Спробуйте пізніше» |
+| `login_ticket_invalid` | «Час вибору минув, увійдіть ще раз» |
+| `membership_not_found` | «Доступ до цього бізнесу недоступний» (оновити список `memberships`) |
+| `email_in_use` | «Ця пошта вже використовується в Beauty CRM. Вкажіть іншу пошту» (створення й прийняття запрошення) |
+| `reset_invalid` | «Посилання недійсне або застаріло. Запросіть нове» |
+| `forgot` `202` | «Якщо ця пошта зареєстрована, ми надіслали лист із посиланням» |
+
+- Mock-режим (`NEXT_PUBLIC_USE_MOCK=1`) відтворює обидві форми `login`, `select`, `memberships`, `switch`, `forgot`/`reset` за цим контрактом.
+
+### 31.12 Аудит, логи, метрики (TASK-860)
+- `platform_audit_log` (append-only, `actor_type = identity`, `details` без пошти). CHECK `action`/`actor_type` розширює TASK-862:
+  - `identity.password_reset_completed` (`tenant_id = NULL`, `{identityId}`);
+  - `identity.locked` (`tenant_id = NULL`, `{identityId}`): раз на кожне досягнення порогу, лише для наявної ідентичності;
+  - `identity.created` (`tenant_id` = бізнес, що створив ідентичність, `{identityId, via: staff_invite | owner_provisioning | platform}`) **(F-4)**;
+  - `identity.released` (`tenant_id = NULL`, `{identityId, reasonCode}`), процедура оператора §31.8.4 **(F-4)**.
+- Успішні й невдалі входи, вибір і перемикання в журнал **не** пишуться (як зараз). Лише структуровані логи й метрики без ПІІ: `auth_login{outcome=token|selection|invalid|locked|throttled}`, `auth_login_legacy_tenant`, `auth_login_select{outcome}`, `auth_switch{outcome}`, `auth_password_forgot{outcome=requested|suppressed|dropped}` (`suppressed` — ліміт пошти, `dropped` — переповнена черга; чи існує пошта, метрика не показує), `auth_lockout` (кожне досягнення порогу, без розрізнення наявної й невідомої пошти, F-12), `identity_created{via}`, `invite_email_in_use`.
+- Devops-алерти: частка `invalid_credentials` у `auth_login`; сплеск `auth_lockout` (повторні блокування, F-12); `identity_created{via="staff_invite"}` на tenant понад поріг (§31.8.4).
+- `user_access_audit` (ADR-023): без нових дій.
+
+### 31.13 Коди помилок (зведення §31)
+| Статус | `code` | Де |
+|---|---|---|
+| 401 | `invalid_credentials` | `login` (усі причини §31.10) |
+| 401 | `login_ticket_invalid` | `login/select`, BFF без cookie квитка |
+| 401 | `invalid_token` | `refresh` (зокрема неактивна ідентичність і токен, виданий до `sessions_valid_after`), `switch` (refresh-токен сесії непридатний) |
+| 401 | `session_revoked` | будь-який JWT-ендпоінт: `iat` < `users.sessions_valid_after` (§31.6, F-6; код §30.5 без змін) |
+| 404 | `membership_not_found` | `switch` |
+| 409 | `email_in_use` | створення й прийняття запрошення персоналу |
+| 409 | `owner_email_in_use` | `POST /api/control/v1/tenants`, `POST /api/platform/tenants` |
+| 409 | `user_exists` | без змін: пошта вже член цього tenant |
+| 410 | `reset_invalid` | `password/reset` |
+| 410 | `invite_invalid` | запрошення власника (§27.8), зокрема ідентичність уже активна |
+| 422 | `same_tenant` | `switch` у поточний tenant |
+| 422 | `invalid_email` | `password/forgot` |
+| 422 | `weak_password` | `password/reset`, прийняття запрошень (без змін) |
+| 423 | `account_locked` | `login` |
+| 429 | `rate_limited` | §31.9, зокрема квота ідентичностей при прийнятті запрошення персоналу (F-4) |
+
+### 31.14 Відповіді на Q1–Q13 (ADR-024 §7, прийнято 2026-11-17 з рекомендованими значеннями) і питання контракту
+
+| # | Рішення |
+|---|---|
+| Q1 | V1: кілька членств лише через злиття наявних даних. Явне приєднання з підтвердженням паролем — окремий ADR (V2) |
+| Q2 | Перевірка зайнятої пошти при створенні й повторно при прийнятті (§31.8) |
+| Q3 | Нейтральний текст без назви бізнесу (§31.8.1, §31.11) |
+| Q4 | Дублікати на staging: звірити з власниками акаунтів; одна людина — злиття «найсвіжіший вхід», тестові — розвести до міграції (TASK-861, human gate) |
+| Q5 | Екран вибору завжди при ≥ 2; останній обраний першим (§31.11) |
+| Q6 | Перемикач у шапці є (§31.4–31.5) |
+| Q7 | Скидання в цьому релізі (§31.7): SMTP воркера, TTL 30 хв, без назви бізнесу; адресу відправника задає ops у env |
+| Q8 | `owner_email_in_use` погодити з ShelfGuard до мерджу TASK-864 |
+| Q9 | CAPTCHA не у V1 |
+| Q10 | Блокування на ідентичність, діє на всі бізнеси |
+| Q11 | Вимкнення в усіх бізнесах пошту не звільняє (звільняє лише оператор платформи окремою процедурою) |
+| Q12 | `Sunset` = реліз фази 2 + 30 днів (§31.2.3) |
+| Q13 | Правильний пароль без активних членств → `401 invalid_credentials` |
+
+**Питання контракту — закрито TASK-860 (2026-11-17):**
+
+| # | Питання | Рішення |
+|---|---|---|
+| Q-C1 | Лічильник при правильному паролі без придатного членства (0 членств, legacy `tenant` без членства). ADR-024 §2.9 казав «без збільшення лічильника», але тоді момент `423` видає правильний пароль | **Рішення людини: так, це невдала спроба** (§31.2.1 п.8). Errata ADR-024 §2.9. Ціна: legacy-клієнт, що 5 разів передав не той slug із правильним паролем, блокується на 15 хв |
+| Q-C2 | `refreshToken` у `switch` | **Прийнято:** обов'язковий; BFF бере лише з `beauty_rt` (§31.5) |
+| Q-C3 | Формат `Deprecation` | **Прийнято:** RFC 9745 `@<unix>` + RFC 8594 `Sunset` (§31.2.3); errata ADR-024 §2.9 |
+| Q-C4 | Черга доставки скидання | **Замінено за F-9:** рядок `auth_password_resets` лишається чергою, але токен генерує воркер, у БД лише `sha256`, колонки `delivery_token` немає (§31.7.1) |
+| Q-C5 | Одна спроба на квиток | **Прийнято** (§31.3) |
+| — | Часова різниця «правильний пароль, 0 членств» | **Не вирівнювати** (F-7): невимірна на тлі bcrypt |
+
+### 31.15 Тест-вимоги (TASK-862/863/864/865/866 → TASK-867/868)
+
+Обов'язкові автоматичні тести. Кожен пункт має щонайменше один тест, і TASK-867 перевіряє покриття за цим списком. Висновки TASK-860 внесено (пункти 1, 3, 5–7, 12, 15 оновлено; 19–31 нові). TASK-868 перевіряє реалізацію за цим списком і за знахідками звіту `docs/reviews/identity-threat-model.md`.
+
+1. **БД: deny-all (TASK-862).** Роль застосунку, роль воркера й `PUBLIC` не можуть `SELECT/INSERT/UPDATE/DELETE` з `identities`, `auth_login_tickets`, `auth_password_resets`, `auth_login_attempts` (і через гранти, і через RLS). `EXECUTE` — точно за матрицею §31.16 (і нічого понад неї). Функції мають `search_path = pg_catalog, pg_temp` і `REVOKE ALL FROM PUBLIC`.
+2. **БД: поверхня функцій.** `auth_identity_find` повертає 0/1 рядок лише за точною поштою (шаблони `%`, `_` не діють). `auth_identity_memberships` не повертає членств інших ідентичностей, вимкнених членств, `invited`-членств і призупинених tenant. Тригер не дає вставити `users` з `email ≠ identities.email`.
+3. **БД: міграція (оновлено F-5).** Backfill на фікстурі: одне членство → ідентичність з його хешем. Дублікати, яких немає в `beautycrm.identity_merge_allowlist`, → `RAISE`. Ключ з allowlist, що не відповідає жодній групі дублікатів, → `RAISE`. Старий глобальний GUC `beautycrm.identity_merge` злиття **не** вмикає. Злиття групи з allowlist → пароль з найсвіжішого активного членства; refresh-токени **всіх** злитих членств відкликано, `sessions_valid_after` встановлено. Злиття з invited-власником → відмова. Повторний прогін нічого не змінює. `users.password_hash` не змінено. `Down` відмовляє при порушеному dual-write.
+4. **Логін 0/1/N.** 1 членство → `TokenResponse`. ≥ 2 → варіант B, `businesses` відсортовано, без `slug`/`userId`, квиток 43 символи. Призупинений tenant і вимкнене членство до списку не потрапляють.
+5. **Однаковість.** Для «немає пошти», `pending`, «невірний пароль», «0 членств», «legacy без членства»: однаковий статус, `code`, `message`, рівно один виклик `IPasswordHasher.Verify` (детермінований тест через підрахунок викликів, а не за годинником) і рівно один виклик `auth_login_attempt_failed`. Невідома пошта після 5 спроб дає той самий `423`, що й наявна.
+6. **Блокування (Q10, Q-C1, F-2).** 5 невдалих спроб → `423` при вході в будь-який бізнес людини, зокрема з правильним паролем і через legacy `tenant`. Правильний пароль з 0 членств і legacy `tenant` без членства збільшують лічильник так само, як невірний пароль (Q-C1). Після спливу блокування лічильник з нуля. Спроби, розділені більш ніж вікном, не накопичуються, однаково для наявної й невідомої пошти. `identity.locked` записано в `platform_audit_log` без пошти лише для наявної ідентичності. Успішний вхід видаляє рядок лічильника.
+7. **Ліміти.** `LoginEmailThrottle` дає `429` після порогу і для наявної, і для невідомої пошти. `forgot`: IP-ліміт `429`, ліміт пошти — тихий `202` без постановки в чергу. Ліміт перевірок пошти запрошення на tenant → `429`.
+8. **Квиток.** Прострочений, повторний, чужий `tenantId`, квиток іншої ідентичності, членство вимкнене між кроками, квиток після нової видачі або скидання пароля → `401 login_ticket_invalid`. Невдала спроба з чинним квитком його погашає. У БД лише хеш.
+9. **Legacy `tenant`.** Повертає `TokenResponse` для slug навіть при ≥ 2 членствах. Заголовки `Deprecation` і `Sunset` у форматі §31.2.3 є на 200 і 401. Без `tenant` заголовків немає. Поза Development без конфігу дат API не стартує.
+10. **Перемикання (IDOR).** `switch` у tenant, де людина не член, у вимкнене членство, у призупинений або неіснуючий tenant → однаковий `404 membership_not_found`. Без `refreshToken`, з чужим, відкликаним або з іншого tenant → `401 invalid_token`. Успіх: новий JWT має `sub` цільового членства й `tenant_id` цілі; права й `accessStamp` — цільового членства (ADR-023 не зламано); старий refresh відкликано; повторний `switch` з ним → `401`. Поточний tenant → `422 same_tenant`.
+11. **`memberships`.** Лише членства ідентичності поточного `sub`, `current` коректний, `no-store`. Неактивний профіль майстра не блокує `memberships` і `switch`.
+12. **Refresh.** Ідентичність не `active` → `401 invalid_token`. Refresh із `issued_at` < `sessions_valid_after` → `401 invalid_token`. Сесії, видані до міграції (`sessions_valid_after IS NULL`), оновлюються після деплою.
+13. **Запрошення персоналу.** Створення з поштою, зайнятою в іншому бізнесі (активна чи `pending` ідентичність) → `409 email_in_use`, у тілі немає назви бізнесу. Пошта в цьому tenant → `409 user_exists`. Гонка: два бізнеси запросили одну пошту, обидва приймають паралельно → один `201`, другий `409 email_in_use`, його запрошення лишається pending. Прийняття створює ідентичність і dual-write `users.password_hash`.
+14. **Власник.** Control plane і `/api/platform/tenants` з зайнятою поштою → `409 owner_email_in_use`, tenant не створено. Replay за `externalRef` → `200` (не `409`). Паралельне створення двох tenant з однією поштою → один успіх. Прийняття запрошення власника активує `pending`-ідентичність. Якщо вона вже активна → `410 invite_invalid`.
+15. **Скидання пароля (оновлено F-3, F-9).** `forgot` → `202` без тіла для будь-якої пошти, рядок запиту створюється лише для активної ідентичності, попередні гасяться. `reset`: `422 weak_password` не споживає токен; прострочений, повторний або невідомий → `410 reset_invalid`; успіх змінює пароль для входу в усі бізнеси, знімає блокування (рядок `auth_login_attempts` видалено), відкликає refresh **усіх** членств, ставить `sessions_valid_after`, гасить квитки, пише `identity.password_reset_completed`. Воркер: у `last_error` і логах немає токена й пошти; лист без назви бізнесу.
+16. **BFF.** `loginTicket` ніколи не з'являється в JSON для браузера. Cookie `beauty_lt` має `HttpOnly`, `SameSite=Strict`, правильний `Path` і видаляється після `select` за будь-якого результату. `switch` бере refresh з cookie і замінює його. Не-same-origin → `403`.
+17. **Frontend e2e і a11y.** Вхід → вибір → перемикання в шапці → вихід. Вхід з одним бізнесом без екрана вибору. Екран вибору з клавіатури, видимий фокус, оголошення помилок. Сторінки «Забули пароль» і «Новий пароль» прибирають токен з адреси.
+18. **Регресія.** ADR-023: middleware, `X-Access-Version`, права після перемикання. Staging smoke (вхід наявних акаунтів після міграції, у тому числі злитих).
+
+**Доповнення TASK-860 (2026-11-17):**
+
+19. **F-1, IP клієнта за BFF (TASK-871, staging smoke + автотест).** Автотест API (на зразок `HardeningTests`): з `TrustedProxies` = шлюз + адреса `web` і ланцюгом `client → nginx → web → api` два різні клієнтські IP мають незалежні ліміти `auth`; підроблений XFF від недовіреної адреси ключ не змінює. Staging smoke за §31.9 п.5 записано в task log. Без нього реліз TASK-866 не стартує.
+20. **F-2, `auth_login_attempts`.** (а) У БД зберігається `login_key` = HMAC з pepper: рядок не дорівнює `sha256(email)` і не містить пошти. (б) Блокування невідомої пошти переживає рестарт API (новий `WebApplicationFactory` на тій самій БД). (в) Два інстанси API рахують спроби спільно. (г) Однакова послідовність спроб для наявної, невідомої й `pending` пошти дає однакову послідовність `401…423` і однакові рядки в таблиці (крім `identity.locked` в аудиті). (ґ) Поза Development без `Auth:LoginAttemptKeyPepper` (або з коротшим за 32 байти) API не стартує. (д) Паралельні `auth_login_attempt_failed` на один ключ не гублять інкременти. (е) `purge_expired` видаляє спливлі рядки й не чіпає активні блокування.
+21. **F-3, `forgot` без часового оракула.** Детермінований тест: контролер повертає `202`, коли фейковий `IIdentityStore` ще не викликано (store блокується на семафорі до відповіді). Обробник черги викликає `auth_password_reset_issue` рівно один раз на запит. Переповнена черга → `202` і метрика `dropped`. Функція `issue` повертає `void` (перевірка `pg_proc.prorettype`).
+22. **F-4, квота й аудит.** 21-ше прийняття запрошення персоналу в tenant за 24 год → `429 rate_limited` з `Retry-After`, ідентичність не створено, запрошення pending. Квота іншого tenant не зачеплена. Кожне створення пише `identity.created` з правильними `tenant_id` і `via`. `auth_identity_release`: `beautycrm_app` і воркер не мають `EXECUTE`. Після виклику пошту можна запросити знову, старі членства вимкнені, refresh відкликано, `identity.released` записано.
+23. **F-5, злиття й сесії.** Сесія членства, що «програло» злиття (refresh, виданий до міграції), після міграції: `refresh` → `401 invalid_token`, `switch` → `401`, access-токен → `401 session_revoked`. Тобто без пароля в бізнес «переможця» не пройти.
+24. **F-6, `sessions_valid_after`.** Access-токен з `iat` до скидання пароля → `401 session_revoked` на першому ж запиті (а не через 15 хв). Токен, виданий після скидання, працює. Кількість SQL-запитів `AccessContextMiddleware` на запит не зросла (підрахунок команд). Членство з `sessions_valid_after IS NULL` поводиться як раніше.
+25. **F-8, жорсткість БД (на тестовій БД, через `pg_catalog`).** Для кожної `auth_*`-функції набір ролей з `EXECUTE` точно дорівнює матриці §31.16. `PUBLIC` не має `EXECUTE` ні на одній. Усі `SECURITY DEFINER` мають `proconfig` з `search_path=pg_catalog, pg_temp`. Функції, що повертають рядки, оголошено як `RETURNS TABLE` з явними колонками (немає `SETOF` таблиці й `record`). `beautycrm_app` і воркер не мають `CREATE` на схемі `public`. Нові глобальні таблиці не мають жодних прав для app, воркера й `PUBLIC` **після** повторного прогону `grants.sql` і `setup-db.ps1`. Нормалізація всередині функцій: `find(' A@B.UA ')` = `find('a@b.ua')`. Два паралельні `consume` одного квитка чи токена скидання → рівно один успіх. Стартова перевірка API (на зразок `DbRoleGuard`) падає, якщо app має прямий доступ до глобальних таблиць або зайвий `EXECUTE`.
+26. **F-8, DTO.** Рефлексійний тест над типами запитів і відповідей `/api/auth/**` і BFF: жодної властивості `identityId` / `identity_id`. JWT не містить claim ідентичності.
+27. **F-9, токен скидання лише у воркера.** Після повного циклу (claim → attach → send → mark) у `auth_password_resets` немає 43-символьного токена в жодній колонці. Повторна спроба після невдачі генерує новий токен (`token_hash` змінився), і посилання з першої спроби дає `410`. Два воркери паралельно → один лист (`SKIP LOCKED`). Погашення новою видачею між `claim` і `attach` → `attach` = `false`, лист не надіслано. У `beautycrm_app` немає функції, що повертає токен, хеш чи пошту з цієї таблиці.
+28. **F-10, посилання й лист «Пароль змінено».** Посилання в листі будується з `PublicAppUrl` воркера. Запит `forgot` з підробленими `Host` і `X-Forwarded-Host` не впливає на посилання. Після успішного `reset` у черзі з'являється `changed_notice`, а воркер надсилає лист без токена й назви бізнесу з посиланням на `/forgot-password` (TASK-872; до нього — `failed` з кодом `not_implemented`, purge не блокується).
+29. **F-11, `switch` TOCTOU і кеш.** Членство цілі вимкнено між кроками 5 і 6 (хук у тестовому store) → `404 membership_not_found`, поточний refresh **не** відкликано, нового токена немає. Frontend: після `switch` кеш даних попереднього tenant порожній до першого запиту новим токеном (unit-тест стану), екран не показує даних tenant A.
+30. **F-13, фіктивний хеш.** Cost фіктивного хешу (`$2a$NN$`) дорівнює налаштованому cost хешера. Preflight (TASK-861) показує розподіл cost у `users.password_hash` (лише кількості за префіксом). Якщо cost різні, рішення приймає людина до TASK-862.
+31. **Q-C1, Q-C2, Q-C5.** Покриваються пунктами 5–6, 10 і 8 відповідно. Окремо: BFF `switch` ігнорує `refreshToken` у тілі від браузера й бере лише cookie.
+
+### 31.16 Вимоги до схеми й функцій для TASK-862 (TASK-860 F-2, F-4, F-5, F-6, F-8, F-9, F-10)
+
+Доповнює ADR-024 §2.1/§2.3/§2.10 за errata 2026-11-17. Остаточні типи й імена параметрів — TASK-862, семантика — ця секція.
+
+**Зміни таблиць:**
+- `identities`: **без** `failed_login_count` і `lockout_until` (F-2). Решта за ADR-024 §2.1.
+- **Нова** `auth_login_attempts` (глобальна, `ENABLE + FORCE RLS`, політики лише `TO beautycrm_identity`, deny-all для app, воркера й `PUBLIC`): `login_key bytea PK` (32 байти, `CHECK octet_length = 32`), `failed_count int NOT NULL`, `window_started_at timestamptz NOT NULL`, `locked_until timestamptz NULL`, `updated_at`. Колонки пошти чи `identity_id` **немає**.
+- `auth_password_resets`: `id`, `identity_id`, `login_key bytea` (для зняття блокування при `consume`), `token_hash bytea NULL` (до першої спроби доставки), `expires_at`, `consumed_at`, `superseded_at`, `delivery_status`, `attempts`, `next_attempt_at`, `last_error` (код), `notice_status` (`none|pending|sent|failed`), `notice_attempts`, `notice_next_attempt_at`. Колонки сирого токена (`delivery_token`) **немає** (F-9). Унікальний частковий індекс на `token_hash` (де не `NULL`).
+- `users.sessions_valid_after timestamptz NULL` (F-6). Колонковий `UPDATE` для `beautycrm_identity`. Читає її `AccessContextMiddleware` (наявний запит).
+- `platform_audit_log` CHECK: `identity.password_reset_completed`, `identity.locked`, `identity.created`, `identity.released`; `actor_type`: `identity`.
+
+**Матриця `EXECUTE` (усе інше — `REVOKE`; `PUBLIC` — нічого):**
+
+| Функція | Вихід | `beautycrm_app` | воркер | ops / мігратор |
+|---|---|---|---|---|
+| `auth_identity_find(email)` | `TABLE(identity_id, password_hash, state)` | так | — | — |
+| `auth_login_attempt_is_locked(key, now)` / `auth_login_attempt_failed(key, identity_id?, max, window_s, lockout_s, now)` / `auth_login_attempt_reset(key)` | `bool` / `bool` (locked) / `void` | так | — | — |
+| `auth_identity_login_succeeded(identity, now)` | `void` | так | — | — |
+| `auth_identity_memberships(identity)` | `TABLE(tenant_id, user_id, tenant_name, tenant_slug, role)` | так | — | — |
+| `auth_identity_is_active(identity)`, `auth_identity_email_in_use(email)` | `bool` | так | — | — |
+| `auth_identity_create(email, hash, origin_tenant_id, via, max_per_day)` / `auth_identity_create_pending(email, origin_tenant_id, via)` | `uuid`; квота → `P0001 identity_quota` | так | — | — |
+| `auth_identity_activate_pending(identity, hash)` | `bool` | так | — | — |
+| `auth_login_ticket_issue(identity, hash, expires)` / `auth_login_ticket_consume(hash, tenant_id, now)` | `void` / `uuid` або `NULL` | так | — | — |
+| `auth_password_reset_issue(email, login_key, expires)` | **`void`** (F-3) | так | — | — |
+| `auth_password_reset_consume(hash, new_hash, now)` | `uuid` або `NULL` | так | — | — |
+| `auth_password_reset_claim_delivery(now, lease_s, batch)` | `TABLE(reset_id, email, kind)` | — | так | — |
+| `auth_password_reset_attach_token(reset_id, hash, now)` / `auth_password_reset_mark_delivery(reset_id, kind, status, error_code, next_at)` | `bool` / `void` | — | так | — |
+| `auth_identity_purge_expired(now)` | `bigint` | — | так | — |
+| `auth_identity_release(identity, reason_code)` (F-4) | `void` | — | — | так |
+
+- Колонкові гранти `beautycrm_identity` (ADR-024 §2.3) розширюються лише на `users.sessions_valid_after` (UPDATE). `auth_identity_release` змінює `users.email` і `is_active`, тому належить окремій ролі (не `beautycrm_identity`), щоб не розширювати її права. Роль обирає TASK-862. Тригер узгодженості пошти пропускає зміну, коли `identities.email` і `users.email` змінюються в одній транзакції (спершу ідентичність, потім членства).
+- Квоту `identity_quota` функція рахує за `platform_audit_log` (`identity.created`, `via = staff_invite`, `tenant_id`, 24 год) або за колонкою `identities.origin_tenant_id` з індексом. Вибір за TASK-862, семантика однакова.
+
+**Чекліст F-8 (обов'язковий, перевіряється тестом §31.15 п.25):**
+1. `grants.sql`, `setup-db.ps1`, `init-*-role.sql`: **після** масового `GRANT … ON ALL TABLES` і `ALTER DEFAULT PRIVILEGES` — `REVOKE ALL` на `identities`, `auth_login_tickets`, `auth_password_resets`, `auth_login_attempts` від `beautycrm_app`, ролі воркера й `PUBLIC`. Повторний прогін скриптів прав не повертає.
+2. Для **кожної** `auth_*`-функції окремо: `REVOKE ALL ON FUNCTION … FROM PUBLIC` і явний `GRANT EXECUTE` лише ролям з матриці. Масових `GRANT EXECUTE ON ALL FUNCTIONS` немає (або після них ідуть явні `REVOKE`).
+3. Стартова перевірка API за зразком `DbRoleGuard`: app не має прямих прав на глобальні таблиці, має `EXECUTE` рівно за матрицею, не має `CREATE` на `public`. Якщо щось не так, API не стартує поза Development.
+4. Функції з рядками — `RETURNS TABLE` з явними колонками. Нічого понад перелічене в матриці.
+5. Нормалізація пошти (`lower(btrim())`) **всередині** функцій, що приймають пошту, незалежно від того, чи нормалізував її застосунок.
+6. Споживання квитка й токена скидання — один `UPDATE … WHERE … RETURNING`, без `SELECT` перед ним.
+7. `beautycrm_app`, воркер і `PUBLIC` не мають `CREATE` на схемі `public` (`REVOKE CREATE ON SCHEMA public FROM PUBLIC`), щоб не можна було перехопити об'єкт попри `search_path`.
+8. Жоден вхід функції не приймає `identity_id`, отриманий від клієнта. `identity_id` береться лише з результату інших функцій (§31.1).
+
+**Злиття дублікатів (F-5, замінює GUC `beautycrm.identity_merge`):**
+- Злиття вмикає **лише** `beautycrm.identity_merge_allowlist` = список `email_key` через кому (8 hex, як у звіті preflight `deploy/staging/db/preflight-identity-duplicates.sql`). Правило вибору пароля фіксоване: «найсвіжіший вхід» (ADR-024 §2.10).
+- Група дублікатів не в allowlist → `RAISE`. Ключ з allowlist без групи або з кількома групами (колізія) → `RAISE`.
+- Для кожної злитої групи в тій самій транзакції: `refresh_tokens.revoked_at = now()` для **всіх** членств групи (і того, чий пароль переміг, бо пароль інших стане недійсним), `users.sessions_valid_after = now()` для всіх членств групи. `RAISE NOTICE` лише з кількостями.
+
+**Фіктивний хеш (F-13):** генерується на старті тим самим `IPasswordHasher` з поточним cost. Preflight TASK-861 доповнюється підрахунком cost у `users.password_hash` (лише кількості за префіксом `$2a$NN$`).

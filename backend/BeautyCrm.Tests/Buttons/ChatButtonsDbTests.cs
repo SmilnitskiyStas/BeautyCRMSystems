@@ -981,7 +981,7 @@ public sealed class ChatButtonsDbTests : IClassFixture<PostgresRlsFixture>
         var staffId = Guid.NewGuid();
         await using (var uc = _db.CreateContext(e.Tenant))
         {
-            uc.Add(new User { Id = staffId, Email = $"{staffId:N}@t.test", FullName = "Олена", PasswordHash = "x", Role = Roles.Admin });
+            uc.Add(await IdentitySeed.NewUserAsync(uc, Roles.Admin, "Олена", staffId));
             await uc.SaveChangesAsync();
         }
         await Scope(e, sp => sp.GetRequiredService<CancellationService>().CancelAsync(appt.Id, default, CancelOrigin.Staff(staffId), "перенесли"));
@@ -1231,7 +1231,7 @@ public sealed class ChatButtonsDbTests : IClassFixture<PostgresRlsFixture>
 
         await using (var ctx = _db.CreateContext(e.Tenant))
         {
-            var admin = new User { Id = Guid.NewGuid(), Email = $"{Guid.NewGuid():N}@t.test", FullName = "Олена", PasswordHash = "x", Role = Roles.Admin };
+            var admin = await IdentitySeed.NewUserAsync(ctx, Roles.Admin, "Олена");
             ctx.Add(admin);
             await ctx.SaveChangesAsync();
             var actor = Actor.ForTest(Roles.Admin, null, admin.Id, e.Tenant);
@@ -1266,7 +1266,7 @@ public sealed class ChatButtonsDbTests : IClassFixture<PostgresRlsFixture>
         var appt = await AddApptAsync(e);
         await PressAsync(e, await ActionsKbAsync(e, appt.Id), "aa");
         await using var ctx = _db.CreateContext(e.Tenant);
-        var admin = new User { Id = Guid.NewGuid(), Email = $"{Guid.NewGuid():N}@t.test", FullName = "Олена", PasswordHash = "x", Role = Roles.Admin };
+        var admin = await IdentitySeed.NewUserAsync(ctx, Roles.Admin, "Олена");
         ctx.Add(admin);
         await ctx.SaveChangesAsync();
 

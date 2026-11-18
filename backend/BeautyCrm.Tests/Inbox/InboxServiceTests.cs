@@ -37,12 +37,13 @@ public sealed class InboxServiceTests : IClassFixture<PostgresRlsFixture>
         var h = ChatHarness.Create(_db);
         var s = await h.SeedAsync();
         await using var ctx = _db.CreateContext(s.TenantId);
-        User U(string role, string name) => new()
+        async Task<User> U(string role, string name)
         {
-            Id = Guid.NewGuid(), Email = $"{Guid.NewGuid():N}@t.test", FullName = name, PasswordHash = "x", Role = role,
-            SpecialistId = role == Roles.Specialist ? s.SpecialistId : null,
-        };
-        var admin = U(Roles.Admin, "Олена Адмін"); var owner = U(Roles.Owner, "Іван Власник"); var spec = U(Roles.Specialist, "Марина");
+            var u = await IdentitySeed.NewUserAsync(ctx, role, name);
+            u.SpecialistId = role == Roles.Specialist ? s.SpecialistId : null;
+            return u;
+        }
+        var admin = await U(Roles.Admin, "Олена Адмін"); var owner = await U(Roles.Owner, "Іван Власник"); var spec = await U(Roles.Specialist, "Марина");
         ctx.AddRange(admin, owner, spec);
         await ctx.SaveChangesAsync();
         return new Env(h, s, Actor.ForTest(Roles.Admin, null, admin.Id, s.TenantId), Actor.ForTest(Roles.Owner, null, owner.Id, s.TenantId),

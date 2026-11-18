@@ -37,7 +37,7 @@ public sealed class EfControlPlaneStore(BeautyDbContext db) : IControlPlaneStore
         return (true, value);
     }
 
-    public async Task<bool> TryCreateAsync(CpNewTenant t, CpNewOwner o, Func<ICpSession, Task> inSameTransaction, CancellationToken ct)
+    public async Task<CpCreateOutcome> TryCreateAsync(CpNewTenant t, CpNewOwner o, Func<ICpSession, Task> inSameTransaction, CancellationToken ct)
     {
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await SetLocalAsync("app.tenant_id", t.Id.ToString(), ct); // RLS WITH CHECK (id = app.tenant_id) дозволяє вставку лише цього tenant
@@ -46,24 +46,47 @@ public sealed class EfControlPlaneStore(BeautyDbContext db) : IControlPlaneStore
             Id = t.Id, Name = t.Name, Slug = t.Slug, Modules = t.Modules.ToArray(), Status = "active",
             ExternalRef = t.ExternalRef, ExternalSource = ExternalSource, CreatedAt = t.Now, UpdatedAt = t.Now,
         });
-        db.Users.Add(new User
-        {
-            Id = Guid.NewGuid(), TenantId = t.Id, Email = o.Email, FullName = o.FullName, Role = Roles.Owner,
-            PasswordHash = null, State = UserStates.Invited,
-        });
         try
         {
-            await db.SaveChangesAsync(ct);
+            await db.SaveChangesAsync(ct); // tenant першим: platform_audit_log.tenant_id (identity.created) посилається на нього
         }
-        catch (DbUpdateException ex) when ((ex.InnerException as PostgresException)?.SqlState == PostgresErrorCodes.UniqueViolation)
+        catch (Exception ex) when (IsUniqueViolation(ex))
         {
             db.ChangeTracker.Clear();
-            return false; // tx відкотиться при Dispose
+            return CpCreateOutcome.Conflict; // external_ref або slug (порядок §31.8.3: раніше за пошту); tx відкотиться при Dispose
+        }
+
+        try
+        {
+            // ADR-024: власник без пароля = pending-ідентичність (via = owner_provisioning); активується при прийнятті запрошення.
+            // Зайнята пошта (активна або pending), зокрема програш гонки двох create -> unique_violation -> owner_email_in_use.
+            var identityId = (await db.Database
+                .SqlQuery<Guid>($"SELECT public.auth_identity_create_pending({o.Email}, {t.Id}, {"owner_provisioning"}) AS \"Value\"")
+                .ToListAsync(ct)).Single();
+            db.Users.Add(new User
+            {
+                Id = Guid.NewGuid(), TenantId = t.Id, Email = o.Email, FullName = o.FullName, Role = Roles.Owner,
+                PasswordHash = null, State = UserStates.Invited, IdentityId = identityId,
+            });
+            await db.SaveChangesAsync(ct);
+        }
+        catch (Exception ex) when (IsUniqueViolation(ex))
+        {
+            db.ChangeTracker.Clear();
+            return CpCreateOutcome.OwnerEmailInUse; // tx відкотиться при Dispose: tenant, власник і запрошення не створюються
         }
 
         await inSameTransaction(new Session(db, new CpTenant(t.Id, t.ExternalRef, t.Slug, t.Name, "active", t.Modules, null, t.Now)));
         await tx.CommitAsync(ct);
-        return true;
+        AuthMetrics.IdentityCreated("owner_provisioning");
+        return CpCreateOutcome.Created;
+    }
+
+    private static bool IsUniqueViolation(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+            if (e is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation }) return true;
+        return false;
     }
 
     private Task SetLocalAsync(string name, string value, CancellationToken ct) =>

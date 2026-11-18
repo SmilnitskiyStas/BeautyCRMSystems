@@ -81,7 +81,7 @@ public sealed class UserPermissionsMigrationTests
             var migrator = ((IInfrastructure<IServiceProvider>)ctx.Database).Instance.GetService(typeof(IMigrator)) as IMigrator
                            ?? throw new InvalidOperationException("IMigrator not available");
             var target = ctx.Database.GetMigrations().Single(m => m.EndsWith("_auth_user_permissions", StringComparison.Ordinal));
-            Assert.Equal(target, ctx.Database.GetMigrations().Last()); // нова міграція остання
+            // (більше не остання: після неї йде auth_global_identities; тест мігрує до `target` явно)
 
             // ---- дані "до міграції": 2 tenant-и, owner/admin/specialist, вимкнений admin, pending-запрошення ----
             await migrator.MigrateAsync(Previous);

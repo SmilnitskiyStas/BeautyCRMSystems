@@ -14,8 +14,11 @@ public static class AuthResultMapping
             foreach (var (k, v) in e.Extras) map[k] = v;
             body = map;
         }
+        if (e.Kind == AuthErrorKind.TooManyRequests && e.RetryAfterSeconds is { } ra)
+            c.Response.Headers.RetryAfter = ra.ToString(System.Globalization.CultureInfo.InvariantCulture);
         return e.Kind switch
         {
+            AuthErrorKind.TooManyRequests => c.StatusCode(StatusCodes.Status429TooManyRequests, body),
             AuthErrorKind.Unauthorized => c.Unauthorized(body),
             AuthErrorKind.Forbidden => c.StatusCode(StatusCodes.Status403Forbidden, body),
             AuthErrorKind.NotFound => c.NotFound(body),

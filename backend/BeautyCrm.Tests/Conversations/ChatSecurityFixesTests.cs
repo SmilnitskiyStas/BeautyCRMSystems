@@ -338,9 +338,7 @@ public sealed class ChatSecurityFixesTests : IClassFixture<PostgresRlsFixture>
         await using (var admin = new NpgsqlConnection(_db.AdminConnectionString))
         {
             await admin.OpenAsync();
-            await using var cmd = new NpgsqlCommand($@"INSERT INTO users (id, tenant_id, email, full_name, password_hash, role)
-                VALUES ('{userId}', '{s.TenantId}', 'u{userId:N}@x.test', 'Owner', 'x', 'owner')", admin);
-            await cmd.ExecuteNonQueryAsync();
+            await BeautyCrm.Tests.Data.IdentitySeed.InsertUserAsync(admin, s.TenantId, $"u{userId:N}@x.test", "Owner", "x", "owner", userId);
         }
         var protector = h.Sp.GetRequiredService<IAiSecretProtector>();
         const string key = "sk-ant-test-0123456789abcdef0123456789";

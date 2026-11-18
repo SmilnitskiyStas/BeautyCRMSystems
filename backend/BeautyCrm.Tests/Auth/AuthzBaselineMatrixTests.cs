@@ -68,6 +68,8 @@ public sealed class AuthzBaselineMatrixTests(AuthApiFixture fx) : IClassFixture<
     [
         // ---- auth / команда
         Open("GET", "api/auth/me", "200"),
+        Open("GET", "api/auth/memberships", "200"), // ADR-024 (TASK-863): членства ідентичності, Staff без [RequirePermission]
+        Open("POST", "api/auth/switch", "422"), // перемикання бізнесу: порожнє тіло -> 422 (tenantId обов'язковий)
         Open("GET", "api/access/catalog", "200"), // ADR-023 (TASK-850): каталог прав, Staff-політика, однаковий для всіх ролей
         MgmtFilter("GET", "api/users", "200"),
         MgmtFilter("PATCH", "api/users/{id:guid}/status", "404"),

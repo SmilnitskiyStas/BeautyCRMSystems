@@ -79,6 +79,10 @@ public sealed class AccessContextMiddleware(RequestDelegate next, ILogger<Access
                 {
                     failure = "session_revoked";
                 }
+                else if (IsIssuedBeforeSessionsValidAfter(http.User, snapshot.SessionsValidAfter))
+                {
+                    failure = "session_revoked"; // §31.6 (F-6): скидання пароля/злиття/звільнення пошти; без другого запиту до БД
+                }
                 else
                 {
                     var access = AccessSet.Build(snapshot.Role, snapshot.Permissions, snapshot.Modules, snapshot.SpecialistActive == false);
@@ -113,6 +117,17 @@ public sealed class AccessContextMiddleware(RequestDelegate next, ILogger<Access
             return;
         }
         await next(http);
+    }
+
+    /// <summary>
+    /// §31.6: <c>iat</c> &lt; <c>users.sessions_valid_after</c>, обрізаного до секунд. Токен без iat при встановленій позначці відхиляється
+    /// (fail-closed); токен, виданий у ту саму секунду, проходить.
+    /// </summary>
+    private static bool IsIssuedBeforeSessionsValidAfter(ClaimsPrincipal user, DateTimeOffset? validAfter)
+    {
+        if (validAfter is not { } after) return false;
+        var threshold = after.ToUnixTimeSeconds();
+        return !long.TryParse(user.FindFirst("iat")?.Value, out var iat) || iat < threshold;
     }
 
     /// <summary>JWT-principal користувача tenant (не PlatformKey / ControlPlaneHmac, не анонімний, не [AllowAnonymous]).</summary>

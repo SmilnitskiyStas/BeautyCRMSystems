@@ -223,7 +223,8 @@ public sealed class WebhookAndRlsRegressionTests : IClassFixture<AuthApiFixture>
         }
 
         var nonEmptyForOwner = new List<string>();
-        foreach (var table in tables)
+        // платформні таблиці свідомо без tenant RLS (ADR-018); тепер platform_audit_log має рядки identity.created (ADR-024, §31.12)
+        foreach (var table in tables.Where(t => t is not ("platform_audit_log" or "platform_owner_invites")))
         {
             Assert.Equal(0, await CountAsync(table, b.Tenant.TenantId, a.Tenant.TenantId)); // чужий tenant
             Assert.Equal(0, await CountAsync(table, null, a.Tenant.TenantId));              // tenant не заданий

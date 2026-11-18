@@ -31,9 +31,8 @@ public sealed class UserPermissionsRlsTests : IClassFixture<PostgresRlsFixture>
         await using var admin = new NpgsqlConnection(_db.AdminConnectionString);
         await admin.OpenAsync();
         await Exec(admin, $"INSERT INTO tenants (id, name, slug) VALUES ('{tenantId}', 'T', '{slug}')");
-        await Exec(admin, $@"INSERT INTO users (id, tenant_id, email, full_name, password_hash, role)
-                             VALUES ('{ownerId}', '{tenantId}', 'o@{slug}.test', 'Owner', 'x', 'owner'),
-                                    ('{adminId}', '{tenantId}', 'a@{slug}.test', 'Admin', 'x', 'admin')");
+        await Exec(admin, IdentitySeed.UserSql(tenantId, $"o@{slug}.test", "Owner", "x", "owner", ownerId));
+        await Exec(admin, IdentitySeed.UserSql(tenantId, $"a@{slug}.test", "Admin", "x", "admin", adminId));
         await Exec(admin, $@"INSERT INTO invites (id, tenant_id, email, role, token_hash, expires_at)
                              VALUES ('{inviteId}', '{tenantId}', 'i@{slug}.test', 'deputy', '{Guid.NewGuid():N}', now() + interval '1 day')");
         return new Seed(tenantId, ownerId, adminId, inviteId);
@@ -168,7 +167,7 @@ public sealed class UserPermissionsRlsTests : IClassFixture<PostgresRlsFixture>
         await using (var admin = new NpgsqlConnection(_db.AdminConnectionString))
         {
             await admin.OpenAsync();
-            await Exec(admin, $"INSERT INTO users (id, tenant_id, email, full_name, password_hash, role) VALUES ('{extra}', '{a.TenantId}', 'e{extra:N}@x.test', 'E', 'x', 'specialist')");
+            await Exec(admin, IdentitySeed.UserSql(a.TenantId, $"e{extra:N}@x.test", "E", "x", "specialist", extra));
             await Save(a.TenantId, Perm(a.TenantId, extra), Perm(a.TenantId, extra, "calendar.manage", "own"));
             await Exec(admin, $"DELETE FROM users WHERE id = '{extra}'"); // CASCADE
             Assert.Equal(0L, await Scalar(admin, $"SELECT count(*) FROM user_permissions WHERE user_id = '{extra}'"));
@@ -276,9 +275,9 @@ public sealed class UserPermissionsRlsTests : IClassFixture<PostgresRlsFixture>
         Assert.Equal(new[] { 1, 1 }, await ctx.Users.AsNoTracking().OrderBy(u => u.Email).Select(u => u.AccessVersion).ToArrayAsync());
 
         var email = $"d{Guid.NewGuid():N}@x.test";
-        await ctx.Database.ExecuteSqlRawAsync($"INSERT INTO users (tenant_id, email, full_name, password_hash, role) VALUES ('{a.TenantId}', '{email}', 'D', 'x', 'deputy')");
+        await ctx.Database.ExecuteSqlRawAsync(IdentitySeed.UserSql(a.TenantId, email, "D", "x", "deputy", asApp: true));
         Assert.Equal(1, await ctx.Users.AsNoTracking().Where(u => u.Email == email).Select(u => u.AccessVersion).SingleAsync());
-        await Rejects(() => ctx.Database.ExecuteSqlRawAsync($"INSERT INTO users (tenant_id, email, full_name, password_hash, role) VALUES ('{a.TenantId}', 'm{email}', 'M', 'x', 'manager')"),
+        await Rejects(() => ctx.Database.ExecuteSqlRawAsync(IdentitySeed.UserSql(a.TenantId, "m" + email, "M", "x", "manager", asApp: true)),
             CheckViolation, "ck_users_role");
         await Rejects(() => ctx.Database.ExecuteSqlRawAsync($"INSERT INTO invites (tenant_id, email, role, token_hash, expires_at) VALUES ('{a.TenantId}', 'o{email}', 'owner', '{Guid.NewGuid():N}', now() + interval '1 day')"),
             CheckViolation, "ck_invites_role");

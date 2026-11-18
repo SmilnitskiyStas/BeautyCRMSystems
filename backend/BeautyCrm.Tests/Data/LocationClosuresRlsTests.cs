@@ -24,8 +24,7 @@ public sealed class LocationClosuresRlsTests : IClassFixture<PostgresRlsFixture>
             await admin.OpenAsync();
             var slug = "clos-" + tenantId.ToString("N")[..20];
             await Exec(admin, $"INSERT INTO tenants (id, name, slug) VALUES ('{tenantId}', 'T', '{slug}')");
-            await Exec(admin, $@"INSERT INTO users (id, tenant_id, email, full_name, password_hash, role)
-                                 VALUES ('{userId}', '{tenantId}', 'u@{slug}.test', 'Staff', 'x', 'admin')");
+            await Exec(admin, IdentitySeed.UserSql(tenantId, $"u@{slug}.test", "Staff", "x", "admin", userId));
         }
         await using var ctx = _db.CreateContext(tenantId);
         var location = new Location { Name = "L", Timezone = "UTC" };

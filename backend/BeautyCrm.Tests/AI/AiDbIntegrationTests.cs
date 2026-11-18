@@ -185,9 +185,7 @@ public sealed class AiDbIntegrationTests : IClassFixture<PostgresRlsFixture>
         var userId = Guid.NewGuid();
         await using var admin = new NpgsqlConnection(_db.AdminConnectionString);
         await admin.OpenAsync();
-        await using var cmd = new NpgsqlCommand($@"INSERT INTO users (id, tenant_id, email, full_name, password_hash, role)
-            VALUES ('{userId}', '{tenantId}', 'u{userId:N}@x.test', 'Owner', 'x', 'owner')", admin);
-        await cmd.ExecuteNonQueryAsync();
+        await BeautyCrm.Tests.Data.IdentitySeed.InsertUserAsync(admin, tenantId, $"u{userId:N}@x.test", "Owner", "x", "owner", userId);
         return new AiProviderKey
         {
             Provider = "anthropic", KeyEncrypted = cipher ?? protector.Protect(apiKey, tenantId, "anthropic"),

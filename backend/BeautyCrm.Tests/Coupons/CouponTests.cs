@@ -137,7 +137,7 @@ public sealed class CouponDbTests : IClassFixture<PostgresRlsFixture>
         {
             await admin.OpenAsync();
             await using var cmd = new NpgsqlCommand($@"INSERT INTO tenants (id, name, slug) VALUES ('{w.TenantId}', 'T', 'cp-{w.TenantId:N}');
-                INSERT INTO users (id, tenant_id, email, full_name, password_hash, role) VALUES ('{w.UserId}', '{w.TenantId}', 'u@{w.TenantId:N}.test', 'Owner', 'x', 'owner');", admin);
+                {BeautyCrm.Tests.Data.IdentitySeed.UserSql(w.TenantId, $"u@{w.TenantId:N}.test", "Owner", "x", "owner", w.UserId)}", admin);
             await cmd.ExecuteNonQueryAsync();
         }
         await using var ctx = _db.CreateContext(w.TenantId);

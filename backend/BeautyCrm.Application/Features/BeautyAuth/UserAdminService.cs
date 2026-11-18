@@ -1,10 +1,13 @@
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 using BeautyCrm.Application.Features.BeautyBooking;
 
 namespace BeautyCrm.Application.Features.BeautyAuth;
 
 /// <summary>Запрошення й керування користувачами tenant. Усі виклики йдуть під RLS tenant поточного користувача.</summary>
-public sealed class UserAdminService(IAuthStore store, AuthOptions options, TimeProvider clock)
+public sealed class UserAdminService(
+    IAuthStore store, IIdentityStore identities, InviteEmailCheckThrottle emailCheckThrottle, AuthOptions options, TimeProvider clock,
+    Microsoft.Extensions.Logging.ILogger<UserAdminService> logger)
 {
     public async Task<AuthResult<InviteCreatedDto>> CreateInviteAsync(Actor actor, CreateInviteRequest req, CancellationToken ct)
     {
@@ -39,6 +42,16 @@ public sealed class UserAdminService(IAuthStore store, AuthOptions options, Time
         if ((await store.ListUsersAsync(ct)).Any(u => u.Email == email))
             return AuthError.Conflict("user_exists", "A user with this email already exists.");
 
+        // §31.8.1: ліміт на tenant витрачає кожен запит, що дійшов сюди; потім глобальна перевірка пошти (активна або pending ідентичність).
+        var (acquired, retryAfter) = emailCheckThrottle.TryAcquire(actor.TenantId);
+        if (!acquired) return AuthError.RateLimited(retryAfter);
+        if (await identities.EmailInUseAsync(email, ct))
+        {
+            AuthMetrics.InviteEmailInUse();
+            logger.LogWarning("invite_email_in_use tenant={TenantId}", actor.TenantId); // без пошти
+            return EmailInUse;
+        }
+
         var now = clock.GetUtcNow();
         var (token, hash) = TokenCodec.Generate(actor.TenantId);
         var permissionsJson = System.Text.Json.JsonSerializer.Serialize(snapshot.Value!.Permissions);
@@ -51,6 +64,9 @@ public sealed class UserAdminService(IAuthStore store, AuthOptions options, Time
         if (invite is null) return AuthError.Conflict("specialist_inactive", "The specialist profile is deactivated; reactivate it first.");
         return new InviteCreatedDto(ToDto(invite, now), token, snapshot.Value.Clamped);
     }
+
+    /// <summary>Назва іншого бізнесу не розкривається (§31.8.1).</summary>
+    internal static readonly AuthError EmailInUse = AuthError.Conflict("email_in_use", "This email is already used in Beauty CRM.");
 
     public async Task<IReadOnlyList<InviteDto>> ListInvitesAsync(CancellationToken ct)
     {
@@ -112,9 +128,12 @@ public sealed class PlatformTenantService(IAuthStore store, IPasswordHasher hash
         var owner = new NewUser(AuthService.NormalizeEmail(req.Owner.Email), req.Owner.FullName.Trim(),
             hasher.Hash(req.Owner.Password), Roles.Owner, null);
         var (outcome, ownerId) = await store.CreateTenantWithOwnerAsync(tenant, owner, ct);
-        return outcome == WriteOutcome.Ok
-            ? new TenantCreatedDto(tenant.Id, tenant.Name, slug, modules, ownerId)
-            : AuthError.Conflict("tenant_slug_taken", "A tenant with this slug already exists.");
+        return outcome switch
+        {
+            WriteOutcome.Ok => new TenantCreatedDto(tenant.Id, tenant.Name, slug, modules, ownerId),
+            WriteOutcome.EmailInUse => AuthError.Conflict("owner_email_in_use", "The owner email is already used in Beauty CRM."),
+            _ => AuthError.Conflict("tenant_slug_taken", "A tenant with this slug already exists."),
+        };
     }
 
     public async Task<AuthResult<bool>> UpdateTenantAsync(Guid tenantId, UpdateTenantRequest req, CancellationToken ct)

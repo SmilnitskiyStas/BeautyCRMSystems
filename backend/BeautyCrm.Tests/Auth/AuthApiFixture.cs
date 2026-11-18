@@ -15,6 +15,9 @@ public sealed class AuthApiFixture : IAsyncLifetime
 {
     public const string PlatformKey = "test-platform-key-0123456789-abcdefghijklmnop";
     public const string Password = "Correct-Horse-Battery-9";
+    public const string Pepper = "test-login-pepper-0123456789-abcdefghijklmnop";
+    public static readonly DateTimeOffset DeprecatedAt = new(2026, 11, 17, 0, 0, 0, TimeSpan.Zero);
+    public static readonly DateTimeOffset SunsetAt = new(2027, 1, 16, 0, 0, 0, TimeSpan.Zero);
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     public PostgresRlsFixture Db { get; } = new();
@@ -39,6 +42,9 @@ public sealed class AuthApiFixture : IAsyncLifetime
             b.UseSetting("Auth:PlatformKey", PlatformKey);
             b.UseSetting("Auth:PlatformKeyEnabled", "true"); // ADR-018: поза Development вимкнено за замовчуванням
             b.UseSetting("Auth:BcryptWorkFactor", "4");
+            b.UseSetting("Auth:LoginAttemptKeyPepper", Pepper); // §31.1: обов'язковий поза Development
+            b.UseSetting("Auth:LegacyTenantLogin:DeprecatedAt", DeprecatedAt.ToString("o")); // §31.2.3: обов'язкові поза Development
+            b.UseSetting("Auth:LegacyTenantLogin:SunsetAt", SunsetAt.ToString("o"));
             b.UseSetting("Auth:RateLimit:PermitLimit", permitLimit.ToString());
             b.UseSetting("Beauty:AllowTenantHeader", "true");
         });
@@ -116,10 +122,11 @@ public sealed class AuthApiFixture : IAsyncLifetime
         var id = Guid.NewGuid();
         await using (var ctx = Db.CreateContext(t.TenantId))
         {
+            var hash = BCrypt.Net.BCrypt.EnhancedHashPassword(Password, 4);
             ctx.Users.Add(new User
             {
                 Id = id, Email = email, FullName = role, Role = role, SpecialistId = specialistId,
-                PasswordHash = BCrypt.Net.BCrypt.EnhancedHashPassword(Password, 4),
+                PasswordHash = hash, IdentityId = await IdentitySeed.EnsureAsync(ctx, email, hash), // ADR-024: пароль у ідентичності (dual-write)
             });
             if (role != Roles.Owner)
                 foreach (var (key, level) in permissions ?? PermissionPresets.For(role))

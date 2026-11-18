@@ -1298,6 +1298,10 @@ public class BeautyDbContext : DbContext
             b.Property(x => x.IsActive).HasDefaultValue(true);
             b.Property(x => x.FailedLoginCount).HasDefaultValue(0);
             b.Property(x => x.AccessVersion).HasDefaultValue(1); // ADR-023
+            // ADR-024: членство належить ідентичності; UNIQUE (tenant_id, identity_id), FK RESTRICT (ідентичності не видаляються)
+            b.HasOne<AuthIdentity>().WithMany().HasForeignKey(x => x.IdentityId).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => x.IdentityId);
+            b.HasIndex(x => new { x.TenantId, x.IdentityId }).IsUnique();
             b.HasOne<Tenant>().WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
             TenantFk(b, x => x.Specialist, x => new { x.TenantId, x.SpecialistId }, DeleteBehavior.Restrict);
             b.HasIndex(x => new { x.TenantId, x.Email }).IsUnique();
@@ -1333,6 +1337,8 @@ public class BeautyDbContext : DbContext
             b.HasIndex(x => new { x.TenantId, x.TokenHash }).IsUnique();
             b.HasIndex(x => new { x.TenantId, x.UserId });
         });
+
+        ConfigureIdentity(mb);
 
         // ADR-023 §2.4: матеріалізовані права користувача (RLS FORCE + tenant_isolation у міграції auth_user_permissions)
         mb.Entity<UserPermission>(b =>
@@ -1388,6 +1394,91 @@ public class BeautyDbContext : DbContext
         });
     }
 
+    // ---------- global identity (ADR-024, TASK-862; RLS deny-all, ролі, функції auth_* і backfill - у міграції auth_global_identities) ----------
+
+    private static void ConfigureIdentity(ModelBuilder mb)
+    {
+        mb.Entity<AuthIdentity>(b =>
+        {
+            b.ToTable("identities", t =>
+            {
+                t.HasCheckConstraint("ck_identities_email_normalized", "email = lower(btrim(email)) AND email <> ''");
+                t.HasCheckConstraint("ck_identities_state", "state IN ('pending', 'active')");
+                t.HasCheckConstraint("ck_identities_password_or_pending", "(state = 'active') = (password_hash IS NOT NULL)");
+            });
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
+            b.Property(x => x.Email).HasMaxLength(320);
+            b.Property(x => x.PasswordHash).HasMaxLength(255);
+            b.Property(x => x.State).HasMaxLength(16);
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            b.Property(x => x.UpdatedAt).HasDefaultValueSql("now()");
+            b.HasIndex(x => x.Email).IsUnique().HasDatabaseName("ux_identities_email");
+        });
+
+        mb.Entity<AuthLoginTicket>(b =>
+        {
+            b.ToTable("auth_login_tickets", t =>
+                t.HasCheckConstraint("ck_auth_login_tickets_token_hash", "octet_length(token_hash) = 32"));
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
+            b.Property(x => x.TokenHash).HasColumnType("bytea");
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            b.HasOne<AuthIdentity>().WithMany().HasForeignKey(x => x.IdentityId).OnDelete(DeleteBehavior.Cascade);
+            b.HasIndex(x => x.TokenHash).IsUnique();
+            b.HasIndex(x => x.IdentityId);
+            b.HasIndex(x => x.ExpiresAt);
+        });
+
+        mb.Entity<AuthPasswordReset>(b =>
+        {
+            b.ToTable("auth_password_resets", t =>
+            {
+                t.HasCheckConstraint("ck_auth_password_resets_login_key", "octet_length(login_key) = 32");
+                t.HasCheckConstraint("ck_auth_password_resets_token_hash", "token_hash IS NULL OR octet_length(token_hash) = 32");
+                t.HasCheckConstraint("ck_auth_password_resets_delivery_status", "delivery_status IN ('pending', 'sent', 'failed')");
+                t.HasCheckConstraint("ck_auth_password_resets_notice_status", "notice_status IN ('none', 'pending', 'sent', 'failed')");
+                t.HasCheckConstraint("ck_auth_password_resets_attempts", "attempts >= 0 AND notice_attempts >= 0");
+                t.HasCheckConstraint("ck_auth_password_resets_consumed_or_superseded", "consumed_at IS NULL OR superseded_at IS NULL");
+            });
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
+            b.Property(x => x.LoginKey).HasColumnType("bytea");
+            b.Property(x => x.TokenHash).HasColumnType("bytea");
+            b.Property(x => x.DeliveryStatus).HasMaxLength(16).HasDefaultValue("pending");
+            b.Property(x => x.Attempts).HasDefaultValue(0);
+            b.Property(x => x.NextAttemptAt).HasDefaultValueSql("now()");
+            b.Property(x => x.LastError).HasMaxLength(64);
+            b.Property(x => x.NoticeStatus).HasMaxLength(16).HasDefaultValue("none");
+            b.Property(x => x.NoticeAttempts).HasDefaultValue(0);
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            b.HasOne<AuthIdentity>().WithMany().HasForeignKey(x => x.IdentityId).OnDelete(DeleteBehavior.Cascade);
+            b.HasIndex(x => x.TokenHash).IsUnique().HasFilter("token_hash IS NOT NULL").HasDatabaseName("ux_auth_password_resets_token_hash");
+            // не більше одного живого запиту на ідентичність (issue гасить попередній)
+            b.HasIndex(x => x.IdentityId).IsUnique().HasFilter("consumed_at IS NULL AND superseded_at IS NULL")
+                .HasDatabaseName("ux_auth_password_resets_active_identity");
+            b.HasIndex(x => x.IdentityId).HasDatabaseName("ix_auth_password_resets_identity_id"); // FK (cascade)
+            b.HasIndex(x => x.NextAttemptAt).HasFilter("delivery_status = 'pending' AND consumed_at IS NULL AND superseded_at IS NULL")
+                .HasDatabaseName("ix_auth_password_resets_delivery_queue");
+            b.HasIndex(x => x.NoticeNextAttemptAt).HasFilter("notice_status = 'pending'")
+                .HasDatabaseName("ix_auth_password_resets_notice_queue");
+            b.HasIndex(x => x.ExpiresAt);
+        });
+
+        mb.Entity<AuthLoginAttempt>(b =>
+        {
+            b.ToTable("auth_login_attempts", t =>
+            {
+                t.HasCheckConstraint("ck_auth_login_attempts_login_key", "octet_length(login_key) = 32");
+                t.HasCheckConstraint("ck_auth_login_attempts_failed_count", "failed_count >= 0");
+            });
+            b.HasKey(x => x.LoginKey);
+            b.Property(x => x.LoginKey).HasColumnType("bytea");
+            b.Property(x => x.UpdatedAt).HasDefaultValueSql("now()");
+            b.HasIndex(x => x.UpdatedAt);
+        });
+    }
+
     // ---------- control plane ShelfGuard (TASK-816, ADR-018; RLS/grants/trigger in migrations platform_control_plane) ----------
 
     private static void ConfigurePlatform(ModelBuilder mb)
@@ -1421,9 +1512,11 @@ public class BeautyDbContext : DbContext
             {
                 t.HasCheckConstraint("ck_platform_audit_log_action",
                     "action IN ('tenant.created', 'tenant.create_replayed', 'tenant.suspended', 'tenant.resumed', 'tenant.modules_changed', " +
-                    "'owner_invite.issued', 'owner_invite.revoked', 'owner_invite.accepted', 'control_auth.failed')");
+                    "'owner_invite.issued', 'owner_invite.revoked', 'owner_invite.accepted', 'control_auth.failed', " +
+                    // ADR-024 / контракт §31.12 (TASK-862)
+                    "'identity.password_reset_completed', 'identity.locked', 'identity.created', 'identity.released')");
                 t.HasCheckConstraint("ck_platform_audit_log_actor_type",
-                    "actor_type IN ('shelfguard_admin', 'platform_key', 'owner', 'system')");
+                    "actor_type IN ('shelfguard_admin', 'platform_key', 'owner', 'system', 'identity')");
                 t.HasCheckConstraint("ck_platform_audit_log_details", "jsonb_typeof(details) = 'object'");
             });
             b.HasKey(x => x.Id);

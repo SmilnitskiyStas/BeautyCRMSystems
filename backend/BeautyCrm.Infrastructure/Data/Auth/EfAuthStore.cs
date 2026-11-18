@@ -63,30 +63,14 @@ public sealed class EfAuthStore(BeautyDbContext db, TenantContext tenant, IConfi
 
     // ---------- users ----------
 
-    public async Task<UserRecord?> FindUserByEmailAsync(string normalizedEmail, CancellationToken ct) =>
-        await Db.Users.AsNoTracking().Where(u => u.Email == normalizedEmail).Select(Project).FirstOrDefaultAsync(ct);
-
     public async Task<UserRecord?> GetUserAsync(Guid id, CancellationToken ct) =>
         await Db.Users.AsNoTracking().Where(u => u.Id == id).Select(Project).FirstOrDefaultAsync(ct);
 
     public async Task<IReadOnlyList<UserRecord>> ListUsersAsync(CancellationToken ct) =>
         await Db.Users.AsNoTracking().OrderBy(u => u.CreatedAt).Select(Project).ToListAsync(ct);
 
-    public Task RegisterFailedLoginAsync(Guid userId, int maxAttempts, DateTimeOffset lockUntil, CancellationToken ct) =>
-        Db.Users.Where(u => u.Id == userId).ExecuteUpdateAsync(s => s
-            .SetProperty(u => u.LockoutUntil, u => u.FailedLoginCount + 1 >= maxAttempts ? lockUntil : u.LockoutUntil)
-            .SetProperty(u => u.FailedLoginCount, u => u.FailedLoginCount + 1), ct);
-
-    public Task RegisterSuccessfulLoginAsync(Guid userId, DateTimeOffset now, CancellationToken ct) =>
-        Db.Users.Where(u => u.Id == userId).ExecuteUpdateAsync(s => s
-            .SetProperty(u => u.FailedLoginCount, 0)
-            .SetProperty(u => u.LockoutUntil, (DateTimeOffset?)null)
-            .SetProperty(u => u.LastLoginAt, now), ct);
-
-    public Task ResetLockoutAsync(Guid userId, CancellationToken ct) =>
-        Db.Users.Where(u => u.Id == userId).ExecuteUpdateAsync(s => s
-            .SetProperty(u => u.FailedLoginCount, 0)
-            .SetProperty(u => u.LockoutUntil, (DateTimeOffset?)null), ct);
+    public Task SetLastLoginAsync(Guid userId, DateTimeOffset now, CancellationToken ct) =>
+        Db.Users.Where(u => u.Id == userId).ExecuteUpdateAsync(s => s.SetProperty(u => u.LastLoginAt, now), ct);
 
     // ---------- refresh tokens ----------
 
@@ -98,7 +82,7 @@ public sealed class EfAuthStore(BeautyDbContext db, TenantContext tenant, IConfi
 
     public async Task<RefreshRecord?> FindRefreshTokenAsync(string tokenHash, CancellationToken ct) =>
         await Db.RefreshTokens.AsNoTracking().Where(t => t.TokenHash == tokenHash)
-            .Select(t => new RefreshRecord(t.Id, t.UserId, t.ExpiresAt, t.RevokedAt)).FirstOrDefaultAsync(ct);
+            .Select(t => new RefreshRecord(t.Id, t.UserId, t.ExpiresAt, t.RevokedAt, t.CreatedAt)).FirstOrDefaultAsync(ct);
 
     public async Task<bool> TryRevokeRefreshTokenAsync(Guid id, DateTimeOffset now, CancellationToken ct) =>
         await Db.RefreshTokens.Where(t => t.Id == id && t.RevokedAt == null)
@@ -207,7 +191,32 @@ public sealed class EfAuthStore(BeautyDbContext db, TenantContext tenant, IConfi
             return (WriteOutcome.Unavailable, null);
         }
 
+        // §31.8.2: пошта вже член цього tenant -> user_exists (до створення ідентичності: вона глобально унікальна, тож інакше вийшов би email_in_use)
+        if (await db.Users.AsNoTracking().AnyAsync(x => x.Email == user.Email, ct))
+        {
+            db.ChangeTracker.Clear();
+            return (WriteOutcome.Conflict, null);
+        }
+
+        // ADR-024: нова ідентичність (via = staff_invite, квота на tenant, аудит identity.created у тій самій транзакції). Пошту зайняла
+        // інша ідентичність -> EmailInUse; квоту вичерпано -> QuotaExceeded. В обох випадках транзакція відкочується, запрошення лишається чинним.
+        Guid identityId;
+        try
+        {
+            identityId = await CreateIdentityAsync(user.Email, user.PasswordHash ?? throw new InvalidOperationException("Password hash is required."), tenant.TenantId!.Value, "staff_invite", ct);
+        }
+        catch (Exception ex) when (FindPostgres(ex) is { } pg && pg.SqlState == PostgresErrorCodes.UniqueViolation)
+        {
+            db.ChangeTracker.Clear();
+            return (WriteOutcome.EmailInUse, null);
+        }
+        catch (Exception ex) when (FindPostgres(ex) is { MessageText: "identity_quota" })
+        {
+            db.ChangeTracker.Clear();
+            return (WriteOutcome.QuotaExceeded, null);
+        }
         var entity = NewUserEntity(user);
+        entity.IdentityId = identityId;
         db.Users.Add(entity);
         foreach (var (key, level) in plan.Permissions)
             db.UserPermissions.Add(new UserPermission { UserId = entity.Id, Permission = key, Level = level, UpdatedByUserId = invite.InvitedByUserId });
@@ -224,6 +233,7 @@ public sealed class EfAuthStore(BeautyDbContext db, TenantContext tenant, IConfi
             return (WriteOutcome.Conflict, null); // tx відкотиться при Dispose: запрошення лишається чинним
         }
         await tx.CommitAsync(ct);
+        AuthMetrics.IdentityCreated("staff_invite");
         return (WriteOutcome.Ok, ToRecord(entity));
     }
 
@@ -233,22 +243,37 @@ public sealed class EfAuthStore(BeautyDbContext db, TenantContext tenant, IConfi
     {
         tenant.SetTenant(t.Id); // RLS WITH CHECK (id = app.tenant_id) дозволяє вставку лише цього tenant
         var now = DateTimeOffset.UtcNow;
-        Db.Tenants.Add(new Tenant
+        await using var tx = await Db.Database.BeginTransactionAsync(ct);
+        db.Tenants.Add(new Tenant
         {
             Id = t.Id, Name = t.Name, Slug = t.Slug, Modules = t.Modules.ToArray(), Status = "active", CreatedAt = now, UpdatedAt = now,
         });
         var ownerEntity = NewUserEntity(owner);
         ownerEntity.TenantId = t.Id;
-        db.Users.Add(ownerEntity);
         try
         {
-            await db.SaveChangesAsync(ct);
+            await db.SaveChangesAsync(ct); // tenant першим: platform_audit_log.tenant_id (identity.created) посилається на нього
         }
-        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        catch (Exception ex) when (FindPostgres(ex) is { SqlState: PostgresErrorCodes.UniqueViolation })
         {
             db.ChangeTracker.Clear();
-            return (WriteOutcome.Conflict, Guid.Empty);
+            return (WriteOutcome.Conflict, Guid.Empty); // slug зайнятий; tx відкотиться при Dispose
         }
+        try
+        {
+            // ADR-024 / §31.8.3: власник з паролем = одразу активна ідентичність (via = platform), без квоти. Зайнята пошта (активна або
+            // pending) -> unique_violation -> EmailInUse (tenant не створюється).
+            ownerEntity.IdentityId = await CreateIdentityAsync(owner.Email, owner.PasswordHash ?? throw new InvalidOperationException("Password hash is required."), t.Id, "platform", ct);
+            db.Users.Add(ownerEntity);
+            await db.SaveChangesAsync(ct);
+        }
+        catch (Exception ex) when (FindPostgres(ex) is { SqlState: PostgresErrorCodes.UniqueViolation })
+        {
+            db.ChangeTracker.Clear();
+            return (WriteOutcome.EmailInUse, Guid.Empty);
+        }
+        await tx.CommitAsync(ct);
+        AuthMetrics.IdentityCreated("platform");
         return (WriteOutcome.Ok, ownerEntity.Id);
     }
 
@@ -270,11 +295,46 @@ public sealed class EfAuthStore(BeautyDbContext db, TenantContext tenant, IConfi
         return WriteOutcome.Ok;
     }
 
+    /// <summary>
+    /// Ковзне вікно 24 год за identity.created (via = staff_invite) цього tenant: місце звільниться, коли найстаріший запис вийде з вікна.
+    /// Читає platform_audit_log (SELECT у ролі застосунку, без RLS). Округлення вгору до хвилини; 60..86400 с.
+    /// </summary>
+    public async Task<int> IdentityQuotaRetryAfterSecondsAsync(CancellationToken ct)
+    {
+        const int day = 86400;
+        var tenantId = tenant.TenantId ?? throw new InvalidOperationException("Tenant is not resolved.");
+        var seconds = (await db.Database.SqlQuery<double?>($"""
+            SELECT extract(epoch FROM (min(a.occurred_at) + interval '24 hours' - now())) AS "Value"
+            FROM platform_audit_log a
+            WHERE a.action = 'identity.created' AND a.tenant_id = {tenantId} AND a.details ->> 'via' = 'staff_invite'
+              AND a.occurred_at > now() - interval '24 hours'
+            """).ToListAsync(ct)).SingleOrDefault();
+        if (seconds is not { } s || s <= 0) return day;
+        return Math.Clamp((int)(Math.Ceiling(s / 60.0) * 60), 60, day);
+    }
+
     // ---------- helpers ----------
+
+    /// <summary>auth_identity_create (SECURITY DEFINER, §31.16): нова активна ідентичність у поточній транзакції. unique_violation (пошта зайнята) і P0001 identity_quota - викликачу.</summary>
+    private async Task<Guid> CreateIdentityAsync(string email, string passwordHash, Guid originTenantId, string via, CancellationToken ct)
+    {
+        var maxPerDay = Math.Clamp(int.TryParse(config["Auth:IdentityCreate:PerTenantPerDay"], out var q) ? q : 20, 1, 200);
+        var rows = await db.Database
+            .SqlQuery<Guid>($"SELECT public.auth_identity_create({email}, {passwordHash}, {originTenantId}, {via}, {maxPerDay}) AS \"Value\"")
+            .ToListAsync(ct);
+        return rows.Single();
+    }
+
+    private static PostgresException? FindPostgres(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+            if (e is PostgresException pg) return pg;
+        return null;
+    }
 
     private static readonly System.Linq.Expressions.Expression<Func<User, UserRecord>> Project = u =>
         new UserRecord(u.Id, u.TenantId, u.Email, u.FullName, u.PasswordHash, u.Role, u.SpecialistId, u.IsActive,
-            u.FailedLoginCount, u.LockoutUntil, u.LastLoginAt, u.State, u.AccessVersion);
+            u.FailedLoginCount, u.LockoutUntil, u.LastLoginAt, u.State, u.AccessVersion, u.IdentityId, u.SessionsValidAfter);
 
     private static User NewUserEntity(NewUser u) => new()
     {

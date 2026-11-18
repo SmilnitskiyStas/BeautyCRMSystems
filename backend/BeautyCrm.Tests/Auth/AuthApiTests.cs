@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using BeautyCrm.Application.Features.BeautyAuth;
+using BeautyCrm.Tests.Data;
 using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Infrastructure.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -442,30 +443,26 @@ public sealed class AuthApiTests(AuthApiFixture fx) : IClassFixture<AuthApiFixtu
         }
         await using (var evil = fx.Db.CreateContext(a.TenantId))
         {
-            evil.Users.Add(new User { TenantId = b.TenantId, Email = "evil@x.test", FullName = "E", PasswordHash = "x", Role = Roles.Admin });
+            evil.Users.Add(new User { TenantId = b.TenantId, Email = "evil@x.test", FullName = "E", PasswordHash = "x", Role = Roles.Admin, IdentityId = await IdentitySeed.EnsureAsync(evil, "evil@x.test") });
             var ex = await Assert.ThrowsAsync<DbUpdateException>(() => evil.SaveChangesAsync());
             Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, (ex.InnerException as PostgresException)?.SqlState);
         }
     }
 
     [SkippableFact]
-    public async Task same_email_can_exist_in_two_tenants_but_not_twice_in_one()
+    public async Task an_email_is_one_global_identity_so_it_cannot_be_registered_twice_in_one_tenant()
     {
+        // ADR-024: раніше та сама пошта могла мати окремі облікові записи в різних tenant; тепер пошта = одна ідентичність.
+        // Прийняття запрошення з уже зайнятою поштою в іншому бізнесі (email_in_use при створенні) - TASK-864.
         NeedDb();
         var a = await fx.CreateTenantAsync();
-        var b = await fx.CreateTenantAsync();
-        var email = "shared@x.test";
-        foreach (var t in new[] { a, b })
-        {
-            var owner = await fx.LoginAsync(t.Slug, t.OwnerEmail);
-            var inv = await fx.Send(HttpMethod.Post, "/api/invites", new { email, role = "admin" }, owner.AccessToken);
-            var token = (await Read<InviteCreatedDto>(inv)).Token;
-            Assert.Equal(HttpStatusCode.Created, (await fx.Send(HttpMethod.Post, "/api/auth/invites/accept", new { token, fullName = "S", password = Password })).StatusCode);
-        }
-        var ownerA = await fx.LoginAsync(a.Slug, a.OwnerEmail);
-        Assert.Equal(HttpStatusCode.Conflict, (await fx.Send(HttpMethod.Post, "/api/invites", new { email, role = "admin" }, ownerA.AccessToken)).StatusCode);
+        var email = $"shared-{Guid.NewGuid():N}@x.test";
+        var owner = await fx.LoginAsync(a.Slug, a.OwnerEmail);
+        var inv = await fx.Send(HttpMethod.Post, "/api/invites", new { email, role = "admin" }, owner.AccessToken);
+        var token = (await Read<InviteCreatedDto>(inv)).Token;
+        Assert.Equal(HttpStatusCode.Created, (await fx.Send(HttpMethod.Post, "/api/auth/invites/accept", new { token, fullName = "S", password = Password })).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await fx.Send(HttpMethod.Post, "/api/invites", new { email, role = "admin" }, owner.AccessToken)).StatusCode);
         await fx.LoginAsync(a.Slug, email);
-        await fx.LoginAsync(b.Slug, email);
     }
 }
 

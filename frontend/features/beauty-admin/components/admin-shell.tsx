@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, Suspense, useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthGate, useAuth } from "@/features/beauty-auth/components/auth-provider";
+import { BusinessSwitcher } from "@/features/beauty-auth/components/business-switcher";
 import { canUseAi, canUseInbox, canUseMarketing, navFor, navGroupsFor, type NavItem } from "@/features/beauty-auth/permissions";
 import { ROLE_LABEL } from "@/features/beauty-auth/types";
 import { useAiPanel } from "../hooks/use-ai-panel";
@@ -336,6 +337,7 @@ export function SideNav() {
         />
       ))}
       <div className="mt-auto flex flex-col gap-2 border-t border-white/20 pt-4">
+        <BusinessSwitcher />
         <div className="text-sm text-white">
           <div className="font-semibold break-words">{user.fullName}</div>
           <div className="text-[13px] text-[#D9D4E4]">{ROLE_LABEL[user.role] ?? user.role}</div>

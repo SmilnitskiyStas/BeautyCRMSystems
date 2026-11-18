@@ -18,6 +18,7 @@
 | Контейнери | `beauty_staging_db`, `_api`, `_worker`, `_web` | по одному (не масштабувати) |
 | Мережі | `beauty_staging` (вихід в інтернет), `beauty_staging_db` (internal, без виходу) | БД лише в internal-мережі |
 | Том | `beauty_staging_pgdata` | дані PostgreSQL 16 |
+| Адреса web | статична `BEAUTY_WEB_IP` у `beauty_staging` (F-1) | входить у `Beauty__TrustedProxies` разом зі шлюзом |
 | Порти на хості | `127.0.0.1:${BEAUTY_API_PORT}` -> api, `127.0.0.1:${BEAUTY_WEB_PORT}` -> web | лише loopback; порт БД не публікується; redis немає |
 
 Ліміти (mem/cpu): db 512m/1.0, api 512m/1.0, worker 256m/0.5, web 384m/0.5, разом близько 1.7 ГБ (знижено через малий запас пам'яті спільного сервера, ADR-016); у setup-server.sh є крок створення swap. Перевірте запас сервера (`free -h`, `uptime`) і за потреби змініть.
@@ -28,7 +29,7 @@
 1. Docker Engine і Compose v2 уже є: `docker compose version`.
 2. **Вільні порти.** Звірте `ss -ltn` (і `docker ps --format '{{.Names}} {{.Ports}}'`). У шаблоні стоять **5200** (api) і **3400** (web). Якщо одне з них зайняте, змініть значення в `.env.compose`.
    Зайняті за ADR-016 §1.4 (станом на 2026-11-02; стан змінюється, завжди звіряйтесь із `ss -ltn`): 80, 1883, 1884, 3000, 3001, 3010, 3100, 3200, 3300, 5100, 5110, 5432–5435, 6379–6381, 8001, 8443, 10048. Порт SSH і зовнішні порти провайдера не торкаються; не використовуйте 5000 (dev-API).
-3. **Вільна підмережа Docker.** Перегляньте наявні: `docker network ls -q | xargs docker network inspect --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}'`. Виберіть `/24`, що не перетинається (шаблон: `172.29.200.0/24`, шлюз `172.29.200.1`), і пропишіть у `.env.compose` (`BEAUTY_SUBNET`, `BEAUTY_GATEWAY`) та в `Beauty__TrustedProxies` в `api.env` (= шлюз).
+3. **Вільна підмережа Docker.** Перегляньте наявні: `docker network ls -q | xargs docker network inspect --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}'`. Виберіть `/24`, що не перетинається (шаблон: `172.29.200.0/24`, шлюз `172.29.200.1`), і пропишіть у `.env.compose` (`BEAUTY_SUBNET`, `BEAUTY_GATEWAY`) та в `Beauty__TrustedProxies` в `api.env` (= шлюз **і** адреса web). Додатково задайте `BEAUTY_WEB_IP` у `.env.compose`: вільна статична адреса `web` у тій самій підмережі (шаблон `172.29.200.10`; не шлюз, не збігається з наявними контейнерами).
 4. **Стан мережі (лише читання).** Провайдер: зовнішній 443 направляє на внутрішній 8443 системного nginx; зовнішній 80 відкритий; зовнішній 8443 закритий (очікувано). Публічна адреса: `https://beauty.<DOMAIN>` **без порту**. Перевірка nginx: `sudo nginx -T 2>/dev/null | grep -nE 'listen|server_name'`.
 5. Каталог секретів **поза клоном репозиторію**: `sudo install -d -m 700 /opt/beauty_staging/secrets` (шлях можна змінити через `SECRETS_DIR`).
 6. Клонувати репозиторій (лише для `deploy/staging/`) або скопіювати цей каталог. Поставити зі шаблонів `.env.compose` і `*.env`:
@@ -113,7 +114,8 @@
       unset OWNER_PW
       ```
       Міграції, що перемикають `FORCE ROW LEVEL SECURITY` для backfill, виконуються саме роллю-власником. `migrator.env` потрібен лише для разового `ai-secrets reencrypt` (S5).
-   5. **GRANT-и** від суперкористувача: `$DC exec -T db psql -U postgres -d beautycrm -v ON_ERROR_STOP=1 < db/grants.sql`. Файл відтворює блок `$grants` зі `scripts/dev/setup-db.ps1` (синхронність перевіряє тест `worker/src/staging-grants-sync.test.ts`): `REVOKE UPDATE, DELETE` на `beauty_ai_settings_audit` і `beauty_marketing_consent_events`, точкові права воркера. Повторюйте після **кожної** міграції.
+      **Міграція ADR-024 `auth_global_identities` (human gate):** до кроку 4 обов'язково пройти preflight дублікатів пошти (`db/preflight-identity-duplicates.sql`) і задати allowlist злиття (`beautycrm.identity_merge_allowlist`, передається сесійно, не файлом). Повна процедура, порядок і відкат — `.claude/docs/runbook.md` §2b. Без рішення щодо дублікатів міграція зупиниться з `RAISE EXCEPTION` (це очікувано, бекап не змінюється).
+   5. **GRANT-и** від суперкористувача: `$DC exec -T db psql -U postgres -d beautycrm -v ON_ERROR_STOP=1 < db/grants.sql`. Файл відтворює блок `$grants` зі `scripts/dev/setup-db.ps1` (синхронність перевіряє тест `worker/src/staging-grants-sync.test.ts`): `REVOKE UPDATE, DELETE` на `beauty_ai_settings_audit` і `beauty_marketing_consent_events`, точкові права воркера. Повторюйте після **кожної** міграції. Для `auth_global_identities` (ADR-024) цей крок обов'язковий: він робить `REVOKE` глобальних таблиць ідентичностей для `beautycrm_app` і воркера (після `GRANT ON ALL TABLES`).
 5. **API:** `$DC up -d api`. Очікування: контейнер `healthy`; у `$DC logs api` немає помилок `DbRoleGuard`. Перевірка з хоста: `curl -fsS http://127.0.0.1:$BEAUTY_API_PORT/healthz` (liveness) і `/readyz` (БД); обидва без деталей. Попередження `Failed to determine the https port for redirect` очікуване (TLS закінчується на nginx).
 6. **Worker:** `$DC up -d worker` (після створення першого синтетичного tenant допишіть `WORKER_TENANT_IDS` у `worker.env` і `$DC up -d worker`). Відсутність `BYPASSRLS` перевіряє сам процес.
 7. **Web:** `$DC up -d web`. Перевірка: `curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:$BEAUTY_WEB_PORT/login`.
@@ -250,7 +252,7 @@ proxy_set_header X-Forwarded-Proto https;
 proxy_set_header Connection "";
 proxy_read_timeout 60s;
 ```
-Після `sudo nginx -t` — reload. Origin у `Beauty__AllowedOrigins` і `public_origin` образу web: `https://beauty.<DOMAIN>` без порту. Після `up -d api` перевірте, що IP клієнта в логах API бачиться правильно: `Beauty__TrustedProxies` має дорівнювати адресі шлюзу мережі `beauty_staging`, з якої контейнер бачить nginx. Не розширюйте до всієї підмережі без потреби.
+Після `sudo nginx -t` — reload. Origin у `Beauty__AllowedOrigins` і `public_origin` образу web: `https://beauty.<DOMAIN>` без порту. Після `up -d api` перевірте, що IP клієнта в логах API бачиться правильно: `Beauty__TrustedProxies` = адреса шлюзу мережі `beauty_staging` (звідси API бачить nginx) **плюс** `BEAUTY_WEB_IP` (звідси API бачить BFF `web`), через кому: `172.29.200.1,172.29.200.10`. Не розширюйте до всієї підмережі. Без адреси web API бачить усіх користувачів BFF з одного IP, і ліміт `auth` (10/хв) спільний для всіх (ADR-024 F-1, §31.9).
 
 ### 6.4 Крок 4: перевірка
 
@@ -264,6 +266,17 @@ openssl s_client -connect beauty.<DOMAIN>:443 -servername beauty.<DOMAIN> </dev/
   | openssl x509 -noout -subject -issuer -enddate -ext subjectAltName
 ```
 Очікування для `openssl`: видавець Let's Encrypt, SAN лише `beauty.<DOMAIN>`, дата дійсна. Webhook-шлях відповідає від API (не 401/403 від nginx).
+
+### 6.6 Крок 5: smoke IP клієнта за BFF (ADR-024 errata E-14 / F-1, §31.9 п.5; блокує реліз TASK-866)
+
+Джерело вимог: `.claude/docs/runbook.md` §2b.4 і `beauty-contracts.md` §31.9. Конфіг (compose, `.env.compose`, `.env.api`, bootstrap-env, nginx-приклад §6.3) уже в репозиторії (TASK-871). На сервері ще не застосовано, smoke не виконано.
+
+Умови (перевірити до smoke): (1) `web` має статичну `BEAUTY_WEB_IP` (`docker inspect beauty_staging_web --format '{{(index .NetworkSettings.Networks "beauty_staging").IPAddress}}'`); (2) `Beauty__TrustedProxies` = шлюз + ця адреса; (3) `proxy_set_header X-Forwarded-For $remote_addr` (6.3), не `$proxy_add_x_forwarded_for`; (4) `ss -ltn` показує порт web лише на `127.0.0.1`. Застосувати: `$DC up -d web api` (web перестворюється зі статичною адресою; api перечитує env).
+
+1. **(а) окремі кошики:** `BEAUTY_WEB_PORT=<порт> SMOKE_ORIGIN=https://beauty.<DOMAIN> ./smoke-client-ip.sh`. 11-й запит з IP A дає `429`, перший з IP B не `429`. Скрипт б'є у loopback web і сам ставить XFF (імітує nginx). Між повторами зачекайте 60 с.
+2. **(б) підробка через nginx:** з зовнішнього хоста двічі по 11 запитів `POST https://beauty.<DOMAIN>/api/session/login` (з basic auth) з клієнтським заголовком `X-Forwarded-For: 198.51.100.7` (довільний). Очікування: ліміт рахується за реальною адресою вашого хоста, а не за `198.51.100.7`: зміна підробленого значення між запитами не скидає кошик (11-й дає `429` незалежно від підробки).
+3. **(в) IP у логах API:** `$DC logs --tail 50 api | grep -i 'RemoteIp\|client'` не показує адресу web (`BEAUTY_WEB_IP`) і шлюз як клієнтські; видно адресу вашого хоста. Якщо в логах немає IP, достатньо результатів 1 і 2.
+4. Результат (дата, виконавець, 429/не 429 для кожного кроку) занесіть у `.claude/logs/tasks/TASK-871.md`.
 
 ### 6.5 Basic auth (Q5, рекомендовано)
 

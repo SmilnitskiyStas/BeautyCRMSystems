@@ -180,3 +180,29 @@ public sealed class RefreshThrottle
         return tokenLease.IsAcquired;
     }
 }
+
+/// <summary>
+/// §31.9: ліміт входів за поштою (20 / 900 с за замовчуванням), in-memory на інстанс. Ключ - лише sha256 нормалізованої пошти
+/// (сирої пошти в пам'яті лімітера немає). Діє однаково для наявної й невідомої пошти (не залежить від її існування).
+/// </summary>
+public sealed class LoginEmailThrottle
+{
+    private readonly PartitionedRateLimiter<string> _perEmail;
+    private readonly int _windowSeconds;
+
+    public LoginEmailThrottle(int permit, TimeSpan window)
+    {
+        _windowSeconds = Math.Max(1, (int)window.TotalSeconds);
+        _perEmail = PartitionedRateLimiter.Create<string, string>(key => RateLimitPartition.GetFixedWindowLimiter(key,
+            _ => new FixedWindowRateLimiterOptions { PermitLimit = permit, Window = window, QueueLimit = 0 }));
+    }
+
+    /// <summary>Acquired = false -> перевищено; RetryAfter у секундах (для заголовка Retry-After).</summary>
+    public (bool Acquired, int RetryAfter) TryAcquire(string normalizedEmail)
+    {
+        var key = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(normalizedEmail)));
+        using var lease = _perEmail.AttemptAcquire(key);
+        if (lease.IsAcquired) return (true, 0);
+        return (false, lease.TryGetMetadata(MetadataName.RetryAfter, out var ra) ? Math.Max(1, (int)Math.Ceiling(ra.TotalSeconds)) : _windowSeconds);
+    }
+}

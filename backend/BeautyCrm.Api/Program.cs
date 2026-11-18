@@ -55,7 +55,7 @@ builder.Services
     .AddBeautyAiSecretsStartupCheck() // keyring ключів ШІ (Ai:Secrets:*): валідація лише логується, старт не ламає
     .AddBeautyApplication()
     .AddBeautyAuthData()
-    .AddBeautyAuthApi(builder.Configuration) // JWT, ролі, rate limit; без Auth:JwtSigningKey додаток не стартує
+    .AddBeautyAuthApi(builder.Configuration, builder.Environment) // JWT, ролі, rate limit; без Auth:JwtSigningKey додаток не стартує
     .AddBeautyAiApi(builder.Configuration) // налаштування ШІ (TASK-716): ліміт ключів, мапінг винятків ШІ, swagger-фільтр секрету
     .AddBeautyPublicBookingApi(builder.Configuration, builder.Environment) // публічний запис /api/public/{slug} (TASK-688)
     .AddBeautyAnalyticsApi(builder.Configuration); // ліміт деталей аналітики на користувача (TASK-764, §24.2)
@@ -104,6 +104,9 @@ if (args.Length > 0 && args[0] == AiSecretsCli.Command)
     Environment.ExitCode = await AiSecretsCli.RunAsync(app.Services, args[1..], Console.Out);
     return;
 }
+
+// F-13: фіктивний bcrypt-хеш того самого cost створюється на старті (а не в першому запиті входу)
+_ = app.Services.GetRequiredService<BeautyCrm.Application.Features.BeautyAuth.LoginDummyHash>();
 
 app.UseBeautyForwardedHeaders(); // лише довірені проксі (Beauty:TrustedProxies); першим, щоб IP/схема були справжніми далі
 app.UseBeautySecurityHeaders(app.Environment);

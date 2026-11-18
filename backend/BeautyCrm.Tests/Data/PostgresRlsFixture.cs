@@ -79,6 +79,12 @@ public sealed class PostgresRlsFixture : IAsyncLifetime
             await Exec(admin, $"GRANT EXECUTE ON FUNCTION public.beauty_public_resolve_location(text) TO {AppRole}");
             await Exec(admin, $"GRANT EXECUTE ON FUNCTION public.beauty_public_nearby_locations(double precision, double precision, double precision, integer) TO {AppRole}");
             await Exec(admin, $"GRANT EXECUTE ON FUNCTION public.beauty_public_search_locations_by_city(text, integer) TO {AppRole}");
+            // ADR-024 / §31.16 (F-8): глобальні таблиці ідентичності deny-all (REVOKE ПІСЛЯ масового GRANT), CREATE на public закрито,
+            // EXECUTE на auth_* рівно за матрицею (функції вже без PUBLIC після міграції). Те саме робить deploy/staging/db/grants.sql.
+            await Exec(admin, $"REVOKE ALL ON {string.Join(", ", BeautyCrm.Api.Infrastructure.DbRoleGuard.IdentityTables)} FROM PUBLIC, {AppRole}");
+            await Exec(admin, $"REVOKE CREATE ON SCHEMA public FROM PUBLIC, {AppRole}");
+            foreach (var fn in BeautyCrm.Api.Infrastructure.DbRoleGuard.IdentityAppFunctions)
+                await Exec(admin, $"GRANT EXECUTE ON FUNCTION public.{fn} TO {AppRole}");
         }
 
         AppConnectionString = new NpgsqlConnectionStringBuilder(adminDbCs)

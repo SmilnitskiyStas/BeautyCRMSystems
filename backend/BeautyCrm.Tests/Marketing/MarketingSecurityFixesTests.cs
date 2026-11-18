@@ -356,7 +356,7 @@ public sealed class ChatMarketingSecurityTests : IClassFixture<PostgresRlsFixtur
         var e = await NewAsync();
         await using (var ctx = _db.CreateContext(e.Tenant))
         {
-            var owner = new User { Id = Guid.NewGuid(), Email = $"{Guid.NewGuid():N}@t.test", FullName = "Власник", PasswordHash = "x", Role = Roles.Owner };
+            var owner = await IdentitySeed.NewUserAsync(ctx, Roles.Owner, "Власник");
             ctx.Add(owner);
             // повідомлення кампанії з кодом (пише воркер) - як є в БД
             ctx.Messages.Add(new Message

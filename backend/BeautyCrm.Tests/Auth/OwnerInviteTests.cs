@@ -73,8 +73,9 @@ public sealed class OwnerInviteTests(AuthApiFixture fx) : IClassFixture<AuthApiF
 
     private static string TokenOf(string url) => url[(url.IndexOf("#t=", StringComparison.Ordinal) + 3)..];
 
-    private async Task<Created> CreateAsync(Host h, string email = "Owner@Salon.Test")
+    private async Task<Created> CreateAsync(Host h, string? email = null)
     {
+        email ??= $"Owner-{Guid.NewGuid():N}@Salon.Test"; // ADR-024: пошта глобально унікальна
         var ext = "sg-" + Guid.NewGuid().ToString("N")[..16];
         var slug = "inv-" + Guid.NewGuid().ToString("N")[..20];
         var r = await h.Client.SendAsync(Signed(HttpMethod.Post, "/api/control/v1/tenants", new
@@ -363,8 +364,8 @@ public sealed class OwnerInviteTests(AuthApiFixture fx) : IClassFixture<AuthApiF
     {
         NeedDb();
         using var h = Build();
-        var a = await CreateAsync(h, "a@salon.test");
-        var b = await CreateAsync(h, "b@salon.test");
+        var a = await CreateAsync(h, $"a-{Guid.NewGuid():N}@salon.test");
+        var b = await CreateAsync(h, $"b-{Guid.NewGuid():N}@salon.test");
         Assert.Equal(HttpStatusCode.OK, (await Accept(h, a.Token)).StatusCode);
         Assert.Equal("invited", await Q<string>("SELECT state FROM users WHERE id = @u", ("u", b.OwnerId)));
         Assert.Null(await Q<DateTime?>("SELECT used_at FROM platform_owner_invites WHERE tenant_id = @t", ("t", b.TenantId)));

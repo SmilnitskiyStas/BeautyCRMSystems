@@ -8,6 +8,10 @@ const REFRESH_MAX_AGE = 14 * 24 * 3600; // = Auth__RefreshTokenDays за зам�
 export const backendUrl = () =>
   (process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000").replace(/\/+$/, "");
 
+/** Квиток входу (§31.11): httpOnly, не доступний JS; Path покриває `/login/select`. */
+export const TICKET_COOKIE = "beauty_lt";
+const TICKET_PATH = "/api/session/login";
+
 const secure = () => process.env.NODE_ENV === "production";
 
 export function setRefreshCookie(res: NextResponse, token: string) {
@@ -22,6 +26,14 @@ export function setRefreshCookie(res: NextResponse, token: string) {
 
 export function clearRefreshCookie(res: NextResponse) {
   res.cookies.set(REFRESH_COOKIE, "", { httpOnly: true, secure: secure(), sameSite: "strict", path: "/", maxAge: 0 });
+}
+
+export function setTicketCookie(res: NextResponse, ticket: string, maxAgeSeconds: number) {
+  res.cookies.set(TICKET_COOKIE, ticket, { httpOnly: true, secure: secure(), sameSite: "strict", path: TICKET_PATH, maxAge: maxAgeSeconds });
+}
+
+export function clearTicketCookie(res: NextResponse) {
+  res.cookies.set(TICKET_COOKIE, "", { httpOnly: true, secure: secure(), sameSite: "strict", path: TICKET_PATH, maxAge: 0 });
 }
 
 /** CSRF-захист: змінюючі запити BFF приймаються лише з того самого origin. */
@@ -46,9 +58,14 @@ function forwardedFor(req: NextRequest): string | undefined {
 }
 
 /** POST до backend із JSON-тілом; мережеву помилку перетворює на 502 `api_unreachable`. */
-export async function callBackend(req: NextRequest, path: string, body: unknown): Promise<Response | NextResponse> {
+export async function callBackend(
+  req: NextRequest,
+  path: string,
+  body: unknown,
+  extraHeaders?: Record<string, string>,
+): Promise<Response | NextResponse> {
   try {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...extraHeaders };
     const ip = forwardedFor(req);
     if (ip) headers["X-Forwarded-For"] = ip;
     return await fetch(`${backendUrl()}${path}`, {
