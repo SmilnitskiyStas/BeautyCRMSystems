@@ -128,6 +128,13 @@
 | TASK-832 | integrations-developer | planned | ADR-018 D4 [репозиторій ShelfGuard]: метод клієнта Beauty setModules (підпис v1, actor), тести | .claude/logs/tasks/TASK-832.md |
 | TASK-833 | frontend-developer | planned | ADR-018 D4 [репозиторій ShelfGuard]: UI модулів tenant у картці підприємства (перемикачі, підтвердження, помилки) | .claude/logs/tasks/TASK-833.md |
 | TASK-834 | frontend-developer | review | ADR-018 D2: публічний запис і віджет — екран «Запис тимчасово призупинено» на 403 tenant_suspended, mock, тести | .claude/logs/tasks/TASK-834.md |
+| TASK-875 | project-architect | review | Склад (beauty_inventory) етап 1: ADR-025 (proposed, приймає людина) + контракт §32 v0.35 (модуль, права inventory.*, API, DTO, коди, FEFO, переміщення, інвентаризація) | .claude/logs/tasks/TASK-875.md |
+| TASK-876 | database-engineer | planned | Склад етап 1: міграція beauty_inventory, RLS FORCE, CHECK, append-only рухи, GRANT (setup-db.ps1 + grants.sql), schema.sql, EF, тести БД | .claude/logs/tasks/TASK-876.md |
+| TASK-877 | backend-developer | planned | Склад етап 1: Features/BeautyInventory, FEFO/переміщення/інвентаризація, InventoryController, PermissionKeys inventory.* + backfill + Version, RequireModule, тести | .claude/logs/tasks/TASK-877.md |
+| TASK-878 | frontend-developer | planned | Склад етап 1 (mock + http): пункт «Склад» у каталозі, товари/залишки/партії/рух/інвентаризація, права (access.ts), коди помилок, vitest | .claude/logs/tasks/TASK-878.md |
+| TASK-879 | qa-engineer | planned | QA складу етап 1: таблиця відповідності ADR-025, RLS крос-tenant, FEFO, атомарність переміщень, інвентаризація, гонки, права/модуль | .claude/logs/tasks/TASK-879.md |
+| TASK-880 | security-reviewer | planned | Рев'ю безпеки складу етап 1: RLS/IDOR, межа inventory.costs, append-only журнал, синхронність GRANT, PII; звіт у docs/reviews/ | .claude/logs/tasks/TASK-880.md |
+| TASK-881 | documentation-writer | planned | Документація складу етап 1: §32 статус, database.md, runbook (модуль, backfill, відкат), known-issues | .claude/logs/tasks/TASK-881.md |
 
 ## ADR-017: індивідуальна ціна й тривалість майстра (TASK-804…814)
 
@@ -403,3 +410,19 @@ ADR: `.claude/docs/adr/ADR-018-shelfguard-control-plane-integration.md` (propose
     - mock-сценарій;
     - `npm test`, `tsc`, `lint`, `build` зелені;
     - a11y (оголошення стану).
+
+## Склад beauty_inventory, етап 1 (TASK-875…881)
+
+План: `C:\Users\stass\.claude\plans\twinkly-exploring-axolotl.md` (етап 1 з 3). Класифікація: feature, risk high, оновлено 2026-11-18. Номери (звірено 2026-11-18): ADR — **ADR-025** (ADR-019 зайнятий `ADR-019-beauty-production-deployment` у main-checkout, ADR-024 — `global-identity` у гілці mobile, не злито); контракт — **§32** (§31 зайнятий global identity у гілці mobile); TASK-ID — з 875 (максимум у всіх worktrees — 874).
+
+**Human gates:** ADR-025 приймає людина (зміна схеми й меж авторизації); міграція з RLS/GRANT і backfill прав — окремий gate перед застосуванням на staging; security-review блокує merge.
+
+**DAG:** 875 → 876 → {877 ∥ 878} → 879 → 880 → 881. Frontend (878) може почати mock за контрактом §32 після 875, не чекаючи міграції; http-клієнт — після 877.
+
+- **TASK-875 (project-architect).** Залежності: none. Критерії: ADR-025 (рішення плану, Q-відкриті питання позначено); §32 — модуль `beauty_inventory` (Known, не All), права `inventory.view/manage/sales/costs`, DTO, коди 422/409, FEFO, переміщення, інвентаризація; статус ADR `proposed` до gate.
+- **TASK-876 (database-engineer).** Залежності: TASK-875. Критерії: таблиці з плану (suppliers, products, location_settings, stock_batches, stock_movements, stocktakes + рядки, рівні); CHECK на кількості ≥ 0 для партій; `REVOKE UPDATE, DELETE` на movements; RLS ENABLE+FORCE+tenant_isolation; GRANT синхронно в `scripts/dev/setup-db.ps1` і `deploy/staging/db/grants.sql`; `worker/src/testing/schema.sql` (без BOM, LF); тести БД (RLS крос-tenant, append-only); Up→Down→Up на копії; runbook відкату — Down human gate.
+- **TASK-877 (backend-developer).** Залежності: TASK-876. Критерії: `Features/BeautyInventory/` (IInventoryStore, сервіси, `Result<T>`, 422); FEFO; переміщення = два руху в одній транзакції; інвентаризація; `FOR UPDATE` на залишках; `InventoryController` `api/beauty/inventory/*`; `PermissionKeys`/`PermissionCatalog`/`PermissionPresets` + backfill + збільшення `Version`; `[RequireModule("beauty_inventory")]`; `inventory.costs` вимагає `revenue.view=all`; тести на фейку й HTTP (`AuthApiFixture`), гонки (`ConcurrencyTests`); `dotnet test` зелений з `BEAUTY_TEST_REQUIRE_DB=1`.
+- **TASK-878 (frontend-developer).** Залежності: TASK-875 (mock), TASK-877 (http). Критерії: пункт «Склад» у групі `catalog` (`NAV_GROUPS`); екрани каталог/залишки («Усі заклади» + заклади)/партії/рух/інвентаризація; `http-inventory.ts` + `mock-inventory.ts`; `use-inventory.ts`; коди в `errors.ts` (`BY_CODE`); дзеркало прав в `access.ts`; чиста логіка + vitest; `npx tsc --noEmit`, `npm.cmd run lint`, `npm.cmd test`, mock `NEXT_PUBLIC_USE_MOCK=1`.
+- **TASK-879 (qa-engineer).** Залежності: TASK-877, TASK-878. Критерії: таблиця відповідності ADR-025; сценарії FEFO, атомарне переміщення, інвентаризація, нестача (для етапу 1 — лише від'ємний залишок заборонено/422 за рішенням ADR), гонки, 403 `module_disabled`/`forbidden_role`; тести без залежності від реального годинника.
+- **TASK-880 (security-reviewer).** Залежності: TASK-879. Критерії: звіт у `docs/reviews/`; RLS і IDOR за `locationId`; межа `inventory.costs`; append-only журнал; синхронність GRANT (setup-db / grants.sql / staging-grants-sync тест); відсутність ПД і собівартості у відповідях для прав без `costs`.
+- **TASK-881 (documentation-writer).** Залежності: TASK-880. Критерії: §32 позначено статусом, `database.md` (нові таблиці, міграція), runbook (модуль, backfill, відкат, gate), `known-issues.md` за потреби; тригери workflow.
