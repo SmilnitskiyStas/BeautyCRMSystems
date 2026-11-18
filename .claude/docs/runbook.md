@@ -79,6 +79,33 @@ docker exec beautycrm psql -U postgres -d beautycrm \
 
 **Відомі обмеження:** `DbRoleGuard` не перевіряє роль `beautycrm_audit_purge`; retention-job воркера для `purge_user_access_audit` ще не реалізовано (known-issues KI-006).
 
+### 2b. Склад `beauty_inventory` (ADR-025, контракт §32)
+
+**Міграції** (дві, під `beautycrm_owner`, у цьому порядку):
+1. `20261118155039_beauty_inventory`: 9 таблиць, RLS ENABLE+FORCE, CHECK, `REVOKE UPDATE, DELETE` на журналах. `Down` відмовляє (`inventory history exists`), якщо `beauty_stock_movements` непорожня.
+2. `20261118170000_beauty_inventory_permissions`: backfill прав `inventory.*` (ідемпотентний, одна транзакція, `migrated` в `user_access_audit`), `PermissionCatalog.Version = 2`. `Down` відмовляє (`inventory.* permissions were edited manually`), якщо будь-який рядок змінено вручну.
+
+Застосування на staging/prod — human gate: бекап перед міграцією (`deploy/staging/README.md`), `Down` лише вручну після рішення людини.
+
+**GRANT після міграцій** (обов'язково, як для ADR-023):
+- staging: `deploy/staging/db/grants.sql`; локально: `scripts/dev/setup-db.ps1`. Обидва містять `REVOKE UPDATE, DELETE ON beauty_stock_movements` і `beauty_stock_operations` від `beautycrm_app`. Синхронність перевіряє `worker/src/staging-grants-sync.test.ts`.
+- Воркер у етапі 1 GRANT-ів складу не має.
+
+**Схема для тестів:** `worker/src/testing/schema.sql` перегенеровано без BOM, LF. Після будь-якої зміни міграцій складу перегенерувати його, інакше падає `schema-drift.test.ts`. Перевірити, що файл починається з `CREATE`/`--`, а не з BOM.
+
+**Увімкнення модуля для tenant.** Модуль не входить у `All`, тож за замовчуванням вимкнено.
+- Локально: `scripts/dev/enable-inventory.ps1 [-Slug beauty-lab-dev]`. Скрипт робить `PATCH /api/platform/tenants/{id}` з `modules` (додає `beauty_inventory` до наявних, ідемпотентно).
+- Staging і control plane: `PATCH` tenant `{modules}` (ADR-018, §27). Це єдиний шлях увімкнення для реального бізнесу, human gate.
+- ShelfGuard: парна правка `setModules` — окрема задача в репозиторії ShelfGuard (TASK-832). Поки її немає, увімкнення лише через API.
+- Опції модуля в `create-salon.ps1`, `seed.ps1`, `deploy/staging/create-tenant.sh` ще не додано (ADR-025 §2.1).
+
+**Перевірки після деплою:**
+1. `SELECT has_table_privilege('beautycrm_app','beauty_stock_movements','UPDATE')` і те саме для `beauty_stock_operations` → `f`.
+2. Backfill: для кожного `admin`, `deputy`, `specialist` у `user_permissions` є рядки `inventory.view`, `inventory.manage`, `inventory.costs`; у `user_access_audit` є `migrated`.
+3. API: `GET /api/beauty/inventory/scope` від owner → `200` з `expiringSoonDays`; для tenant без модуля той самий запит → `403 module_disabled`; відповідь має `Cache-Control: no-store`.
+
+**Відкат:** `Down` складу на staging/prod не виконувати без бекапу і рішення людини (див. §2b вище). Після `Down` GRANT-и `beauty_stock_*` з `grants.sql` стають неактуальними для видалених таблиць.
+
 ## 3. Секрети й змінні середовища
 Згенеруйте (`openssl rand`): `Auth__JwtSigningKey` (`-base64 48`), `Auth__PlatformKey` (`-base64 36`), `Channels__EncryptionKey` (`-base64 32`, base64 від 32 байт; при заміні ключа вже збережені секрети каналів перестануть розшифровуватись). Файл `.env` у `.gitignore`, комітити заборонено. Повний перелік змінних і коментарі: `.env.example`.
 

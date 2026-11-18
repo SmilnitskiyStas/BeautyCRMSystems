@@ -282,3 +282,44 @@ Frontend дзеркалить ключі (`access.ts`, `permissions.ts`: пун�
 - `worker/src/scheduler/pollers.ts`, `worker/src/main.ts` (етап 2)
 - `frontend/features/beauty-auth/permissions.ts` (`NAV_GROUPS`)
 - ADR-002, ADR-003, ADR-005, ADR-010 §2.11, ADR-014, ADR-015, ADR-018, ADR-023; контракт §3 (ідемпотентність), §24 (собівартість), §26 (опційний модуль), §30 (права)
+
+---
+
+## 10. Статус реалізації (станом на 2026-11-18)
+
+### 10.1 Етап 1 «Склад» — реалізовано
+
+Гілка `feature/inventory`, коміти:
+
+| Коміт | Задача | Що зроблено |
+|---|---|---|
+| `b0910ae` | TASK-876 (database-engineer) | міграція `20261118155039_beauty_inventory`: 9 таблиць, RLS ENABLE+FORCE, CHECK, `REVOKE UPDATE, DELETE` на журналах; GRANT у `scripts/dev/setup-db.ps1` і `deploy/staging/db/grants.sql`; `worker/src/testing/schema.sql`; модуль у `Known` |
+| `3e63f91` | TASK-878 (frontend-developer) | екрани «Склад»: каталог, залишки, партії, рух, інвентаризація, постачальники; mock- і http-клієнт; дзеркало прав `inventory.*`; коди помилок |
+| `c580441` | TASK-877 (backend-developer) | `Features/BeautyInventory` (FEFO, переміщення, інвентаризація), `InventoryController`, ключі `inventory.view/manage/costs`, `PermissionCatalog.Version = 2`, backfill `20261118170000_beauty_inventory_permissions`, `[RequireModule("beauty_inventory")]`, throttle |
+| `272ef9a` | TASK-879 (qa-engineer) | таблиця відповідності ADR-025, RLS крос-tenant, FEFO, атомарність переміщень, інвентаризація, гонки, randomized-інваріанти `level = Σ партій = Σ рухів` |
+| `e7a2cbe` | TASK-880 (security-reviewer) | виправлення за security-review: читання залишків і `hasMovements` в SQL без `DISTINCT` по журналу, курсори з перевіркою типів, межа `numeric(14,3)` (`quantity_out_of_range`), `unit_locked` під блокуванням товару, `FOR SHARE` на товарах і налаштуваннях у записах, `invalid_expiry` для надлишку інвентаризації |
+
+Перевірка: на момент TASK-877 backend 2872/2872 і worker 228/228; TASK-880 додав тести (`InventoryReviewFix*`). Точні цифри після `e7a2cbe` не фіксувалися.
+
+### 10.2 Відхилення від контракту §32 (фактичний стан коду)
+
+- **Store розділено на два файли:** `EfBeautyStore.Inventory.cs` (довідники й читання) і `EfBeautyStore.InventoryOps.cs` (операції, інвентаризація). Порт `IInventoryStore` один.
+- **`InventoryNamedRef`** замість `NamedRef` у DTO: колізія імені зламала генерацію Swagger.
+- **27 маршрутів** (`InventoryController`), звірено з §32.5 у TASK-881. Підрахунок «28» у TASK-877 був помилкою і не відповідає коду.
+- **Екран постачальників** є у фронтенді (`/beauty/inventory/suppliers`); в §32.9 його не було перелічено.
+- **`quantity_out_of_range`** (результуючий залишок понад `99 999 999 999.999`) і **`invalid_expiry`** (прострочений `expiresOn` надходження або `surplusExpiresOn` інвентаризації) — реалізовано; код `quantity_out_of_range` додано в §32.7 у TASK-881.
+- **Пошук `search`** — `ILIKE` з екрануванням `%_\`. Поведінка залежить від локалі БД: для кирилиці потрібна UTF-8-локаль (prod і Docker-postgres відповідають).
+- **Фільтр «закінчується»** (`expiringWithinDays`) у `GET /stock` діє лише для одного закладу (`locationId` обов'язковий). У `GET /stock/summary` цього параметра немає (збіг з §32.5).
+
+### 10.3 Не реалізовано
+
+- **Етап 2** (норми матеріалів, автосписання в `CompleteWithCostSnapshotAsync`, `beauty_staff_alerts`, воркер `pollInventory`, Telegram власнику) — не почато; контракт §32.13 лише орієнтовний.
+- **Етап 3** (продаж, виручка з товарів, `IFiscalService`, ключ `inventory.sales`) — не почато; ключа `inventory.sales` у каталозі немає.
+- **Опції модуля** в `create-salon.ps1`, `seed.ps1`, `deploy/staging/create-tenant.sh` (ADR-025 §2.1) — ще не додано; є лише `scripts/dev/enable-inventory.ps1`.
+- **Парна правка ShelfGuard** (`setModules`) — окрема задача в репозиторії ShelfGuard (`C:\Users\stass\source\CRMProductSystems`, TASK-832 у `.claude/tasks/current.md`).
+
+### 10.4 Відомі ризики (відкриті, див. `.claude/docs/known-issues.md` KI-008…KI-010)
+
+- Сторінка залишків (`/stock`) читає легкі ключі (id, назва) усіх відфільтрованих товарів; для каталогів у десятки тисяч потрібен keyset у SQL з `collate "C"`.
+- Порядок рухів у відповіді `GET /operations/{id}` — `occurred_at, id` (рухи однієї операції мають однаковий час). Це не порядок FEFO і не порядок списання з партій; клієнт не повинен на нього покладатися.
+- Пошук `ILIKE` залежить від локалі БД (див. §10.2).
