@@ -82,7 +82,7 @@ describe("password reset delivery (real DB)", () => {
     const first = await admin.query("SELECT token_hash, last_error, next_attempt_at FROM auth_password_resets r JOIN identities i ON i.id = r.identity_id WHERE i.email = $1", [email]);
     expect(first.rows[0].last_error).toBe("send_failed");
     // make the retry due, then deliver successfully
-    await admin.query("UPDATE auth_password_resets SET next_attempt_at = now() WHERE identity_id = (SELECT id FROM identities WHERE email = $1)", [email]);
+    await admin.query("UPDATE auth_password_resets SET next_attempt_at = now() - interval '5 seconds' WHERE identity_id = (SELECT id FROM identities WHERE email = $1)", [email]);
     const mailer = new MockPasswordMailer(logger);
     expect(await pollPasswordResets(ctx(mailer))).toMatchObject({ sent: 1 });
     const second = tokenOf(mailer.outbox[0]!.text);
@@ -169,13 +169,14 @@ describe("password reset delivery (real DB)", () => {
     const m0 = new MockPasswordMailer(logger);
     await pollPasswordResets(ctx(m0));
     await admin.query("SELECT auth_password_reset_consume($1, 'n', now())", [sha(tokenOf(m0.outbox[0]!.text))]);
+    await admin.query("UPDATE auth_password_resets SET notice_next_attempt_at = now() - interval '5 seconds' WHERE identity_id = $1", [id]);
 
     const failing = { send: async () => { throw new Error("boom"); } };
     expect(await pollPasswordResets({ ...ctx(new MockPasswordMailer(logger)), mailer: failing })).toMatchObject({ retried: 1 });
     expect((await admin.query("SELECT notice_status, notice_attempts, last_error FROM auth_password_resets WHERE identity_id = $1", [id])).rows[0])
       .toMatchObject({ notice_status: "pending", notice_attempts: 1, last_error: "send_failed" });
 
-    await admin.query("UPDATE auth_password_resets SET notice_next_attempt_at = now() WHERE identity_id = $1", [id]);
+    await admin.query("UPDATE auth_password_resets SET notice_next_attempt_at = now() - interval '5 seconds' WHERE identity_id = $1", [id]);
     const a = new MockPasswordMailer(logger), b = new MockPasswordMailer(logger);
     await Promise.all([pollPasswordResets(ctx(a)), pollPasswordResets(ctx(b))]);
     expect(a.outbox.length + b.outbox.length).toBe(1);
