@@ -6865,3 +6865,75 @@ BEGIN
 END $EF$;
 COMMIT;
 
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261118170000_beauty_inventory_permissions') THEN
+    ALTER TABLE users NO FORCE ROW LEVEL SECURITY;
+    ALTER TABLE invites NO FORCE ROW LEVEL SECURITY;
+    ALTER TABLE user_permissions NO FORCE ROW LEVEL SECURITY;
+    ALTER TABLE user_access_audit NO FORCE ROW LEVEL SECURITY;
+
+    WITH presets(permission, admin_level, deputy_level, specialist_level) AS (VALUES
+        ('inventory.view', 'all', 'all', 'own'),
+        ('inventory.manage', 'all', 'all', 'none'),
+        ('inventory.costs', 'edit', 'none', 'none')),
+    ins AS (
+        INSERT INTO user_permissions (tenant_id, user_id, permission, level, updated_by_user_id)
+        SELECT u.tenant_id, u.id, p.permission,
+               CASE WHEN p.permission = 'inventory.costs' AND COALESCE(rv.level, 'none') <> 'all' THEN 'none'
+                    ELSE CASE u.role WHEN 'admin' THEN p.admin_level WHEN 'deputy' THEN p.deputy_level ELSE p.specialist_level END
+               END,
+               NULL
+        FROM users u
+        CROSS JOIN presets p
+        LEFT JOIN user_permissions rv
+               ON rv.tenant_id = u.tenant_id AND rv.user_id = u.id AND rv.permission = 'revenue.view'
+        WHERE u.role IN ('admin', 'deputy', 'specialist')
+        ON CONFLICT (tenant_id, user_id, permission) DO NOTHING
+        RETURNING tenant_id, user_id, permission, level
+    ),
+    aud AS (
+        INSERT INTO user_access_audit (tenant_id, actor_user_id, target_user_id, action, changes)
+        SELECT tenant_id, NULL, user_id, 'migrated',
+               jsonb_agg(jsonb_build_object('permission', permission, 'from', NULL::text, 'to', level) ORDER BY permission)
+        FROM ins
+        GROUP BY tenant_id, user_id
+        RETURNING tenant_id, target_user_id
+    )
+    UPDATE users u SET access_version = u.access_version + 1
+    FROM aud WHERE u.tenant_id = aud.tenant_id AND u.id = aud.target_user_id;
+
+    -- знімки запрошень: лише відсутні ключі inventory.* (наявні значення виграють у ||)
+    WITH presets(permission, admin_level, deputy_level, specialist_level) AS (VALUES
+        ('inventory.view', 'all', 'all', 'own'),
+        ('inventory.manage', 'all', 'all', 'none'),
+        ('inventory.costs', 'edit', 'none', 'none'))
+    UPDATE invites i
+       SET permissions = (
+            SELECT jsonb_object_agg(p.permission,
+                       CASE WHEN p.permission = 'inventory.costs' AND COALESCE(i.permissions ->> 'revenue.view', 'none') <> 'all' THEN 'none'
+                            ELSE CASE i.role WHEN 'admin' THEN p.admin_level WHEN 'deputy' THEN p.deputy_level ELSE p.specialist_level END
+                       END)
+            FROM presets p WHERE NOT (i.permissions ? p.permission)) || i.permissions
+     WHERE i.role IN ('admin', 'deputy', 'specialist')
+       AND EXISTS (SELECT 1 FROM presets p WHERE NOT (i.permissions ? p.permission));
+
+    ALTER TABLE users FORCE ROW LEVEL SECURITY;
+    ALTER TABLE invites FORCE ROW LEVEL SECURITY;
+    ALTER TABLE user_permissions FORCE ROW LEVEL SECURITY;
+    ALTER TABLE user_access_audit FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261118170000_beauty_inventory_permissions') THEN
+    INSERT INTO "__EFMigrationsHistory" (migration_id, product_version)
+    VALUES ('20261118170000_beauty_inventory_permissions', '8.0.11');
+    END IF;
+END $EF$;
+COMMIT;
+

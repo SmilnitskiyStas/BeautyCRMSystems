@@ -88,12 +88,14 @@ public sealed class AccessApiTests(AuthApiFixture fx) : IClassFixture<AuthApiFix
         Assert.True(resp.Headers.CacheControl?.NoStore);
         Assert.Equal("owner", me.GetProperty("role").GetString());
         Assert.Equal(1, me.GetProperty("accessVersion").GetInt32());
-        Assert.Equal(1, me.GetProperty("catalogVersion").GetInt32());
+        Assert.Equal(2, me.GetProperty("catalogVersion").GetInt32());
         Assert.Equal(me.GetProperty("accessStamp").GetString(), Stamp(resp));
         Assert.Matches(@"^1\.[0-9a-f]{8}$", Stamp(resp));
         Assert.Contains("beauty_booking", me.GetProperty("modules").EnumerateArray().Select(m => m.GetString()));
+        Assert.Contains("beauty_inventory", me.GetProperty("modules").EnumerateArray().Select(m => m.GetString()));
         var perms = me.GetProperty("permissions").EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString()!);
-        Assert.Equal(18, perms.Count);
+        Assert.Equal(21, perms.Count);
+        Assert.Equal(["all", "all", "edit"], new[] { perms["inventory.view"], perms["inventory.manage"], perms["inventory.costs"] });
         Assert.All(PermissionCatalog.All, d => Assert.Equal(d.Highest, perms[d.Key]));
     }
 
@@ -160,9 +162,9 @@ public sealed class AccessApiTests(AuthApiFixture fx) : IClassFixture<AuthApiFix
         Assert.True(r1.Headers.CacheControl?.Private);
         Assert.Equal(TimeSpan.FromSeconds(300), r1.Headers.CacheControl?.MaxAge);
         Assert.Equal(owned.GetRawText(), dep.GetRawText()); // однакова для всіх ролей
-        Assert.Equal(1, owned.GetProperty("catalogVersion").GetInt32());
-        Assert.Equal(11, owned.GetProperty("blocks").GetArrayLength());
-        Assert.Equal(6, owned.GetProperty("constraints").GetArrayLength());
+        Assert.Equal(2, owned.GetProperty("catalogVersion").GetInt32());
+        Assert.Equal(12, owned.GetProperty("blocks").GetArrayLength());
+        Assert.Equal(8, owned.GetProperty("constraints").GetArrayLength());
         Assert.Equal(4, owned.GetProperty("roles").GetArrayLength());
         var staff = owned.GetProperty("blocks").EnumerateArray().First(b => b.GetProperty("block").GetString() == "staff")
             .GetProperty("permissions")[0];

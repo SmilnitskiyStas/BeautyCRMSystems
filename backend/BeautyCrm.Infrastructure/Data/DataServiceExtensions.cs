@@ -60,6 +60,7 @@ public static class DataServiceExtensions
         services.AddScoped<IStaffStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<IOverviewStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<ILocationStore>(sp => sp.GetRequiredService<EfBeautyStore>());
+        services.AddScoped<BeautyCrm.Application.Features.BeautyInventory.IInventoryStore>(sp => sp.GetRequiredService<EfBeautyStore>()); // ADR-025: склад
         services.AddScoped<BeautyCrm.Application.Features.BeautyCoupons.ICouponStore>(sp => sp.GetRequiredService<EfBeautyStore>()); // TASK-778
         services.AddScoped<BeautyCrm.Application.Features.BeautyReminders.IReminderContextStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<BeautyCrm.Application.Features.BeautyReminders.IReminderReplanStore>(sp => sp.GetRequiredService<EfBeautyStore>());
