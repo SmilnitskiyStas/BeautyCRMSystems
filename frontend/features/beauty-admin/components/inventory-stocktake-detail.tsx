@@ -8,7 +8,7 @@ import { useCancelStocktake, usePostStocktake, useSaveStocktakeLines, useStockta
 import { dateTimeLabel } from "../format";
 import { formatQuantity, formatSigned, humanizeInventoryError, isYmd, numberToField, parseQuantity, stocktakeDifference, unitShort } from "../inventory/logic";
 import type { InventoryScope, Stocktake, StocktakeLineInput } from "../inventory/types";
-import { InputField, InventoryPage, locationName } from "./inventory-parts";
+import { ErrorSummary, InputField, InventoryPage, locationName, quantityInputMode, useFocusInvalid } from "./inventory-parts";
 import { ModalDialog } from "./modal-dialog";
 import { ErrorBanner, SuccessBanner } from "./staff-parts";
 import { STOCKTAKE_STATUS } from "./inventory-stocktakes-screen";
@@ -26,6 +26,7 @@ function Detail({ id, scope }: { id: string; scope: InventoryScope }) {
   const cancel = useCancelStocktake(id);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [errors, setErrors] = useState<Record<string, { counted?: string; surplus?: string }>>({});
+  const [attachInvalid, requestInvalid] = useFocusInvalid<HTMLDivElement>();
   const [serverError, setServerError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [dialog, setDialog] = useState<"post" | "cancel" | null>(null);
@@ -81,7 +82,11 @@ function Detail({ id, scope }: { id: string; scope: InventoryScope }) {
       out.push({ productId: pid, countedQuantity: counted, surplusExpiresOn: surplus || null });
     }
     setErrors(next);
-    return Object.keys(next).length > 0 ? null : out;
+    if (Object.keys(next).length > 0) {
+      requestInvalid();
+      return null;
+    }
+    return out;
   }
 
   const fail = (e: unknown, fallback: string) => {
@@ -160,7 +165,7 @@ function Detail({ id, scope }: { id: string; scope: InventoryScope }) {
           {st.postedAt ? `, проведено ${dateTimeLabel(st.postedAt, location?.timezone)}` : ""}
         </p>
         {st.note ? <p className="text-sm text-(--muted)">{st.note}</p> : null}
-        <p role="status" aria-live="polite" className="ml-auto text-sm text-(--muted)">
+        <p role="status" className="ml-auto text-sm text-(--muted)">
           Пораховано {countedNow} із {st.lines.length}
         </p>
       </Card>
@@ -169,8 +174,10 @@ function Detail({ id, scope }: { id: string; scope: InventoryScope }) {
           Очікуваний залишок - живе значення на зараз. Якщо в закладі були рухи під час підрахунку, різниця рахується до залишку на момент проведення. Порожнє поле - «не рахували».
         </p>
       ) : null}
+      <ErrorSummary count={Object.values(errors).reduce((n, e) => n + Object.keys(e).length, 0)} />
       <Card>
-        <Table headers={["Товар", "Очікується", "Підраховано", "Різниця", ...(editable ? ["Термін надлишку"] : [])]} minWidth={760}>
+        <div ref={attachInvalid}>
+        <Table caption="Позиції інвентаризації" headers={["Товар", "Очікується", "Підраховано", "Різниця", ...(editable ? ["Термін надлишку"] : [])]} minWidth={760}>
           {st.lines.map((l) => {
             const pid = l.product.id;
             const d = draftOf(pid);
@@ -187,7 +194,7 @@ function Detail({ id, scope }: { id: string; scope: InventoryScope }) {
                   {editable ? (
                     <InputField
                       label={`Підраховано: ${l.product.name}`}
-                      inputMode="decimal"
+                      inputMode={quantityInputMode(l.product.unit)}
                       value={d.counted}
                       onChange={(v) => setDraft(pid, { counted: v })}
                       suffix={unitShort(l.product.unit)}
@@ -222,8 +229,9 @@ function Detail({ id, scope }: { id: string; scope: InventoryScope }) {
             );
           })}
         </Table>
+        </div>
       </Card>
-      <div aria-live="polite" className="flex flex-col gap-2">
+      <div className="flex flex-col gap-2">
         {serverError ? <ErrorBanner>{serverError}</ErrorBanner> : null}
         {message ? <SuccessBanner>{message}</SuccessBanner> : null}
       </div>

@@ -2,13 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useId, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useAuth } from "@/features/beauty-auth/components/auth-provider";
 import { canManageInventory, canViewInventory } from "@/features/beauty-auth/permissions";
 import { BeautyApiError } from "@/features/beauty-auth/errors";
 import { useInventoryScope } from "../hooks/use-inventory";
-import { humanizeInventoryError } from "../inventory/logic";
-import type { InventoryScope } from "../inventory/types";
+import { humanizeInventoryError, isIntegerUnit } from "../inventory/logic";
+import type { InventoryScope, StockUnit } from "../inventory/types";
 import { Card, Chip, FIELD_INPUT, FIELD_LABEL, PageHeader, QueryState, SecondaryButton } from "./ui";
 import { ERROR_TEXT } from "./staff-parts";
 
@@ -200,6 +200,7 @@ export function InputField({
   suffix,
   type = "text",
   inputMode,
+  autoComplete,
   required,
   disabled,
   maxLength,
@@ -213,8 +214,10 @@ export function InputField({
   suffix?: string;
   /** `id` елемента `<datalist>` для підказок. */
   list?: string;
-  type?: "text" | "date";
-  inputMode?: "decimal" | "text" | "numeric";
+  type?: "text" | "date" | "tel" | "email";
+  inputMode?: "decimal" | "text" | "numeric" | "tel" | "email";
+  /** За замовчуванням `off`; для `type="tel"` - `tel`. */
+  autoComplete?: string;
   required?: boolean;
   disabled?: boolean;
   maxLength?: number;
@@ -237,7 +240,7 @@ export function InputField({
           disabled={disabled}
           maxLength={maxLength}
           list={list}
-          autoComplete="off"
+          autoComplete={autoComplete ?? (type === "tel" ? "tel" : type === "email" ? "email" : "off")}
           onChange={(e) => onChange(e.target.value)}
           aria-invalid={error ? true : undefined}
           aria-describedby={describedBy}
@@ -259,15 +262,64 @@ export function InputField({
   );
 }
 
-/** Кнопка «Показати ще» для курсорних списків; `aria-live` повідомляє про довантаження. */
+/** Клавіатура для кількості: цілі одиниці (шт/уп) - цифрова, дробові - з роздільником. */
+export const quantityInputMode = (unit: StockUnit | undefined): "numeric" | "decimal" => (unit && isIntegerUnit(unit) ? "numeric" : "decimal");
+
+/** Пояснення позначки «*» для форм із обов'язковими полями. */
+export function RequiredNote() {
+  return <p className="text-[13px] text-(--muted)">Поля, позначені «*», обов’язкові.</p>;
+}
+
+/**
+ * Після невдалого сабміту фокус переходить на перше поле з `aria-invalid="true"` усередині `ref`.
+ * Виклик `request()` після `setErrors`: фокус ставиться в effect, коли помилки вже відрендерені.
+ */
+export function useFocusInvalid<T extends HTMLElement>(): [attach: (el: T | null) => void, request: () => void] {
+  const [el, setEl] = useState<T | null>(null);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (tick > 0) el?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
+  }, [tick, el]);
+  return [setEl, () => setTick((t) => t + 1)];
+}
+
+/** Підсумок помилок валідації (озвучується одним `role="alert"`). */
+export function ErrorSummary({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <p role="alert" className="rounded-xl bg-[#FBE4E4] px-3.5 py-2.5 text-sm text-[#8A1F1F]">
+      Виправте помилки у формі: {count}.
+    </p>
+  );
+}
+
+/**
+ * Кнопка «Показати ще» для курсорних списків; статус (`role="status"`) повідомляє про довантаження. Коли кнопка зникає
+ * (`hasMore=false`), а фокус був на ній, він повертається на статус - інакше втрачається на `body`.
+ */
 export function LoadMore({ hasMore, loading, onClick, shown }: { hasMore: boolean; loading: boolean; onClick: () => void; shown: number }) {
+  const status = useRef<HTMLParagraphElement>(null);
+  const clicked = useRef(false);
+  useEffect(() => {
+    if (!hasMore && clicked.current) {
+      clicked.current = false;
+      status.current?.focus();
+    }
+  }, [hasMore]);
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <p role="status" aria-live="polite" className="text-[13px] text-(--muted)">
+      <p ref={status} tabIndex={-1} role="status" className="text-[13px] text-(--muted) outline-none focus-visible:outline-2 focus-visible:outline-(--accent)">
         Показано: {shown}
       </p>
       {hasMore ? (
-        <SecondaryButton onClick={onClick} disabled={loading}>
+        <SecondaryButton
+          onClick={() => {
+            if (loading) return;
+            clicked.current = true;
+            onClick();
+          }}
+          aria-disabled={loading || undefined}
+        >
           {loading ? "Завантажуємо…" : "Показати ще"}
         </SecondaryButton>
       ) : null}

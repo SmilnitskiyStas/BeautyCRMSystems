@@ -51,12 +51,12 @@ function SupplierForm({ supplier, canEdit, onClose }: { supplier: Supplier | nul
         <div className="grid gap-4 sm:grid-cols-2">
           <InputField label="Назва" required maxLength={200} value={values.name} onChange={(v) => set("name", v)} error={errors.name} disabled={!canEdit} />
           <InputField label="Контактна особа" maxLength={200} value={values.contactName} onChange={(v) => set("contactName", v)} error={errors.contactName} disabled={!canEdit} />
-          <InputField label="Телефон" inputMode="text" maxLength={32} value={values.phone} onChange={(v) => set("phone", v)} error={errors.phone} disabled={!canEdit} />
-          <InputField label="Пошта" maxLength={320} value={values.email} onChange={(v) => set("email", v)} error={errors.email} disabled={!canEdit} />
+          <InputField label="Телефон" type="tel" inputMode="tel" maxLength={32} value={values.phone} onChange={(v) => set("phone", v)} error={errors.phone} disabled={!canEdit} />
+          <InputField label="Пошта" type="email" inputMode="email" maxLength={320} value={values.email} onChange={(v) => set("email", v)} error={errors.email} disabled={!canEdit} />
         </div>
         <InputField label="Примітка" maxLength={500} value={values.note} onChange={(v) => set("note", v)} error={errors.note} disabled={!canEdit} />
         {isEdit ? <CheckRow label="Постачальник активний" hint="Неактивний не пропонується в надходженнях." checked={values.isActive} onChange={(on) => set("isActive", on)} disabled={!canEdit} /> : null}
-        <div aria-live="polite" className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2">
           {serverError ? <ErrorBanner>{serverError}</ErrorBanner> : null}
           {saved ? <SuccessBanner>{saved}</SuccessBanner> : null}
         </div>
@@ -112,7 +112,7 @@ export function InventorySuppliersScreen() {
               </Card>
             ) : (
               <Card>
-                <Table headers={["Назва", "Контактна особа", "Телефон", "Пошта", "Товарів", "Статус", "Дії"]} minWidth={820}>
+                <Table caption="Постачальники" headers={["Назва", "Контактна особа", "Телефон", "Пошта", "Товарів", "Статус", "Дії"]} minWidth={820}>
                   {q.items.map((s) => (
                     <tr key={s.id} className="border-t border-(--line)">
                       <th scope="row" className={`${TD} text-left font-semibold`}>

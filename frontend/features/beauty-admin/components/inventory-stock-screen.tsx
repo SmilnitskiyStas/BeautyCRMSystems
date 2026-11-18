@@ -45,7 +45,7 @@ function LocationStock({ scope, locationId, search, state }: { scope: InventoryS
         </Card>
       ) : (
         <Card>
-          <Table headers={["Товар", "Залишок", "Мін. залишок", "Найближчий термін", "Стан", ...(showValue ? ["Вартість"] : [])]} minWidth={760}>
+          <Table caption="Залишки закладу" headers={["Товар", "Залишок", "Мін. залишок", "Найближчий термін", "Стан", ...(showValue ? ["Вартість"] : [])]} minWidth={760}>
             {rows.map((r) => (
               <tr key={r.product.id} className={`border-t border-(--line) ${r.isLow || r.expiredQuantity > 0 ? "bg-[#FFF8E6]" : ""}`}>
                 <th scope="row" className={`${TD} text-left font-semibold`}>
@@ -85,7 +85,7 @@ function SummaryStock({ scope, search, state }: { scope: InventoryScope; search:
         </Card>
       ) : (
         <Card>
-          <Table headers={["Товар", "Усього", "По закладах", ...(showValue ? ["Вартість"] : [])]} minWidth={680}>
+          <Table caption="Залишки по мережі" headers={["Товар", "Усього", "По закладах", ...(showValue ? ["Вартість"] : [])]} minWidth={680}>
             {rows.map((r) => (
               <tr key={r.product.id} className={`border-t border-(--line) ${r.isLowAnywhere ? "bg-[#FFF8E6]" : ""}`}>
                 <th scope="row" className={`${TD} text-left font-semibold`}>
@@ -166,7 +166,7 @@ export function InventoryStockScreen() {
                 ))}
               </div>
             </div>
-            <div aria-live="polite">{done ? <SuccessBanner>{done}</SuccessBanner> : null}</div>
+            {done ? <SuccessBanner>{done}</SuccessBanner> : null}
             {location === null ? <SummaryStock scope={scope} search={search} state={effective} /> : <LocationStock scope={scope} locationId={location} search={search} state={effective} />}
             {dialog ? (
               <OperationDialog

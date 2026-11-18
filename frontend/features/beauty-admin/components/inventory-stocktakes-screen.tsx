@@ -63,7 +63,7 @@ export function InventoryStocktakesScreen() {
                 </PrimaryButton>
               </Card>
             ) : null}
-            <div aria-live="polite" className="flex flex-col gap-2">
+            <div className="flex flex-col gap-2">
               {error ? <ErrorBanner>{error}</ErrorBanner> : null}
               {resumeId ? (
                 <Link href={`/beauty/inventory/stocktakes/${encodeURIComponent(resumeId)}`} className="inline-flex min-h-11 items-center text-sm font-semibold text-(--accent) underline">
@@ -88,7 +88,7 @@ export function InventoryStocktakesScreen() {
                 </Card>
               ) : (
                 <Card>
-                  <Table headers={["Створено", "Заклад", "Статус", "Рахунок", "Хто створив", "Дії"]} minWidth={720}>
+                  <Table caption="Інвентаризації" headers={["Створено", "Заклад", "Статус", "Рахунок", "Хто створив", "Дії"]} minWidth={720}>
                     {q.items.map((s) => (
                       <tr key={s.id} className="border-t border-(--line)">
                         <td className={TD}>{dateTimeLabel(s.createdAt, scope.locations.find((l) => l.id === s.locationId)?.timezone)}</td>

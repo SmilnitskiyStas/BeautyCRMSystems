@@ -65,6 +65,7 @@ export function InventoryProductsScreen() {
             ) : (
               <Card>
                 <Table
+                  caption="Товари"
                   headers={["Товар", "Категорія", "Од.", "Штрихкод", "Постачальник", "Призначення", ...(scope.costs !== "none" ? ["Закупівельна ціна"] : []), "Мін. залишок", "Статус", "Дії"]}
                   minWidth={980}
                 >

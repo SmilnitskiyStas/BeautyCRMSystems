@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import {
   useInventoryCategories,
   useInventoryProduct,
@@ -22,7 +22,7 @@ import {
   type ProductFormValues,
 } from "../inventory/logic";
 import type { InventoryScope, Product, ProductPurpose, StockUnit } from "../inventory/types";
-import { InputField, SelectField } from "./inventory-parts";
+import { ErrorSummary, InputField, RequiredNote, SelectField, quantityInputMode, useFocusInvalid } from "./inventory-parts";
 import { CheckRow, ErrorBanner, SuccessBanner } from "./staff-parts";
 import { Card, PrimaryButton, SecondaryButton } from "./ui";
 
@@ -108,7 +108,7 @@ function LocationSettings({ product, scope }: { product: Product; scope: Invento
             <p className="text-sm font-semibold">{l.name}</p>
             <InputField
               label={`Мін. залишок у «${l.name}»`}
-              inputMode="decimal"
+              inputMode={quantityInputMode(product.unit)}
               value={d.minStock}
               suffix={unitShort(product.unit)}
               disabled={!l.canManage}
@@ -136,7 +136,7 @@ function LocationSettings({ product, scope }: { product: Product; scope: Invento
           </div>
         );
       })}
-      <div aria-live="polite">
+      <div>
         {message ? <SuccessBanner>{message}</SuccessBanner> : null}
         {serverError ? <ErrorBanner>{serverError}</ErrorBanner> : null}
       </div>
@@ -159,6 +159,8 @@ export function ProductForm({ product, scope, onClose }: { product: Product | nu
   const [serverError, setServerError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [confirmingOff, setConfirmingOff] = useState(false);
+  const [attachInvalid, requestInvalid] = useFocusInvalid<HTMLFormElement>();
+  const confirmHeading = useRef<HTMLParagraphElement>(null);
   const canEditCosts = scope.costs === "edit";
   const readOnly = isEdit ? !scope.canEditCatalog : false;
   const set = <K extends keyof ProductFormValues>(k: K, v: ProductFormValues[K]) => {
@@ -167,6 +169,10 @@ export function ProductForm({ product, scope, onClose }: { product: Product | nu
     if (k === "isActive") setConfirmingOff(false);
   };
   const wasActive = product?.isActive ?? true;
+  // Блок підтвердження з'являється на місці кнопки, що мала фокус: переносимо фокус на його текст.
+  useEffect(() => {
+    if (confirmingOff) confirmHeading.current?.focus();
+  }, [confirmingOff]);
 
   async function doSave() {
     setServerError(null);
@@ -186,7 +192,10 @@ export function ProductForm({ product, scope, onClose }: { product: Product | nu
     setSaved(null);
     const next = validateProduct(values, { canEditCosts });
     setErrors(next);
-    if (Object.keys(next).length > 0) return;
+    if (Object.keys(next).length > 0) {
+      requestInvalid();
+      return;
+    }
     if (isEdit && wasActive && !values.isActive && !confirmingOff) {
       setConfirmingOff(true);
       return;
@@ -195,9 +204,11 @@ export function ProductForm({ product, scope, onClose }: { product: Product | nu
   }
 
   const formBody = (
-    <form onSubmit={submit} noValidate className="flex flex-col gap-5" aria-label={isEdit ? `Товар «${product.name}»` : "Новий товар"}>
+    <form ref={attachInvalid} onSubmit={submit} noValidate className="flex flex-col gap-5" aria-label={isEdit ? `Товар «${product.name}»` : "Новий товар"}>
       <h2 className="text-lg font-semibold">{isEdit ? product.name : "Новий товар"}</h2>
       {readOnly ? <p className="text-sm text-(--muted)">Каталог товарів змінює лише керівник з правом «Усі заклади й каталог товарів». Нижче можна налаштувати свої заклади.</p> : null}
+      {readOnly ? null : <RequiredNote />}
+      <ErrorSummary count={Object.keys(errors).length} />
       <div className="grid gap-4 sm:grid-cols-2">
         <InputField label="Назва" required maxLength={200} value={values.name} onChange={(v) => set("name", v)} error={errors.name} disabled={readOnly} />
         <div>
@@ -239,7 +250,7 @@ export function ProductForm({ product, scope, onClose }: { product: Product | nu
         ) : null}
         <InputField
           label="Мінімальний залишок (мережа)"
-          inputMode="decimal"
+          inputMode={quantityInputMode(values.unit)}
           value={values.minStock}
           onChange={(v) => set("minStock", v)}
           suffix={unitShort(values.unit)}
@@ -255,8 +266,11 @@ export function ProductForm({ product, scope, onClose }: { product: Product | nu
         {isEdit ? <CheckRow label="Товар активний" hint="Неактивний товар не приймається в надходженні; залишки лишаються." checked={values.isActive} onChange={(on) => set("isActive", on)} disabled={readOnly} /> : null}
       </fieldset>
       {confirmingOff ? (
-        <div role="alertdialog" aria-label="Підтвердження деактивації товару" className="flex flex-col gap-3 rounded-xl bg-[#FFF1CC] p-4 text-[#5C3900]">
-          <p className="text-sm">Товар перестане прийматися в надходженнях. Залишки, партії й журнал збережуться; списання й переміщення лишаються доступними.</p>
+        <div role="group" aria-labelledby="confirm-off-t" aria-describedby="confirm-off-d" className="flex flex-col gap-3 rounded-xl bg-[#FFF1CC] p-4 text-[#5C3900]">
+          <p id="confirm-off-t" ref={confirmHeading} tabIndex={-1} className="text-sm font-semibold outline-none">
+            Деактивувати товар?
+          </p>
+          <p id="confirm-off-d" className="text-sm">Товар перестане прийматися в надходженнях. Залишки, партії й журнал збережуться; списання й переміщення лишаються доступними.</p>
           <div className="flex flex-wrap gap-2">
             <PrimaryButton disabled={save.isPending} onClick={() => void doSave()}>
               Так, деактивувати
@@ -265,7 +279,7 @@ export function ProductForm({ product, scope, onClose }: { product: Product | nu
           </div>
         </div>
       ) : null}
-      <div aria-live="polite" className="flex flex-col gap-2">
+      <div className="flex flex-col gap-2">
         {serverError ? <ErrorBanner>{serverError}</ErrorBanner> : null}
         {saved ? <SuccessBanner>{saved}</SuccessBanner> : null}
       </div>

@@ -212,10 +212,12 @@ export function Avatar({ text, size = 40 }: { text: string; size?: number }) {
   );
 }
 
-export function Table({ headers, children, minWidth = 560 }: { headers: string[]; children: ReactNode; minWidth?: number }) {
+/** `caption` - підпис таблиці для скрінрідерів (sr-only) і назва прокручуваної області (клавіатурний скрол). */
+export function Table({ headers, children, minWidth = 560, caption }: { headers: string[]; children: ReactNode; minWidth?: number; caption?: string }) {
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto" role="region" aria-label={caption ?? "Таблиця"} tabIndex={0}>
       <table className="w-full border-collapse text-sm" style={{ minWidth }}>
+        {caption ? <caption className="sr-only">{caption}</caption> : null}
         <thead>
           <tr className="text-left text-[13px] text-(--muted)">
             {headers.map((h) => (
@@ -268,5 +270,5 @@ export function EmptyState({ children }: { children: ReactNode }) {
 }
 
 export const FIELD_INPUT =
-  "min-h-11 w-full rounded-xl border border-(--line-strong) bg-white px-3.5 text-[15px] text-(--ink)";
+  "min-h-11 w-full rounded-xl border border-[#8a849c] bg-white px-3.5 text-[15px] text-(--ink)";
 export const FIELD_LABEL = "text-[13px] font-semibold";

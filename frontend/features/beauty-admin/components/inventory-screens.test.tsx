@@ -185,7 +185,7 @@ describe("списання й переміщення", () => {
     await pick(user, /Товар \(позиція 1\)/, /Фарба/, dialog);
     await user.type(within(dialog).getByLabelText(/^Кількість/), "8");
     await user.click(within(dialog).getByRole("button", { name: "Списати" }));
-    const confirm = within(dialog).getByRole("alertdialog", { name: "Підтвердження операції" });
+    const confirm = within(dialog).getByRole("group", { name: "Підтвердіть операцію" });
     expect(confirm).toHaveTextContent("Списати 1 поз.");
     await user.click(within(confirm).getByRole("button", { name: "Так, списати" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -208,7 +208,7 @@ describe("списання й переміщення", () => {
     await user.click(within(dialog).getByRole("button", { name: "Списати" }));
     await user.click(within(dialog).getByRole("button", { name: "Так, списати" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(/потрібно 10 шт, доступно 3 шт/);
-    expect(within(dialog).queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("group", { name: "Підтвердіть операцію" })).not.toBeInTheDocument();
   });
 
   it("коментар обов'язковий для «Виправлення помилки»", async () => {
@@ -236,7 +236,7 @@ describe("списання й переміщення", () => {
     expect(within(batchSelect).getByRole("option", { name: /прострочена/ })).toBeDisabled();
     await user.type(within(dialog).getByLabelText(/^Кількість/), "5");
     await user.click(within(dialog).getByRole("button", { name: "Перемістити" }));
-    const confirm = within(dialog).getByRole("alertdialog");
+    const confirm = within(dialog).getByRole("group", { name: "Підтвердіть операцію" });
     expect(confirm).toHaveTextContent("із «Центр» до «Поділ»");
     await user.click(within(confirm).getByRole("button", { name: "Так, перемістити" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());

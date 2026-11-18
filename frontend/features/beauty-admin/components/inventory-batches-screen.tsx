@@ -47,6 +47,7 @@ export function InventoryBatchesScreen() {
               ) : (
                 <Card>
                   <Table
+                    caption="Партії й терміни придатності"
                     headers={["Товар", "Заклад", "Номер партії", "Надійшла", "Термін придатності", "Залишок", ...(scope.costs !== "none" ? ["Ціна за од."] : []), "Статус"]}
                     minWidth={900}
                   >

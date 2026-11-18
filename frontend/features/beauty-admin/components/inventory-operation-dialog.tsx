@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { todayInZone } from "../../beauty-shared/zone-time";
 import { useBatches, useCreateReceipt, useCreateTransfer, useCreateWriteOff, useInventoryProducts, useSuppliers } from "../hooks/use-inventory";
 import {
@@ -24,7 +24,7 @@ import {
 } from "../inventory/logic";
 import type { InventoryScope, Operation, ProductRef, ReceiptRequest, StockLineRequest, StockUnit, WriteOffReason } from "../inventory/types";
 import { ModalDialog } from "./modal-dialog";
-import { InputField, SelectField } from "./inventory-parts";
+import { ErrorSummary, InputField, RequiredNote, SelectField, quantityInputMode, useFocusInvalid } from "./inventory-parts";
 import { ErrorBanner } from "./staff-parts";
 import { PrimaryButton, SecondaryButton } from "./ui";
 
@@ -73,6 +73,12 @@ export function OperationDialog({
   const [serverError, setServerError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const attempt = useRef<Attempt | null>(null);
+  const [attachInvalid, requestInvalid] = useFocusInvalid<HTMLFormElement>();
+  const confirmTitle = useRef<HTMLParagraphElement>(null);
+  // Блок підтвердження з'являється на місці кнопки, що мала фокус: переносимо фокус на його заголовок.
+  useEffect(() => {
+    if (confirming) confirmTitle.current?.focus();
+  }, [confirming]);
 
   const receipt = useCreateReceipt();
   const writeOff = useCreateWriteOff();
@@ -126,7 +132,9 @@ export function OperationDialog({
     const le = validateLines(lines, { unitOf, trackExpiry }, { mode: kind === "receipt" ? "receipt" : "stock", today, canEditCosts });
     setHeaderErrors(h);
     setLineErrors(le);
-    return Object.keys(h).length === 0 && Object.keys(le).length === 0;
+    const ok = Object.keys(h).length === 0 && Object.keys(le).length === 0;
+    if (!ok) requestInvalid();
+    return ok;
   }
 
   const stockLines = (): StockLineRequest[] =>
@@ -216,9 +224,12 @@ export function OperationDialog({
           submit();
         }}
         noValidate
+        ref={attachInvalid}
         aria-label={TITLE[kind]}
         className="flex flex-col gap-4"
       >
+        <RequiredNote />
+        <ErrorSummary count={Object.keys(headerErrors).length + Object.values(lineErrors).reduce((n, e) => n + Object.keys(e).length, 0)} />
         <div className="grid gap-3 sm:grid-cols-2">
           <SelectField
             label={kind === "transfer" ? "Звідки" : "Заклад"}
@@ -321,8 +332,11 @@ export function OperationDialog({
         </fieldset>
 
         {confirming ? (
-          <div role="alertdialog" aria-label="Підтвердження операції" className="flex flex-col gap-3 rounded-xl bg-[#FFF1CC] p-4 text-[#5C3900]">
-            <p className="text-sm">
+          <div role="group" aria-labelledby="op-confirm-t" aria-describedby="op-confirm-d" className="flex flex-col gap-3 rounded-xl bg-[#FFF1CC] p-4 text-[#5C3900]">
+            <p id="op-confirm-t" ref={confirmTitle} tabIndex={-1} className="text-sm font-semibold outline-none">
+              Підтвердіть операцію
+            </p>
+            <p id="op-confirm-d" className="text-sm">
               {kind === "write_off"
                 ? `Списати ${lines.length} поз. із закладу «${fromName}»? Рух не редагується: помилку виправляють лише новим списанням з причиною «${REASON_LABEL.correction}».`
                 : `Перемістити ${lines.length} поз. із «${fromName}» до «${toName}»? Переміщення відбувається одразу, партії зберігають терміни придатності.`}
@@ -335,7 +349,7 @@ export function OperationDialog({
             </div>
           </div>
         ) : null}
-        <div aria-live="polite">{serverError ? <ErrorBanner>{serverError}</ErrorBanner> : null}</div>
+        {serverError ? <ErrorBanner>{serverError}</ErrorBanner> : null}
       </form>
     </ModalDialog>
   );
@@ -381,7 +395,7 @@ function LineEditor({
       <InputField
         label="Кількість"
         required
-        inputMode="decimal"
+        inputMode={quantityInputMode(unit)}
         value={line.quantity}
         onChange={(v) => onChange({ quantity: v })}
         suffix={unit ? unitShort(unit) : undefined}
@@ -407,9 +421,7 @@ function LineEditor({
         />
       )}
       {errors && Object.keys(errors).length > 0 ? (
-        <p className="sr-only" role="status">
-          У позиції {n} є помилки
-        </p>
+        <p className="sr-only">У позиції {n} є помилки</p>
       ) : null}
       {onRemove ? (
         <div>

@@ -49,7 +49,7 @@ export function InventoryMovementsScreen() {
               </Card>
             ) : (
               <Card>
-                <Table headers={["Час", "Заклад", "Операція", "Товар", "Кількість", ...(scope.costs !== "none" ? ["Ціна за од."] : []), "Причина / коментар", "Хто"]} minWidth={980}>
+                <Table caption="Журнал рухів складу" headers={["Час", "Заклад", "Операція", "Товар", "Кількість", ...(scope.costs !== "none" ? ["Ціна за од."] : []), "Причина / коментар", "Хто"]} minWidth={980}>
                   {q.items.map((m) => (
                     <tr key={m.id} className="border-t border-(--line)">
                       <td className={TD}>{dateTimeLabel(m.occurredAt, scope.locations.find((l) => l.id === m.locationId)?.timezone)}</td>
