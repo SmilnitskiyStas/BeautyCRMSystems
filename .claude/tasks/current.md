@@ -132,7 +132,7 @@
 | TASK-876 | database-engineer | done | Склад етап 1: міграція beauty_inventory, RLS FORCE, CHECK, append-only рухи, GRANT (setup-db.ps1 + grants.sql), schema.sql, EF, тести БД | .claude/logs/tasks/TASK-876.md |
 | TASK-877 | backend-developer | review | Склад етап 1: Features/BeautyInventory, FEFO/переміщення/інвентаризація, InventoryController, PermissionKeys inventory.* + backfill + Version, RequireModule, тести | .claude/logs/tasks/TASK-877.md |
 | TASK-878 | frontend-developer | review (mock готовий; http чекає на TASK-877) | Склад етап 1 (mock + http): пункт «Склад» у каталозі, товари/залишки/партії/рух/інвентаризація, права (access.ts), коди помилок, vitest | .claude/logs/tasks/TASK-878.md |
-| TASK-879 | qa-engineer | planned | QA складу етап 1: таблиця відповідності ADR-025, RLS крос-tenant, FEFO, атомарність переміщень, інвентаризація, гонки, права/модуль | .claude/logs/tasks/TASK-879.md |
+| TASK-879 | qa-engineer | review | QA складу етап 1: таблиця відповідності ADR-025, RLS крос-tenant, FEFO, атомарність переміщень, інвентаризація, гонки, права/модуль | .claude/logs/tasks/TASK-879.md |
 | TASK-880 | security-reviewer | planned | Рев'ю безпеки складу етап 1: RLS/IDOR, межа inventory.costs, append-only журнал, синхронність GRANT, PII; звіт у docs/reviews/ | .claude/logs/tasks/TASK-880.md |
 | TASK-881 | documentation-writer | planned | Документація складу етап 1: §32 статус, database.md, runbook (модуль, backfill, відкат), known-issues | .claude/logs/tasks/TASK-881.md |
 
