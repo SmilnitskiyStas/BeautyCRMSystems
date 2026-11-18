@@ -1,5 +1,36 @@
 import type { AccessCatalog } from "@/features/beauty-auth/access";
 import type {
+  Batch,
+  BatchQuery,
+  InventoryScope,
+  LocationSetting,
+  Movement,
+  MovementQuery,
+  Operation,
+  OperationQuery,
+  OperationSummary,
+  Page,
+  Product,
+  ProductDetail,
+  ProductQuery,
+  ProductRequest,
+  ReceiptRequest,
+  StockPage,
+  StockQuery,
+  StockSummaryPage,
+  StockSummaryQuery,
+  Stocktake,
+  StocktakeLineInput,
+  StocktakePostResult,
+  StocktakeQuery,
+  StocktakeSummary,
+  Supplier,
+  SupplierQuery,
+  SupplierRequest,
+  TransferRequest,
+  WriteOffRequest,
+} from "../inventory/types";
+import type {
   AccessSaveInput,
   AccessSaveResult,
   AuditPage,
@@ -389,4 +420,61 @@ export interface BeautyAdminApi {
    * 404 client_not_found; 422 invalid_level|channel_unsupported|basis_required|invalid_basis|invalid_basis_note; 409 admin_grant_disabled.
    */
   setMarketingConsent(clientId: string, input: ConsentInput): Promise<MarketingConsent>;
+  // ---------- §32: склад (ADR-025, модуль `beauty_inventory`; всі відповіді `no-store`) ----------
+  // Права: `inventory.view|manage|costs` (§32.2). Без `costs` ціни (†) у відповідях відсутні. Заклад поза scope -> 404 location_not_found.
+  /** GET /inventory/scope: заклади scope з `canManage`, рівень цін, `canEditCatalog`, `expiringSoonDays`. */
+  getInventoryScope(): Promise<InventoryScope>;
+  /** GET /inventory/products (§32.5): `active` за замовчуванням `true`. */
+  getInventoryProducts(q?: ProductQuery): Promise<Page<Product>>;
+  /** GET /inventory/products/{id}: з `locationSettings` закладів scope. 404 product_not_found. */
+  getInventoryProduct(id: string): Promise<ProductDetail>;
+  /** GET /inventory/categories: різні непорожні категорії. */
+  getInventoryCategories(): Promise<string[]>;
+  /** POST /inventory/products (`inventory.manage = all`): 409 barcode_taken, 422 invalid_*, 403 forbidden_role (`purchasePrice` без `costs = edit`). */
+  createInventoryProduct(r: ProductRequest): Promise<Product>;
+  /** PUT /inventory/products/{id}: + 422 unit_locked. */
+  updateInventoryProduct(id: string, r: ProductRequest): Promise<Product>;
+  /** PUT /inventory/products/{id}/locations/{locationId}: `minStock: null` = успадкувати мережевий. */
+  setProductLocationSetting(productId: string, locationId: string, input: { minStock: number | null; isEnabled: boolean }): Promise<LocationSetting>;
+  /** DELETE /inventory/products/{id}/locations/{locationId}: 404 setting_not_found. */
+  deleteProductLocationSetting(productId: string, locationId: string): Promise<void>;
+  /** GET /inventory/suppliers (`inventory.manage >= own`). */
+  getSuppliers(q?: SupplierQuery): Promise<Page<Supplier>>;
+  /** POST /inventory/suppliers: 409 supplier_name_taken. */
+  createSupplier(r: SupplierRequest): Promise<Supplier>;
+  /** PUT /inventory/suppliers/{id}. */
+  updateSupplier(id: string, r: SupplierRequest): Promise<Supplier>;
+  /** GET /inventory/stock: `locationId` обов'язковий (422 location_required). */
+  getStock(q: StockQuery): Promise<StockPage>;
+  /** GET /inventory/stock/summary: усі заклади scope («Усі заклади»). */
+  getStockSummary(q?: StockSummaryQuery): Promise<StockSummaryPage>;
+  /** GET /inventory/batches: FEFO-порядок; статус за датою закладу. */
+  getBatches(q?: BatchQuery): Promise<Page<Batch>>;
+  /** GET /inventory/movements: за замовчуванням останні 30 діб. */
+  getMovements(q?: MovementQuery): Promise<Page<Movement>>;
+  /** GET /inventory/operations. */
+  getOperations(q?: OperationQuery): Promise<Page<OperationSummary>>;
+  /** GET /inventory/operations/{id}: 404 operation_not_found. */
+  getOperation(id: string): Promise<Operation>;
+  /**
+   * POST /inventory/receipts з обов'язковим `Idempotency-Key`: 201 або 200 (повтор). 422 product_inactive|product_disabled_for_location|
+   * location_inactive|supplier_inactive|expiry_required|invalid_expiry|invalid_*; 403 forbidden_role (`unitCost` без `costs = edit`).
+   */
+  createReceipt(r: ReceiptRequest, idempotencyKey: string): Promise<Operation>;
+  /** POST /inventory/write-offs (`Idempotency-Key`): 422 insufficient_stock|note_required|batch_not_found(404). */
+  createWriteOff(r: WriteOffRequest, idempotencyKey: string): Promise<Operation>;
+  /** POST /inventory/transfers (`Idempotency-Key`): 422 insufficient_stock|batch_expired|same_location|location_inactive. */
+  createTransfer(r: TransferRequest, idempotencyKey: string): Promise<Operation>;
+  /** GET /inventory/stocktakes. */
+  getStocktakes(q?: StocktakeQuery): Promise<Page<StocktakeSummary>>;
+  /** POST /inventory/stocktakes: чернетка; 409 stocktake_in_progress (+`stocktakeId`), 422 too_many_lines. */
+  createStocktake(input: { locationId: string; note?: string; productIds?: string[] }): Promise<Stocktake>;
+  /** GET /inventory/stocktakes/{id}. */
+  getStocktake(id: string): Promise<Stocktake>;
+  /** PUT /inventory/stocktakes/{id}/lines: 409 stocktake_version_conflict (+`currentVersion`)|stocktake_closed. */
+  saveStocktakeLines(id: string, expectedVersion: number, lines: StocktakeLineInput[]): Promise<Stocktake>;
+  /** POST /inventory/stocktakes/{id}/post: 422 stocktake_empty|expiry_required; 409 stocktake_closed|stocktake_version_conflict. */
+  postStocktake(id: string, expectedVersion: number): Promise<StocktakePostResult>;
+  /** POST /inventory/stocktakes/{id}/cancel. */
+  cancelStocktake(id: string, expectedVersion: number): Promise<Stocktake>;
 }

@@ -33,6 +33,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: "Послуги", href: "/beauty/services" },
       { label: "Ціни та акції", href: "/beauty/promos" },
       { label: "Розсилки", href: "/beauty/campaigns" },
+      { label: "Склад", href: "/beauty/inventory" },
     ],
   },
   {
@@ -85,6 +86,8 @@ const RULES: Rule[] = [
   { path: "/beauty/services", mode: "prefix", test: (a) => a.hasModule("beauty_catalog") && a.can("revenue.costs", "view") },
   { path: "/beauty/promos", mode: "prefix", test: (a) => a.hasModule("beauty_catalog") && a.can("services.catalog", "view") },
   { path: "/beauty/campaigns", mode: "prefix", test: when("marketing.campaigns", "edit") },
+  // Склад (§32.9): модуль `beauty_inventory` (вимкнено за замовчуванням) і `inventory.view >= own`.
+  { path: "/beauty/inventory", mode: "prefix", test: (a) => a.hasModule("beauty_inventory") && a.can("inventory.view", "own") },
   { path: "/beauty/analytics", mode: "prefix", test: when("revenue.view", "all") },
   { path: "/beauty/ai", mode: "prefix", test: (a) => a.can("ai.settings", "edit") || a.can("ai.use", "use") },
   { path: "/beauty/channels", mode: "prefix", test: when("channels.settings", "edit") },
@@ -174,6 +177,11 @@ export const canSeeAccessAudit = (s: AccessSubject) => accessOf(s).isOwner;
 export const canSeeMyRevenue = gate("revenue.view", "own");
 export const canEditLocations = gate("locations.access", "edit");
 export const canEditStaff = gate("staff.access", "edit");
+/** Склад (§32.2): перегляд закладів scope = `own`; керування (операції) = `manage >= own`; каталог товарів = `manage = all`; ціни = `costs`. */
+export const canViewInventory = (s: AccessSubject) => accessOf(s).hasModule("beauty_inventory") && accessOf(s).can("inventory.view", "own");
+export const canManageInventory = (s: AccessSubject) => accessOf(s).hasModule("beauty_inventory") && accessOf(s).can("inventory.manage", "own");
+export const canSeeInventoryCosts = gate("inventory.costs", "view");
+export const canEditInventoryCosts = gate("inventory.costs", "edit");
 /** Календар: `own` - лише власні записи (майстер у пресеті). */
 export const seesOnlyOwnCalendar = (s: AccessSubject) => !accessOf(s).can("calendar.view", "all");
 

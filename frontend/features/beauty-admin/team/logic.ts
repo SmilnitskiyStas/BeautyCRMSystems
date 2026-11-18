@@ -16,6 +16,7 @@ export const BLOCK_TITLE: Record<string, string> = {
   locations: "Заклади",
   settings: "Налаштування",
   team: "Команда й доступи",
+  inventory: "Склад",
 };
 
 interface PermText {
@@ -42,6 +43,9 @@ export const PERM_TEXT: Record<string, PermText> = {
   "locations.access": { title: "Заклади", levels: { own: "Мої заклади", all: "Усі заклади", edit: "Керування закладами" } },
   "settings.general": { title: "Налаштування бізнесу", levels: { none: NONE, view: "Лише перегляд", edit: "Перегляд і зміна" } },
   "team.manage": { title: "Керування командою", levels: { none: NONE, manage: "Керування" } },
+  "inventory.view": { title: "Перегляд складу", levels: { none: NONE, own: "Лише заклади спеціаліста", all: "Усі заклади" } },
+  "inventory.manage": { title: "Операції зі складом", levels: { none: "Не може змінювати", own: "Лише заклади спеціаліста", all: "Усі заклади й каталог товарів" } },
+  "inventory.costs": { title: "Закупівельні ціни складу", levels: { none: NONE, view: "Перегляд", edit: "Перегляд і зміна" } },
 };
 
 export const permTitle = (key: string) => PERM_TEXT[key]?.title ?? key;
