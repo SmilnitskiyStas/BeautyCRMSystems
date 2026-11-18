@@ -83,6 +83,9 @@ REVOKE UPDATE, DELETE ON platform_audit_log FROM beautycrm_app;
 -- Права доступу користувачів (ADR-023, TASK-849): user_permissions - SELECT/INSERT/UPDATE/DELETE (ALL TABLES); журнал user_access_audit append-only: лише SELECT/INSERT
 -- Воркер і control plane не мають доступу до user_permissions та user_access_audit
 REVOKE UPDATE, DELETE ON user_access_audit FROM beautycrm_app;
+-- Склад (ADR-025, TASK-876): журнал рухів і заголовки операцій append-only для app-ролі: лише SELECT/INSERT
+REVOKE UPDATE, DELETE ON beauty_stock_movements FROM beautycrm_app;
+REVOKE UPDATE, DELETE ON beauty_stock_operations FROM beautycrm_app;
 
 -- Роль воркера: мінімальні права (runbook §6/§11; контракти §22.3, §22.5, §23)
 GRANT USAGE ON SCHEMA public TO beautycrm_worker;

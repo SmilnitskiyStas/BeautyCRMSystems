@@ -3580,6 +3580,196 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.Product", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<string>("Barcode")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("barcode");
+
+                    b.Property<string>("Category")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("category");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true)
+                        .HasColumnName("is_active");
+
+                    b.Property<decimal?>("MinStock")
+                        .HasPrecision(14, 3)
+                        .HasColumnType("numeric(14,3)")
+                        .HasColumnName("min_stock");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("note");
+
+                    b.Property<decimal?>("PurchasePrice")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("purchase_price");
+
+                    b.Property<string>("Purpose")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("purpose");
+
+                    b.Property<Guid?>("SupplierId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("supplier_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<bool>("TrackExpiry")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("track_expiry");
+
+                    b.Property<string>("Unit")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)")
+                        .HasColumnName("unit");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid>("UpdatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by_user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_products");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_products_tenant_id_id");
+
+                    b.HasIndex("TenantId", "Barcode")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_products_barcode")
+                        .HasFilter("barcode IS NOT NULL");
+
+                    b.HasIndex("TenantId", "SupplierId")
+                        .HasDatabaseName("ix_beauty_products_supplier");
+
+                    b.HasIndex("TenantId", "UpdatedByUserId")
+                        .HasDatabaseName("ix_beauty_products_tenant_id_updated_by_user_id");
+
+                    b.HasIndex("TenantId", "IsActive", "Name")
+                        .HasDatabaseName("ix_beauty_products_active_name");
+
+                    b.ToTable("beauty_products", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_products_barcode", "barcode IS NULL OR barcode ~ '^[0-9A-Za-z._-]{1,64}$'");
+
+                            t.HasCheckConstraint("ck_beauty_products_min_stock", "min_stock IS NULL OR min_stock >= 0");
+
+                            t.HasCheckConstraint("ck_beauty_products_purchase_price", "purchase_price IS NULL OR purchase_price BETWEEN 0 AND 1000000");
+
+                            t.HasCheckConstraint("ck_beauty_products_purpose", "purpose IN ('sale', 'salon_use', 'both')");
+
+                            t.HasCheckConstraint("ck_beauty_products_unit", "unit IN ('pcs', 'ml', 'g', 'l', 'kg', 'pack')");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductLocationSetting", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<bool>("IsEnabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true)
+                        .HasColumnName("is_enabled");
+
+                    b.Property<Guid>("LocationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("location_id");
+
+                    b.Property<decimal?>("MinStock")
+                        .HasPrecision(14, 3)
+                        .HasColumnType("numeric(14,3)")
+                        .HasColumnName("min_stock");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("product_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid>("UpdatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by_user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_product_location_settings");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_product_location_settings_tenant_id_id");
+
+                    b.HasIndex("TenantId", "LocationId")
+                        .HasDatabaseName("ix_beauty_product_location_settings_tenant_id_location_id");
+
+                    b.HasIndex("TenantId", "UpdatedByUserId")
+                        .HasDatabaseName("ix_beauty_product_location_settings_tenant_id_updated_by_user_");
+
+                    b.HasIndex("TenantId", "ProductId", "LocationId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_product_location_settings_pair");
+
+                    b.ToTable("beauty_product_location_settings", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_product_location_settings_min_stock", "min_stock IS NULL OR min_stock >= 0");
+                        });
+                });
+
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.Promotion", b =>
                 {
                     b.Property<Guid>("Id")
@@ -4524,6 +4714,632 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasDatabaseName("ix_beauty_specialist_services_tenant_id_service_id");
 
                     b.ToTable("beauty_specialist_services", (string)null);
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StockBatch", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<DateOnly?>("ExpiresOn")
+                        .HasColumnType("date")
+                        .HasColumnName("expires_on");
+
+                    b.Property<decimal>("InitialQuantity")
+                        .HasPrecision(14, 3)
+                        .HasColumnType("numeric(14,3)")
+                        .HasColumnName("initial_quantity");
+
+                    b.Property<Guid>("LocationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("location_id");
+
+                    b.Property<string>("LotNumber")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("lot_number");
+
+                    b.Property<Guid>("OperationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("operation_id");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("product_id");
+
+                    b.Property<decimal>("Quantity")
+                        .HasPrecision(14, 3)
+                        .HasColumnType("numeric(14,3)")
+                        .HasColumnName("quantity");
+
+                    b.Property<DateTimeOffset>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<Guid?>("SourceBatchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("source_batch_id");
+
+                    b.Property<Guid?>("SupplierId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("supplier_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<decimal?>("UnitCost")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("unit_cost");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_stock_batches");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_stock_batches_tenant_id_id");
+
+                    b.HasIndex("TenantId", "OperationId")
+                        .HasDatabaseName("ix_beauty_stock_batches_tenant_id_operation_id");
+
+                    b.HasIndex("TenantId", "ProductId")
+                        .HasDatabaseName("ix_beauty_stock_batches_tenant_id_product_id");
+
+                    b.HasIndex("TenantId", "SourceBatchId")
+                        .HasDatabaseName("ix_beauty_stock_batches_tenant_id_source_batch_id")
+                        .HasFilter("source_batch_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "SupplierId")
+                        .HasDatabaseName("ix_beauty_stock_batches_tenant_id_supplier_id")
+                        .HasFilter("supplier_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "LocationId", "ExpiresOn")
+                        .HasDatabaseName("ix_beauty_stock_batches_expiry")
+                        .HasFilter("quantity > 0 AND expires_on IS NOT NULL");
+
+                    b.HasIndex("TenantId", "LocationId", "ProductId", "ExpiresOn", "ReceivedAt", "Id")
+                        .HasDatabaseName("ix_beauty_stock_batches_fefo")
+                        .HasFilter("quantity > 0");
+
+                    b.ToTable("beauty_stock_batches", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_stock_batches_expires_on", "expires_on IS NULL OR expires_on BETWEEN DATE '2000-01-01' AND DATE '2100-12-31'");
+
+                            t.HasCheckConstraint("ck_beauty_stock_batches_initial_quantity", "initial_quantity > 0");
+
+                            t.HasCheckConstraint("ck_beauty_stock_batches_quantity", "quantity >= 0 AND quantity <= initial_quantity");
+
+                            t.HasCheckConstraint("ck_beauty_stock_batches_unit_cost", "unit_cost IS NULL OR unit_cost BETWEEN 0 AND 1000000");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StockLevel", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid>("LocationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("location_id");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("product_id");
+
+                    b.Property<decimal>("Quantity")
+                        .ValueGeneratedOnAdd()
+                        .HasPrecision(14, 3)
+                        .HasColumnType("numeric(14,3)")
+                        .HasDefaultValue(0m)
+                        .HasColumnName("quantity");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_stock_levels");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_stock_levels_tenant_id_id");
+
+                    b.HasIndex("TenantId", "ProductId")
+                        .HasDatabaseName("ix_beauty_stock_levels_tenant_id_product_id");
+
+                    b.HasIndex("TenantId", "LocationId", "ProductId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_stock_levels_pair");
+
+                    b.ToTable("beauty_stock_levels", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_stock_levels_quantity", "quantity >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StockMovement", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<Guid?>("BatchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("batch_id");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by_user_id");
+
+                    b.Property<Guid>("LocationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("location_id");
+
+                    b.Property<DateTimeOffset>("OccurredAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid>("OperationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("operation_id");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("product_id");
+
+                    b.Property<decimal>("Quantity")
+                        .HasPrecision(14, 3)
+                        .HasColumnType("numeric(14,3)")
+                        .HasColumnName("quantity");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("type");
+
+                    b.Property<decimal?>("UnitCost")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("unit_cost");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_stock_movements");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_stock_movements_tenant_id_id");
+
+                    b.HasIndex("TenantId", "BatchId")
+                        .HasDatabaseName("ix_beauty_stock_movements_batch");
+
+                    b.HasIndex("TenantId", "CreatedByUserId")
+                        .HasDatabaseName("ix_beauty_stock_movements_tenant_id_created_by_user_id")
+                        .HasFilter("created_by_user_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "OperationId")
+                        .HasDatabaseName("ix_beauty_stock_movements_operation");
+
+                    b.HasIndex("TenantId", "ProductId", "OccurredAt")
+                        .IsDescending(false, false, true)
+                        .HasDatabaseName("ix_beauty_stock_movements_product_occurred");
+
+                    b.HasIndex("TenantId", "LocationId", "OccurredAt", "Id")
+                        .IsDescending(false, false, true, true)
+                        .HasDatabaseName("ix_beauty_stock_movements_location_occurred");
+
+                    b.ToTable("beauty_stock_movements", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_stock_movements_batch", "batch_id IS NOT NULL OR type = 'service_consumption'");
+
+                            t.HasCheckConstraint("ck_beauty_stock_movements_quantity_sign", "(type IN ('receipt', 'transfer_in') AND quantity > 0) OR (type IN ('write_off', 'transfer_out', 'service_consumption', 'sale') AND quantity < 0) OR (type = 'stocktake_adjust' AND quantity <> 0)");
+
+                            t.HasCheckConstraint("ck_beauty_stock_movements_type", "type IN ('receipt', 'write_off', 'transfer_out', 'transfer_in', 'stocktake_adjust', 'service_consumption', 'sale')");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StockOperation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by_user_id");
+
+                    b.Property<string>("DocumentNumber")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("document_number");
+
+                    b.Property<string>("IdempotencyKeyHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("idempotency_key_hash");
+
+                    b.Property<string>("IdempotencyRequestHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("idempotency_request_hash");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("kind");
+
+                    b.Property<Guid>("LocationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("location_id");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("note");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("reason");
+
+                    b.Property<DateOnly?>("ReceivedOn")
+                        .HasColumnType("date")
+                        .HasColumnName("received_on");
+
+                    b.Property<Guid?>("StocktakeId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("stocktake_id");
+
+                    b.Property<Guid?>("SupplierId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("supplier_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid?>("ToLocationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("to_location_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_stock_operations");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_stock_operations_tenant_id_id");
+
+                    b.HasIndex("TenantId", "CreatedByUserId")
+                        .HasDatabaseName("ix_beauty_stock_operations_tenant_id_created_by_user_id")
+                        .HasFilter("created_by_user_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "IdempotencyKeyHash")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_stock_operations_idempotency")
+                        .HasFilter("idempotency_key_hash IS NOT NULL");
+
+                    b.HasIndex("TenantId", "StocktakeId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_stock_operations_stocktake")
+                        .HasFilter("stocktake_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "SupplierId")
+                        .HasDatabaseName("ix_beauty_stock_operations_tenant_id_supplier_id")
+                        .HasFilter("supplier_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "ToLocationId", "CreatedAt")
+                        .IsDescending(false, false, true)
+                        .HasDatabaseName("ix_beauty_stock_operations_to_location_created")
+                        .HasFilter("to_location_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "LocationId", "CreatedAt", "Id")
+                        .IsDescending(false, false, true, true)
+                        .HasDatabaseName("ix_beauty_stock_operations_location_created");
+
+                    b.ToTable("beauty_stock_operations", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_stock_operations_idempotency", "(idempotency_key_hash IS NULL) = (idempotency_request_hash IS NULL)");
+
+                            t.HasCheckConstraint("ck_beauty_stock_operations_kind", "kind IN ('receipt', 'write_off', 'transfer', 'stocktake', 'service_consumption', 'sale')");
+
+                            t.HasCheckConstraint("ck_beauty_stock_operations_reason", "reason IS NULL OR reason IN ('expired', 'damaged', 'lost', 'internal_use', 'correction', 'other')");
+
+                            t.HasCheckConstraint("ck_beauty_stock_operations_reason_kind", "(kind = 'write_off') = (reason IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_beauty_stock_operations_receipt_fields", "kind = 'receipt' OR (supplier_id IS NULL AND document_number IS NULL AND received_on IS NULL)");
+
+                            t.HasCheckConstraint("ck_beauty_stock_operations_stocktake", "(kind = 'stocktake') = (stocktake_id IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_beauty_stock_operations_transfer_distinct", "to_location_id IS NULL OR to_location_id <> location_id");
+
+                            t.HasCheckConstraint("ck_beauty_stock_operations_transfer_target", "(kind = 'transfer') = (to_location_id IS NOT NULL)");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.Stocktake", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateTimeOffset?>("CancelledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("cancelled_at");
+
+                    b.Property<Guid?>("CancelledByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("cancelled_by_user_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by_user_id");
+
+                    b.Property<Guid>("LocationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("location_id");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("note");
+
+                    b.Property<DateTimeOffset?>("PostedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("posted_at");
+
+                    b.Property<Guid?>("PostedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("posted_by_user_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("draft")
+                        .HasColumnName("status");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<int>("Version")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1)
+                        .HasColumnName("version");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_stocktakes");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_stocktakes_tenant_id_id");
+
+                    b.HasIndex("TenantId", "CancelledByUserId")
+                        .HasDatabaseName("ix_beauty_stocktakes_tenant_id_cancelled_by_user_id")
+                        .HasFilter("cancelled_by_user_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "CreatedByUserId")
+                        .HasDatabaseName("ix_beauty_stocktakes_tenant_id_created_by_user_id");
+
+                    b.HasIndex("TenantId", "LocationId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_stocktakes_open")
+                        .HasFilter("status = 'draft'");
+
+                    b.HasIndex("TenantId", "PostedByUserId")
+                        .HasDatabaseName("ix_beauty_stocktakes_tenant_id_posted_by_user_id")
+                        .HasFilter("posted_by_user_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "LocationId", "CreatedAt")
+                        .IsDescending(false, false, true)
+                        .HasDatabaseName("ix_beauty_stocktakes_location_created");
+
+                    b.ToTable("beauty_stocktakes", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_stocktakes_cancelled", "(status = 'cancelled') = (cancelled_at IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_beauty_stocktakes_posted", "(status = 'posted') = (posted_at IS NOT NULL AND posted_by_user_id IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_beauty_stocktakes_status", "status IN ('draft', 'posted', 'cancelled')");
+
+                            t.HasCheckConstraint("ck_beauty_stocktakes_version", "version >= 1");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StocktakeLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<decimal?>("CountedQuantity")
+                        .HasPrecision(14, 3)
+                        .HasColumnType("numeric(14,3)")
+                        .HasColumnName("counted_quantity");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<decimal?>("ExpectedQuantity")
+                        .HasPrecision(14, 3)
+                        .HasColumnType("numeric(14,3)")
+                        .HasColumnName("expected_quantity");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("product_id");
+
+                    b.Property<Guid>("StocktakeId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("stocktake_id");
+
+                    b.Property<DateOnly?>("SurplusExpiresOn")
+                        .HasColumnType("date")
+                        .HasColumnName("surplus_expires_on");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid?>("UpdatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by_user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_stocktake_lines");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_stocktake_lines_tenant_id_id");
+
+                    b.HasIndex("TenantId", "ProductId")
+                        .HasDatabaseName("ix_beauty_stocktake_lines_tenant_id_product_id");
+
+                    b.HasIndex("TenantId", "UpdatedByUserId")
+                        .HasDatabaseName("ix_beauty_stocktake_lines_tenant_id_updated_by_user_id")
+                        .HasFilter("updated_by_user_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "StocktakeId", "ProductId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_stocktake_lines_pair");
+
+                    b.ToTable("beauty_stocktake_lines", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_stocktake_lines_counted", "counted_quantity IS NULL OR counted_quantity >= 0");
+
+                            t.HasCheckConstraint("ck_beauty_stocktake_lines_surplus_expires_on", "surplus_expires_on IS NULL OR surplus_expires_on BETWEEN DATE '2000-01-01' AND DATE '2100-12-31'");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.Supplier", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<string>("ContactName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("contact_name");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("Email")
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)")
+                        .HasColumnName("email");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true)
+                        .HasColumnName("is_active");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("note");
+
+                    b.Property<string>("Phone")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("phone");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_suppliers");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_suppliers_tenant_id_id");
+
+                    b.ToTable("beauty_suppliers", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_suppliers_name", "char_length(btrim(name)) BETWEEN 1 AND 200");
+                        });
                 });
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.Tenant", b =>
@@ -5751,6 +6567,51 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasConstraintName("fk_platform_owner_invites_users_tenant_id_user_id");
                 });
 
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.Product", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Supplier", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SupplierId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_products_beauty_suppliers_tenant_id_supplier_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "UpdatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_products_users_tenant_id_updated_by_user_id");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductLocationSetting", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Location", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LocationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_product_location_settings_beauty_locations_tenant_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Product", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ProductId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_product_location_settings_beauty_products_tenant_id_");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "UpdatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_product_location_settings_users_tenant_id_updated_by");
+                });
+
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.PromotionLocation", b =>
                 {
                     b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Location", "Location")
@@ -6031,6 +6892,205 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.Navigation("Service");
 
                     b.Navigation("Specialist");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StockBatch", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Location", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LocationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_stock_batches_beauty_locations_tenant_id_location_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.StockOperation", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "OperationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_stock_batches_beauty_stock_operations_tenant_id_oper");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Product", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ProductId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_stock_batches_beauty_products_tenant_id_product_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.StockBatch", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SourceBatchId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_stock_batches_beauty_stock_batches_tenant_id_source_");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Supplier", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SupplierId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_stock_batches_beauty_suppliers_tenant_id_supplier_id");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StockLevel", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Location", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LocationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_stock_levels_beauty_locations_tenant_id_location_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Product", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ProductId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_stock_levels_beauty_products_tenant_id_product_id");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StockMovement", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.StockBatch", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "BatchId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_stock_movements_beauty_stock_batches_tenant_id_batch");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CreatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_stock_movements_users_tenant_id_created_by_user_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Location", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LocationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_stock_movements_beauty_locations_tenant_id_location_");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.StockOperation", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "OperationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_stock_movements_beauty_stock_operations_tenant_id_op");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Product", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ProductId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_stock_movements_beauty_products_tenant_id_product_id");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StockOperation", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CreatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_stock_operations_users_tenant_id_created_by_user_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Location", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LocationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_stock_operations_beauty_locations_tenant_id_location");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Stocktake", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "StocktakeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_stock_operations_stocktakes_tenant_id_stocktake_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Supplier", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SupplierId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_stock_operations_beauty_suppliers_tenant_id_supplier");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Location", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ToLocationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_stock_operations_beauty_locations_tenant_id_to_locat");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.Stocktake", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CancelledByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_stocktakes_users_tenant_id_cancelled_by_user_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CreatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_stocktakes_users_tenant_id_created_by_user_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Location", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LocationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_stocktakes_beauty_locations_tenant_id_location_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PostedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_stocktakes_users_tenant_id_posted_by_user_id");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StocktakeLine", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Product", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ProductId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_stocktake_lines_beauty_products_tenant_id_product_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Stocktake", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "StocktakeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_stocktake_lines_beauty_stocktakes_tenant_id_stocktak");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "UpdatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_stocktake_lines_users_tenant_id_updated_by_user_id");
                 });
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.User", b =>
