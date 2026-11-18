@@ -97,7 +97,7 @@ public sealed partial class InventoryService
             .Select(g => ((IReadOnlyList<Guid>)g.Select(l => l.Id).ToList(), g.Key)).ToList();
         var days = ExpiringDays(q.ExpiringWithinDays);
         var hash = ParamHash("batches", q.LocationId, q.ProductId, status, days);
-        var after = DecodeCursor(q.Cursor, hash, "fDtg");
+        var after = DecodeCursor(q.Cursor, hash, "fDtgg");
         if (!after.IsOk) return after.Error!;
         if (after.Value is { } av && av[0] == "0" && av[1].Length == 0) return Error.Validation("invalid_cursor", "Cursor is invalid.");
         var n = Take(q.Take);
@@ -109,7 +109,7 @@ public sealed partial class InventoryService
     }
 
     private static string BatchCursor(string hash, BatchDto b) => EncodeCursor(hash,
-        b.ExpiresOn is null ? "1" : "0", b.ExpiresOn?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "", b.ReceivedAt.UtcTicks.ToString(CultureInfo.InvariantCulture), b.Id.ToString());
+        b.ExpiresOn is null ? "1" : "0", b.ExpiresOn?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "", b.ReceivedAt.UtcTicks.ToString(CultureInfo.InvariantCulture), b.LocationId.ToString(), b.Id.ToString());
 
     // ---------- журнал і операції ----------
 

@@ -778,6 +778,35 @@ public sealed class InventoryServiceTests
         var short1 = FefoPlanner.Allocate([new(0, p, 11, null)], [b1, b2], false, Today);
         Assert.Equal(10m, short1.Shortages.Single().Available);
     }
+
+    [Fact]
+    public void Fefo_planner_serves_explicit_batch_lines_before_fefo_lines_M1()
+    {
+        var t = DateTimeOffset.UnixEpoch;
+        var p = Guid.NewGuid();
+        var b1 = new BatchRow(Guid.NewGuid(), p, new DateOnly(2027, 6, 1), t, 5, null, null, null);
+        var b2 = new BatchRow(Guid.NewGuid(), p, new DateOnly(2026, 12, 1), t, 5, null, null, null); // FEFO-перша
+        // рядок 0 без партії (5) не повинен забрати b2, яку явно просить рядок 1
+        var plan = FefoPlanner.Allocate([new(0, p, 5, null), new(1, p, 5, b2.Id)], [b1, b2], false, Today);
+        Assert.Empty(plan.Shortages);
+        Assert.Equal([(0, b1.Id), (1, b2.Id)], plan.Takes.Select(x => (x.Line, x.BatchId)).ToArray()); // Line збережено, порядок за рядками
+    }
+
+    [Fact]
+    public void Fefo_planner_rejects_explicit_expired_batch_when_skipping_expired_and_foreign_product_batch()
+    {
+        var t = DateTimeOffset.UnixEpoch;
+        var p = Guid.NewGuid();
+        var expired = new BatchRow(Guid.NewGuid(), p, Today.AddDays(-1), t, 5, null, null, null);
+        var other = new BatchRow(Guid.NewGuid(), Guid.NewGuid(), null, t, 5, null, null, null);
+        var skip = FefoPlanner.Allocate([new(0, p, 1, expired.Id)], [expired], true, Today);
+        Assert.True(skip.Shortages.Single().BatchExpired);
+        Assert.Empty(skip.Takes);
+        Assert.Empty(FefoPlanner.Allocate([new(0, p, 1, expired.Id)], [expired], false, Today).Shortages); // списання: прострочене можна
+        var foreign = FefoPlanner.Allocate([new(0, p, 1, other.Id)], [other], false, Today);
+        Assert.Equal(0m, foreign.Shortages.Single().Available);
+        Assert.Empty(foreign.Takes);
+    }
 }
 
 /// <summary>Проксі з можливістю перевизначити окремі методи (імітація гонок у сервісних тестах).</summary>

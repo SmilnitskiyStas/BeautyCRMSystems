@@ -66,6 +66,7 @@ public sealed partial class InventoryService
         "invalid_quantity" => "Quantity must be a whole number for this unit.",
         "expiry_required" => "Expiry date is required.",
         "invalid_expiry" => "Expiry date is in the past.",
+        "batch_expired" => "The batch is expired and cannot be transferred.",
         _ => "Request rejected.",
     };
 
@@ -337,6 +338,8 @@ public sealed partial class InventoryService
         StocktakeWriteStatus.ExpiryInPast => new Error(ErrorKind.Validation, "invalid_expiry", "Expiry date is in the past.", null,
             new Dictionary<string, object?> { ["productId"] = r.ProductId }),
         StocktakeWriteStatus.QuantityOutOfRange => new Error(ErrorKind.Validation, "quantity_out_of_range", "Resulting stock is above the maximum allowed.", null,
+            new Dictionary<string, object?> { ["productId"] = r.ProductId }),
+        StocktakeWriteStatus.InvalidQuantity => new Error(ErrorKind.Validation, "invalid_quantity", "Quantity must be a whole number for this unit.", null,
             new Dictionary<string, object?> { ["productId"] = r.ProductId }),
         _ => null,
     };

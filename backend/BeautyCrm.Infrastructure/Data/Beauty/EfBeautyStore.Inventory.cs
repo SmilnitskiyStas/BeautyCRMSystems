@@ -374,21 +374,24 @@ public sealed partial class EfBeautyStore : IInventoryStore
             if (after is not null)
             {
                 var receivedAt = new DateTimeOffset(long.Parse(after[2], System.Globalization.CultureInfo.InvariantCulture), TimeSpan.Zero);
-                var id = Guid.Parse(after[3]);
+                var locId = Guid.Parse(after[3]);
+                var id = Guid.Parse(after[4]);
                 if (after[0] == "1")
-                    q = q.Where(b => b.ExpiresOn == null && (b.ReceivedAt > receivedAt || (b.ReceivedAt == receivedAt && b.Id.CompareTo(id) > 0)));
+                    q = q.Where(b => b.ExpiresOn == null && (b.ReceivedAt > receivedAt
+                        || (b.ReceivedAt == receivedAt && (b.LocationId.CompareTo(locId) > 0 || (b.LocationId == locId && b.Id.CompareTo(id) > 0)))));
                 else
                 {
                     var exp = DateOnly.ParseExact(after[1], "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
                     q = q.Where(b => b.ExpiresOn == null || b.ExpiresOn > exp
-                        || (b.ExpiresOn == exp && (b.ReceivedAt > receivedAt || (b.ReceivedAt == receivedAt && b.Id.CompareTo(id) > 0))));
+                        || (b.ExpiresOn == exp && (b.ReceivedAt > receivedAt
+                            || (b.ReceivedAt == receivedAt && (b.LocationId.CompareTo(locId) > 0 || (b.LocationId == locId && b.Id.CompareTo(id) > 0))))));
                 }
             }
-            var rows = await q.OrderBy(b => b.ExpiresOn == null).ThenBy(b => b.ExpiresOn).ThenBy(b => b.ReceivedAt).ThenBy(b => b.Id).Take(take).ToListAsync(ct);
+            var rows = await q.OrderBy(b => b.ExpiresOn == null).ThenBy(b => b.ExpiresOn).ThenBy(b => b.ReceivedAt).ThenBy(b => b.LocationId).ThenBy(b => b.Id).Take(take).ToListAsync(ct);
             merged.AddRange(rows.Select(r => (r, today)));
         }
         var page = merged.OrderBy(x => x.B.ExpiresOn == null).ThenBy(x => x.B.ExpiresOn).ThenBy(x => x.B.ReceivedAt)
-            .ThenBy(x => x.B.Id.ToString("D"), StringComparer.Ordinal).Take(take).ToList();
+            .ThenBy(x => x.B.LocationId.ToString("D"), StringComparer.Ordinal).ThenBy(x => x.B.Id.ToString("D"), StringComparer.Ordinal).Take(take).ToList();
 
         var productIds = page.Select(x => x.B.ProductId).Distinct().ToList();
         var products = await db.Products.AsNoTracking().Where(p => productIds.Contains(p.Id)).ToDictionaryAsync(p => p.Id, ct);

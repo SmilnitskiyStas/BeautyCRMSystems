@@ -31,13 +31,19 @@ public static class FefoPlanner
         var takes = new List<PlannedTake>();
         var shortages = new List<StockShortage>();
 
-        foreach (var l in lines)
+        // M1: спершу рядки з явною партією (вони не можуть бути вичерпані підбором FEFO іншого рядка), потім FEFO-рядки.
+        // Результат повертається у порядку рядків запиту (стабільно).
+        foreach (var l in lines.Where(x => x.BatchId != null).Concat(lines.Where(x => x.BatchId == null)))
         {
             if (l.BatchId is { } bid)
             {
                 var b = batches.FirstOrDefault(x => x.Id == bid);
+                // L6: партія іншого товару - як відсутня (захист у глибину; сервіс теж перевіряє)
+                if (b is not null && b.ProductId != l.ProductId) b = null;
                 var avail = b is null ? 0m : remaining[bid];
                 if (b is null || l.Quantity > avail) { shortages.Add(new(l.Line, l.ProductId, bid, l.Quantity, avail)); continue; }
+                // L5: явна прострочена партія при skipExpired (переміщення) не підлягає взяттю
+                if (skipExpired && IsExpired(b.ExpiresOn, today)) { shortages.Add(new(l.Line, l.ProductId, bid, l.Quantity, 0m, BatchExpired: true)); continue; }
                 remaining[bid] = avail - l.Quantity;
                 takes.Add(new(l.Line, l.ProductId, bid, l.Quantity, b.UnitCost));
                 continue;
@@ -57,6 +63,7 @@ public static class FefoPlanner
                 takes.Add(new(l.Line, l.ProductId, b.Id, take, b.UnitCost));
             }
         }
-        return new FefoPlan(takes, shortages);
+        // OrderBy стабільний: у межах рядка зберігається порядок партій FEFO
+        return new FefoPlan([.. takes.OrderBy(t => t.Line)], [.. shortages.OrderBy(s => s.Line)]);
     }
 }

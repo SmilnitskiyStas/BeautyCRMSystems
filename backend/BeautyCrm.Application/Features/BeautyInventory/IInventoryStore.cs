@@ -51,7 +51,7 @@ public sealed record StockLine(int Line, Guid ProductId, decimal Quantity, Guid?
 /// <summary>Rejected: перевірка під блокуванням не пройшла (Code/Line у <see cref="StockWriteResult"/>).</summary>
 public enum StockWriteStatus { Ok, DuplicateKey, Insufficient, Rejected }
 
-public sealed record StockShortage(int Line, Guid ProductId, Guid? BatchId, decimal Requested, decimal Available);
+public sealed record StockShortage(int Line, Guid ProductId, Guid? BatchId, decimal Requested, decimal Available, bool BatchExpired = false);
 
 public sealed record StockWriteResult(StockWriteStatus Status, OperationDto? Operation = null, IReadOnlyList<StockShortage>? Shortages = null,
     string? Code = null, int? Line = null);
@@ -61,7 +61,7 @@ public sealed record KeyedOperation(OperationDto Operation, string RequestHash);
 public enum StocktakeWriteStatus
 {
     Ok, NotFound, Closed, VersionConflict, InProgress, ProductNotFound, TooManyLines, Empty, ExpiryRequired, Insufficient, LocationNotFound,
-    ExpiryInPast, QuantityOutOfRange,
+    ExpiryInPast, QuantityOutOfRange, InvalidQuantity,
 }
 
 public sealed record StocktakeWriteResult(StocktakeWriteStatus Status, StocktakeDto? Stocktake = null, OperationDto? Operation = null,

@@ -65,11 +65,32 @@ public sealed partial class EfBeautyStore
     {
         var m = new StockMovement
         {
-            Id = Guid.NewGuid(), OperationId = op.Id, LocationId = locationId, ProductId = productId, BatchId = batchId, Type = type,
+            Id = NextMovementId(op), OperationId = op.Id, LocationId = locationId, ProductId = productId, BatchId = batchId, Type = type,
             Quantity = qty, UnitCost = cost, CreatedByUserId = user, OccurredAt = now,
         };
         db.StockMovements.Add(m);
         return m;
+    }
+
+    /// <summary>
+    /// L3: id руху з префіксом-лічильником (8 hex) у межах операції: за однакового occurred_at сортування за id дає порядок створення
+    /// (порядок рядків запиту), а не випадковий. Решта - випадкові біти, унікальність збережена.
+    /// </summary>
+    private Guid NextMovementId(StockOperation op)
+    {
+        var n = db.StockMovements.Local.Count(m => m.OperationId == op.Id) + 1;
+        var tail = Guid.NewGuid().ToString("N");
+        return Guid.ParseExact($"{n:x8}{tail[8..]}", "N");
+    }
+
+    /// <summary>
+    /// M2: час запису береться ПІСЛЯ взяття блокувань рівнів (порядок коміту узгоджений із часом для операцій над одними й тими ж рівнями).
+    /// Не менший за час запиту. Годинник - лише <see cref="TimeProvider"/>.
+    /// </summary>
+    private DateTimeOffset LockedNow(DateTimeOffset requested)
+    {
+        var t = (clock ?? TimeProvider.System).GetUtcNow();
+        return t > requested ? t : requested;
     }
 
     private static StockOperation NewOperation(OperationHeader h) => new()
@@ -95,6 +116,7 @@ public sealed partial class EfBeautyStore
         if (await InsertHeaderAsync(h, ct)) { await tx.RollbackAsync(ct); return new(StockWriteStatus.DuplicateKey); }
         var op = await db.StockOperations.FirstAsync(o => o.Id == h.Id, ct);
         var levels = await LockLevelsAsync(lines.Select(l => (h.LocationId, l.ProductId)), ct);
+        h = h with { Now = LockedNow(h.Now) };
         var pids = lines.Select(l => l.ProductId).Distinct().ToList();
         var products = await LockProductsAsync(pids, ct);
         var productSupplier = products.ToDictionary(p => p.Key, p => p.Value.SupplierId);
@@ -141,9 +163,11 @@ public sealed partial class EfBeautyStore
         if (await InsertHeaderAsync(h, ct)) { await tx.RollbackAsync(ct); return new(StockWriteStatus.DuplicateKey); }
         var op = await db.StockOperations.FirstAsync(o => o.Id == h.Id, ct);
         var levels = await LockLevelsAsync(lines.Select(l => (h.LocationId, l.ProductId)), ct);
+        h = h with { Now = LockedNow(h.Now) };
         await LockProductsAsync(lines.Select(l => l.ProductId), ct);
         var batches = await LoadBatchesAsync(h.LocationId, lines, ct);
         var plan = FefoPlanner.Allocate(lines, [.. batches.Values.Select(ToRow)], skipExpired: false, today);
+        if (plan.Shortages.FirstOrDefault(x => x.BatchExpired) is { } expired) return await RejectAsync(tx, "batch_expired", expired.Line, ct);
         if (plan.Shortages.Count > 0) { await tx.RollbackAsync(ct); db.ChangeTracker.Clear(); return new(StockWriteStatus.Insufficient, null, plan.Shortages); }
 
         foreach (var t in plan.Takes)
@@ -176,6 +200,7 @@ public sealed partial class EfBeautyStore
         if (await InsertHeaderAsync(h, ct)) { await tx.RollbackAsync(ct); return new(StockWriteStatus.DuplicateKey); }
         var op = await db.StockOperations.FirstAsync(o => o.Id == h.Id, ct);
         var levels = await LockLevelsAsync(lines.SelectMany(l => new[] { (h.LocationId, l.ProductId), (to, l.ProductId) }), ct);
+        h = h with { Now = LockedNow(h.Now) };
         var pids = lines.Select(l => l.ProductId).Distinct().ToList();
         await LockProductsAsync(pids, ct);
         var dest = await LockLocationAsync(to, ct);
@@ -185,6 +210,7 @@ public sealed partial class EfBeautyStore
             if (enabled.TryGetValue(l.ProductId, out var en) && !en) return await RejectAsync(tx, "product_disabled_for_location", l.Line, ct);
         var batches = await LoadBatchesAsync(h.LocationId, lines, ct);
         var plan = FefoPlanner.Allocate(lines, [.. batches.Values.Select(ToRow)], skipExpired: true, today);
+        if (plan.Shortages.FirstOrDefault(x => x.BatchExpired) is { } expired) return await RejectAsync(tx, "batch_expired", expired.Line, ct);
         if (plan.Shortages.Count > 0) { await tx.RollbackAsync(ct); db.ChangeTracker.Clear(); return new(StockWriteStatus.Insufficient, null, plan.Shortages); }
         var moved = new Dictionary<Guid, decimal>();
         foreach (var t in plan.Takes)
@@ -331,7 +357,8 @@ public sealed partial class EfBeautyStore
                 lines[c.ProductId] = l = new StocktakeLine { Id = Guid.NewGuid(), StocktakeId = id, ProductId = c.ProductId, CreatedAt = now };
                 db.StocktakeLines.Add(l);
             }
-            l.CountedQuantity = c.CountedQuantity; l.SurplusExpiresOn = c.SurplusExpiresOn; l.UpdatedByUserId = userId;
+            l.CountedQuantity = c.CountedQuantity; l.UpdatedByUserId = userId;
+            if (c.SurplusExpiresOn is not null) l.SurplusExpiresOn = c.SurplusExpiresOn; // L8: не передано = зберегти наявне
         }
         if (lines.Count > InventoryService.MaxStocktakeLines) { await tx.RollbackAsync(ct); db.ChangeTracker.Clear(); return new(StocktakeWriteStatus.TooManyLines); }
         st!.Version++;
@@ -365,7 +392,14 @@ public sealed partial class EfBeautyStore
         var loc = st!.LocationId;
         var pids = lines.Select(l => l.ProductId).ToList();
         var levels = await LockLevelsAsync(pids.Select(p => (loc, p)), ct);
+        now = LockedNow(now);
         var products = await LockProductsAsync(pids, ct);
+        foreach (var l in lines.OrderBy(l => l.ProductId))
+            if (products.TryGetValue(l.ProductId, out var cp) && Fractional(cp, l.CountedQuantity!.Value))
+            {
+                await tx.RollbackAsync(ct); db.ChangeTracker.Clear();
+                return new(StocktakeWriteStatus.InvalidQuantity, ProductId: l.ProductId); // L9: одиницю могли змінити між Put і Post
+            }
         var batches = await db.StockBatches.Where(b => b.LocationId == loc && pids.Contains(b.ProductId) && b.Quantity > 0).ToDictionaryAsync(b => b.Id, ct);
 
         var shortLines = new List<StockLine>();
