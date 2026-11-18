@@ -1,6 +1,7 @@
 using BeautyCrm.Application.Features.BeautyInventory;
 using BeautyCrm.Infrastructure.Data.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace BeautyCrm.Infrastructure.Data.Beauty;
 
@@ -25,6 +26,38 @@ public sealed partial class EfBeautyStore
         }
         return result;
     }
+
+    /// <summary>
+    /// Рядки товарів FOR SHARE (у порядку id) - ПІСЛЯ блокування рівнів. Конфліктує з оновленням товару (FOR UPDATE у UpdateProductAsync), тож
+    /// зміна одиниці/активності не може проскочити між перевіркою сервісу й записом руху (TASK-880 L3). Повертає знімок під блокуванням.
+    /// </summary>
+    private async Task<Dictionary<Guid, Product>> LockProductsAsync(IEnumerable<Guid> ids, CancellationToken ct)
+    {
+        var arr = ids.Distinct().OrderBy(x => x).ToArray();
+        return (await db.Products.FromSqlInterpolated($"SELECT * FROM beauty_products WHERE id = ANY({arr}) ORDER BY id FOR SHARE").AsNoTracking().ToListAsync(ct))
+            .ToDictionary(p => p.Id);
+    }
+
+    private async Task<Location?> LockLocationAsync(Guid id, CancellationToken ct) =>
+        (await db.Locations.FromSqlInterpolated($"SELECT * FROM beauty_locations WHERE id = {id} FOR SHARE").AsNoTracking().ToListAsync(ct)).FirstOrDefault();
+
+    /// <summary>is_enabled налаштувань товарів у закладі (рядки FOR SHARE); немає рядка = увімкнено.</summary>
+    private async Task<Dictionary<Guid, bool>> LockEnabledAsync(Guid locationId, IEnumerable<Guid> productIds, CancellationToken ct)
+    {
+        var arr = productIds.Distinct().ToArray();
+        return (await db.ProductLocationSettings.FromSqlInterpolated(
+                $"SELECT * FROM beauty_product_location_settings WHERE location_id = {locationId} AND product_id = ANY({arr}) ORDER BY product_id FOR SHARE")
+            .AsNoTracking().ToListAsync(ct)).ToDictionary(s => s.ProductId, s => s.IsEnabled);
+    }
+
+    private async Task<StockWriteResult> RejectAsync(IDbContextTransaction tx, string code, int? line, CancellationToken ct)
+    {
+        await tx.RollbackAsync(ct);
+        db.ChangeTracker.Clear();
+        return new(StockWriteStatus.Rejected, Code: code, Line: line);
+    }
+
+    private static bool Fractional(Product p, decimal qty) => p.Unit is ProductUnit.Pcs or ProductUnit.Pack && qty != decimal.Truncate(qty);
 
     private static BatchRow ToRow(StockBatch b) => new(b.Id, b.ProductId, b.ExpiresOn, b.ReceivedAt, b.Quantity, b.UnitCost, b.LotNumber, b.SupplierId);
 
@@ -63,7 +96,24 @@ public sealed partial class EfBeautyStore
         var op = await db.StockOperations.FirstAsync(o => o.Id == h.Id, ct);
         var levels = await LockLevelsAsync(lines.Select(l => (h.LocationId, l.ProductId)), ct);
         var pids = lines.Select(l => l.ProductId).Distinct().ToList();
-        var productSupplier = await db.Products.AsNoTracking().Where(p => pids.Contains(p.Id)).ToDictionaryAsync(p => p.Id, p => p.SupplierId, ct);
+        var products = await LockProductsAsync(pids, ct);
+        var productSupplier = products.ToDictionary(p => p.Key, p => p.Value.SupplierId);
+
+        // повтор перевірок сервісу ПІД блокуванням (TASK-880 L3) + межа numeric(14,3) для рівня (L2)
+        var location = await LockLocationAsync(h.LocationId, ct);
+        if (location is null || !location.IsActive) return await RejectAsync(tx, "location_inactive", null, ct);
+        var enabled = await LockEnabledAsync(h.LocationId, pids, ct);
+        var added = new Dictionary<Guid, decimal>();
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var l = lines[i];
+            if (!products.TryGetValue(l.ProductId, out var p) || !p.IsActive) return await RejectAsync(tx, "product_inactive", i, ct);
+            if (enabled.TryGetValue(p.Id, out var en) && !en) return await RejectAsync(tx, "product_disabled_for_location", i, ct);
+            if (Fractional(p, l.Quantity)) return await RejectAsync(tx, "invalid_quantity", i, ct);
+            if (p.TrackExpiry && l.ExpiresOn is null) return await RejectAsync(tx, "expiry_required", i, ct);
+            added[p.Id] = added.GetValueOrDefault(p.Id) + l.Quantity;
+            if (levels[(h.LocationId, p.Id)].Quantity + added[p.Id] > InventoryService.MaxLevel) return await RejectAsync(tx, "quantity_out_of_range", i, ct);
+        }
 
         foreach (var l in lines)
         {
@@ -91,6 +141,7 @@ public sealed partial class EfBeautyStore
         if (await InsertHeaderAsync(h, ct)) { await tx.RollbackAsync(ct); return new(StockWriteStatus.DuplicateKey); }
         var op = await db.StockOperations.FirstAsync(o => o.Id == h.Id, ct);
         var levels = await LockLevelsAsync(lines.Select(l => (h.LocationId, l.ProductId)), ct);
+        await LockProductsAsync(lines.Select(l => l.ProductId), ct);
         var batches = await LoadBatchesAsync(h.LocationId, lines, ct);
         var plan = FefoPlanner.Allocate(lines, [.. batches.Values.Select(ToRow)], skipExpired: false, today);
         if (plan.Shortages.Count > 0) { await tx.RollbackAsync(ct); db.ChangeTracker.Clear(); return new(StockWriteStatus.Insufficient, null, plan.Shortages); }
@@ -125,9 +176,22 @@ public sealed partial class EfBeautyStore
         if (await InsertHeaderAsync(h, ct)) { await tx.RollbackAsync(ct); return new(StockWriteStatus.DuplicateKey); }
         var op = await db.StockOperations.FirstAsync(o => o.Id == h.Id, ct);
         var levels = await LockLevelsAsync(lines.SelectMany(l => new[] { (h.LocationId, l.ProductId), (to, l.ProductId) }), ct);
+        var pids = lines.Select(l => l.ProductId).Distinct().ToList();
+        await LockProductsAsync(pids, ct);
+        var dest = await LockLocationAsync(to, ct);
+        if (dest is null || !dest.IsActive) return await RejectAsync(tx, "location_inactive", null, ct);
+        var enabled = await LockEnabledAsync(to, pids, ct);
+        foreach (var l in lines)
+            if (enabled.TryGetValue(l.ProductId, out var en) && !en) return await RejectAsync(tx, "product_disabled_for_location", l.Line, ct);
         var batches = await LoadBatchesAsync(h.LocationId, lines, ct);
         var plan = FefoPlanner.Allocate(lines, [.. batches.Values.Select(ToRow)], skipExpired: true, today);
         if (plan.Shortages.Count > 0) { await tx.RollbackAsync(ct); db.ChangeTracker.Clear(); return new(StockWriteStatus.Insufficient, null, plan.Shortages); }
+        var moved = new Dictionary<Guid, decimal>();
+        foreach (var t in plan.Takes)
+        {
+            moved[t.ProductId] = moved.GetValueOrDefault(t.ProductId) + t.Quantity;
+            if (levels[(to, t.ProductId)].Quantity + moved[t.ProductId] > InventoryService.MaxLevel) return await RejectAsync(tx, "quantity_out_of_range", t.Line, ct);
+        }
 
         foreach (var t in plan.Takes)
         {
@@ -301,7 +365,7 @@ public sealed partial class EfBeautyStore
         var loc = st!.LocationId;
         var pids = lines.Select(l => l.ProductId).ToList();
         var levels = await LockLevelsAsync(pids.Select(p => (loc, p)), ct);
-        var products = await db.Products.AsNoTracking().Where(p => pids.Contains(p.Id)).ToDictionaryAsync(p => p.Id, ct);
+        var products = await LockProductsAsync(pids, ct);
         var batches = await db.StockBatches.Where(b => b.LocationId == loc && pids.Contains(b.ProductId) && b.Quantity > 0).ToDictionaryAsync(b => b.Id, ct);
 
         var shortLines = new List<StockLine>();
@@ -318,6 +382,16 @@ public sealed partial class EfBeautyStore
                 {
                     await tx.RollbackAsync(ct); db.ChangeTracker.Clear();
                     return new(StocktakeWriteStatus.ExpiryRequired, ProductId: l.ProductId);
+                }
+                if (l.SurplusExpiresOn is { } sx && sx < today)
+                {
+                    await tx.RollbackAsync(ct); db.ChangeTracker.Clear();
+                    return new(StocktakeWriteStatus.ExpiryInPast, ProductId: l.ProductId);
+                }
+                if (level + diff > InventoryService.MaxLevel)
+                {
+                    await tx.RollbackAsync(ct); db.ChangeTracker.Clear();
+                    return new(StocktakeWriteStatus.QuantityOutOfRange, ProductId: l.ProductId);
                 }
                 surplus.Add((l, diff));
             }

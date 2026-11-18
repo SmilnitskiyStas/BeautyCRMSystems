@@ -8,10 +8,16 @@ public sealed record ProductData(string Name, string? Category, string Unit, str
 
 public sealed record SupplierData(string Name, string? ContactName, string? Phone, string? Email, string? Note, bool IsActive);
 
-public enum CatalogWriteOutcome { Ok, NotFound, BarcodeTaken, NameTaken }
+public enum CatalogWriteOutcome { Ok, NotFound, BarcodeTaken, NameTaken, UnitLocked }
 
 public sealed record ProductWriteResult(CatalogWriteOutcome Outcome, ProductDetailDto? Product = null);
 public sealed record SupplierWriteResult(CatalogWriteOutcome Outcome, SupplierDto? Supplier = null);
+
+/// <summary>Фільтр залишків закладу (виконується в БД). State: all|low|in_stock|out_of_stock.</summary>
+public sealed record StockFilter(Guid LocationId, DateOnly Today, int ExpiringWithinDays, string State, string? Search, string? Category, string? Purpose, bool OnlyExpiring);
+
+/// <summary>Фільтр зведення по закладах (виконується в БД).</summary>
+public sealed record SummaryFilter(IReadOnlyList<Guid> LocationIds, string? Search, string? Category, string? Purpose, bool LowOnly);
 
 /// <summary>Сирий рядок залишків закладу: ефективний мінімум і ознаки рахує сервіс.</summary>
 public sealed record StockRaw(ProductRef Product, decimal Quantity, decimal? ProductMinStock, decimal? SettingMinStock, bool IsEnabled,
@@ -42,17 +48,20 @@ public sealed record ReceiptLine(Guid ProductId, decimal Quantity, decimal? Unit
 
 public sealed record StockLine(int Line, Guid ProductId, decimal Quantity, Guid? BatchId);
 
-public enum StockWriteStatus { Ok, DuplicateKey, Insufficient }
+/// <summary>Rejected: перевірка під блокуванням не пройшла (Code/Line у <see cref="StockWriteResult"/>).</summary>
+public enum StockWriteStatus { Ok, DuplicateKey, Insufficient, Rejected }
 
 public sealed record StockShortage(int Line, Guid ProductId, Guid? BatchId, decimal Requested, decimal Available);
 
-public sealed record StockWriteResult(StockWriteStatus Status, OperationDto? Operation = null, IReadOnlyList<StockShortage>? Shortages = null);
+public sealed record StockWriteResult(StockWriteStatus Status, OperationDto? Operation = null, IReadOnlyList<StockShortage>? Shortages = null,
+    string? Code = null, int? Line = null);
 
 public sealed record KeyedOperation(OperationDto Operation, string RequestHash);
 
 public enum StocktakeWriteStatus
 {
     Ok, NotFound, Closed, VersionConflict, InProgress, ProductNotFound, TooManyLines, Empty, ExpiryRequired, Insufficient, LocationNotFound,
+    ExpiryInPast, QuantityOutOfRange,
 }
 
 public sealed record StocktakeWriteResult(StocktakeWriteStatus Status, StocktakeDto? Stocktake = null, OperationDto? Operation = null,
@@ -73,7 +82,10 @@ public interface IInventoryStore
     Task<IReadOnlyList<Guid>> SpecialistLocationIdsAsync(Guid specialistId, CancellationToken ct);
 
     // ---- каталог ----
+    /// <summary>Усі товари БЕЗ ознаки руху (HasMovements = false): її додає сервіс для сторінки через <see cref="ProductIdsWithMovementsAsync"/>.</summary>
     Task<IReadOnlyList<ProductDto>> ListProductsAsync(CancellationToken ct);
+    /// <summary>Підмножина id, що мають хоч один рух (EXISTS по індексу, лише для переданих id).</summary>
+    Task<IReadOnlySet<Guid>> ProductIdsWithMovementsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct);
     Task<ProductDetailDto?> GetProductAsync(Guid id, CancellationToken ct);
     Task<ProductDto?> GetProductByBarcodeAsync(string code, CancellationToken ct);
     Task<IReadOnlyDictionary<Guid, ProductDto>> GetProductsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct);
@@ -92,8 +104,10 @@ public interface IInventoryStore
     Task<SupplierWriteResult> UpdateSupplierAsync(Guid id, SupplierData data, DateTimeOffset now, CancellationToken ct);
 
     // ---- залишки ----
-    Task<IReadOnlyList<StockRaw>> ListStockAsync(Guid locationId, DateOnly today, int expiringWithinDays, CancellationToken ct);
-    Task<IReadOnlyList<SummaryRaw>> ListSummaryAsync(IReadOnlyCollection<Guid> locationIds, CancellationToken ct);
+    /// <summary>Фільтрація й агрегація в БД; сторінка за (lower(name), id): after = [nameKey, id] (вже перевірені), take рядків упорядковано.</summary>
+    Task<IReadOnlyList<StockRaw>> ListStockAsync(StockFilter filter, string[]? after, int take, CancellationToken ct);
+    /// <summary>take товарів (за тим самим порядком) з усіма їхніми рядками по закладах; фільтри в БД.</summary>
+    Task<IReadOnlyList<SummaryRaw>> ListSummaryAsync(SummaryFilter filter, string[]? after, int take, CancellationToken ct);
     Task<IReadOnlyList<BatchDto>> ListBatchesAsync(BatchFilter filter, string[]? after, int take, CancellationToken ct);
     Task<IReadOnlyDictionary<Guid, BatchRef>> GetBatchRefsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct);
     Task<IReadOnlyList<MovementDto>> ListMovementsAsync(MovementFilter filter, string[]? after, int take, CancellationToken ct);

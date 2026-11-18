@@ -26,6 +26,8 @@ public sealed partial class InventoryService(IInventoryStore store, TimeProvider
 {
     public const int MaxLines = 100, MaxCountLines = 500, MaxStocktakeLines = 2000, DefaultTake = 50, MaxTake = 200, MaxRangeDays = 366;
     public const decimal MaxMoney = 1_000_000m, MaxQuantity = 1_000_000m;
+    /// <summary>Межа numeric(14,3): рівень залишку (і Σ надходжень на нього) не може її перевищити.</summary>
+    public const decimal MaxLevel = 99_999_999_999.999m;
 
     private static readonly string[] Units = ["pcs", "ml", "g", "l", "kg", "pack"];
     private static readonly string[] Purposes = ["sale", "salon_use", "both"];
@@ -101,7 +103,7 @@ public sealed partial class InventoryService(IInventoryStore store, TimeProvider
 
     // ---------- курсори (keyset, base64url "{частини}|{hash параметрів}", частини екрануються) ----------
 
-    private static string ParamHash(params object?[] parts)
+    internal static string ParamHash(params object?[] parts)
     {
         var s = string.Join('\u001f', parts.Select(p => Convert.ToString(p, CultureInfo.InvariantCulture)));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s)), 0, 4).ToLowerInvariant();
@@ -113,8 +115,12 @@ public sealed partial class InventoryService(IInventoryStore store, TimeProvider
         return Convert.ToBase64String(Encoding.UTF8.GetBytes(raw)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
 
-    /// <summary>null cursor = початок. Нерозбірний або від інших параметрів -> помилка invalid_cursor.</summary>
-    private static Result<string[]?> DecodeCursor(string? cursor, string hash, int partCount)
+    /// <summary>
+    /// null cursor = початок. Нерозбірний, від інших параметрів або з сміттєвими полями -> invalid_cursor (422), ніколи 500.
+    /// kinds - тип кожної частини: n = рядок, g = Guid, t = ticks (long у межах DateTimeOffset), d = дата yyyy-MM-dd, D = дата або порожньо, f = "0"/"1".
+    /// Повернуті частини гарантовано парсяться відповідним типом.
+    /// </summary>
+    private static Result<string[]?> DecodeCursor(string? cursor, string hash, string kinds)
     {
         if (string.IsNullOrEmpty(cursor)) return Result<string[]?>.Ok(null);
         try
@@ -122,12 +128,26 @@ public sealed partial class InventoryService(IInventoryStore store, TimeProvider
             var b64 = cursor.Replace('-', '+').Replace('_', '/');
             b64 = b64.PadRight(b64.Length + (4 - b64.Length % 4) % 4, '=');
             var parts = Encoding.UTF8.GetString(Convert.FromBase64String(b64)).Split('|');
-            if (parts.Length == partCount + 1 && parts[^1] == hash)
-                return Result<string[]?>.Ok(parts[..^1].Select(Uri.UnescapeDataString).ToArray());
+            if (parts.Length == kinds.Length + 1 && parts[^1] == hash)
+            {
+                var values = parts[..^1].Select(Uri.UnescapeDataString).ToArray();
+                if (values.Zip(kinds).All(x => CursorPartValid(x.First, x.Second))) return Result<string[]?>.Ok(values);
+            }
         }
-        catch (Exception e) when (e is FormatException or ArgumentException or UriFormatException) { }
+        catch (Exception e) when (e is FormatException or ArgumentException or UriFormatException or OverflowException) { }
         return Error.Validation("invalid_cursor", "Cursor is invalid.");
     }
+
+    private static bool CursorPartValid(string v, char kind) => kind switch
+    {
+        'n' => true,
+        'g' => Guid.TryParseExact(v, "D", out _),
+        't' => long.TryParse(v, NumberStyles.None, CultureInfo.InvariantCulture, out var t) && t <= DateTimeOffset.MaxValue.UtcTicks,
+        'd' => TryDate(v, out _),
+        'D' => v.Length == 0 || TryDate(v, out _),
+        'f' => v is "0" or "1",
+        _ => false,
+    };
 
     private static int Take(int? take) => Math.Clamp(take ?? DefaultTake, 1, MaxTake);
 
@@ -136,12 +156,12 @@ public sealed partial class InventoryService(IInventoryStore store, TimeProvider
     /// <summary>Сторінка з відсортованого за (lower(name), id) списку.</summary>
     private static Result<Page<T>> PageByName<T>(IEnumerable<T> items, Func<T, string> name, Func<T, Guid> id, string? cursor, int? take, string hash)
     {
-        var after = DecodeCursor(cursor, hash, 2);
+        var after = DecodeCursor(cursor, hash, "ng");
         if (!after.IsOk) return after.Error!;
         var ordered = items.OrderBy(i => NameKey(name(i)), StringComparer.Ordinal).ThenBy(id).AsEnumerable();
         if (after.Value is { } a)
         {
-            var an = a[0]; var aid = Guid.TryParse(a[1], out var g) ? g : Guid.Empty;
+            var an = a[0]; var aid = Guid.Parse(a[1]);
             ordered = ordered.Where(i =>
             {
                 var c = string.CompareOrdinal(NameKey(name(i)), an);
@@ -187,7 +207,8 @@ public sealed partial class InventoryService(IInventoryStore store, TimeProvider
             && (search is null || Contains(p.Name, search) || Contains(p.Barcode, search) || Contains(p.Category, search)));
         var r = PageByName(items, p => p.Name, p => p.Id, q.Cursor, q.Take, ParamHash("products", active, search, q.Category, q.Purpose, q.SupplierId));
         if (!r.IsOk) return r.Error!;
-        return new Page<ProductDto>([.. r.Value!.Items.Select(p => Redact(actor, p))], r.Value.HasMore, r.Value.NextCursor);
+        var moved = await store.ProductIdsWithMovementsAsync([.. r.Value!.Items.Select(p => p.Id)], ct);
+        return new Page<ProductDto>([.. r.Value.Items.Select(p => Redact(actor, p with { HasMovements = moved.Contains(p.Id) }))], r.Value.HasMore, r.Value.NextCursor);
     }
 
     private static bool Contains(string? s, string needle) => s is not null && s.Contains(needle, StringComparison.OrdinalIgnoreCase);
@@ -232,7 +253,7 @@ public sealed partial class InventoryService(IInventoryStore store, TimeProvider
         var note = NullIfEmpty(req.Note);
         if (note is { Length: > 500 }) return V("invalid_note", "Note is too long (max 500).");
         if (existing is not null && existing.HasMovements && !string.Equals(existing.Unit, unit, StringComparison.Ordinal))
-            return Error.Validation("unit_locked", "The unit cannot be changed: the product already has movements.");
+            return UnitLocked;
         if (req.SupplierId is { } sid && await store.GetSupplierAsync(sid, ct) is null) return SupplierNotFound;
 
         return new ProductData(name, category, unit, barcode, purpose, req.SupplierId,
@@ -240,11 +261,14 @@ public sealed partial class InventoryService(IInventoryStore store, TimeProvider
             req.TrackExpiry ?? existing?.TrackExpiry ?? false, existing is null ? true : req.IsActive ?? existing.IsActive, note);
     }
 
+    private static readonly Error UnitLocked = Error.Validation("unit_locked", "The unit cannot be changed: the product already has movements.");
+
     private Result<ProductDetailDto> MapProduct(Actor actor, ProductWriteResult r, string op, Guid userId) => r.Outcome switch
     {
         CatalogWriteOutcome.Ok => LogCatalog("product", r.Product!.Id, userId, Redact(actor, r.Product!)),
         CatalogWriteOutcome.NotFound => ProductNotFound,
         CatalogWriteOutcome.BarcodeTaken => Error.Conflict("barcode_taken", "A product with this barcode already exists."),
+        CatalogWriteOutcome.UnitLocked => UnitLocked,
         _ => Error.Conflict("barcode_taken", "A product with this barcode already exists."),
     };
 

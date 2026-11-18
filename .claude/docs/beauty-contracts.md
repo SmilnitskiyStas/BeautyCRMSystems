@@ -4818,7 +4818,7 @@ StocktakeDto        = StocktakeSummaryDto & { note|null, version, postedBy: {id,
 | однакова пара `(productId, batchId)` двічі в списанні чи переміщенні; повтор `productId` у PUT інвентаризації | `duplicate_line` |
 | дата не `yyyy-MM-dd`, рік поза 2000..2100 | `invalid_date` |
 | `receivedOn` > `localToday` або < `localToday − 365` | `invalid_date` |
-| `expiresOn` < `localToday` закладу надходження (прострочений товар не приймається) | `invalid_expiry` |
+| `expiresOn` < `localToday` закладу надходження (прострочений товар не приймається); так само `surplusExpiresOn` надлишку при проведенні інвентаризації (`productId` у відповіді) | `invalid_expiry` |
 | `expiresOn` відсутній для товару з `trackExpiry`; `surplusExpiresOn` відсутній при надлишку товару з `trackExpiry` (під час проведення) | `expiry_required` |
 | `reason` ∉ переліку §32.4 | `invalid_reason` |
 | `note` відсутній для `correction\|other` | `note_required` |
@@ -4861,7 +4861,8 @@ StocktakeDto        = StocktakeSummaryDto & { note|null, version, postedBy: {id,
 | 422 | `batch_expired` | `line` | Партія прострочена, її не можна переміщувати |
 | 422 | `unit_locked` | — | Одиницю виміру не можна змінити: товар уже має рух |
 | 422 | `expiry_required` | `line` | Вкажіть термін придатності |
-| 422 | `invalid_expiry` | `line` | Термін придатності вже минув |
+| 422 | `invalid_expiry` | `line` (надходження) або `productId` (інвентаризація) | Термін придатності вже минув |
+| 422 | `quantity_out_of_range` | `line` (надходження/переміщення) або `productId` (інвентаризація) | Результуючий залишок перевищує максимум (`99 999 999 999.999`, межа `numeric(14,3)`) |
 | 422 | `note_required` | — | Додайте коментар до списання |
 | 422 | `stocktake_empty` | — | Внесіть хоча б один підрахунок |
 | 422 | `idempotency_key_required`, `invalid_idempotency_key` | — | Технічна помилка запиту. Спробуйте ще раз |

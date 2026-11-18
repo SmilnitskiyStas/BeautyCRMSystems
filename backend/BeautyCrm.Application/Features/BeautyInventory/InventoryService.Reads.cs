@@ -25,24 +25,23 @@ public sealed partial class InventoryService
         var days = ExpiringDays(q.ExpiringWithinDays);
         var today = SlotCalculator.LocalDate(clock.GetUtcNow(), loc.Timezone);
 
-        var rows = new List<StockRowDto>();
-        foreach (var r in await store.ListStockAsync(locId, today, days, ct))
+        var hash = ParamHash("stock", locId, state, search, q.Category, q.Purpose, q.ExpiringWithinDays);
+        var after = DecodeCursor(q.Cursor, hash, "ng");
+        if (!after.IsOk) return after.Error!;
+        var n = Take(q.Take);
+        var filter = new StockFilter(locId, today, days, state, search, q.Category?.Trim(), q.Purpose, q.ExpiringWithinDays is not null);
+        var raw = (await store.ListStockAsync(filter, after.Value, n + 1, ct)).ToList();
+        var hasMore = raw.Count > n;
+        if (hasMore) raw.RemoveAt(n);
+        var costs = SeesCosts(actor);
+        var rows = raw.Select(r =>
         {
             var eff = r.SettingMinStock ?? r.ProductMinStock;
-            var low = IsLow(r.Quantity, eff);
-            if (q.Category is not null && !string.Equals(r.Product.Category, q.Category.Trim(), StringComparison.Ordinal)) continue;
-            if (q.Purpose is not null && r.Product.Purpose != q.Purpose) continue;
-            if (search is not null && !(Contains(r.Product.Name, search) || Contains(r.Product.Barcode, search) || Contains(r.Product.Category, search))) continue;
-            if (state == "low" && !low) continue;
-            if (state == "in_stock" && r.Quantity <= 0) continue;
-            if (state == "out_of_stock" && r.Quantity > 0) continue;
-            if (q.ExpiringWithinDays is not null && r.ExpiringQuantity <= 0) continue;
-            rows.Add(new StockRowDto(r.Product, locId, r.Quantity, eff, low, r.IsEnabled, r.NearestExpiresOn, r.ExpiredQuantity, r.ExpiringQuantity,
-                SeesCosts(actor) ? r.Value : null, SeesCosts(actor) ? r.ValueIncomplete : null));
-        }
-        var page = PageByName(rows, x => x.Product.Name, x => x.Product.Id, q.Cursor, q.Take, ParamHash("stock", locId, state, search, q.Category, q.Purpose, q.ExpiringWithinDays));
-        if (!page.IsOk) return page.Error!;
-        return new StockPageDto(new StockLocationBrief(loc.Id, loc.Name, loc.Timezone, loc.IsActive), page.Value!.Items, page.Value.HasMore, page.Value.NextCursor);
+            return new StockRowDto(r.Product, locId, r.Quantity, eff, IsLow(r.Quantity, eff), r.IsEnabled, r.NearestExpiresOn, r.ExpiredQuantity, r.ExpiringQuantity,
+                costs ? r.Value : null, costs ? r.ValueIncomplete : null);
+        }).ToList();
+        var next = hasMore ? EncodeCursor(hash, NameKey(rows[^1].Product.Name), rows[^1].Product.Id.ToString()) : null;
+        return new StockPageDto(new StockLocationBrief(loc.Id, loc.Name, loc.Timezone, loc.IsActive), rows, hasMore, next);
     }
 
     public async Task<Result<StockSummaryPageDto>> GetSummaryAsync(Actor actor, SummaryListQuery q, CancellationToken ct)
@@ -52,26 +51,28 @@ public sealed partial class InventoryService
         var locs = (await store.ListInventoryLocationsAsync(ct)).Where(l => scope.Contains(l.Id)).OrderBy(l => l.Name, StringComparer.Ordinal).ThenBy(l => l.Id).ToList();
         var header = locs.Select(l => new StockSummaryLocation(l.Id, l.Name, l.IsActive)).ToList();
         var search = NullIfEmpty(q.Search);
+        var hash = ParamHash("summary", search, q.Category, q.Purpose, q.LowOnly);
+        var after = DecodeCursor(q.Cursor, hash, "ng");
+        if (!after.IsOk) return after.Error!;
+        var n = Take(q.Take);
 
         var items = new List<StockSummaryRowDto>();
+        var hasMore = false;
         if (locs.Count > 0)
         {
-            foreach (var g in (await store.ListSummaryAsync(locs.Select(l => l.Id).ToList(), ct)).GroupBy(r => r.Product.Id))
+            var filter = new SummaryFilter([.. locs.Select(l => l.Id)], search, q.Category?.Trim(), q.Purpose, q.LowOnly == true);
+            var groups = (await store.ListSummaryAsync(filter, after.Value, n + 1, ct)).GroupBy(r => r.Product.Id).ToList();
+            hasMore = groups.Count > n;
+            foreach (var g in groups.Take(n))
             {
                 var p = g.First().Product;
-                if (q.Category is not null && !string.Equals(p.Category, q.Category.Trim(), StringComparison.Ordinal)) continue;
-                if (q.Purpose is not null && p.Purpose != q.Purpose) continue;
-                if (search is not null && !(Contains(p.Name, search) || Contains(p.Barcode, search) || Contains(p.Category, search))) continue;
                 var perLoc = g.Select(r => new StockSummaryLocationQty(r.LocationId, r.Quantity, IsLow(r.Quantity, r.SettingMinStock ?? r.ProductMinStock))).ToList();
-                var lowAny = perLoc.Any(x => x.IsLow);
-                if (q.LowOnly == true && !lowAny) continue;
-                items.Add(new StockSummaryRowDto(p, g.Sum(r => r.Quantity), lowAny, perLoc,
+                items.Add(new StockSummaryRowDto(p, g.Sum(r => r.Quantity), perLoc.Any(x => x.IsLow), perLoc,
                     SeesCosts(actor) ? g.Sum(r => r.Value) : null, SeesCosts(actor) ? g.Any(r => r.ValueIncomplete) : null));
             }
         }
-        var page = PageByName(items, x => x.Product.Name, x => x.Product.Id, q.Cursor, q.Take, ParamHash("summary", search, q.Category, q.Purpose, q.LowOnly));
-        if (!page.IsOk) return page.Error!;
-        return new StockSummaryPageDto(header, page.Value!.Items, page.Value.HasMore, page.Value.NextCursor);
+        var next = hasMore ? EncodeCursor(hash, NameKey(items[^1].Product.Name), items[^1].Product.Id.ToString()) : null;
+        return new StockSummaryPageDto(header, items, hasMore, next);
     }
 
     // ---------- партії ----------
@@ -96,8 +97,9 @@ public sealed partial class InventoryService
             .Select(g => ((IReadOnlyList<Guid>)g.Select(l => l.Id).ToList(), g.Key)).ToList();
         var days = ExpiringDays(q.ExpiringWithinDays);
         var hash = ParamHash("batches", q.LocationId, q.ProductId, status, days);
-        var after = DecodeCursor(q.Cursor, hash, 4);
+        var after = DecodeCursor(q.Cursor, hash, "fDtg");
         if (!after.IsOk) return after.Error!;
+        if (after.Value is { } av && av[0] == "0" && av[1].Length == 0) return Error.Validation("invalid_cursor", "Cursor is invalid.");
         var n = Take(q.Take);
         List<BatchDto> rows = groups.Count == 0 ? [] : [.. await store.ListBatchesAsync(new BatchFilter(groups, q.ProductId, status, days), after.Value, n + 1, ct)];
         var hasMore = rows.Count > n;
@@ -145,7 +147,7 @@ public sealed partial class InventoryService
         var range = ParseRange(q.From, q.To, true);
         if (!range.IsOk) return range.Error!;
         var hash = ParamHash("movements", q.LocationId, q.ProductId, q.Type, q.OperationId, q.From is null ? null : range.Value.From.UtcTicks, q.To is null ? null : range.Value.To.UtcTicks);
-        var after = DecodeCursor(q.Cursor, hash, 2);
+        var after = DecodeCursor(q.Cursor, hash, "tg");
         if (!after.IsOk) return after.Error!;
         IReadOnlyList<Guid>? ids = q.LocationId is { } one ? [one] : scope.All ? null : [.. scope.Ids];
         var n = Take(q.Take);
@@ -166,7 +168,7 @@ public sealed partial class InventoryService
         var range = ParseRange(q.From, q.To, false);
         if (!range.IsOk) return range.Error!;
         var hash = ParamHash("operations", q.Kind, q.LocationId, q.From is null ? null : range.Value.From.UtcTicks, q.To is null ? null : range.Value.To.UtcTicks);
-        var after = DecodeCursor(q.Cursor, hash, 2);
+        var after = DecodeCursor(q.Cursor, hash, "tg");
         if (!after.IsOk) return after.Error!;
         IReadOnlyList<Guid>? ids = scope.All ? null : [.. scope.Ids];
         var n = Take(q.Take);

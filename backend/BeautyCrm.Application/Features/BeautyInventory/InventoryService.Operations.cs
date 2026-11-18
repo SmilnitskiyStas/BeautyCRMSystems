@@ -49,10 +49,25 @@ public sealed partial class InventoryService
                 return new OperationResult(Present(actor, w.Operation!, await ViewScopeAsync(actor, ct)), false);
             case StockWriteStatus.DuplicateKey:
                 return await ReplayAsync(actor, keyHash, requestHash, ct) ?? KeyReused;
+            case StockWriteStatus.Rejected:
+                return V(w.Code!, RejectMessage(w.Code!), w.Line);
             default:
                 return InsufficientStock(w.Shortages!);
         }
     }
+
+    /// <summary>Коди відмов, що їх сховище повертає з перевірок ПІД блокуванням (повтор перевірок сервісу, див. TASK-880 L3).</summary>
+    private static string RejectMessage(string code) => code switch
+    {
+        "quantity_out_of_range" => "Resulting stock is above the maximum allowed.",
+        "product_inactive" => "Product is inactive.",
+        "product_disabled_for_location" => "Product is disabled for this location.",
+        "location_inactive" => "Location is inactive.",
+        "invalid_quantity" => "Quantity must be a whole number for this unit.",
+        "expiry_required" => "Expiry date is required.",
+        "invalid_expiry" => "Expiry date is in the past.",
+        _ => "Request rejected.",
+    };
 
     private static Error InsufficientStock(IReadOnlyList<StockShortage> shortages) =>
         new(ErrorKind.Validation, "insufficient_stock", "Not enough stock.", null, new Dictionary<string, object?>
@@ -265,7 +280,7 @@ public sealed partial class InventoryService
         var scope = await ViewScopeAsync(actor, ct);
         if (q.LocationId is { } l && (!scope.Contains(l) || !(await LocationsAsync(ct)).ContainsKey(l))) return LocationNotFound;
         var hash = ParamHash("stocktakes", q.LocationId, status);
-        var after = DecodeCursor(q.Cursor, hash, 2);
+        var after = DecodeCursor(q.Cursor, hash, "tg");
         if (!after.IsOk) return after.Error!;
         IReadOnlyList<Guid>? ids = scope.All ? null : [.. scope.Ids];
         var n = Take(q.Take);
@@ -319,6 +334,10 @@ public sealed partial class InventoryService
         StocktakeWriteStatus.ExpiryRequired => new Error(ErrorKind.Validation, "expiry_required", "Expiry date is required.", null,
             new Dictionary<string, object?> { ["productId"] = r.ProductId }),
         StocktakeWriteStatus.Insufficient => Error.Validation("insufficient_stock", "Not enough stock."),
+        StocktakeWriteStatus.ExpiryInPast => new Error(ErrorKind.Validation, "invalid_expiry", "Expiry date is in the past.", null,
+            new Dictionary<string, object?> { ["productId"] = r.ProductId }),
+        StocktakeWriteStatus.QuantityOutOfRange => new Error(ErrorKind.Validation, "quantity_out_of_range", "Resulting stock is above the maximum allowed.", null,
+            new Dictionary<string, object?> { ["productId"] = r.ProductId }),
         _ => null,
     };
 

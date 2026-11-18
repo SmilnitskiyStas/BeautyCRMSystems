@@ -56,8 +56,16 @@ public sealed partial class EfBeautyStore : IInventoryStore
     {
         var products = await db.Products.AsNoTracking().ToListAsync(ct);
         var suppliers = await SupplierNamesAsync(ct);
-        var moved = (await db.StockMovements.AsNoTracking().Select(m => m.ProductId).Distinct().ToListAsync(ct)).ToHashSet();
-        return [.. products.Select(p => ToDto(p, suppliers, moved.Contains(p.Id)))];
+        return [.. products.Select(p => ToDto(p, suppliers, false))];
+    }
+
+    /// <summary>EXISTS по індексу (tenant, product, occurred_at) лише для переданих id (сторінка), без сканування всього журналу.</summary>
+    public async Task<IReadOnlySet<Guid>> ProductIdsWithMovementsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct)
+    {
+        var list = ids.ToList();
+        if (list.Count == 0) return new HashSet<Guid>();
+        return (await db.Products.AsNoTracking().Where(p => list.Contains(p.Id) && db.StockMovements.Any(m => m.ProductId == p.Id))
+            .Select(p => p.Id).ToListAsync(ct)).ToHashSet();
     }
 
     public async Task<IReadOnlyDictionary<Guid, ProductDto>> GetProductsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct)
@@ -111,14 +119,26 @@ public sealed partial class EfBeautyStore : IInventoryStore
         return new(CatalogWriteOutcome.Ok, await GetProductAsync(p.Id, ct));
     }
 
+    /// <summary>
+    /// Оновлення під блокуванням рядка товару (FOR UPDATE): зміна одиниці перевіряється проти журналу ПІД цим блокуванням, а операції з рухами
+    /// беруть той самий рядок FOR SHARE (<see cref="LockProductsAsync"/>) - гонка «перше надходження vs зміна одиниці» неможлива (TASK-880 L3).
+    /// </summary>
     public async Task<ProductWriteResult> UpdateProductAsync(Guid id, ProductData data, Guid userId, DateTimeOffset now, CancellationToken ct)
     {
-        var p = await db.Products.FirstOrDefaultAsync(x => x.Id == id, ct);
-        if (p is null) return new(CatalogWriteOutcome.NotFound);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var p = (await db.Products.FromSqlInterpolated($"SELECT * FROM beauty_products WHERE id = {id} FOR UPDATE").ToListAsync(ct)).FirstOrDefault();
+        if (p is null) { await tx.RollbackAsync(ct); db.ChangeTracker.Clear(); return new(CatalogWriteOutcome.NotFound); }
+        if (p.Unit != EnumText<ProductUnit>.FromDb(data.Unit) && await db.StockMovements.AsNoTracking().AnyAsync(m => m.ProductId == id, ct))
+        {
+            await tx.RollbackAsync(ct); db.ChangeTracker.Clear();
+            return new(CatalogWriteOutcome.UnitLocked);
+        }
         Apply(p, data);
         p.UpdatedByUserId = userId;
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateException ex) when (IsUnique(ex, BarcodeIndex)) { db.ChangeTracker.Clear(); return new(CatalogWriteOutcome.BarcodeTaken); }
+        await tx.CommitAsync(ct);
+        db.ChangeTracker.Clear();
         return new(CatalogWriteOutcome.Ok, await GetProductAsync(id, ct));
     }
 
@@ -199,53 +219,134 @@ public sealed partial class EfBeautyStore : IInventoryStore
 
     // ---------- залишки ----------
 
-    public async Task<IReadOnlyList<StockRaw>> ListStockAsync(Guid locationId, DateOnly today, int expiringWithinDays, CancellationToken ct)
+    private sealed class Pair
     {
-        var products = await db.Products.AsNoTracking().ToListAsync(ct);
-        var levels = await db.StockLevels.AsNoTracking().Where(l => l.LocationId == locationId).ToDictionaryAsync(l => l.ProductId, l => l.Quantity, ct);
-        var settings = await db.ProductLocationSettings.AsNoTracking().Where(s => s.LocationId == locationId).ToDictionaryAsync(s => s.ProductId, ct);
-        var batches = (await db.StockBatches.AsNoTracking().Where(b => b.LocationId == locationId && b.Quantity > 0).ToListAsync(ct)).ToLookup(b => b.ProductId);
-        var limit = today.AddDays(expiringWithinDays);
+        public Product P = null!;
+        public Guid LocationId;
+        public decimal Qty;
+        public decimal? SettingMin;
+        public bool Enabled;
+    }
 
-        var rows = new List<StockRaw>();
-        foreach (var p in products)
+    private static string Like(string s) => "%" + s.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%";
+
+    /// <summary>Пари (товар, заклад): рівень і налаштування приєднані в БД; відсутній рівень = 0, відсутнє налаштування = увімкнено.</summary>
+    private IQueryable<Pair> Pairs(IReadOnlyList<Guid> locIds) => Pairs([.. locIds], 0);
+
+    private IQueryable<Pair> Pairs(List<Guid> locs, int _) =>
+        from p in db.Products
+        from loc in db.Locations.Where(x => locs.Contains(x.Id))
+        join l in db.StockLevels on new { L = loc.Id, P = p.Id } equals new { L = l.LocationId, P = l.ProductId } into lj
+        from l in lj.DefaultIfEmpty()
+        join s in db.ProductLocationSettings on new { L = loc.Id, P = p.Id } equals new { L = s.LocationId, P = s.ProductId } into sj
+        from s in sj.DefaultIfEmpty()
+        select new Pair { P = p, LocationId = loc.Id, Qty = l == null ? 0m : l.Quantity, SettingMin = s == null ? null : s.MinStock, Enabled = s == null || s.IsEnabled };
+
+    /// <summary>Спільні фільтри каталогу (категорія, призначення, пошук) і «кандидат у залишки»; null = порожній результат (невідоме призначення).</summary>
+    private static IQueryable<Pair>? FilterPairs(IQueryable<Pair> q, string? category, string? purpose, string? search)
+    {
+        q = q.Where(x => x.Qty > 0 || (x.P.IsActive && x.Enabled));
+        if (category is not null) q = q.Where(x => x.P.Category == category);
+        if (purpose is not null)
         {
-            var qty = levels.GetValueOrDefault(p.Id);
-            settings.TryGetValue(p.Id, out var st);
-            var enabled = st?.IsEnabled ?? true;
-            if (!(qty > 0 || (p.IsActive && enabled))) continue;
-            var bs = batches[p.Id].ToList();
-            rows.Add(new StockRaw(ToRef(p), qty, p.MinStock, st?.MinStock, enabled,
-                bs.Where(b => b.ExpiresOn != null).Select(b => b.ExpiresOn).Min(),
-                bs.Where(b => b.ExpiresOn < today).Sum(b => b.Quantity),
-                bs.Where(b => b.ExpiresOn >= today && b.ExpiresOn <= limit).Sum(b => b.Quantity),
-                bs.Where(b => b.UnitCost != null).Sum(b => b.Quantity * b.UnitCost!.Value), bs.Any(b => b.UnitCost == null)));
+            if (!EnumText<ProductPurpose>.Values.Contains(purpose)) return null;
+            var pu = EnumText<ProductPurpose>.FromDb(purpose);
+            q = q.Where(x => x.P.Purpose == pu);
         }
-        return rows;
+        if (search is not null)
+        {
+            var pat = Like(search);
+            q = q.Where(x => EF.Functions.ILike(x.P.Name, pat, "\\") || (x.P.Barcode != null && EF.Functions.ILike(x.P.Barcode, pat, "\\"))
+                || (x.P.Category != null && EF.Functions.ILike(x.P.Category, pat, "\\")));
+        }
+        return q;
     }
 
-    public async Task<IReadOnlyList<SummaryRaw>> ListSummaryAsync(IReadOnlyCollection<Guid> locationIds, CancellationToken ct)
+    /// <summary>Сторінка (lower(name), id) серед відфільтрованих ключів; ключі легкі (id + name), важкі агрегати рахуються лише для сторінки.</summary>
+    private static List<Guid> PageKeys(IEnumerable<(Guid Id, string Name)> keys, string[]? after, int take)
     {
-        var locs = locationIds.ToList();
-        var products = await db.Products.AsNoTracking().ToListAsync(ct);
-        var levels = (await db.StockLevels.AsNoTracking().Where(l => locs.Contains(l.LocationId)).ToListAsync(ct)).ToDictionary(l => (l.LocationId, l.ProductId), l => l.Quantity);
-        var settings = (await db.ProductLocationSettings.AsNoTracking().Where(s => locs.Contains(s.LocationId)).ToListAsync(ct)).ToDictionary(s => (s.LocationId, s.ProductId));
-        var batches = (await db.StockBatches.AsNoTracking().Where(b => locs.Contains(b.LocationId) && b.Quantity > 0).ToListAsync(ct)).ToLookup(b => (b.LocationId, b.ProductId));
-
-        var rows = new List<SummaryRaw>();
-        foreach (var p in products)
-            foreach (var l in locs)
+        var ordered = keys.OrderBy(k => k.Name.ToLowerInvariant(), StringComparer.Ordinal).ThenBy(k => k.Id).AsEnumerable();
+        if (after is not null)
+        {
+            var an = after[0]; var aid = Guid.Parse(after[1]); // частини перевірено DecodeCursor
+            ordered = ordered.Where(k =>
             {
-                var qty = levels.GetValueOrDefault((l, p.Id));
-                settings.TryGetValue((l, p.Id), out var st);
-                var enabled = st?.IsEnabled ?? true;
-                if (!(qty > 0 || (p.IsActive && enabled))) continue;
-                var bs = batches[(l, p.Id)].ToList();
-                rows.Add(new SummaryRaw(ToRef(p), l, qty, p.MinStock, st?.MinStock, enabled,
-                    bs.Where(b => b.UnitCost != null).Sum(b => b.Quantity * b.UnitCost!.Value), bs.Any(b => b.UnitCost == null)));
-            }
-        return rows;
+                var c = string.CompareOrdinal(k.Name.ToLowerInvariant(), an);
+                return c > 0 || (c == 0 && k.Id.CompareTo(aid) > 0);
+            });
+        }
+        return [.. ordered.Take(take).Select(k => k.Id)];
     }
+
+    public async Task<IReadOnlyList<StockRaw>> ListStockAsync(StockFilter f, string[]? after, int take, CancellationToken ct)
+    {
+        var loc = f.LocationId; var today = f.Today; var limit = today.AddDays(f.ExpiringWithinDays);
+        if (FilterPairs(Pairs([loc]), f.Category, f.Purpose, f.Search) is not { } q) return [];
+        switch (f.State)
+        {
+            case "low": q = q.Where(x => (x.SettingMin ?? x.P.MinStock) > 0 && x.Qty < (x.SettingMin ?? x.P.MinStock)); break;
+            case "in_stock": q = q.Where(x => x.Qty > 0); break;
+            case "out_of_stock": q = q.Where(x => x.Qty <= 0); break;
+        }
+        if (f.OnlyExpiring)
+            q = q.Where(x => db.StockBatches.Any(b => b.LocationId == loc && b.ProductId == x.P.Id && b.Quantity > 0 && b.ExpiresOn != null && b.ExpiresOn >= today && b.ExpiresOn <= limit));
+
+        var keys = (await q.Select(x => new { x.P.Id, x.P.Name }).ToListAsync(ct)).Select(k => (k.Id, k.Name));
+        var ids = PageKeys(keys, after, take);
+        if (ids.Count == 0) return [];
+
+        var rows = (await Pairs([loc]).Where(x => ids.Contains(x.P.Id)).ToListAsync(ct)).ToDictionary(x => x.P.Id);
+        var agg = (await db.StockBatches.AsNoTracking().Where(b => b.LocationId == loc && ids.Contains(b.ProductId) && b.Quantity > 0)
+            .GroupBy(b => b.ProductId)
+            .Select(g => new
+            {
+                Id = g.Key,
+                Nearest = g.Min(b => b.ExpiresOn),
+                Expired = g.Sum(b => b.ExpiresOn < today ? b.Quantity : 0m),
+                Expiring = g.Sum(b => b.ExpiresOn >= today && b.ExpiresOn <= limit ? b.Quantity : 0m),
+                Value = g.Sum(b => b.UnitCost != null ? b.Quantity * b.UnitCost.Value : 0m),
+                NoCost = g.Sum(b => b.UnitCost == null ? 1 : 0),
+            }).ToListAsync(ct)).ToDictionary(x => x.Id);
+
+        return [.. ids.Select(id =>
+        {
+            var r = rows[id];
+            var a = agg.GetValueOrDefault(id);
+            return new StockRaw(ToRef(r.P), r.Qty, r.P.MinStock, r.SettingMin, r.Enabled, a?.Nearest, a?.Expired ?? 0, a?.Expiring ?? 0,
+                Money(a?.Value ?? 0), (a?.NoCost ?? 0) > 0);
+        })];
+    }
+
+    public async Task<IReadOnlyList<SummaryRaw>> ListSummaryAsync(SummaryFilter f, string[]? after, int take, CancellationToken ct)
+    {
+        var locs = f.LocationIds;
+        if (FilterPairs(Pairs(locs), f.Category, f.Purpose, f.Search) is not { } q) return [];
+        if (f.LowOnly) q = q.Where(x => (x.SettingMin ?? x.P.MinStock) > 0 && x.Qty < (x.SettingMin ?? x.P.MinStock));
+
+        var keys = (await q.Select(x => new { x.P.Id, x.P.Name }).Distinct().ToListAsync(ct)).Select(k => (k.Id, k.Name));
+        var ids = PageKeys(keys, after, take);
+        if (ids.Count == 0) return [];
+
+        var order = locs.Select((l, i) => (l, i)).ToDictionary(x => x.l, x => x.i);
+        var pairs = await FilterPairs(Pairs(locs), null, null, null)!.Where(x => ids.Contains(x.P.Id)).ToListAsync(ct);
+        var agg = (await db.StockBatches.AsNoTracking().Where(b => locs.Contains(b.LocationId) && ids.Contains(b.ProductId) && b.Quantity > 0)
+            .GroupBy(b => new { b.LocationId, b.ProductId })
+            .Select(g => new
+            {
+                g.Key.LocationId, g.Key.ProductId,
+                Value = g.Sum(b => b.UnitCost != null ? b.Quantity * b.UnitCost.Value : 0m),
+                NoCost = g.Sum(b => b.UnitCost == null ? 1 : 0),
+            }).ToListAsync(ct)).ToDictionary(x => (x.LocationId, x.ProductId));
+
+        var position = ids.Select((id, i) => (id, i)).ToDictionary(x => x.id, x => x.i);
+        return [.. pairs.OrderBy(r => position[r.P.Id]).ThenBy(r => order[r.LocationId]).Select(r =>
+        {
+            agg.TryGetValue((r.LocationId, r.P.Id), out var a);
+            return new SummaryRaw(ToRef(r.P), r.LocationId, r.Qty, r.P.MinStock, r.SettingMin, r.Enabled, Money(a?.Value ?? 0), (a?.NoCost ?? 0) > 0);
+        })];
+    }
+
+    private static decimal Money(decimal v) => decimal.Round(v, 2, MidpointRounding.AwayFromZero);
 
     public async Task<IReadOnlyDictionary<Guid, BatchRef>> GetBatchRefsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct)
     {
@@ -347,7 +448,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
     private static decimal? TotalCost(IEnumerable<StockMovement> moves, StockOperationKind kind)
     {
         var priced = moves.Where(m => m.UnitCost != null && (kind != StockOperationKind.Transfer || m.Type == StockMovementType.TransferOut)).ToList();
-        return priced.Count == 0 ? null : priced.Sum(m => Math.Abs(m.Quantity) * m.UnitCost!.Value);
+        return priced.Count == 0 ? null : Money(priced.Sum(m => Math.Abs(m.Quantity) * m.UnitCost!.Value));
     }
 
     public async Task<IReadOnlyList<OperationSummaryDto>> ListOperationsAsync(OperationFilter f, string[]? after, int take, CancellationToken ct)

@@ -98,6 +98,18 @@ internal sealed class FakeInventoryStore : IInventoryStore
 
     public Task<IReadOnlyList<ProductDto>> ListProductsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<ProductDto>>([.. Products.Values]);
 
+    /// <summary>Скільки id перевірено на «має рух» (стеження за тим, що сервіс питає лише про сторінку).</summary>
+    public readonly List<int> MovementProbeSizes = [];
+
+    public Task<IReadOnlySet<Guid>> ProductIdsWithMovementsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct)
+    {
+        MovementProbeSizes.Add(ids.Count);
+        return Task.FromResult<IReadOnlySet<Guid>>(ids.Where(id => Ops.Any(o => o.Moves.Any(m => m.Prod == id))).ToHashSet());
+    }
+
+    /// <summary>Хук гонки: викликається в UpdateProductAsync перед перевіркою «має рух» (імітація першого надходження між перевіркою сервісу й записом).</summary>
+    public Action? BeforeProductUpdate;
+
     public Task<ProductDetailDto?> GetProductAsync(Guid id, CancellationToken ct) => Task.FromResult(Products.TryGetValue(id, out var p) ? Detail(p) : null);
 
     private ProductDetailDto Detail(ProductDto p) => new(p.Id, p.Name, p.Category, p.Unit, p.Barcode, p.Purpose, p.Supplier, p.PurchasePrice, p.MinStock,
@@ -123,6 +135,8 @@ internal sealed class FakeInventoryStore : IInventoryStore
     public Task<ProductWriteResult> UpdateProductAsync(Guid id, ProductData d, Guid userId, DateTimeOffset now, CancellationToken ct)
     {
         if (!Products.TryGetValue(id, out var old)) return Task.FromResult(new ProductWriteResult(CatalogWriteOutcome.NotFound));
+        BeforeProductUpdate?.Invoke();
+        if (old.Unit != d.Unit && Ops.Any(o => o.Moves.Any(m => m.Prod == id))) return Task.FromResult(new ProductWriteResult(CatalogWriteOutcome.UnitLocked));
         if (d.Barcode is not null && Products.Values.Any(p => p.Id != id && p.Barcode == d.Barcode)) return Task.FromResult(new ProductWriteResult(CatalogWriteOutcome.BarcodeTaken));
         var p = old with
         {
@@ -166,8 +180,9 @@ internal sealed class FakeInventoryStore : IInventoryStore
 
     // ---------- читання (мінімум для сервісних тестів) ----------
 
-    public Task<IReadOnlyList<StockRaw>> ListStockAsync(Guid locationId, DateOnly today, int expiringWithinDays, CancellationToken ct)
+    public Task<IReadOnlyList<StockRaw>> ListStockAsync(StockFilter f, string[]? after, int take, CancellationToken ct)
     {
+        var locationId = f.LocationId; var today = f.Today; var expiringWithinDays = f.ExpiringWithinDays;
         var rows = Products.Values.Select(p =>
         {
             var bs = Batches.Where(b => b.Loc == locationId && b.Prod == p.Id && b.Qty > 0).ToList();
@@ -177,10 +192,21 @@ internal sealed class FakeInventoryStore : IInventoryStore
                 bs.Where(b => b.Exp >= today && b.Exp <= today.AddDays(expiringWithinDays)).Sum(b => b.Qty),
                 bs.Where(b => b.Cost != null).Sum(b => b.Qty * b.Cost!.Value), bs.Any(b => b.Cost == null));
         });
-        return Task.FromResult<IReadOnlyList<StockRaw>>([.. rows]);
+        var list = rows.Where(r => (r.Quantity > 0 || (r.Product.IsActive && r.IsEnabled))
+                && (f.Category is null || r.Product.Category == f.Category) && (f.Purpose is null || r.Product.Purpose == f.Purpose)
+                && (f.Search is null || r.Product.Name.Contains(f.Search, StringComparison.OrdinalIgnoreCase))
+                && (f.State != "in_stock" || r.Quantity > 0) && (f.State != "out_of_stock" || r.Quantity <= 0)
+                && (f.State != "low" || (r.ProductMinStock > 0 && r.Quantity < r.ProductMinStock)) && (!f.OnlyExpiring || r.ExpiringQuantity > 0))
+            .OrderBy(r => r.Product.Name.ToLowerInvariant(), StringComparer.Ordinal).ThenBy(r => r.Product.Id);
+        var paged = after is null ? list : list.Where(r =>
+        {
+            var c = string.CompareOrdinal(r.Product.Name.ToLowerInvariant(), after[0]);
+            return c > 0 || (c == 0 && r.Product.Id.CompareTo(Guid.Parse(after[1])) > 0);
+        }).OrderBy(r => r.Product.Name.ToLowerInvariant(), StringComparer.Ordinal).ThenBy(r => r.Product.Id);
+        return Task.FromResult<IReadOnlyList<StockRaw>>([.. paged.Take(take)]);
     }
 
-    public Task<IReadOnlyList<SummaryRaw>> ListSummaryAsync(IReadOnlyCollection<Guid> locationIds, CancellationToken ct) => throw new NotSupportedException();
+    public Task<IReadOnlyList<SummaryRaw>> ListSummaryAsync(SummaryFilter filter, string[]? after, int take, CancellationToken ct) => throw new NotSupportedException();
     public Task<IReadOnlyList<BatchDto>> ListBatchesAsync(BatchFilter filter, string[]? after, int take, CancellationToken ct) => throw new NotSupportedException();
 
     public Task<IReadOnlyDictionary<Guid, BatchRef>> GetBatchRefsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct) =>

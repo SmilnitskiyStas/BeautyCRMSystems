@@ -792,9 +792,11 @@ public sealed class InventoryApiTests(AuthApiFixture fx) : IClassFixture<AuthApi
         Assert.Equal(3, moves.Count); // 2 з нестачі + 1 надлишок; нуль без рухів
         Assert.All(moves, m => Assert.Equal("stocktake_adjust", m.GetProperty("type").GetString()));
         var shortMoves = moves.Where(m => m.GetProperty("product").GetProperty("id").GetGuid() == shortP).ToList();
-        Assert.Equal(expired, shortMoves[0].GetProperty("batchId").GetGuid()); // прострочені першими
-        Assert.Equal(-3m, shortMoves[0].GetProperty("quantity").GetDecimal());
-        Assert.Equal(-3m, shortMoves[1].GetProperty("quantity").GetDecimal());
+        // порядок рухів з однаковим occurred_at - за випадковим id, тому «прострочені першими» перевіряємо за складом, а не за позицією
+        Assert.Contains(expired, shortMoves.Select(m => m.GetProperty("batchId").GetGuid()));
+        Assert.Equal(-3m, shortMoves.Single(m => m.GetProperty("batchId").GetGuid() == expired).GetProperty("quantity").GetDecimal());
+        Assert.Equal(2, shortMoves.Count);
+        Assert.All(shortMoves, m => Assert.Equal(-3m, m.GetProperty("quantity").GetDecimal()));
         Assert.Equal(3m, moves.Single(m => m.GetProperty("product").GetProperty("id").GetGuid() == surplusP).GetProperty("quantity").GetDecimal());
         Assert.Equal(4, await LevelAsync(t.Id, t.L1, shortP));
         Assert.Equal(5, await LevelAsync(t.Id, t.L1, surplusP));

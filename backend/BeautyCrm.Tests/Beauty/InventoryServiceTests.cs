@@ -786,6 +786,7 @@ internal abstract class IInventoryStoreProxy(FakeInventoryStore inner) : IInvent
     public Task<IReadOnlyList<LocationRow>> ListInventoryLocationsAsync(CancellationToken ct) => inner.ListInventoryLocationsAsync(ct);
     public Task<IReadOnlyList<Guid>> SpecialistLocationIdsAsync(Guid s, CancellationToken ct) => inner.SpecialistLocationIdsAsync(s, ct);
     public Task<IReadOnlyList<ProductDto>> ListProductsAsync(CancellationToken ct) => inner.ListProductsAsync(ct);
+    public Task<IReadOnlySet<Guid>> ProductIdsWithMovementsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct) => inner.ProductIdsWithMovementsAsync(ids, ct);
     public Task<ProductDetailDto?> GetProductAsync(Guid id, CancellationToken ct) => inner.GetProductAsync(id, ct);
     public Task<ProductDto?> GetProductByBarcodeAsync(string code, CancellationToken ct) => inner.GetProductByBarcodeAsync(code, ct);
     public Task<IReadOnlyDictionary<Guid, ProductDto>> GetProductsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct) => inner.GetProductsAsync(ids, ct);
@@ -799,8 +800,8 @@ internal abstract class IInventoryStoreProxy(FakeInventoryStore inner) : IInvent
     public Task<SupplierDto?> GetSupplierAsync(Guid id, CancellationToken ct) => inner.GetSupplierAsync(id, ct);
     public Task<SupplierWriteResult> CreateSupplierAsync(SupplierData d, DateTimeOffset n, CancellationToken ct) => inner.CreateSupplierAsync(d, n, ct);
     public Task<SupplierWriteResult> UpdateSupplierAsync(Guid id, SupplierData d, DateTimeOffset n, CancellationToken ct) => inner.UpdateSupplierAsync(id, d, n, ct);
-    public Task<IReadOnlyList<StockRaw>> ListStockAsync(Guid l, DateOnly t, int d, CancellationToken ct) => inner.ListStockAsync(l, t, d, ct);
-    public Task<IReadOnlyList<SummaryRaw>> ListSummaryAsync(IReadOnlyCollection<Guid> l, CancellationToken ct) => inner.ListSummaryAsync(l, ct);
+    public Task<IReadOnlyList<StockRaw>> ListStockAsync(StockFilter f, string[]? a, int t, CancellationToken ct) => inner.ListStockAsync(f, a, t, ct);
+    public Task<IReadOnlyList<SummaryRaw>> ListSummaryAsync(SummaryFilter f, string[]? a, int t, CancellationToken ct) => inner.ListSummaryAsync(f, a, t, ct);
     public Task<IReadOnlyList<BatchDto>> ListBatchesAsync(BatchFilter f, string[]? a, int t, CancellationToken ct) => inner.ListBatchesAsync(f, a, t, ct);
     public Task<IReadOnlyDictionary<Guid, BatchRef>> GetBatchRefsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct) => inner.GetBatchRefsAsync(ids, ct);
     public Task<IReadOnlyList<MovementDto>> ListMovementsAsync(MovementFilter f, string[]? a, int t, CancellationToken ct) => inner.ListMovementsAsync(f, a, t, ct);
