@@ -37,7 +37,11 @@ async function identity(email: string): Promise<string> {
   const { rows } = await admin.query("INSERT INTO identities (email, password_hash, state) VALUES ($1, 'h', 'active') RETURNING id", [email]);
   return rows[0].id;
 }
-const issue = (email: string) => admin.query("SELECT auth_password_reset_issue($1, $2, now() + interval '30 minutes')", [email, key]);
+// The row is due at DB now() (microseconds) while the worker passes JS time (milliseconds): a fast poll can land before it. Back-date it so the test is deterministic.
+const issue = async (email: string) => {
+  await admin.query("SELECT auth_password_reset_issue($1, $2, now() + interval '30 minutes')", [email, key]);
+  await admin.query("UPDATE auth_password_resets SET next_attempt_at = now() - interval '5 seconds' WHERE identity_id = (SELECT id FROM identities WHERE email = $1) AND delivery_status = 'pending'", [email]);
+};
 const ctx = (mailer: MockPasswordMailer) => ({ store: new PgPasswordResetStore(worker), mailer, publicAppUrl: "https://app.example.test", logger, attempts: new Map<string, number>() });
 
 describe("password reset delivery (real DB)", () => {
