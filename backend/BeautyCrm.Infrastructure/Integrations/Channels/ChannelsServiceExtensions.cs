@@ -63,6 +63,14 @@ public static class ChannelsServiceExtensions
         services.TryAddSingleton(sp => InboxOptions.Read(sp.GetRequiredService<IConfiguration>()));
         services.TryAddSingleton<InboxThrottle>();
         services.TryAddScoped<InboxService>();
+        // Склад, етап 2b (ADR-025 §12, §32.24): прив'язка Telegram власника, guard вхідних (працює незалежно від прапора).
+        services.TryAddSingleton(sp => StaffTelegramOptions.Read(sp.GetRequiredService<IConfiguration>(), sp.GetService<Microsoft.Extensions.Hosting.IHostEnvironment>()));
+        services.AddHostedService<StaffTelegramStartupGuard>();
+        services.TryAddSingleton<StaffTelegramLimits>();
+        services.TryAddSingleton<IStaffTelegramTransport, AdapterStaffTelegramTransport>();
+        services.TryAddScoped<StaffChatCodec>();
+        services.TryAddScoped<StaffTelegramLinkService>();
+        services.TryAddScoped<IStaffChatGate, StaffChatGate>();
         return services;
     }
 }

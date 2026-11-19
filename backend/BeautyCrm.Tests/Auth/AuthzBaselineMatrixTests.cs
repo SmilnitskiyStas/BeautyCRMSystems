@@ -236,6 +236,10 @@ public sealed class AuthzBaselineMatrixTests(AuthApiFixture fx) : IClassFixture<
         Open("GET", "api/beauty/inventory/alerts/unread-count", "200"),
         Open("POST", "api/beauty/inventory/alerts/{id:guid}/read", "404"),
         Open("POST", "api/beauty/inventory/alerts/read-all", "200"),
+        // ---- склад, етап 2b (TASK-890, §32.24.8): прив'язка Telegram власника - лише owner (фільтр до прив'язки тіла); прапор у тестовому хості вимкнено
+        new("GET", "api/beauty/inventory/telegram/link", "200", RoleDeny, RoleDeny),
+        new("POST", "api/beauty/inventory/telegram/link", "403:telegram_alerts_disabled", RoleDeny, RoleDeny),
+        new("DELETE", "api/beauty/inventory/telegram/link", "204", RoleDeny, RoleDeny),
 
         // ---- спеціалісти (читання - всі, зміни - Management)
         Open("GET", "api/beauty/specialists", "200"),
