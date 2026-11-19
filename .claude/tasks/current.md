@@ -148,7 +148,7 @@
 | TASK-892 | qa-engineer | review | QA складу 2a: таблиця відповідності §32.15–§32.22, наскрізні сценарії, ручний чекліст | .claude/logs/tasks/TASK-892.md |
 | TASK-893 | security-reviewer | review | Рев'ю безпеки складу 2a: RLS/IDOR норм і алертів, append-only, GRANT воркера, ПД у алертах, транзакція завершення візиту | .claude/logs/tasks/TASK-893.md |
 | TASK-894 | documentation-writer | review | Документація складу 2a: ADR-025 §10.5, контракт §32.18 (v0.36.1) + §32.26, database.md, runbook §2c, known-issues KI-015…018 | .claude/logs/tasks/TASK-894.md |
-| TASK-895 | database-engineer | blocked (889 + G1) | Склад 2b: міграція — beauty_staff_telegram_links, _link_events (append-only), beauty_staff_notifications, _notification_alerts; RLS FORCE, CHECK/UNIQUE, GRANT воркера | .claude/logs/tasks/TASK-895.md |
+| TASK-895 | database-engineer | review | Склад 2b: міграція — beauty_staff_telegram_links, _link_events (append-only), beauty_staff_notifications, _notification_alerts; RLS FORCE, CHECK/UNIQUE, GRANT воркера | .claude/logs/tasks/TASK-895.md |
 | TASK-896 | backend-developer | blocked (895) | Склад 2b: воркер pollInventoryTelegram (відбір, тихі години, дайджест, sendTelegramText, 403/429, прибирання), env, тексти | .claude/logs/tasks/TASK-896.md |
 | TASK-897 | qa-engineer | blocked (890, 891, 896) | QA складу 2b: відповідність §32.24, наскрізний сценарій у dev-боті, ручний чекліст | .claude/logs/tasks/TASK-897.md |
 | TASK-898 | security-reviewer | blocked (897) | Рев'ю безпеки 2b: токен/replay/brute-force, guard fail-closed, RLS/GRANT, шифрування chat_id, логи, тексти без ПД | .claude/logs/tasks/TASK-898.md |

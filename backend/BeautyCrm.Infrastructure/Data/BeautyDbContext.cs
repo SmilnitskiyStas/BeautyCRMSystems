@@ -83,6 +83,11 @@ public class BeautyDbContext : DbContext
     public DbSet<ServiceMaterialSet> ServiceMaterialSets => Set<ServiceMaterialSet>();
     public DbSet<ServiceMaterial> ServiceMaterials => Set<ServiceMaterial>();
     public DbSet<StaffAlert> StaffAlerts => Set<StaffAlert>();
+    // Склад, етап 2b (TASK-895, §32.24.2): Telegram-сповіщення власнику
+    public DbSet<StaffTelegramLink> StaffTelegramLinks => Set<StaffTelegramLink>();
+    public DbSet<StaffTelegramLinkEvent> StaffTelegramLinkEvents => Set<StaffTelegramLinkEvent>();
+    public DbSet<StaffNotification> StaffNotifications => Set<StaffNotification>();
+    public DbSet<StaffNotificationAlert> StaffNotificationAlerts => Set<StaffNotificationAlert>();
 
     // auth (TASK-684)
     public DbSet<Tenant> Tenants => Set<Tenant>();
@@ -629,6 +634,7 @@ public class BeautyDbContext : DbContext
         ConfigureServiceCosts(mb);
         ConfigureMarketing(mb);
         ConfigureInventory(mb);
+        ConfigureStaffTelegram(mb);
         ConfigureAuth(mb);
         ConfigurePlatform(mb);
     }
@@ -993,6 +999,121 @@ public class BeautyDbContext : DbContext
             b.HasIndex(x => new { x.TenantId, x.OperationId }).HasFilter("operation_id IS NOT NULL");
             b.HasIndex(x => new { x.TenantId, x.ProductId });
             b.HasIndex(x => new { x.TenantId, x.ReadByUserId }).HasFilter("read_by_user_id IS NOT NULL");
+        });
+    }
+
+    // ---------- Склад, етап 2b: Telegram-сповіщення власнику (TASK-895, ADR-025 §12, §32.24.2; RLS/тригери в міграції beauty_inventory_stage2b) ----------
+
+    private static void ConfigureStaffTelegram(ModelBuilder mb)
+    {
+        const string OpenStates = "status IN ('issued', 'claimed', 'active')";
+        const string RevokeReasons = "'user_unlink', 'bot_stop', 'declined', 'replaced', 'expired', 'bot_blocked', 'chat_not_found', " +
+                                     "'user_deactivated', 'role_changed', 'tenant_inactive'";
+        const string RejectReasons = "'expired', 'used', 'channel_mismatch', 'chat_conflict', 'user_inactive', 'disabled'";
+
+        mb.Entity<StaffTelegramLink>(b =>
+        {
+            Base(b, "beauty_staff_telegram_links", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_staff_telegram_links_status", "status IN ('issued', 'claimed', 'active', 'revoked')");
+                // форма кожного стану (§32.24.2): у revoked дані чату й токен стерто; у issued/claimed ще немає підтвердження й доставок
+                t.HasCheckConstraint("ck_beauty_staff_telegram_links_shape",
+                    "(status = 'issued' AND token_hash IS NOT NULL AND token_expires_at IS NOT NULL AND chat_id_encrypted IS NULL AND chat_id_hash IS NULL " +
+                    "AND claimed_at IS NULL AND bot_confirmed_at IS NULL AND activated_at IS NULL AND revoked_at IS NULL AND last_delivery_at IS NULL) " +
+                    "OR (status = 'claimed' AND token_hash IS NOT NULL AND token_expires_at IS NOT NULL AND chat_id_encrypted IS NOT NULL AND chat_id_hash IS NOT NULL " +
+                    "AND claimed_at IS NOT NULL AND bot_confirmed_at IS NULL AND activated_at IS NULL AND revoked_at IS NULL AND last_delivery_at IS NULL) " +
+                    "OR (status = 'active' AND token_hash IS NULL AND chat_id_encrypted IS NOT NULL AND chat_id_hash IS NOT NULL " +
+                    "AND bot_confirmed_at IS NOT NULL AND activated_at IS NOT NULL AND revoked_at IS NULL) " +
+                    "OR (status = 'revoked' AND token_hash IS NULL AND chat_id_encrypted IS NULL AND chat_id_hash IS NULL AND revoked_at IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_staff_telegram_links_revoke_reason",
+                    $"(revoke_reason IS NULL) = (status <> 'revoked') AND (revoke_reason IS NULL OR revoke_reason IN ({RevokeReasons}))");
+                t.HasCheckConstraint("ck_beauty_staff_telegram_links_chat", "(chat_id_encrypted IS NULL) = (chat_id_hash IS NULL)");
+                t.HasCheckConstraint("ck_beauty_staff_telegram_links_token_hash", "token_hash IS NULL OR octet_length(token_hash) = 32");
+                t.HasCheckConstraint("ck_beauty_staff_telegram_links_chat_hash", "chat_id_hash IS NULL OR octet_length(chat_id_hash) = 32");
+                t.HasCheckConstraint("ck_beauty_staff_telegram_links_consent", "consent_version ~ '^inv-tg-v[0-9]+$'");
+            });
+            b.Property(x => x.Status).HasMaxLength(16).HasDefaultValue("issued");
+            b.Property(x => x.TokenHash).HasColumnType("bytea");
+            b.Property(x => x.ChatIdEncrypted).HasColumnType("text");
+            b.Property(x => x.ChatIdHash).HasColumnType("bytea");
+            b.Property(x => x.ConsentVersion).HasMaxLength(32);
+            b.Property(x => x.RevokeReason).HasMaxLength(24);
+            FkTo<StaffTelegramLink, User>(b, "UserId", DeleteBehavior.Restrict);
+            FkTo<StaffTelegramLink, Channel>(b, "ChannelId", DeleteBehavior.Restrict);
+            // один незакритий рядок (отже один активний чат) на користувача
+            b.HasIndex(x => new { x.TenantId, x.UserId }).IsUnique().HasFilter(OpenStates)
+                .HasDatabaseName("ux_beauty_staff_telegram_links_user_open");
+            // один користувач на чат у боті tenant (хеш чату тримають лише claimed|active)
+            b.HasIndex(x => new { x.TenantId, x.ChannelId, x.ChatIdHash }).IsUnique().HasFilter("status IN ('claimed', 'active')")
+                .HasDatabaseName("ux_beauty_staff_telegram_links_chat_open");
+            b.HasIndex(x => new { x.TenantId, x.TokenHash }).IsUnique().HasFilter("token_hash IS NOT NULL")
+                .HasDatabaseName("ux_beauty_staff_telegram_links_token");
+            // прибирання прострочених
+            b.HasIndex(x => new { x.TenantId, x.Status, x.TokenExpiresAt }).HasFilter("status IN ('issued', 'claimed')")
+                .HasDatabaseName("ix_beauty_staff_telegram_links_expiry");
+            // FK-індекси (часткові ux_ не покривають revoked-рядки; (user, created_at) обслуговує й lastRevoke за 30 днів)
+            b.HasIndex(x => new { x.TenantId, x.UserId, x.CreatedAt }).HasDatabaseName("ix_beauty_staff_telegram_links_user_created");
+            b.HasIndex(x => new { x.TenantId, x.ChannelId }).HasDatabaseName("ix_beauty_staff_telegram_links_channel");
+        });
+
+        mb.Entity<StaffTelegramLinkEvent>(b =>
+        {
+            KeyOnly(b, "beauty_staff_telegram_link_events", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_staff_telegram_link_events_event",
+                    "event IN ('issued', 'claimed', 'activated', 'declined', 'revoked', 'rejected')");
+                t.HasCheckConstraint("ck_beauty_staff_telegram_link_events_actor", "actor IN ('user', 'bot', 'system')");
+                t.HasCheckConstraint("ck_beauty_staff_telegram_link_events_reason",
+                    $"(reason IS NULL OR reason IN ({RevokeReasons}, {RejectReasons})) AND (event NOT IN ('revoked', 'rejected') OR reason IS NOT NULL)");
+            });
+            b.Property(x => x.Event).HasMaxLength(16);
+            b.Property(x => x.Reason).HasMaxLength(24);
+            b.Property(x => x.Actor).HasMaxLength(8);
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            FkTo<StaffTelegramLinkEvent, StaffTelegramLink>(b, "LinkId", DeleteBehavior.Restrict);
+            FkTo<StaffTelegramLinkEvent, User>(b, "UserId", DeleteBehavior.Restrict);
+            FkTo<StaffTelegramLinkEvent, User>(b, "ActorUserId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.LinkId, x.CreatedAt }).HasDatabaseName("ix_beauty_staff_telegram_link_events_link");
+            b.HasIndex(x => new { x.TenantId, x.UserId }).HasDatabaseName("ix_beauty_staff_telegram_link_events_user");
+            b.HasIndex(x => new { x.TenantId, x.ActorUserId }).HasFilter("actor_user_id IS NOT NULL")
+                .HasDatabaseName("ix_beauty_staff_telegram_link_events_actor");
+        });
+
+        mb.Entity<StaffNotification>(b =>
+        {
+            Base(b, "beauty_staff_notifications", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_staff_notifications_kind", "kind IN ('alert', 'digest')");
+                t.HasCheckConstraint("ck_beauty_staff_notifications_body", "char_length(body) BETWEEN 1 AND 4096");
+                t.HasCheckConstraint("ck_beauty_staff_notifications_status", "status IN ('pending', 'sending', 'sent', 'failed', 'cancelled')");
+                t.HasCheckConstraint("ck_beauty_staff_notifications_attempts", "attempts BETWEEN 0 AND 10");
+                t.HasCheckConstraint("ck_beauty_staff_notifications_sent", "(status = 'sent') = (sent_at IS NOT NULL)");
+            });
+            b.Property(x => x.Kind).HasMaxLength(8);
+            b.Property(x => x.Body).HasColumnType("text");
+            b.Property(x => x.Status).HasMaxLength(16).HasDefaultValue("pending");
+            b.Property(x => x.Attempts).HasDefaultValue((short)0);
+            b.Property(x => x.NextAttemptAt).HasDefaultValueSql("now()");
+            b.Property(x => x.LastError).HasMaxLength(32);
+            b.Property(x => x.ExternalMessageId).HasMaxLength(32);
+            b.Property(x => x.DedupeKey).HasMaxLength(200);
+            FkTo<StaffNotification, StaffTelegramLink>(b, "LinkId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.DedupeKey }).IsUnique().HasDatabaseName("ux_beauty_staff_notifications_dedupe");
+            b.HasIndex(x => new { x.TenantId, x.Status, x.NextAttemptAt }).HasFilter("status IN ('pending', 'sending')")
+                .HasDatabaseName("ix_beauty_staff_notifications_due");
+            b.HasIndex(x => new { x.TenantId, x.LinkId }).HasDatabaseName("ix_beauty_staff_notifications_link");
+        });
+
+        mb.Entity<StaffNotificationAlert>(b =>
+        {
+            b.ToTable("beauty_staff_notification_alerts");
+            b.HasKey(x => new { x.TenantId, x.NotificationId, x.AlertId });
+            FkTo<StaffNotificationAlert, StaffNotification>(b, "NotificationId", DeleteBehavior.Cascade);
+            FkTo<StaffNotificationAlert, StaffAlert>(b, "AlertId", DeleteBehavior.Restrict);
+            FkTo<StaffNotificationAlert, StaffTelegramLink>(b, "LinkId", DeleteBehavior.Restrict);
+            // кожен алерт кожному адресату не більше одного разу; також покриває FK link_id
+            b.HasIndex(x => new { x.TenantId, x.LinkId, x.AlertId }).IsUnique().HasDatabaseName("ux_beauty_staff_notification_alerts_link_alert");
+            b.HasIndex(x => new { x.TenantId, x.AlertId }).HasDatabaseName("ix_beauty_staff_notification_alerts_alert");
         });
     }
 

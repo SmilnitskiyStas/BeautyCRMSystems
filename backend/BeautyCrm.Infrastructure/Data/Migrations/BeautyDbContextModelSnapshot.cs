@@ -4974,6 +4974,360 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StaffNotification", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<short>("Attempts")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("smallint")
+                        .HasDefaultValue((short)0)
+                        .HasColumnName("attempts");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("body");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("DedupeKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("dedupe_key");
+
+                    b.Property<string>("ExternalMessageId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("external_message_id");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("last_error");
+
+                    b.Property<Guid>("LinkId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("link_id");
+
+                    b.Property<DateTimeOffset>("NextAttemptAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("next_attempt_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<DateTimeOffset?>("SentAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sent_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("pending")
+                        .HasColumnName("status");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_staff_notifications");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_staff_notifications_tenant_id_id");
+
+                    b.HasIndex("TenantId", "DedupeKey")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_staff_notifications_dedupe");
+
+                    b.HasIndex("TenantId", "LinkId")
+                        .HasDatabaseName("ix_beauty_staff_notifications_link");
+
+                    b.HasIndex("TenantId", "Status", "NextAttemptAt")
+                        .HasDatabaseName("ix_beauty_staff_notifications_due")
+                        .HasFilter("status IN ('pending', 'sending')");
+
+                    b.ToTable("beauty_staff_notifications", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_staff_notifications_attempts", "attempts BETWEEN 0 AND 10");
+
+                            t.HasCheckConstraint("ck_beauty_staff_notifications_body", "char_length(body) BETWEEN 1 AND 4096");
+
+                            t.HasCheckConstraint("ck_beauty_staff_notifications_kind", "kind IN ('alert', 'digest')");
+
+                            t.HasCheckConstraint("ck_beauty_staff_notifications_sent", "(status = 'sent') = (sent_at IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_beauty_staff_notifications_status", "status IN ('pending', 'sending', 'sent', 'failed', 'cancelled')");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StaffNotificationAlert", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("NotificationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("notification_id");
+
+                    b.Property<Guid>("AlertId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("alert_id");
+
+                    b.Property<Guid>("LinkId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("link_id");
+
+                    b.HasKey("TenantId", "NotificationId", "AlertId")
+                        .HasName("pk_beauty_staff_notification_alerts");
+
+                    b.HasIndex("TenantId", "AlertId")
+                        .HasDatabaseName("ix_beauty_staff_notification_alerts_alert");
+
+                    b.HasIndex("TenantId", "LinkId", "AlertId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_staff_notification_alerts_link_alert");
+
+                    b.ToTable("beauty_staff_notification_alerts", (string)null);
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StaffTelegramLink", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateTimeOffset?>("ActivatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("activated_at");
+
+                    b.Property<DateTimeOffset?>("BotConfirmedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("bot_confirmed_at");
+
+                    b.Property<Guid>("ChannelId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("channel_id");
+
+                    b.Property<string>("ChatIdEncrypted")
+                        .HasColumnType("text")
+                        .HasColumnName("chat_id_encrypted");
+
+                    b.Property<byte[]>("ChatIdHash")
+                        .HasColumnType("bytea")
+                        .HasColumnName("chat_id_hash");
+
+                    b.Property<DateTimeOffset?>("ClaimedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("claimed_at");
+
+                    b.Property<DateTimeOffset>("ConsentAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("consent_at");
+
+                    b.Property<string>("ConsentVersion")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("consent_version");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<DateTimeOffset?>("LastDeliveryAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_delivery_at");
+
+                    b.Property<string>("RevokeReason")
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("revoke_reason");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("issued")
+                        .HasColumnName("status");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset?>("TokenExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("token_expires_at");
+
+                    b.Property<byte[]>("TokenHash")
+                        .HasColumnType("bytea")
+                        .HasColumnName("token_hash");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_staff_telegram_links");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_staff_telegram_links_tenant_id_id");
+
+                    b.HasIndex("TenantId", "ChannelId")
+                        .HasDatabaseName("ix_beauty_staff_telegram_links_channel");
+
+                    b.HasIndex("TenantId", "TokenHash")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_staff_telegram_links_token")
+                        .HasFilter("token_hash IS NOT NULL");
+
+                    b.HasIndex("TenantId", "UserId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_staff_telegram_links_user_open")
+                        .HasFilter("status IN ('issued', 'claimed', 'active')");
+
+                    b.HasIndex("TenantId", "ChannelId", "ChatIdHash")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_staff_telegram_links_chat_open")
+                        .HasFilter("status IN ('claimed', 'active')");
+
+                    b.HasIndex("TenantId", "Status", "TokenExpiresAt")
+                        .HasDatabaseName("ix_beauty_staff_telegram_links_expiry")
+                        .HasFilter("status IN ('issued', 'claimed')");
+
+                    b.HasIndex("TenantId", "UserId", "CreatedAt")
+                        .HasDatabaseName("ix_beauty_staff_telegram_links_user_created");
+
+                    b.ToTable("beauty_staff_telegram_links", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_staff_telegram_links_chat", "(chat_id_encrypted IS NULL) = (chat_id_hash IS NULL)");
+
+                            t.HasCheckConstraint("ck_beauty_staff_telegram_links_chat_hash", "chat_id_hash IS NULL OR octet_length(chat_id_hash) = 32");
+
+                            t.HasCheckConstraint("ck_beauty_staff_telegram_links_consent", "consent_version ~ '^inv-tg-v[0-9]+$'");
+
+                            t.HasCheckConstraint("ck_beauty_staff_telegram_links_revoke_reason", "(revoke_reason IS NULL) = (status <> 'revoked') AND (revoke_reason IS NULL OR revoke_reason IN ('user_unlink', 'bot_stop', 'declined', 'replaced', 'expired', 'bot_blocked', 'chat_not_found', 'user_deactivated', 'role_changed', 'tenant_inactive'))");
+
+                            t.HasCheckConstraint("ck_beauty_staff_telegram_links_shape", "(status = 'issued' AND token_hash IS NOT NULL AND token_expires_at IS NOT NULL AND chat_id_encrypted IS NULL AND chat_id_hash IS NULL AND claimed_at IS NULL AND bot_confirmed_at IS NULL AND activated_at IS NULL AND revoked_at IS NULL AND last_delivery_at IS NULL) OR (status = 'claimed' AND token_hash IS NOT NULL AND token_expires_at IS NOT NULL AND chat_id_encrypted IS NOT NULL AND chat_id_hash IS NOT NULL AND claimed_at IS NOT NULL AND bot_confirmed_at IS NULL AND activated_at IS NULL AND revoked_at IS NULL AND last_delivery_at IS NULL) OR (status = 'active' AND token_hash IS NULL AND chat_id_encrypted IS NOT NULL AND chat_id_hash IS NOT NULL AND bot_confirmed_at IS NOT NULL AND activated_at IS NOT NULL AND revoked_at IS NULL) OR (status = 'revoked' AND token_hash IS NULL AND chat_id_encrypted IS NULL AND chat_id_hash IS NULL AND revoked_at IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_beauty_staff_telegram_links_status", "status IN ('issued', 'claimed', 'active', 'revoked')");
+
+                            t.HasCheckConstraint("ck_beauty_staff_telegram_links_token_hash", "token_hash IS NULL OR octet_length(token_hash) = 32");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StaffTelegramLinkEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)")
+                        .HasColumnName("actor");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("Event")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("event");
+
+                    b.Property<Guid>("LinkId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("link_id");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("reason");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_staff_telegram_link_events");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_staff_telegram_link_events_tenant_id_id");
+
+                    b.HasIndex("TenantId", "ActorUserId")
+                        .HasDatabaseName("ix_beauty_staff_telegram_link_events_actor")
+                        .HasFilter("actor_user_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "UserId")
+                        .HasDatabaseName("ix_beauty_staff_telegram_link_events_user");
+
+                    b.HasIndex("TenantId", "LinkId", "CreatedAt")
+                        .HasDatabaseName("ix_beauty_staff_telegram_link_events_link");
+
+                    b.ToTable("beauty_staff_telegram_link_events", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_staff_telegram_link_events_actor", "actor IN ('user', 'bot', 'system')");
+
+                            t.HasCheckConstraint("ck_beauty_staff_telegram_link_events_event", "event IN ('issued', 'claimed', 'activated', 'declined', 'revoked', 'rejected')");
+
+                            t.HasCheckConstraint("ck_beauty_staff_telegram_link_events_reason", "(reason IS NULL OR reason IN ('user_unlink', 'bot_stop', 'declined', 'replaced', 'expired', 'bot_blocked', 'chat_not_found', 'user_deactivated', 'role_changed', 'tenant_inactive', 'expired', 'used', 'channel_mismatch', 'chat_conflict', 'user_inactive', 'disabled')) AND (event NOT IN ('revoked', 'rejected') OR reason IS NOT NULL)");
+                        });
+                });
+
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StockBatch", b =>
                 {
                     b.Property<Guid>("Id")
@@ -7275,6 +7629,89 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasPrincipalKey("TenantId", "Id")
                         .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_beauty_staff_alerts_users_tenant_id_read_by_user_id");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StaffNotification", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.StaffTelegramLink", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LinkId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_staff_notifications_beauty_staff_telegram_links_tena");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StaffNotificationAlert", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.StaffAlert", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "AlertId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_staff_notification_alerts_beauty_staff_alerts_tenant");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.StaffTelegramLink", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LinkId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_staff_notification_alerts_beauty_staff_telegram_link");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.StaffNotification", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "NotificationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_staff_notification_alerts_beauty_staff_notifications");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StaffTelegramLink", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Channel", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ChannelId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_staff_telegram_links_beauty_channels_tenant_id_chann");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "UserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_staff_telegram_links_users_tenant_id_user_id");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StaffTelegramLinkEvent", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ActorUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_staff_telegram_link_events_users_tenant_id_actor_use");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.StaffTelegramLink", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LinkId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_staff_telegram_link_events_beauty_staff_telegram_lin");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "UserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_staff_telegram_link_events_users_tenant_id_user_id");
                 });
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.StockBatch", b =>

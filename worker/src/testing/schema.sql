@@ -7373,3 +7373,356 @@ BEGIN
 END $EF$;
 COMMIT;
 
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE TABLE beauty_staff_telegram_links (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        user_id uuid NOT NULL,
+        channel_id uuid NOT NULL,
+        status character varying(16) NOT NULL DEFAULT 'issued',
+        token_hash bytea,
+        token_expires_at timestamp with time zone,
+        chat_id_encrypted text,
+        chat_id_hash bytea,
+        consent_version character varying(32) NOT NULL,
+        consent_at timestamp with time zone NOT NULL,
+        claimed_at timestamp with time zone,
+        bot_confirmed_at timestamp with time zone,
+        activated_at timestamp with time zone,
+        revoked_at timestamp with time zone,
+        revoke_reason character varying(24),
+        last_delivery_at timestamp with time zone,
+        tenant_id uuid NOT NULL,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        updated_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_staff_telegram_links PRIMARY KEY (id),
+        CONSTRAINT ak_beauty_staff_telegram_links_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT ck_beauty_staff_telegram_links_chat CHECK ((chat_id_encrypted IS NULL) = (chat_id_hash IS NULL)),
+        CONSTRAINT ck_beauty_staff_telegram_links_chat_hash CHECK (chat_id_hash IS NULL OR octet_length(chat_id_hash) = 32),
+        CONSTRAINT ck_beauty_staff_telegram_links_consent CHECK (consent_version ~ '^inv-tg-v[0-9]+$'),
+        CONSTRAINT ck_beauty_staff_telegram_links_revoke_reason CHECK ((revoke_reason IS NULL) = (status <> 'revoked') AND (revoke_reason IS NULL OR revoke_reason IN ('user_unlink', 'bot_stop', 'declined', 'replaced', 'expired', 'bot_blocked', 'chat_not_found', 'user_deactivated', 'role_changed', 'tenant_inactive'))),
+        CONSTRAINT ck_beauty_staff_telegram_links_shape CHECK ((status = 'issued' AND token_hash IS NOT NULL AND token_expires_at IS NOT NULL AND chat_id_encrypted IS NULL AND chat_id_hash IS NULL AND claimed_at IS NULL AND bot_confirmed_at IS NULL AND activated_at IS NULL AND revoked_at IS NULL AND last_delivery_at IS NULL) OR (status = 'claimed' AND token_hash IS NOT NULL AND token_expires_at IS NOT NULL AND chat_id_encrypted IS NOT NULL AND chat_id_hash IS NOT NULL AND claimed_at IS NOT NULL AND bot_confirmed_at IS NULL AND activated_at IS NULL AND revoked_at IS NULL AND last_delivery_at IS NULL) OR (status = 'active' AND token_hash IS NULL AND chat_id_encrypted IS NOT NULL AND chat_id_hash IS NOT NULL AND bot_confirmed_at IS NOT NULL AND activated_at IS NOT NULL AND revoked_at IS NULL) OR (status = 'revoked' AND token_hash IS NULL AND chat_id_encrypted IS NULL AND chat_id_hash IS NULL AND revoked_at IS NOT NULL)),
+        CONSTRAINT ck_beauty_staff_telegram_links_status CHECK (status IN ('issued', 'claimed', 'active', 'revoked')),
+        CONSTRAINT ck_beauty_staff_telegram_links_token_hash CHECK (token_hash IS NULL OR octet_length(token_hash) = 32),
+        CONSTRAINT fk_beauty_staff_telegram_links_beauty_channels_tenant_id_chann FOREIGN KEY (tenant_id, channel_id) REFERENCES beauty_channels (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_staff_telegram_links_users_tenant_id_user_id FOREIGN KEY (tenant_id, user_id) REFERENCES users (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE TABLE beauty_staff_notifications (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        link_id uuid NOT NULL,
+        kind character varying(8) NOT NULL,
+        body text NOT NULL,
+        status character varying(16) NOT NULL DEFAULT 'pending',
+        attempts smallint NOT NULL DEFAULT 0,
+        next_attempt_at timestamp with time zone NOT NULL DEFAULT (now()),
+        last_error character varying(32),
+        external_message_id character varying(32),
+        dedupe_key character varying(200) NOT NULL,
+        sent_at timestamp with time zone,
+        tenant_id uuid NOT NULL,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        updated_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_staff_notifications PRIMARY KEY (id),
+        CONSTRAINT ak_beauty_staff_notifications_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT ck_beauty_staff_notifications_attempts CHECK (attempts BETWEEN 0 AND 10),
+        CONSTRAINT ck_beauty_staff_notifications_body CHECK (char_length(body) BETWEEN 1 AND 4096),
+        CONSTRAINT ck_beauty_staff_notifications_kind CHECK (kind IN ('alert', 'digest')),
+        CONSTRAINT ck_beauty_staff_notifications_sent CHECK ((status = 'sent') = (sent_at IS NOT NULL)),
+        CONSTRAINT ck_beauty_staff_notifications_status CHECK (status IN ('pending', 'sending', 'sent', 'failed', 'cancelled')),
+        CONSTRAINT fk_beauty_staff_notifications_beauty_staff_telegram_links_tena FOREIGN KEY (tenant_id, link_id) REFERENCES beauty_staff_telegram_links (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE TABLE beauty_staff_telegram_link_events (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        tenant_id uuid NOT NULL,
+        link_id uuid NOT NULL,
+        user_id uuid NOT NULL,
+        event character varying(16) NOT NULL,
+        reason character varying(24),
+        actor character varying(8) NOT NULL,
+        actor_user_id uuid,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_staff_telegram_link_events PRIMARY KEY (id),
+        CONSTRAINT ak_beauty_staff_telegram_link_events_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT ck_beauty_staff_telegram_link_events_actor CHECK (actor IN ('user', 'bot', 'system')),
+        CONSTRAINT ck_beauty_staff_telegram_link_events_event CHECK (event IN ('issued', 'claimed', 'activated', 'declined', 'revoked', 'rejected')),
+        CONSTRAINT ck_beauty_staff_telegram_link_events_reason CHECK ((reason IS NULL OR reason IN ('user_unlink', 'bot_stop', 'declined', 'replaced', 'expired', 'bot_blocked', 'chat_not_found', 'user_deactivated', 'role_changed', 'tenant_inactive', 'expired', 'used', 'channel_mismatch', 'chat_conflict', 'user_inactive', 'disabled')) AND (event NOT IN ('revoked', 'rejected') OR reason IS NOT NULL)),
+        CONSTRAINT fk_beauty_staff_telegram_link_events_beauty_staff_telegram_lin FOREIGN KEY (tenant_id, link_id) REFERENCES beauty_staff_telegram_links (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_staff_telegram_link_events_users_tenant_id_actor_use FOREIGN KEY (tenant_id, actor_user_id) REFERENCES users (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_staff_telegram_link_events_users_tenant_id_user_id FOREIGN KEY (tenant_id, user_id) REFERENCES users (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE TABLE beauty_staff_notification_alerts (
+        tenant_id uuid NOT NULL,
+        notification_id uuid NOT NULL,
+        alert_id uuid NOT NULL,
+        link_id uuid NOT NULL,
+        CONSTRAINT pk_beauty_staff_notification_alerts PRIMARY KEY (tenant_id, notification_id, alert_id),
+        CONSTRAINT fk_beauty_staff_notification_alerts_beauty_staff_alerts_tenant FOREIGN KEY (tenant_id, alert_id) REFERENCES beauty_staff_alerts (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_staff_notification_alerts_beauty_staff_notifications FOREIGN KEY (tenant_id, notification_id) REFERENCES beauty_staff_notifications (tenant_id, id) ON DELETE CASCADE,
+        CONSTRAINT fk_beauty_staff_notification_alerts_beauty_staff_telegram_link FOREIGN KEY (tenant_id, link_id) REFERENCES beauty_staff_telegram_links (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE INDEX ix_beauty_staff_notification_alerts_alert ON beauty_staff_notification_alerts (tenant_id, alert_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE UNIQUE INDEX ux_beauty_staff_notification_alerts_link_alert ON beauty_staff_notification_alerts (tenant_id, link_id, alert_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE INDEX ix_beauty_staff_notifications_due ON beauty_staff_notifications (tenant_id, status, next_attempt_at) WHERE status IN ('pending', 'sending');
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE INDEX ix_beauty_staff_notifications_link ON beauty_staff_notifications (tenant_id, link_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE UNIQUE INDEX ux_beauty_staff_notifications_dedupe ON beauty_staff_notifications (tenant_id, dedupe_key);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE INDEX ix_beauty_staff_telegram_link_events_actor ON beauty_staff_telegram_link_events (tenant_id, actor_user_id) WHERE actor_user_id IS NOT NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE INDEX ix_beauty_staff_telegram_link_events_link ON beauty_staff_telegram_link_events (tenant_id, link_id, created_at);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE INDEX ix_beauty_staff_telegram_link_events_user ON beauty_staff_telegram_link_events (tenant_id, user_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE INDEX ix_beauty_staff_telegram_links_channel ON beauty_staff_telegram_links (tenant_id, channel_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE INDEX ix_beauty_staff_telegram_links_expiry ON beauty_staff_telegram_links (tenant_id, status, token_expires_at) WHERE status IN ('issued', 'claimed');
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE INDEX ix_beauty_staff_telegram_links_user_created ON beauty_staff_telegram_links (tenant_id, user_id, created_at);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE UNIQUE INDEX ux_beauty_staff_telegram_links_chat_open ON beauty_staff_telegram_links (tenant_id, channel_id, chat_id_hash) WHERE status IN ('claimed', 'active');
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE UNIQUE INDEX ux_beauty_staff_telegram_links_token ON beauty_staff_telegram_links (tenant_id, token_hash) WHERE token_hash IS NOT NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    CREATE UNIQUE INDEX ux_beauty_staff_telegram_links_user_open ON beauty_staff_telegram_links (tenant_id, user_id) WHERE status IN ('issued', 'claimed', 'active');
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    ALTER TABLE beauty_staff_telegram_links ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    ALTER TABLE beauty_staff_telegram_links FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_staff_telegram_links
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    ALTER TABLE beauty_staff_telegram_link_events ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    ALTER TABLE beauty_staff_telegram_link_events FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_staff_telegram_link_events
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    ALTER TABLE beauty_staff_notifications ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    ALTER TABLE beauty_staff_notifications FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_staff_notifications
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    ALTER TABLE beauty_staff_notification_alerts ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    ALTER TABLE beauty_staff_notification_alerts FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_staff_notification_alerts
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+
+    DO $$
+    DECLARE
+        t text;
+    BEGIN
+        FOREACH t IN ARRAY ARRAY['beauty_staff_telegram_links', 'beauty_staff_telegram_link_events', 'beauty_staff_notifications', 'beauty_staff_notification_alerts']
+        LOOP
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_class WHERE oid = to_regclass('public.' || t) AND relrowsecurity AND relforcerowsecurity
+            ) THEN
+                RAISE EXCEPTION 'FORCE ROW LEVEL SECURITY is not enabled on %', t;
+            END IF;
+        END LOOP;
+    END
+    $$;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+
+    CREATE FUNCTION beauty_staff_telegram_events_block_mutation() RETURNS trigger
+    LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$
+    BEGIN
+        RAISE EXCEPTION '% is append-only', TG_TABLE_NAME USING ERRCODE = '42501';
+    END
+    $fn$;
+    CREATE TRIGGER beauty_staff_telegram_link_events_append_only BEFORE UPDATE OR DELETE ON beauty_staff_telegram_link_events
+        FOR EACH ROW EXECUTE FUNCTION beauty_staff_telegram_events_block_mutation();
+    CREATE TRIGGER beauty_staff_telegram_link_events_no_truncate BEFORE TRUNCATE ON beauty_staff_telegram_link_events
+        FOR EACH STATEMENT EXECUTE FUNCTION beauty_staff_telegram_events_block_mutation();
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119142456_beauty_inventory_stage2b') THEN
+    INSERT INTO "__EFMigrationsHistory" (migration_id, product_version)
+    VALUES ('20261119142456_beauty_inventory_stage2b', '8.0.11');
+    END IF;
+END $EF$;
+COMMIT;
+
