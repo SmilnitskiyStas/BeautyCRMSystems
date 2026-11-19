@@ -34,6 +34,7 @@ export function createMockInventoryV3(deps: TelegramMockDeps) {
   let channel: TelegramChannelRef | null = null;
   let expiresAt: number | null = null;
   let activatedAt: number | null = null;
+  let claimedAt: number | null = null;
   let lastDeliveryAt: number | null = null;
   let lastRevoke: { reason: RevokeReason; at: number } | null = null;
   let seq = 0;
@@ -58,6 +59,7 @@ export function createMockInventoryV3(deps: TelegramMockDeps) {
     channel = null;
     expiresAt = null;
     activatedAt = null;
+    claimedAt = null;
     lastRevoke = { reason, at: now() };
   }
   const advance = () => {
@@ -72,7 +74,10 @@ export function createMockInventoryV3(deps: TelegramMockDeps) {
   };
 
   function simulateClaim() {
-    if (state === "pending") state = "awaitingConfirmation";
+    if (state === "pending") {
+      state = "awaitingConfirmation";
+      claimedAt = now();
+    }
   }
   function simulateConfirm() {
     if (state === "awaitingConfirmation") {
@@ -92,6 +97,7 @@ export function createMockInventoryV3(deps: TelegramMockDeps) {
       channel,
       expiresAt: expiresAt !== null ? iso(expiresAt) : null,
       activatedAt: activatedAt !== null ? iso(activatedAt) : null,
+      claimedAt: claimedAt !== null ? iso(claimedAt) : null,
       lastDeliveryAt: lastDeliveryAt !== null ? iso(lastDeliveryAt) : null,
       lastRevoke: state === "none" && recent ? { reason: recent.reason, at: iso(recent.at) } : null,
       consentVersion: CONSENT_VERSION,

@@ -52,6 +52,16 @@ function Countdown({ expiresAt, onExpire }: { expiresAt: string; onExpire: () =>
   );
 }
 
+/** L1: коли підтверджено в боті + нагадування про відключення (посилання могли використати не ви). */
+function ClaimNote({ claimedAt }: { claimedAt?: string | null }) {
+  return (
+    <>
+      {claimedAt ? <p className="m-0 text-sm">Підтверджено в боті: {dateTimeText(claimedAt)}</p> : null}
+      <p className="m-0 text-[13px] text-(--muted)">Якщо це були не ви — натисніть «Відключити»</p>
+    </>
+  );
+}
+
 function Body({ status, refetch }: { status: TelegramLinkStatus; refetch: () => void }) {
   const create = useCreateTelegramLink();
   const remove = useDeleteTelegramLink();
@@ -72,6 +82,8 @@ function Body({ status, refetch }: { status: TelegramLinkStatus; refetch: () => 
   const [copied, setCopied] = useState("");
   const [confirming, setConfirming] = useState(false);
 
+  // I4: у href лише справжній https://t.me/ (інакше посилання не показуємо).
+  const safeLink = deepLink && /^https:\/\/t\.me\//.test(deepLink) ? deepLink : null;
   const view = cardView(status);
   const banner = revokeBanner(status);
   const busy = create.isPending || remove.isPending;
@@ -139,9 +151,9 @@ function Body({ status, refetch }: { status: TelegramLinkStatus; refetch: () => 
   }
 
   async function copy() {
-    if (!deepLink) return;
+    if (!safeLink) return;
     try {
-      await navigator.clipboard.writeText(deepLink);
+      await navigator.clipboard.writeText(safeLink);
       setCopied("Посилання скопійовано.");
     } catch {
       setCopied("Не вдалося скопіювати. Скористайтеся кнопкою «Відкрити Telegram».");
@@ -203,14 +215,14 @@ function Body({ status, refetch }: { status: TelegramLinkStatus; refetch: () => 
 
       {status.state === "pending" ? (
         <div className="flex flex-col gap-3">
-          {deepLink ? (
+          {safeLink ? (
             <>
               <p className="m-0 text-sm">
                 Відкрийте Telegram за посиланням і натисніть «Старт» у боті{status.channel ? ` «${status.channel.name}»` : ""}. Потім підтвердьте підключення в боті.
               </p>
               <div className="flex flex-wrap items-center gap-3">
                 <a
-                  href={deepLink}
+                  href={safeLink}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex min-h-11 items-center rounded-[22px] bg-(--accent) px-5 text-sm font-semibold text-white no-underline"
@@ -233,6 +245,7 @@ function Body({ status, refetch }: { status: TelegramLinkStatus; refetch: () => 
       {status.state === "awaitingConfirmation" ? (
         <div className="flex flex-col gap-3">
           <p className="m-0 text-sm">Чат отримано. Відкрийте Telegram і натисніть «Підтверджую» у відповідному повідомленні бота.</p>
+          <ClaimNote claimedAt={status.claimedAt} />
           {status.expiresAt ? <Countdown expiresAt={status.expiresAt} onExpire={refetch} /> : null}
         </div>
       ) : null}
@@ -243,6 +256,7 @@ function Body({ status, refetch }: { status: TelegramLinkStatus; refetch: () => 
             Підключено{status.activatedAt ? ` ${dateLabel(status.activatedAt)}` : ""}
             {status.channel ? `, бот «${status.channel.name}»` : ""}.
           </p>
+          <ClaimNote claimedAt={status.claimedAt} />
           <p className="m-0 text-(--muted)">{status.lastDeliveryAt ? `Остання доставка: ${dateTimeText(status.lastDeliveryAt)}.` : "Сповіщень ще не надсилали."}</p>
         </div>
       ) : null}

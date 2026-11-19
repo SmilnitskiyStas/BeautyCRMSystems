@@ -404,6 +404,7 @@ export function toTelegramLinkStatus(v: unknown): TelegramLinkStatus {
     channel: ref(o.channel),
     expiresAt: str(o.expiresAt),
     activatedAt: str(o.activatedAt),
+    claimedAt: str(o.claimedAt),
     lastDeliveryAt: str(o.lastDeliveryAt),
     lastRevoke: reason && at && (TG_REVOKES as readonly string[]).includes(reason) ? { reason: reason as RevokeReason, at } : null,
     consentVersion: str(o.consentVersion) ?? "inv-tg-v1",

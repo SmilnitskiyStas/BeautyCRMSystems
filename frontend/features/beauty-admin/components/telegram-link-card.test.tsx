@@ -215,6 +215,32 @@ describe("TelegramLinkCard", () => {
     expect(screen.queryByRole("link", { name: /Відкрити Telegram/ })).toBeNull();
   });
 
+  it("I4: deepLink не з https://t.me/ не потрапляє в href (посилання не показується)", async () => {
+    const user = userEvent.setup();
+    state.api = { ...mock, getTelegramLink: getSpy, createTelegramLink: async (r: Parameters<typeof mock.createTelegramLink>[0]) => ({ ...(await mock.createTelegramLink(r)), deepLink: "javascript:alert(1)" }) };
+    renderUi();
+    await connect(user);
+    await screen.findByText(/Посилання показується один раз/);
+    expect(screen.queryByRole("link", { name: /Відкрити Telegram/ })).toBeNull();
+  });
+
+  it("L1: показує час підтвердження в боті й нагадування про «Відключити» (awaitingConfirmation, active)", async () => {
+    const user = userEvent.setup();
+    renderUi();
+    await connect(user);
+    await screen.findByRole("link", { name: /Відкрити Telegram/ });
+    mock.telegramScenario.simulateClaim();
+    await refresh();
+    await screen.findByRole("heading", { name: /Підтвердьте в Telegram/ });
+    expect(screen.getByText(/Підтверджено в боті: \d{2}\.\d{2}\.\d{4}/)).toBeTruthy();
+    expect(screen.getByText(/Якщо це були не ви — натисніть «Відключити»/)).toBeTruthy();
+    mock.telegramScenario.simulateConfirm();
+    await refresh();
+    await screen.findByRole("heading", { name: /Стан: Підключено/ });
+    expect(screen.getByText(/Підтверджено в боті: /)).toBeTruthy();
+    expect(screen.getByText(/Якщо це були не ви — натисніть «Відключити»/)).toBeTruthy();
+  });
+
   it("права: не owner / модуль вимкнено -> картка не рендериться і запитів немає", async () => {
     for (const role of ["admin", "deputy", "specialist"] as const) {
       setRole(role);

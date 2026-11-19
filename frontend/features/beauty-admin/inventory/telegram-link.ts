@@ -30,6 +30,8 @@ export interface TelegramLinkStatus {
   channel: TelegramChannelRef | null;
   expiresAt: string | null;
   activatedAt: string | null;
+  /** Час підтвердження claim у боті (ISO); null, якщо ще не було. Необов'язкове: додає backend у GET статусу. */
+  claimedAt?: string | null;
   lastDeliveryAt: string | null;
   lastRevoke: { reason: RevokeReason; at: string } | null;
   consentVersion: string;
