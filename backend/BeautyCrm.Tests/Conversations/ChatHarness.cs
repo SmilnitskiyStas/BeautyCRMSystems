@@ -88,8 +88,11 @@ internal sealed class FakeBotApi : HttpMessageHandler
 internal sealed class TestClock : TimeProvider
 {
     private long _offsetTicks;
+    private DateTimeOffset? _frozen;
     public void Advance(TimeSpan by) => Interlocked.Add(ref _offsetTicks, by.Ticks);
-    public override DateTimeOffset GetUtcNow() => DateTimeOffset.UtcNow.AddTicks(Interlocked.Read(ref _offsetTicks));
+    /// <summary>Зупиняє перебіг реального часу (далі лише Advance): тест ковзного вікна не залежить від швидкості CI.</summary>
+    public void Freeze() => _frozen = DateTimeOffset.UtcNow;
+    public override DateTimeOffset GetUtcNow() => (_frozen ?? DateTimeOffset.UtcNow).AddTicks(Interlocked.Read(ref _offsetTicks));
 }
 
 internal sealed record ChatSeed(Guid TenantId, Guid LocationId, Guid SpecialistId, Guid ServiceId, Guid ChannelId, DateTimeOffset Start, string Token);
