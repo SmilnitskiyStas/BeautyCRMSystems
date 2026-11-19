@@ -15,12 +15,36 @@ public sealed partial class EfBeautyStore
         (await db.Locations.AsNoTracking().Where(l => includeInactive || l.IsActive)
             .OrderBy(l => l.Name).ThenBy(l => l.Id).ToListAsync(ct)).Select(ToLocationDto).ToList();
 
-    public async Task<LocationWriteResult> CreateAsync(LocationChange change, CancellationToken ct)
+    public const int MaxPublicCodeAttempts = 5;
+    private const string PublicCodeIndex = "ux_beauty_locations_public_code";
+
+    /// <summary>
+    /// ADR-022 §1: public_code видає DB default; колізія (23505 на ux_beauty_locations_public_code) дуже малоймовірна, але інакше INSERT падав би 500.
+    /// Повторюємо всю транзакцію (після помилки Postgres вона перервана) до <see cref="MaxPublicCodeAttempts"/> разів; інші помилки не ковтаються.
+    /// </summary>
+    public static async Task<T> RetryOnPublicCodeCollisionAsync<T>(Func<int, Task<T>> attempt, Action? onRetry = null)
+    {
+        for (var n = 1; ; n++)
+        {
+            try { return await attempt(n); }
+            catch (DbUpdateException ex) when (n < MaxPublicCodeAttempts && IsPublicCodeCollision(ex.InnerException)) { onRetry?.Invoke(); }
+            catch (PostgresException ex) when (n < MaxPublicCodeAttempts && IsPublicCodeCollision(ex)) { onRetry?.Invoke(); }
+        }
+    }
+
+    public static bool IsPublicCodeCollision(Exception? ex) =>
+        ex is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation, ConstraintName: PublicCodeIndex };
+
+    public Task<LocationWriteResult> CreateAsync(LocationChange change, CancellationToken ct) =>
+        RetryOnPublicCodeCollisionAsync(_ => CreateOnceAsync(change, ct), () => db.ChangeTracker.Clear());
+
+    private async Task<LocationWriteResult> CreateOnceAsync(LocationChange change, CancellationToken ct)
     {
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await LockLocationNamesAsync(ct);
         if (await NameTakenAsync(change.Name, null, ct)) return new(LocationWriteOutcome.NameTaken);
-        var l = new Location { Id = Guid.NewGuid(), Name = change.Name, Address = change.Address, Phone = change.Phone, Timezone = change.Timezone, IsActive = true };
+        var l = new Location { Id = Guid.NewGuid(), Name = change.Name, Address = change.Address, Phone = change.Phone, Timezone = change.Timezone, IsActive = true,
+            Latitude = change.Latitude, Longitude = change.Longitude, City = change.City, IsDiscoverable = change.IsDiscoverable ?? false };
         db.Locations.Add(l);
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
@@ -52,13 +76,18 @@ public sealed partial class EfBeautyStore
         l.Phone = change.Phone;
         l.Timezone = change.Timezone;
         if (change.IsActive is { } active) l.IsActive = active;
+        if (change.CoordinatesProvided) { l.Latitude = change.Latitude; l.Longitude = change.Longitude; } // §28.11: відсутні в PUT = без змін
+        // ADR-022: пропущено = без змін (форма без цих полів не затирає каталог); PublicCode не змінюється ніколи.
+        if (change.ClearCity) l.City = null; else if (change.City is not null) l.City = change.City;
+        if (change.IsDiscoverable is { } disc) l.IsDiscoverable = disc;
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
         return new(LocationWriteOutcome.Ok, ToLocationDto(l));
     }
 
     private static LocationDto ToLocationDto(Location l) =>
-        new(l.Id, l.Name, l.Address, l.Timezone, l.IsActive, l.Phone, l.ClosedWeekdays, WorkingHoursValidator.Parse(l.WorkingHours));
+        new(l.Id, l.Name, l.Address, l.Timezone, l.IsActive, l.Phone, l.ClosedWeekdays, WorkingHoursValidator.Parse(l.WorkingHours),
+            l.Latitude, l.Longitude, l.PublicCode, l.City, l.IsDiscoverable);
 
     // ---------- вихідні дні закладу (TASK-701, §17) ----------
 

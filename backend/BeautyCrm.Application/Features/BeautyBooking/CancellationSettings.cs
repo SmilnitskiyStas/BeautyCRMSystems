@@ -5,26 +5,53 @@ namespace BeautyCrm.Application.Features.BeautyBooking;
 /// <summary>
 /// Налаштування скасування tenant-а (TASK-685). Відсутній рядок у БД = <see cref="Defaults"/>.
 /// <c>FeePercent</c> діє лише при <c>DeductFee = true</c>.
+/// <c>ShowTermsToClient</c>/<c>CustomTermsText</c> керують лише ПОКАЗОМ умов клієнту; правила й розрахунок повернення
+/// від них не залежать.
 /// </summary>
 public sealed record CancellationSettings(
-    int WindowHours, int RefundPercentInWindow, int RefundPercentOutside, bool DeductFee, int FeePercent)
+    int WindowHours, int RefundPercentInWindow, int RefundPercentOutside, bool DeductFee, int FeePercent,
+    bool ShowTermsToClient = true, string? CustomTermsText = null)
 {
     public const int MaxWindowHours = 24 * 30;
+    public const int MaxCustomTextLength = 500;
 
     public static readonly CancellationSettings Defaults = new(12, 50, 100, false, 0);
 }
 
-/// <summary>Умови скасування для UI запису (слоти / запис), щоб текст не хардкодився на клієнті.</summary>
+/// <summary>
+/// Умови скасування для UI запису (слоти / запис), щоб текст не хардкодився на клієнті.
+/// <c>ShowToClient = false</c> лише ховає власний текст (<c>CustomText = null</c>); числові поля віддаються як раніше.
+/// </summary>
 public sealed record CancellationTerms(
-    int WindowHours, int RefundPercentInWindow, int RefundPercentOutside, bool DeductFee, int FeePercent)
+    int WindowHours, int RefundPercentInWindow, int RefundPercentOutside, bool DeductFee, int FeePercent,
+    bool ShowToClient = true, string? CustomText = null)
 {
     public static CancellationTerms From(CancellationSettings s) =>
-        new(s.WindowHours, s.RefundPercentInWindow, s.RefundPercentOutside, s.DeductFee, s.DeductFee ? s.FeePercent : 0);
+        new(s.WindowHours, s.RefundPercentInWindow, s.RefundPercentOutside, s.DeductFee, s.DeductFee ? s.FeePercent : 0,
+            s.ShowTermsToClient, s.ShowTermsToClient ? s.CustomTermsText : null);
 }
 
-/// <summary>PUT-тіло: усі поля обов'язкові (відсутнє поле = 422, а не мовчазний 0%).</summary>
+/// <summary>
+/// PUT-тіло: п'ять числових полів обов'язкові (відсутнє поле = 422, а не мовчазний 0%).
+/// <c>ShowTermsToClient</c> і <c>CustomTermsText</c> необов'язкові: відсутні в тілі = не змінювати (старі клієнти);
+/// <c>customTermsText: null</c> / порожній рядок = очистити. Наявність customTermsText фіксує setter (<see cref="CustomTermsTextSet"/>).
+/// </summary>
 public sealed record UpdateCancellationSettingsRequest(
-    int? WindowHours, int? RefundPercentInWindow, int? RefundPercentOutside, bool? DeductFee, int? FeePercent);
+    int? WindowHours, int? RefundPercentInWindow, int? RefundPercentOutside, bool? DeductFee, int? FeePercent)
+{
+    private string? _customTermsText;
+
+    public bool? ShowTermsToClient { get; init; }
+
+    public string? CustomTermsText
+    {
+        get => _customTermsText;
+        init { _customTermsText = value; CustomTermsTextSet = true; }
+    }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool CustomTermsTextSet { get; private init; }
+}
 
 /// <summary>Порт даних. Реалізація — Infrastructure (beauty_cancellation_settings, RLS за tenant).</summary>
 public interface ICancellationSettingsStore
@@ -54,8 +81,21 @@ public sealed class CancellationSettingsService(ICancellationSettingsStore store
         if (r.FeePercent is < 0 or > 100)
             return Error.Validation("invalid_fee_percent", "feePercent must be 0..100.");
 
+        var current = await GetAsync(ct); // відсутні в тілі нові поля лишаються як були
+        var customText = current.CustomTermsText;
+        if (r.CustomTermsTextSet)
+        {
+            var t = r.CustomTermsText?.Trim();
+            if (string.IsNullOrEmpty(t)) customText = null;
+            else if (t.Length > CancellationSettings.MaxCustomTextLength || t.Any(c => char.IsControl(c) && c != '\n'))
+                return Error.Validation("invalid_terms_text",
+                    $"customTermsText must be at most {CancellationSettings.MaxCustomTextLength} characters without control characters (except new line).");
+            else customText = t;
+        }
+
         var settings = new CancellationSettings(
-            r.WindowHours.Value, r.RefundPercentInWindow.Value, r.RefundPercentOutside.Value, r.DeductFee.Value, r.FeePercent.Value);
+            r.WindowHours.Value, r.RefundPercentInWindow.Value, r.RefundPercentOutside.Value, r.DeductFee.Value, r.FeePercent.Value,
+            r.ShowTermsToClient ?? current.ShowTermsToClient, customText);
         await store.SaveCancellationSettingsAsync(settings, ct);
         return settings;
     }

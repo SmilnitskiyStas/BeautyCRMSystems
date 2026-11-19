@@ -1,8 +1,8 @@
 ---
 name: design-hero-cta-structure
 description: >-
-  Design Hero CTA Structure — Use when shaping conversion structure — hero/CTA, forms, analytics.
-x-generated-from: skills/cro/design-hero-cta-structure/SKILL.md
+  Decide hero content, CTA hierarchy and placement. Use when designing or reworking a landing page's first screen.
+x-generated-from: .claude/skills/design-hero-cta-structure/SKILL.md
 ---
 
 ## Структура hero

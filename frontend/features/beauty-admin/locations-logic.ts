@@ -34,7 +34,43 @@ export function timeZoneOptions(): string[] {
   return list;
 }
 
-export type LocationErrors = Partial<Record<"name" | "address" | "phone" | "timezone", string>>;
+export type LocationErrors = Partial<Record<"name" | "address" | "phone" | "timezone" | "latitude" | "longitude", string>>;
+
+export interface ParsedCoordinates {
+  /** Обидва `null` = координати не задано (для PUT це «очистити»). */
+  latitude: number | null;
+  longitude: number | null;
+  errors: Pick<LocationErrors, "latitude" | "longitude">;
+}
+
+const DECIMAL = /^[+-]?(\d+([.,]\d*)?|[.,]\d+)$/;
+
+function parseCoordinate(raw: string, min: number, max: number, rangeMsg: string): { value: number | null; error?: string } {
+  const text = raw.trim();
+  if (text === "") return { value: null };
+  if (!DECIMAL.test(text)) return { value: null, error: "Вкажіть число, наприклад 50.4501" };
+  const n = Number(text.replace(",", "."));
+  if (!Number.isFinite(n) || n < min || n > max) return { value: null, error: rangeMsg };
+  return { value: Math.round(n * 1e6) / 1e6 };
+}
+
+/** Широта/довгота (§28.11): необов'язкові, лише парою; кома або крапка; округлення до 6 знаків. */
+export function parseCoordinates(latRaw: string, lonRaw: string): ParsedCoordinates {
+  const lat = parseCoordinate(latRaw, -90, 90, "Широта від −90 до 90");
+  const lon = parseCoordinate(lonRaw, -180, 180, "Довгота від −180 до 180");
+  const errors: ParsedCoordinates["errors"] = {};
+  if (lat.error) errors.latitude = lat.error;
+  if (lon.error) errors.longitude = lon.error;
+  if (!errors.latitude && !errors.longitude) {
+    if (lat.value !== null && lon.value === null) errors.longitude = "Вкажіть довготу або очистіть широту";
+    if (lon.value !== null && lat.value === null) errors.latitude = "Вкажіть широту або очистіть довготу";
+  }
+  const ok = Object.keys(errors).length === 0;
+  return { latitude: ok ? lat.value : null, longitude: ok ? lon.value : null, errors };
+}
+
+/** Число з API -> текст поля (крапка). */
+export const coordinateText = (v: number | null | undefined): string => (typeof v === "number" && Number.isFinite(v) ? String(v) : "");
 
 export function validateLocation(v: LocationInput): LocationErrors {
   const e: LocationErrors = {};

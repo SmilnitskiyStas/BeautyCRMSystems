@@ -1,8 +1,8 @@
 ---
 name: admin-auth-review
 description: >-
-  Admin Auth Review — Use during a security review.
-x-generated-from: skills/security/admin-auth-review/SKILL.md
+  Review admin/protected area authentication, authorization, and session handling. Use when auditing login, roles, or protected routes.
+x-generated-from: .claude/skills/admin-auth-review/SKILL.md
 ---
 
 # Admin Auth Review

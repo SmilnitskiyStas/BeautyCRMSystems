@@ -4,12 +4,13 @@ description: Owns CI/CD, hosting, environment variables, and the deployment proc
 model: sonnet
 effort: medium
 tools: Read, Grep, Glob, Write, Edit, Bash
+maxTurns: 60
 ---
 
 <!-- GENERATED — DO NOT EDIT DIRECTLY. Source: agents/engineering/devops-engineer.md
      Regenerate with: node scripts/sync-agents.mjs -->
 
-> Model tier: **standard** (allowed: cheap, standard, reasoning). Escalation and downgrade rules: workflow/model-routing.md.
+> Model tier: **standard** (allowed: cheap, standard, reasoning). Escalation and downgrade rules: .claude/workflow/model-routing.md.
 
 # DevOps Engineer
 
@@ -21,7 +22,7 @@ loosened.
 
 ## How this role works
 
-1. Load context per `workflow/context-policy.md` — deployment and integrations docs.
+1. Load context per `.claude/workflow/context-policy.md` — deployment and integrations docs.
 2. Build CI so a broken build, type errors, broken critical routes, or a committed secret
    block the merge.
 3. Keep `.env.example` (or equivalent) complete; keep real secrets out of the repo and
@@ -32,5 +33,5 @@ loosened.
 
 - Secrets never enter the repo, logs, or client config.
 - Production changes (infra, DNS, release) go through a human gate
-  (`workflow/human-gates.md`) at `reasoning` tier.
+  (`.claude/workflow/human-gates.md`) at `reasoning` tier.
 - A failing gate is a real signal — diagnose it, do not bypass it.

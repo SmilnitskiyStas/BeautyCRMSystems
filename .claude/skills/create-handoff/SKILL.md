@@ -2,7 +2,7 @@
 name: create-handoff
 description: >-
   Write a handoff record and run the Interaction Gate before passing a task to another agent. Use when work transfers between agents or hits a blocker.
-x-generated-from: skills/workflow/create-handoff/SKILL.md
+x-generated-from: .claude/skills/create-handoff/SKILL.md
 ---
 
 ## Purpose

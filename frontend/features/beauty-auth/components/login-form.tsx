@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { z } from "zod";
 import { humanizeError } from "../errors";
-import { safeNext } from "../permissions";
+import { homeFor, safeNext } from "../permissions";
 import { login } from "../session";
 import { AuthCard, FormAlert, SubmitButton, TextField } from "./auth-card";
 
@@ -46,7 +46,7 @@ export function LoginForm() {
     setPending(true);
     try {
       const user = await login({ ...parsed.data, tenant: parsed.data.tenant.toLowerCase() });
-      router.replace(safeNext(params.get("next"), user.role === "specialist" ? "/beauty/calendar" : "/beauty"));
+      router.replace(safeNext(params.get("next"), homeFor(user)));
     } catch (err) {
       setFormError(humanizeError(err, "Не вдалося увійти. Спробуйте ще раз."));
       setPending(false);

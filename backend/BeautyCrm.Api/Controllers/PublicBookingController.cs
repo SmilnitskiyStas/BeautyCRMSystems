@@ -1,6 +1,7 @@
 using BeautyCrm.Api.Infrastructure;
 using BeautyCrm.Api.PublicBooking;
 using BeautyCrm.Application.Features.BeautyBooking;
+using BeautyCrm.Application.Features.BeautyCoupons;
 using BeautyCrm.Application.Features.BeautyPublicBooking;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -11,13 +12,15 @@ namespace BeautyCrm.Api.Controllers;
 /// <summary>
 /// ПУБЛІЧНИЙ API онлайн-запису (TASK-688): без JWT, tenant за slug з URL. Явний виняток із "автентифікація за замовчуванням".
 /// Контролер лише маршрутизує; уся логіка — Application/Features/BeautyPublicBooking.
-/// Невідомий slug / призупинений tenant / вимкнений модуль -> однакова 404 `not_found`.
+/// Невідомий slug / вимкнений модуль -> однакова 404 `not_found`; призупинений tenant -> 403 `tenant_suspended` (ADR-018 D2).
 /// </summary>
 [ApiController]
 [Route("api/public/{tenantSlug}")]
 [AllowAnonymous]
+[PublicClient]
 [PublicTenant]
 [ProducesResponseType(StatusCodes.Status404NotFound)]
+[ProducesResponseType(StatusCodes.Status426UpgradeRequired)]
 [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
 public sealed class PublicBookingController(PublicBookingService service) : ControllerBase
 {
@@ -52,6 +55,27 @@ public sealed class PublicBookingController(PublicBookingService service) : Cont
         this.ToResult(await service.GetSlotsAsync(locationId, specialistId, serviceId, date, ct));
 
     /// <summary>
+    /// Календар доступності: статус кожного дня (available|full|closed|past) у зоні закладу + кількість вільних слотів.
+    /// `from` за замовч. = сьогодні (зона закладу), `days` 1..62 (за замовч. 31); без specialistId — будь-який майстер.
+    /// </summary>
+    [HttpGet("availability")]
+    [EnableRateLimiting(PublicRateLimit.Read)]
+    [ProducesResponseType<PublicAvailabilityDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> Availability(
+        [FromQuery] Guid locationId, [FromQuery] Guid serviceId, [FromQuery] Guid? specialistId,
+        [FromQuery] DateOnly? from, [FromQuery] int? days, CancellationToken ct) =>
+        this.ToResult(await service.GetAvailabilityAsync(locationId, specialistId, serviceId, from, days, ct));
+
+    /// <summary>Опубліковані відгуки майстра (новіші першими); автор — «Ім'я К.». limit ≤ 50.</summary>
+    [HttpGet("specialists/{specialistId:guid}/reviews")]
+    [EnableRateLimiting(PublicRateLimit.Read)]
+    [ProducesResponseType<PublicReviewsPage>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> Reviews(Guid specialistId, [FromQuery] int? limit, [FromQuery] int? offset, CancellationToken ct) =>
+        this.ToResult(await service.ListReviewsAsync(specialistId, limit, offset, ct));
+
+    /// <summary>
     /// 201 (новий запис) або 200 + `Idempotent-Replayed: true` (повтор того ж Idempotency-Key). 422 валідація, 409 слот зайнятий,
     /// 402 платіж не пройшов. Заголовок `Idempotency-Key` обов'язковий; `X-Captcha-Token` — коли CAPTCHA увімкнена.
     /// </summary>
@@ -67,13 +91,30 @@ public sealed class PublicBookingController(PublicBookingService service) : Cont
         var ctx = new PublicRequestContext(
             Request.Headers[IdempotencyHeader].FirstOrDefault(),
             Request.Headers[CaptchaHeader].FirstOrDefault() ?? request.CaptchaToken,
-            HttpContext.Connection.RemoteIpAddress?.ToString());
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            PublicClientInfo.KindOf(HttpContext),
+            Request.Headers[PublicClientInfo.IntegrityHeader].FirstOrDefault());
         return this.ToResult(await service.CreateAsync(request, ctx, ct), r =>
         {
             if (!r.Replayed) return StatusCode(StatusCodes.Status201Created, r.Booking);
             Response.Headers["Idempotent-Replayed"] = "true";
             return Ok(r.Booking);
         });
+    }
+
+    /// <summary>
+    /// Перевірка ЗАГАЛЬНОГО коду (§26.11.4): 200 {outcome, priceOriginal, priceFinal}; будь-яка причина відмови (і персональний код) -
+    /// однакове 404 coupon_invalid; 429 понад ліміт на IP.
+    /// </summary>
+    [HttpGet("coupons/check")]
+    [EnableRateLimiting(PublicRateLimit.Read)]
+    [ProducesResponseType<PublicCouponCheckDto>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> CheckCoupon([FromQuery] string? code, [FromQuery] Guid locationId, [FromQuery] Guid serviceId, CancellationToken ct)
+    {
+        NoStore();
+        var r = await service.CheckCouponAsync(code, locationId, serviceId, HttpContext.Connection.RemoteIpAddress?.ToString(), ct);
+        if (!r.IsOk && r.Error!.Kind == BeautyCrm.Application.Features.BeautyCommon.ErrorKind.TooManyRequests) Response.Headers.RetryAfter = "600";
+        return this.ToResult(r);
     }
 
     /// <summary>Перегляд запису за довгим випадковим токеном. Невідомий/чужий/зіпсований токен — однакова 404.</summary>

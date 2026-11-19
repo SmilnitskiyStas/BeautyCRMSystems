@@ -27,6 +27,9 @@ public enum ReminderOption
     [EnumMember(Value = "none")] None,
     [EnumMember(Value = "1h")] OneHour,
     [EnumMember(Value = "2h")] TwoHours,
+    /// <summary>TASK-736 (§22.3): будь-який інший набір точок; дзеркало плану reminder_method/reminder_offsets.</summary>
+    [EnumMember(Value = "custom")] Custom,
+    [EnumMember(Value = "24h")] TwentyFourHours,
 }
 
 public enum PaymentMethod
@@ -57,6 +60,8 @@ public enum ChannelType
     [EnumMember(Value = "whatsapp")] WhatsApp,
     [EnumMember(Value = "viber")] Viber,
     [EnumMember(Value = "widget")] Widget,
+    /// <summary>Email-доставка (підтвердження запису): адреса клієнта — у beauty_conversations.external_chat_id; SMTP — глобальний, без секретів у каналі.</summary>
+    [EnumMember(Value = "email")] Email,
 }
 
 public enum ConversationStatus
@@ -94,4 +99,6 @@ public enum ReminderStatus
     [EnumMember(Value = "sent")] Sent,
     [EnumMember(Value = "failed")] Failed,
     [EnumMember(Value = "cancelled")] Cancelled,
+    /// <summary>TASK-736 (§22.3): точку не буде надіслано; причина в skip_reason (код).</summary>
+    [EnumMember(Value = "skipped")] Skipped,
 }

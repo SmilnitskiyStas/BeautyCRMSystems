@@ -8,6 +8,35 @@ public sealed class PublicBookingOptions
 {
     /// <summary>Якщо true, POST /appointments вимагає токен CAPTCHA, який має підтвердити <see cref="ICaptchaVerifier"/>.</summary>
     public bool CaptchaRequired { get; set; }
+    /// <summary>
+    /// ADR-022: політика перевірки клієнта за міткою <c>X-Booking-Client</c> (web|ios|android). Для web `CaptchaRequired=true`
+    /// означає enforce. Для ios/android за замовчуванням none (MVP).
+    /// </summary>
+    public ProtectionMode ProtectionWeb { get; set; } = ProtectionMode.None;
+    public ProtectionMode ProtectionIos { get; set; } = ProtectionMode.None;
+    public ProtectionMode ProtectionAndroid { get; set; } = ProtectionMode.None;
+    /// <summary>
+    /// ADR-022: ліміт онлайн-створень на один заклад за годину (радіус ураження ротації телефонів/IP); персонал не рахується.
+    /// 0 або менше = вимкнено.
+    /// </summary>
+    public int MaxPublicCreatesPerLocationPerHour { get; set; } = 60;
+    /// <summary>Мінімальна підтримувана версія застосунку для ios / android (kill switch застарілих; null = без обмеження).</summary>
+    public Version? MinAppVersionIos { get; set; }
+    public Version? MinAppVersionAndroid { get; set; }
+
+    public ProtectionMode ProtectionFor(ClientKind kind) => kind switch
+    {
+        ClientKind.Ios => ProtectionIos,
+        ClientKind.Android => ProtectionAndroid,
+        _ => CaptchaRequired ? ProtectionMode.Enforce : ProtectionWeb,
+    };
+
+    public Version? MinVersionFor(ClientKind kind) => kind switch
+    {
+        ClientKind.Ios => MinAppVersionIos,
+        ClientKind.Android => MinAppVersionAndroid,
+        _ => null,
+    };
     /// <summary>Скільки майбутніх активних онлайн-записів може мати один телефон у tenant.</summary>
     public int MaxActiveBookingsPerPhone { get; set; } = 3;
     /// <summary>Скільки онлайн-записів (будь-який статус) можна створити з одного телефону за годину.</summary>
@@ -27,29 +56,53 @@ public sealed record PublicClosureDto(DateOnly DateFrom, DateOnly DateTo);
 public sealed record PublicLocationDto(Guid Id, string Name, string? Address, string? Phone, string Timezone,
     IReadOnlyList<string>? ClosedWeekdays = null, IReadOnlyList<PublicClosureDto>? Closures = null,
     System.Text.Json.JsonElement? WorkingHours = null);
-public sealed record PublicSpecialistDto(Guid Id, string Name, string? Title, string? PhotoUrl);
+/// <param name="ExperienceYears">Поточний рік - рік початку практики (мін. 0); null, якщо не задано.</param>
+/// <param name="Rating">Середній рейтинг опублікованих відгуків, 1 знак після коми; null, якщо відгуків немає.</param>
+/// <param name="ReviewsCount">Кількість лише опублікованих відгуків.</param>
+public sealed record PublicSpecialistDto(Guid Id, string Name, string? Title, string? PhotoUrl,
+    int? ExperienceYears = null, string? Bio = null, double? Rating = null, int ReviewsCount = 0);
+
+/// <summary>Рядок порту даних: стаж рахує сервіс (годинник у Application).</summary>
+public sealed record PublicSpecialistRow(Guid Id, string Name, string? Title, string? PhotoUrl,
+    int? PracticeStartYear, string? Bio, double? Rating, int ReviewsCount);
+
+/// <summary>Відгук для публічного API: автор лише як «Ім'я К.», без телефону й id клієнта/запису.</summary>
+public sealed record PublicReviewDto(Guid Id, string AuthorName, int Rating, string? Text, DateTimeOffset CreatedAt);
+
+public sealed record PublicReviewsPage(int Total, IReadOnlyList<PublicReviewDto> Items);
+
+public sealed record PublicAvailabilityDto(IReadOnlyList<DayAvailability> Days);
 
 /// <summary>Послуга закладу: ціна з override закладу й акцією, що діє зараз.</summary>
 public sealed record PublicServiceDto(
     Guid Id, string Name, string? Description, string? Category, int DurationMinutes,
     decimal PriceOriginal, decimal PriceFinal, Guid? PromotionId, string? PromotionName);
 
-/// <param name="MarketingConsent">Лише явне true дає згоду на маркетинг (лише для нового клієнта; наявного профілю не змінює).</param>
-public sealed record PublicClientInput(string? Name, string? Phone, bool? MarketingConsent = null);
+/// <param name="MarketingConsent">Приймається й ІГНОРУЄТЬСЯ (§26, TASK-777): згоду дає лише сам клієнт кнопкою в чаті.</param>
+/// <param name="Email">Необов'язковий: формат, ≤ 254, trim + lower-case; інакше 422 invalid_email. Не повертається у відповідях публічних ендпоінтів.</param>
+public sealed record PublicClientInput(string? Name, string? Phone, bool? MarketingConsent = null, string? Email = null);
 
 public sealed record PublicCreateAppointmentRequest(
     Guid? LocationId, Guid? SpecialistId, Guid? ServiceId, DateTimeOffset? StartsAt,
-    PublicClientInput? Client, string? Reminder, string? PaymentMethod, string? CaptchaToken, string? Website = null);
+    PublicClientInput? Client, string? Reminder, string? PaymentMethod, string? CaptchaToken, string? Website = null,
+    string? CouponCode = null); // §26.6: лише ЗАГАЛЬНІ коди; персональні -> 409 coupon_invalid
 
 /// <summary>Контекст HTTP-запиту, потрібний захисту від зловживань (без PII).</summary>
-public sealed record PublicRequestContext(string? IdempotencyKey, string? CaptchaToken, string? RemoteIp);
+/// <param name="Client">Самодекларована мітка клієнта (X-Booking-Client), НЕ автентифікація.</param>
+/// <param name="IntegrityToken">Доказ клієнта (app attest / play integrity) для ios/android; для web використовується <paramref name="CaptchaToken"/>.</param>
+public sealed record PublicRequestContext(string? IdempotencyKey, string? CaptchaToken, string? RemoteIp,
+    ClientKind Client = ClientKind.Web, string? IntegrityToken = null);
 
 /// <summary>Вигляд запису для клієнта: мінімум PII (без імені/телефону/email клієнта й без внутрішніх id).</summary>
 public sealed record PublicAppointmentDto(
     Guid LocationId, string LocationName, Guid SpecialistId, string SpecialistName, Guid ServiceId, string ServiceName,
     DateTimeOffset StartsAt, DateTimeOffset EndsAt, int DurationMinutes, string Status,
     decimal PriceOriginal, decimal PriceFinal, Guid? PromotionId, string ReminderOption,
-    string? PaymentMethod, string? PaymentStatus, CancellationTerms? Cancellation);
+    string? PaymentMethod, string? PaymentStatus, CancellationTerms? Cancellation,
+    PublicRemindersDto? Reminders = null, bool CouponApplied = false);
+
+/// <summary>§22.6.1: публічний DTO бачить лише спосіб і точки (без стану окремих нагадувань).</summary>
+public sealed record PublicRemindersDto(string Method, IReadOnlyList<int> OffsetsMinutes);
 
 public sealed record PublicBookingCreatedDto(string PublicToken, PublicAppointmentDto Appointment);
 
@@ -66,7 +119,9 @@ public interface IPublicBookingStore
     /// <param name="now">Для відліку «майбутніх 366 днів» закриттів у зоні кожного закладу.</param>
     Task<IReadOnlyList<PublicLocationDto>> ListActiveLocationsAsync(DateTimeOffset now, CancellationToken ct);
     /// <summary>Лише придатні до запису майстри: активні, зі збереженим графіком у закладі й призначеними послугами; serviceId — що надають цю послугу.</summary>
-    Task<IReadOnlyList<PublicSpecialistDto>> ListSpecialistsAsync(Guid locationId, Guid? serviceId, CancellationToken ct);
+    Task<IReadOnlyList<PublicSpecialistRow>> ListSpecialistsAsync(Guid locationId, Guid? serviceId, CancellationToken ct);
+    /// <summary>Опубліковані відгуки активного майстра tenant (новіші першими); null — майстра немає/неактивний/чужий (RLS).</summary>
+    Task<PublicReviewsPage?> ListReviewsAsync(Guid specialistId, int limit, int offset, CancellationToken ct);
     /// <summary>Активні послуги з ціною для закладу (override або мережева); без ціни пропускаються.</summary>
     /// <summary>Лише послуги, призначені хоча б одному придатному майстру закладу (specialistId — саме цьому майстру).</summary>
     Task<IReadOnlyList<PublicServiceBase>> ListServicesAsync(Guid locationId, Guid? specialistId, CancellationToken ct);
@@ -76,6 +131,18 @@ public interface IPublicBookingStore
     Task<int> CountActiveOnlineByPhoneAsync(string phone, DateTimeOffset now, CancellationToken ct);
     /// <summary>Онлайн-записи з цим телефоном, створені після since (будь-який статус) — для rate limit на телефон.</summary>
     Task<int> CountRecentOnlineByPhoneAsync(string phone, DateTimeOffset since, CancellationToken ct);
+    /// <summary>Онлайн-записи закладу, створені після since (будь-який статус) — ліміт MaxPublicCreatesPerLocationPerHour.</summary>
+    Task<int> CountRecentOnlineByLocationAsync(Guid locationId, DateTimeOffset since, CancellationToken ct);
+
+    // ---------- email-підтвердження (outbox: рядок beauty_messages зі status 'pending'; надсилає worker) ----------
+    /// <summary>Збережений email клієнта (null — немає). Лише для внутрішнього використання, у відповіді не потрапляє.</summary>
+    Task<string?> GetClientEmailAsync(Guid clientId, CancellationToken ct);
+    Task<string?> GetLocationAddressAsync(Guid locationId, CancellationToken ct);
+    /// <summary>
+    /// Ставить у чергу вихідний лист: знаходить/створює email-канал tenant-а й розмову (client, external_chat_id = email),
+    /// вставляє beauty_messages (outbound, system, pending) з ключем ідемпотентності. true — створено; false — вже було.
+    /// </summary>
+    Task<bool> QueueEmailMessageAsync(Guid clientId, string email, string idempotencyKey, string body, CancellationToken ct);
 }
 
 public sealed record PublicServiceBase(Guid Id, string Name, string? Description, string? Category, int DurationMinutes, decimal Price);
@@ -92,4 +159,34 @@ public interface ICaptchaVerifier
 public sealed class RejectAllCaptchaVerifier : ICaptchaVerifier
 {
     public Task<bool> VerifyAsync(string? token, string? remoteIp, CancellationToken ct) => Task.FromResult(false);
+}
+
+// ---------- ADR-022 §6: захист клієнтів замість CAPTCHA-хука ----------
+
+/// <summary>Мітка клієнта (X-Booking-Client). Самодекларована: слугує метриці, мінімальній версії й вибору політики.</summary>
+public enum ClientKind { Web, Ios, Android }
+
+public enum ProtectionMode { None, Monitor, Enforce }
+
+/// <summary>Вид доказу клієнта: captcha (web), app_attest (ios), play_integrity (android).</summary>
+public enum ClientProofKind { Captcha, AppAttest, PlayIntegrity }
+
+public sealed record ClientProof(ClientProofKind Kind, string? Token);
+
+/// <summary>
+/// Перевірка «справжній клієнт». Узагальнення <see cref="ICaptchaVerifier"/>. Реалізації App Attest / Play Integrity —
+/// окрема задача (Phase 2); за замовчуванням підключено <see cref="DefaultClientIntegrityVerifier"/> (captcha -> ICaptchaVerifier,
+/// решта -> false, тобто fail closed у режимі enforce).
+/// </summary>
+public interface IClientIntegrityVerifier
+{
+    Task<bool> VerifyAsync(ClientProof proof, string? remoteIp, CancellationToken ct);
+}
+
+public sealed class DefaultClientIntegrityVerifier(ICaptchaVerifier captcha) : IClientIntegrityVerifier
+{
+    public Task<bool> VerifyAsync(ClientProof proof, string? remoteIp, CancellationToken ct) =>
+        proof.Kind == ClientProofKind.Captcha && !string.IsNullOrWhiteSpace(proof.Token)
+            ? captcha.VerifyAsync(proof.Token, remoteIp, ct)
+            : Task.FromResult(false);
 }

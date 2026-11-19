@@ -85,3 +85,15 @@ describe("записи поза годинами", () => {
     expect(outsideHours(items, hours)).toEqual([items[1]]);
   });
 });
+
+describe("F5: знятий зв'язок майстра із закладом (isActive=false)", () => {
+  const link = (locationId: string, isActive?: boolean) => ({ locationId, locationName: locationId, workingHours: {}, ...(isActive === undefined ? {} : { isActive }) });
+  const m = (id: string, locations: StaffMember["locations"]): StaffMember => ({ id, name: id, phone: null, position: null, isActive: true, services: [], locations });
+
+  it("не потрапляє в спеціалістів закладу й не рахується; відсутнє поле = активний", () => {
+    const staff = [m("a", [link("c", true), link("p", false)]), m("b", [link("p")])];
+    expect(staffOfLocation(staff, "p").map((s) => s.member.id)).toEqual(["b"]);
+    expect(countActiveStaff(staff, "p")).toBe(1);
+    expect(countActiveStaff(staff, "c")).toBe(1);
+  });
+});

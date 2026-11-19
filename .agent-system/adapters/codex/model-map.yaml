@@ -1,0 +1,29 @@
+# Codex CLI model map — tier -> concrete model + reasoning effort.
+# The ONLY place a Codex model name appears.
+# Verified 2026-10-31 against codex-cli 0.154.0 (~/.codex/models_cache.json):
+#   gpt-6-luna    "Fast and affordable model for easier tasks."
+#   gpt-6.1-sol   "Latest workhorse model for coding and everyday work."
+#   gpt-6-astra   "Frontier intelligence for the most demanding work."
+#   (also listed: gpt-6.1-terra — description gives no role, so it is not mapped;
+#    gpt-6-sol "previous generation workhorse"; gpt-5.6-* "older generation".)
+# Reasoning effort accepted: low | medium | high | xhigh | max (| ultra on sol/astra/terra).
+#
+# Codex model names change roughly per release — re-verify on upgrade;
+# `node scripts/doctor.mjs` flags a missing tier.
+
+tiers:
+  cheap: gpt-6-luna
+  standard: gpt-6.1-sol
+  reasoning: gpt-6.1-sol
+  frontier: gpt-6-astra
+
+effort:
+  cheap: low
+  standard: medium
+  reasoning: high
+  frontier: xhigh
+
+# Codex per-agent sandbox. Adapter picks: read_only agents -> read-only; agents with
+# edit/shell capability -> workspace-write; others -> read-only. Never danger-full-access
+# from the generator.
+sandbox_default: read-only

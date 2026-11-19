@@ -4,6 +4,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 import { z } from "zod";
 import { useAuth } from "@/features/beauty-auth/components/auth-provider";
+import { accessOf } from "@/features/beauty-auth/access";
+import { canEditStaff, canSeeMyRevenue } from "@/features/beauty-auth/permissions";
+import { MyRevenueCard } from "./my-revenue-card";
 import { humanizeError } from "@/features/beauty-auth/errors";
 import {
   useAbsences,
@@ -19,6 +22,7 @@ import {
   useUpdateStaff,
 } from "../hooks/use-beauty-admin";
 import { addDaysIso, initials, todayIso } from "../format";
+import { activeLinks } from "../staff-links";
 import type { StaffLocation, StaffMember, WorkingHours } from "../types";
 import { WEEKDAYS, defaultHours, hasWorkingDays, normalizeHours, validateHours } from "../working-hours";
 import { AbsencesTab } from "./staff-absences";
@@ -228,7 +232,7 @@ function StaffCard({ m, absentType, pending }: { m: StaffMember; absentType: str
       <dl className="m-0 flex flex-col gap-1.5 text-sm">
         <div className="flex gap-2">
           <dt className="w-20 flex-none text-(--muted)">Заклади</dt>
-          <dd className="m-0 min-w-0">{m.locations.length ? m.locations.map((l) => l.locationName).join(", ") : "—"}</dd>
+          <dd className="m-0 min-w-0">{activeLinks(m).length ? activeLinks(m).map((l) => l.locationName).join(", ") : "—"}</dd>
         </div>
         <div className="flex gap-2">
           <dt className="w-20 flex-none text-(--muted)">Послуги</dt>
@@ -242,7 +246,7 @@ function StaffCard({ m, absentType, pending }: { m: StaffMember; absentType: str
 export function StaffListScreen() {
   const { user } = useAuth();
   const router = useRouter();
-  const isManager = user.role !== "specialist";
+  const isManager = accessOf(user).can("staff.access", "all");
   const staff = useStaff(isManager);
   const today = todayIso();
   const absences = useAbsences({ from: today, to: addDaysIso(today, 90) }, isManager);
@@ -347,7 +351,7 @@ function ProfileTab({ m, canEdit }: { m: StaffMember; canEdit: boolean }) {
         <KeyValue label="Імʼя" value={m.name} />
         <KeyValue label="Посада" value={m.position ?? "—"} />
         {m.phone ? <KeyValue label="Телефон" value={m.phone} /> : null}
-        <KeyValue label="Заклади" value={m.locations.map((l) => l.locationName).join(", ") || "—"} />
+        <KeyValue label="Заклади" value={activeLinks(m).map((l) => l.locationName).join(", ") || "—"} />
         <p className="text-[13px] text-(--muted)">Редагувати профіль може лише керівник.</p>
       </div>
     );
@@ -532,8 +536,8 @@ function ScheduleTab({ m, canEdit }: { m: StaffMember; canEdit: boolean }) {
   return (
     <div className="flex flex-col gap-6">
       <h2 className="text-lg font-semibold">Графік роботи</h2>
-      {m.locations.length === 0 ? <EmptyState>Працівника не прив’язано до жодного закладу.</EmptyState> : null}
-      {m.locations.map((loc) =>
+      {activeLinks(m).length === 0 ? <EmptyState>Працівника не прив’язано до жодного закладу.</EmptyState> : null}
+      {activeLinks(m).map((loc) =>
         canEdit ? (
           <LocationSchedule key={loc.locationId} staffId={m.id} loc={loc} />
         ) : (
@@ -562,7 +566,8 @@ function ScheduleTab({ m, canEdit }: { m: StaffMember; canEdit: boolean }) {
 export function StaffProfileScreen({ id }: { id: string }) {
   const { user } = useAuth();
   const router = useRouter();
-  const isManager = user.role !== "specialist";
+  const isManager = accessOf(user).can("staff.access", "all");
+  const canEdit = canEditStaff(user);
   const isSelf = !isManager && user.specialistId === id;
   const [tab, setTab] = useState<Tab>("profile");
   const [absFormOpen, setAbsFormOpen] = useState(false);
@@ -588,6 +593,7 @@ export function StaffProfileScreen({ id }: { id: string }) {
 
   return (
     <>
+      {isSelf && canSeeMyRevenue(user) ? <MyRevenueCard /> : null}
       {fromLocationId || isManager ? (
         <div className="flex flex-wrap gap-x-5">
           {fromLocationId ? <TextLink href={`/beauty/locations/${encodeURIComponent(fromLocationId)}`}>← Заклад</TextLink> : null}
@@ -613,7 +619,7 @@ export function StaffProfileScreen({ id }: { id: string }) {
                 <div className="text-sm text-(--muted)">{m.position ?? "Посада не вказана"}</div>
                 <div className="flex flex-wrap gap-1.5">
                   {m.isActive ? <Badge tone="ok">Активний</Badge> : <Badge tone="neutral">Неактивний</Badge>}
-                  {m.locations.map((l) => (
+                  {activeLinks(m).map((l) => (
                     <Badge key={l.locationId} tone="vip" className="!text-xs">
                       {l.locationName}
                     </Badge>
@@ -648,11 +654,11 @@ export function StaffProfileScreen({ id }: { id: string }) {
                   { id: "abs", label: "Відсутність" },
                 ]}
               />
-              {tab === "profile" ? <ProfileTab m={m} canEdit={isManager} /> : null}
-              {tab === "svc" ? <ServicesTab m={m} canEdit={isManager} /> : null}
-              {tab === "sch" ? <ScheduleTab m={m} canEdit={isManager} /> : null}
+              {tab === "profile" ? <ProfileTab m={m} canEdit={canEdit} /> : null}
+              {tab === "svc" ? <ServicesTab m={m} canEdit={canEdit} /> : null}
+              {tab === "sch" ? <ScheduleTab m={m} canEdit={canEdit} /> : null}
               {tab === "abs" ? (
-                <AbsencesTab member={m} isManager={isManager} isSelf={isSelf} formOpen={absFormOpen} onFormOpenChange={setAbsFormOpen} />
+                <AbsencesTab member={m} isManager={canEdit} isSelf={isSelf} formOpen={absFormOpen} onFormOpenChange={setAbsFormOpen} />
               ) : null}
             </Card>
           </>

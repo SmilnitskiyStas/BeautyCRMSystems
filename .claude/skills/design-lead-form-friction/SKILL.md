@@ -1,8 +1,8 @@
 ---
 name: design-lead-form-friction
 description: >-
-  Design Lead Form Friction — Use when shaping conversion structure — hero/CTA, forms, analytics.
-x-generated-from: skills/cro/design-lead-form-friction/SKILL.md
+  Choose form fields and steps by weighing completeness against conversion. Use when designing or simplifying a lead/contact form.
+x-generated-from: .claude/skills/design-lead-form-friction/SKILL.md
 ---
 
 # Design Lead Form Friction

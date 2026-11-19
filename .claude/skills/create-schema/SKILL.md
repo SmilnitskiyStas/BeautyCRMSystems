@@ -1,8 +1,8 @@
 ---
 name: create-schema
 description: >-
-  Create Schema — Use when working on database schema, migrations, or query performance.
-x-generated-from: skills/database/create-schema/SKILL.md
+  Design tables, relationships, and constraints from the domain model. Use when introducing new entities or reshaping data.
+x-generated-from: .claude/skills/create-schema/SKILL.md
 ---
 
 # Create Schema

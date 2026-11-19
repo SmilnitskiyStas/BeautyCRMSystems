@@ -24,7 +24,7 @@ Workflow:
 - Не додавати нові залежності без обґрунтування.
 - Фікс мінімальний, але production-safe.
 - Зберігати наявну архітектуру (`.claude/docs/architecture.md`, відповідна секція `{PROJECT_SPEC}`, напр. `PROJECT_PROMPT.md`, `v1-spec.md` тощо).
-- Якщо баг знайдений `qa-engineer` — залогувати через `templates/bug-report-template.md` до або поряд із фіксом.
+- Якщо баг знайдений `qa-engineer` — залогувати через `.claude/templates/bug-report-template.md` до або поряд із фіксом.
 - Не закривати задачу без запису в `known-issues.md`, якщо це був реальний bug, а не одруку — фікс без зафіксованої причини легко повториться.
 
 Output format:

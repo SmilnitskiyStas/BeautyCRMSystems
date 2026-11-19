@@ -1,8 +1,8 @@
 ---
 name: add-structured-data
 description: >-
-  Add Structured Data — Use when implementing technical SEO or planning content strategy.
-x-generated-from: skills/seo/add-structured-data/SKILL.md
+  Choose and add JSON-LD only where it matches visible content. Use when implementing rich-result markup.
+x-generated-from: .claude/skills/add-structured-data/SKILL.md
 ---
 
 ## Типи JSON-LD за контентом

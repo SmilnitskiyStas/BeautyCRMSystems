@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { NextConfig } from "next";
 
 const isProd = process.env.NODE_ENV === "production";
@@ -46,12 +47,24 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Docker-збірка (frontend/Dockerfile) задає NEXT_OUTPUT=standalone; локально й у CI вихід стандартний.
+  ...(process.env.NEXT_OUTPUT === "standalone" ? { output: "standalone" as const } : {}),
   cacheComponents: true,
   partialPrefetching: true,
   poweredByHeader: false,
+  // Внутрішній workspace-пакет поставляється як TS-джерело (ADR-021 §5).
+  transpilePackages: ["@beauty/booking-core"],
   async headers() {
     return [
       { source: "/:path*", headers: securityHeaders },
+      // Запрошення власника (§27.8): токен у фрагменті; без Referer і без кешу.
+      {
+        source: "/invite",
+        headers: [
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "Cache-Control", value: "no-store" },
+        ],
+      },
       // Публічний токен запису в шляху: не віддаємо його у Referer і не кешуємо (узгоджено з §12).
       {
         source: "/book/appointment/:path*",
@@ -63,6 +76,8 @@ const nextConfig: NextConfig = {
     ];
   },
   turbopack: {
+    // Корінь монорепо (npm workspaces): пакет `packages/booking-core` лежить поза `frontend/`.
+    root: path.join(import.meta.dirname, ".."),
     rules: {
       "*.css": {
         loaders: ["@tailwindcss/turbopack"],

@@ -2,7 +2,7 @@
 name: update-task-status
 description: >-
   Move a task through the lifecycle states and keep the task store consistent. Use when a task's state changes.
-x-generated-from: skills/workflow/update-task-status/SKILL.md
+x-generated-from: .claude/skills/update-task-status/SKILL.md
 ---
 
 ## Purpose

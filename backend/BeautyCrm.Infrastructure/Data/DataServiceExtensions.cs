@@ -5,12 +5,14 @@ using BeautyCrm.Application.Features.BeautyCatalog;
 using BeautyCrm.Application.Features.BeautyChannels;
 using BeautyCrm.Application.Features.BeautyClients;
 using BeautyCrm.Application.Features.BeautyOverview;
+using BeautyCrm.Application.Features.BeautyPublicCatalog;
 using BeautyCrm.Application.Features.BeautyStaff;
 using BeautyCrm.Infrastructure.Data.Beauty;
 using BeautyCrm.Infrastructure.Data.Tenancy;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace BeautyCrm.Infrastructure.Data;
 
@@ -50,11 +52,27 @@ public static class DataServiceExtensions
         services.AddScoped<ICatalogStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<ICancellationSettingsStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<IClientStore>(sp => sp.GetRequiredService<EfBeautyStore>());
+        services.AddScoped<BeautyCrm.Application.Features.BeautyAnalytics.IMyRevenueStore>(sp => sp.GetRequiredService<EfBeautyStore>());
+        services.AddScoped<BeautyCrm.Application.Features.BeautyAuth.IClientScope>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<IAnalyticsStore>(sp => sp.GetRequiredService<EfBeautyStore>());
+        services.AddScoped<IAnalyticsDetailsStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<IChannelSettingsStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<IStaffStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<IOverviewStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<ILocationStore>(sp => sp.GetRequiredService<EfBeautyStore>());
+        services.AddScoped<BeautyCrm.Application.Features.BeautyCoupons.ICouponStore>(sp => sp.GetRequiredService<EfBeautyStore>()); // TASK-778
+        services.AddScoped<BeautyCrm.Application.Features.BeautyReminders.IReminderContextStore>(sp => sp.GetRequiredService<EfBeautyStore>());
+        services.AddScoped<BeautyCrm.Application.Features.BeautyReminders.IReminderReplanStore>(sp => sp.GetRequiredService<EfBeautyStore>());
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddScoped<ReminderContactsService>(); // TASK-738: вподобання, call-tasks, settings/reminders
+        services.AddScoped<MarketingModuleGate>(); // TASK-790 (L4): модуль beauty_marketing поза HTTP
+        services.AddScoped<MarketingConsentService>(); // TASK-777: маркетингова згода (§26.4), API картки клієнта
+        services.AddScoped<AudienceService>(); // TASK-779: аудиторії (§26.5)
+        services.AddScoped<CampaignService>(); // TASK-779: кампанії (§26.7, §26.11.3)
+        services.AddScoped<ClientPhoneService>(); // TASK-769: телефон клієнта (збереження, pending, cooldown), §25
+        services.AddScoped<ServiceCostService>(); // TASK-763: CRUD собівартості послуг (§24.6.1)
+        services.AddScoped<PlatformFeedbackService>(); // TASK-820: заявки до провайдера (§27.9, ADR-018)
+        services.AddSingleton<IPublicCatalogStore, EfPublicCatalogStore>(); // ADR-022: cross-tenant каталог лише через definer-функції
 
         return services;
     }

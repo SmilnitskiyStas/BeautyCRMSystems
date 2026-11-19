@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SmilnitskiyStas/AI_agent_only/schemas/review.schema.json",
+  "title": "Review",
+  "description": "Independent review of a completed implementation (§29-31). The reviewer is never the same agent session that did the implementation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "reviewer", "review_types", "decision"],
+  "properties": {
+    "task_id": { "type": "string", "pattern": "^TASK-[0-9]{3,}$" },
+    "reviewer": { "type": "string", "pattern": "^[a-z][a-z0-9-]*[a-z0-9]$" },
+    "implementer": { "type": "string", "pattern": "^[a-z][a-z0-9-]*[a-z0-9]$" },
+    "review_types": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Which reviews the review-orchestrator deemed necessary (§30). Not every change needs all of them.",
+      "properties": {
+        "code_review": { "type": "boolean" },
+        "security_review": { "type": "boolean" },
+        "qa": { "type": "boolean" },
+        "accessibility": { "type": "boolean" },
+        "seo": { "type": "boolean" },
+        "database_review": { "type": "boolean" }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "summary", "evidence"],
+        "properties": {
+          "severity": { "enum": ["critical", "high", "medium", "low"] },
+          "summary": { "type": "string" },
+          "evidence": {
+            "type": "string",
+            "description": "Concrete: file:line, failing input, spec clause. AI findings must be evidence-based (§31)."
+          },
+          "location": { "type": "string" },
+          "recommendation": { "type": "string" }
+        }
+      }
+    },
+    "cycles": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Autonomous review<->fix rounds so far. On repeated substantive disagreement past the limit, escalate to human (§31)."
+    },
+    "decision": {
+      "enum": ["approved", "approved_with_notes", "changes_requested", "escalate_to_human"]
+    }
+  }
+}

@@ -51,11 +51,14 @@ async function seed(o: {
   const tenantId = randomUUID();
   const [loc, spec, svc, client, appt, channel, conv] = Array.from({ length: 7 }, () => randomUUID());
   const q = (sql: string, p: unknown[]) => admin.query(sql, p);
+  await admin.query("INSERT INTO tenants (id, name, slug, modules) VALUES ($1,'T',$2,'{beauty_marketing}')", [tenantId, `t-${tenantId.slice(0, 8)}`]); // TASK-791: marketing needs the module
   await q("INSERT INTO beauty_locations (id, tenant_id, name, timezone, is_active) VALUES ($1,$2,'L','Europe/Kyiv',true)", [loc, tenantId]);
   await q("INSERT INTO beauty_specialists (id, tenant_id, full_name, is_active) VALUES ($1,$2,'S',true)", [spec, tenantId]);
   await q("INSERT INTO beauty_services (id, tenant_id, name, duration_minutes, is_active) VALUES ($1,$2,'Svc',60,true)", [svc, tenantId]);
   await q("INSERT INTO beauty_clients (id, tenant_id, full_name, marketing_consent, unsubscribed) VALUES ($1,$2,'Anna',$3,$4)",
     [client, tenantId, o.consent ?? false, o.unsubscribed ?? false]);
+  // TASK-780: consent is read from beauty_marketing_consents, not from the old clients flag
+  if (o.consent ?? false) await q("INSERT INTO beauty_marketing_consents (tenant_id, client_id, channel, level, source, text_version) VALUES ($1,$2,'telegram','full','chat','mc-v1')", [tenantId, client]);
   const starts = o.starts ?? new Date(NOW.getTime() + 2 * 3_600_000);
   await q(`INSERT INTO beauty_appointments (id, tenant_id, location_id, specialist_id, service_id, client_id, starts_at, duration_minutes,
              status, source, price_original, price_final, reminder_option)
@@ -212,11 +215,14 @@ describe("reminder -> outbox -> channel (PostgreSQL, RLS enforced)", () => {
     const night = makeCtx(ids, { now: () => NIGHT });
     await pollWinback(night.ctx); await pollWinback(night.ctx); // daily rerun = no duplicate
     await pollOutbox(night.ctx);
-    expect(night.sent).toHaveLength(0); // 00:00 Kyiv: outside 09-20, stays pending
+    expect(night.sent).toHaveLength(0); // 00:00 Kyiv: outside 09-20
+    // TASK-791 (M6): winback has the campaign window at enqueue too, so at night no message is even created (was: created and held pending)
     expect(await row("SELECT status, idempotency_key FROM beauty_messages WHERE tenant_id = ANY($1)", [ids]))
-      .toHaveLength(1);
+      .toHaveLength(0);
 
     const day = makeCtx(ids, { now: () => NOW });
+    await pollWinback(day.ctx); await pollWinback(day.ctx); // daily rerun = no duplicate
+    expect(await row("SELECT status, idempotency_key FROM beauty_messages WHERE tenant_id = ANY($1)", [ids])).toHaveLength(1);
     await pollOutbox(day.ctx); await pollOutbox(day.ctx);
     expect(day.sent).toHaveLength(1);
     expect(day.sent[0]).toMatchObject({ tenantId: lapsed.tenantId, kind: "winback", clientId: lapsed.clientId });
@@ -227,7 +233,7 @@ describe("reminder -> outbox -> channel (PostgreSQL, RLS enforced)", () => {
     const { ctx, sent } = makeCtx([s.tenantId]);
     await pollWinback(ctx);
     const [m] = await row("SELECT body FROM beauty_messages WHERE tenant_id=$1", [s.tenantId]);
-    expect(m.body).toContain("надішліть STOP");
+    expect(m.body).toContain("«Стоп»"); // TASK-780: new opt-out line
     await admin.query("UPDATE beauty_clients SET unsubscribed = true WHERE id = $1", [s.clientId]); // after enqueue
     await pollOutbox(ctx);
     expect(sent).toHaveLength(0);

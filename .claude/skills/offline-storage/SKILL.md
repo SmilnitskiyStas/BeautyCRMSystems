@@ -4,7 +4,7 @@ description: >-
   Design offline-first local storage and sync for a mobile app — what is cached, how a
   mutation queue drains, and the conflict-resolution rule. Use when a mobile feature must
   work without a network connection.
-x-generated-from: skills/mobile/offline-storage/SKILL.md
+x-generated-from: .claude/skills/offline-storage/SKILL.md
 ---
 
 # Offline Storage
@@ -22,7 +22,7 @@ user action taken while offline.
    per operation. On reconnect, the queue drains in order.
 3. **Idempotency** — every queued mutation carries a client-generated key so a retry after
    a partial failure does not double-apply. The server contract must accept it
-   (`skills/workflow/create-contract`).
+   (`.claude/skills/create-contract`).
 4. **Conflict-resolution rule** — decide explicitly, per entity:
    - last-write-wins (record `updated_at`), or
    - server-wins with a surfaced "your change was rejected", or
@@ -51,4 +51,4 @@ user action taken while offline.
 
 Offline sync is `reasoning` tier and touches concurrency. If the conflict rule needs a
 product decision (which side wins, what the user sees), that is a human gate
-(`workflow/human-gates.md`).
+(`.claude/workflow/human-gates.md`).

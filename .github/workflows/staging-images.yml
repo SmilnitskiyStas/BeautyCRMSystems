@@ -123,7 +123,8 @@ jobs:
       - id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: ${{ matrix.service == 'api' && 'backend' || matrix.service }}
+          context: ${{ matrix.service == 'api' && 'backend' || matrix.service == 'web' && '.' || matrix.service }}
+          file: ${{ matrix.service == 'web' && 'frontend/Dockerfile' || format('{0}/Dockerfile', matrix.service == 'api' && 'backend' || matrix.service) }}
           push: true
           provenance: false
           tags: ${{ steps.img.outputs.name }}:sha-${{ needs.resolve-and-verify-ci.outputs.sha }}

@@ -13,7 +13,10 @@ public static class BeautyAuthServiceExtensions
         services.AddSingleton<LoginAttemptTracker>();
         services.AddScoped<AuthService>();
         services.AddScoped<UserAdminService>();
+        services.AddScoped<AccessAdminService>(); // ADR-023 (TASK-851)
         services.AddScoped<PlatformTenantService>();
+        services.AddScoped<BeautyCrm.Application.Features.BeautyControlPlane.ControlPlaneService>();
+        services.AddScoped<BeautyCrm.Application.Features.BeautyControlPlane.OwnerInviteService>();
         services.AddScoped<AppointmentAccessService>();
         services.AddScoped<BeautyCrm.Application.Features.BeautyStaff.StaffInviteService>();
         return services;

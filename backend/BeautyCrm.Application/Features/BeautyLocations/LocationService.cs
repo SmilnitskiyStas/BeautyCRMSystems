@@ -10,10 +10,21 @@ using BeautyCrm.Application.Features.BeautyStaff;
 namespace BeautyCrm.Application.Features.BeautyLocations;
 
 /// <summary>POST/PUT /locations (§16). IsActive: у PUT пропущено = без змін; у POST ігнорується (новий заклад активний).</summary>
-public sealed record LocationRequest(string? Name, string? Address, string? Phone, string? Timezone, bool? IsActive = null);
+/// <remarks>
+/// Latitude/Longitude (§28.11): JsonElement, щоб відрізнити «поле відсутнє» (Undefined: координати не змінюються) від явного
+/// null (очистити пару) і числа (задати пару). ClearCoordinates=true (ADR-022) — те саме, що пара явних null.
+/// ADR-022: City (пропущено/null = без змін, "" = очистити), IsDiscoverable (пропущено/null = без змін). PublicCode не приймається (незмінний).
+/// </remarks>
+public sealed record LocationRequest(string? Name, string? Address, string? Phone, string? Timezone, bool? IsActive = null,
+    JsonElement Latitude = default, JsonElement Longitude = default, string? City = null, bool? IsDiscoverable = null, bool? ClearCoordinates = null);
 
-/// <summary>Нормалізований (обрізаний, перевірений) вміст запису закладу.</summary>
-public sealed record LocationChange(string Name, string? Address, string? Phone, string Timezone, bool? IsActive);
+/// <summary>
+/// Нормалізований (обрізаний, перевірений) вміст запису закладу. CoordinatesProvided=false: координати не чіпати (PUT без
+/// полів); true: Latitude/Longitude (обидва null = очистити) записати як є. City: null = без змін, ClearCity = очистити.
+/// </summary>
+public sealed record LocationChange(string Name, string? Address, string? Phone, string Timezone, bool? IsActive,
+    decimal? Latitude = null, decimal? Longitude = null, bool CoordinatesProvided = false,
+    string? City = null, bool ClearCity = false, bool? IsDiscoverable = null);
 
 public enum LocationWriteOutcome { Ok, NotFound, NameTaken, HasFutureAppointments, TimezoneLocked }
 
@@ -96,7 +107,7 @@ public interface ILocationStore
 
 public sealed partial class LocationService(ILocationStore store, TimeProvider clock)
 {
-    public const int MaxName = 200, MaxAddress = 500, MaxPhone = 32, MaxTimezone = 64;
+    public const int MaxName = 200, MaxAddress = 500, MaxPhone = 32, MaxTimezone = 64, MaxCity = 100;
     public const int MaxClosureReason = 200, MaxClosureDays = 366;
 
     private static readonly string[] Weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -107,11 +118,11 @@ public sealed partial class LocationService(ILocationStore store, TimeProvider c
 
     /// <summary>Керівники бачать усе й можуть просити неактивні; specialist лише читає (includeInactive ігнорується).</summary>
     public async Task<IReadOnlyList<LocationDto>> ListAsync(Actor actor, bool includeInactive, CancellationToken ct) =>
-        await store.ListAsync(includeInactive && StaffRoles.IsManager(actor), ct);
+        await store.ListAsync(includeInactive && StaffRoles.CanEditLocations(actor), ct);
 
     public async Task<Result<LocationDto>> CreateAsync(Actor actor, LocationRequest req, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditLocations(actor)) return Forbidden;
         var change = Validate(req);
         if (!change.IsOk) return change.Error!;
         return Map(await store.CreateAsync(change.Value! with { IsActive = true }, ct));
@@ -119,7 +130,7 @@ public sealed partial class LocationService(ILocationStore store, TimeProvider c
 
     public async Task<Result<LocationDto>> UpdateAsync(Actor actor, Guid id, LocationRequest req, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditLocations(actor)) return Forbidden;
         var change = Validate(req);
         if (!change.IsOk) return change.Error!;
         return Map(await store.UpdateAsync(id, change.Value!, clock.GetUtcNow(), ct));
@@ -129,7 +140,7 @@ public sealed partial class LocationService(ILocationStore store, TimeProvider c
 
     public async Task<Result<LocationDto>> SetClosedWeekdaysAsync(Actor actor, Guid id, ClosedWeekdaysRequest req, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditLocations(actor)) return Forbidden;
         if (req.ClosedWeekdays is null) return Error.Validation("invalid_closed_weekdays", "closedWeekdays is required.");
         var set = new HashSet<string>();
         foreach (var raw in req.ClosedWeekdays)
@@ -154,7 +165,7 @@ public sealed partial class LocationService(ILocationStore store, TimeProvider c
 
     public async Task<Result<LocationDto>> SetWorkingHoursAsync(Actor actor, Guid id, WorkingHoursRequest req, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditLocations(actor)) return Forbidden;
         string? normalized = null;
         switch (req.WorkingHours.ValueKind)
         {
@@ -190,12 +201,12 @@ public sealed partial class LocationService(ILocationStore store, TimeProvider c
             return Error.Validation("invalid_range", $"from..to must be a valid range of at most {MaxClosureDays} days.");
         var rows = await store.ListClosuresAsync(locationId, start, end, ct);
         return Result<IReadOnlyList<ClosureDto>>.Ok(
-            StaffRoles.IsManager(actor) ? rows : rows.Select(c => c with { Reason = null }).ToList());
+            StaffRoles.CanEditLocations(actor) ? rows : rows.Select(c => c with { Reason = null }).ToList());
     }
 
     public async Task<Result<ClosureDto>> AddClosureAsync(Actor actor, Guid locationId, ClosureRequest req, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditLocations(actor)) return Forbidden;
         if (await store.GetAsync(locationId, ct) is not { } location) return LocationNotFound;
 
         if (req.DateFrom is not { } from || req.DateTo is not { } to)
@@ -220,7 +231,7 @@ public sealed partial class LocationService(ILocationStore store, TimeProvider c
 
     public async Task<Result<bool>> DeleteClosureAsync(Actor actor, Guid locationId, Guid closureId, CancellationToken ct)
     {
-        if (!StaffRoles.IsManager(actor)) return Forbidden;
+        if (!StaffRoles.CanEditLocations(actor)) return Forbidden;
         return await store.DeleteClosureAsync(locationId, closureId, ct)
             ? true
             : Error.NotFound("closure_not_found", "Closure not found.");
@@ -256,7 +267,34 @@ public sealed partial class LocationService(ILocationStore store, TimeProvider c
         if (phone is { Length: > MaxPhone }) return Error.Validation("invalid_phone", $"Phone is too long (max {MaxPhone}).");
         var tz = req.Timezone?.Trim();
         if (!IsValidTimezone(tz)) return Error.Validation("invalid_timezone", "Timezone must be a valid IANA zone, e.g. Europe/Kyiv.");
-        return new LocationChange(name, address, phone, tz!, req.IsActive);
+        var clearCoords = req.ClearCoordinates == true;
+        if (clearCoords && (req.Latitude.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null)
+                            || req.Longitude.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null)))
+            return InvalidCoordinates;
+        var coords = clearCoords ? Result<(bool, decimal?, decimal?)>.Ok((true, null, null)) : ParseCoordinates(req.Latitude, req.Longitude);
+        if (!coords.IsOk) return coords.Error!;
+        var (provided, lat, lon) = coords.Value;
+        // ADR-022: city до 100 символів ("" = очистити).
+        var city = req.City?.Trim();
+        if (city is { Length: > MaxCity } || city?.Any(char.IsControl) == true)
+            return Error.Validation("invalid_city", $"City is too long (max {MaxCity}).");
+        return new LocationChange(name, address, phone, tz!, req.IsActive, lat, lon, provided,
+            string.IsNullOrEmpty(city) ? null : city, city is { Length: 0 }, req.IsDiscoverable);
+    }
+
+    private static readonly Error InvalidCoordinates = Error.Validation("invalid_coordinates",
+        "latitude and longitude must be given together as numbers (latitude -90..90, longitude -180..180) or both null.");
+
+    /// <summary>§28.11: обидва відсутні = без змін; обидва null = очистити; обидва числа в діапазоні = задати (округлення до 6 знаків).</summary>
+    private static Result<(bool, decimal?, decimal?)> ParseCoordinates(JsonElement lat, JsonElement lon)
+    {
+        if (lat.ValueKind == JsonValueKind.Undefined && lon.ValueKind == JsonValueKind.Undefined) return Result<(bool, decimal?, decimal?)>.Ok((false, null, null));
+        if (lat.ValueKind == JsonValueKind.Null && lon.ValueKind == JsonValueKind.Null) return Result<(bool, decimal?, decimal?)>.Ok((true, null, null));
+        if (lat.ValueKind != JsonValueKind.Number || lon.ValueKind != JsonValueKind.Number
+            || !lat.TryGetDecimal(out var la) || !lon.TryGetDecimal(out var lo)
+            || la < -90m || la > 90m || lo < -180m || lo > 180m)
+            return InvalidCoordinates;
+        return Result<(bool, decimal?, decimal?)>.Ok((true, Math.Round(la, 6, MidpointRounding.AwayFromZero), Math.Round(lo, 6, MidpointRounding.AwayFromZero)));
     }
 
     /// <summary>Валідна IANA-зона, яку знає середовище виконання (TimeZoneInfo).</summary>

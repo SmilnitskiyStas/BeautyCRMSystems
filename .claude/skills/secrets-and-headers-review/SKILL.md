@@ -1,8 +1,8 @@
 ---
 name: secrets-and-headers-review
 description: >-
-  Secrets And Headers Review — Use during a security review.
-x-generated-from: skills/security/secrets-and-headers-review/SKILL.md
+  Check secrets exposure (repo, client bundle, logs) and security headers/CSP. Use before release or when touching config/env.
+x-generated-from: .claude/skills/secrets-and-headers-review/SKILL.md
 ---
 
 ## Секрети

@@ -3,7 +3,7 @@
 import { useId, useState, type FormEvent } from "react";
 import { humanizeError } from "@/features/beauty-auth/errors";
 import { useCreateLocation, useUpdateLocation } from "../hooks/use-beauty-admin";
-import { DEFAULT_TIMEZONE, timeZoneOptions, validateLocation, type LocationErrors } from "../locations-logic";
+import { coordinateText, DEFAULT_TIMEZONE, parseCoordinates, timeZoneOptions, validateLocation, type LocationErrors } from "../locations-logic";
 import type { BeautyLocation, LocationInput } from "../types";
 import { CheckRow, ErrorBanner, SuccessBanner, TextField, ERROR_TEXT } from "./staff-parts";
 import { Card, FIELD_INPUT, FIELD_LABEL, PrimaryButton, SecondaryButton } from "./ui";
@@ -77,6 +77,9 @@ export function LocationForm({
   const [values, setValues] = useState<LocationInput>(
     location ? inputOf(location) : { name: "", address: "", phone: "", timezone: DEFAULT_TIMEZONE, isActive: true },
   );
+  const coordsHintId = useId();
+  const [lat, setLat] = useState(coordinateText(location?.latitude));
+  const [lon, setLon] = useState(coordinateText(location?.longitude));
   const [errors, setErrors] = useState<LocationErrors>({});
   const [serverError, setServerError] = useState<string | null>(null);
   const [confirmingOff, setConfirmingOff] = useState(false);
@@ -90,13 +93,17 @@ export function LocationForm({
 
   async function save() {
     setServerError(null);
+    const coords = parseCoordinates(lat, lon);
+    // Редагування завжди шле пару (порожня = очистити); створення - лише якщо задано.
+    const hasCoords = coords.latitude !== null && coords.longitude !== null;
+    const payload: LocationInput = location || hasCoords ? { ...values, latitude: coords.latitude, longitude: coords.longitude } : values;
     try {
       if (location) {
-        await update.mutateAsync(values);
+        await update.mutateAsync(payload);
         setSaved("Зміни збережено.");
         setConfirmingOff(false);
       } else {
-        const created = await create.mutateAsync(values);
+        const created = await create.mutateAsync(payload);
         onCreated?.(created);
         onClose?.();
       }
@@ -109,7 +116,7 @@ export function LocationForm({
   function submit(e: FormEvent) {
     e.preventDefault();
     setSaved(null);
-    const next = validateLocation(values);
+    const next = { ...validateLocation(values), ...parseCoordinates(lat, lon).errors };
     setErrors(next);
     if (Object.keys(next).length > 0) return;
     if (isEdit && wasActive && !values.isActive && !confirmingOff) {
@@ -130,6 +137,38 @@ export function LocationForm({
         <TextField label="Адреса" autoComplete="off" maxLength={200} value={values.address} onChange={(v) => set("address", v)} error={errors.address} hint="Необов’язково" />
         <TimeZoneField value={values.timezone} onChange={(v) => set("timezone", v)} error={errors.timezone} />
       </div>
+      <fieldset aria-describedby={coordsHintId} className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0">
+        <legend className="mb-1 text-[13px] font-semibold">Координати (необов’язково)</legend>
+        <p id={coordsHintId}className="text-[13px] text-(--muted)">
+          Для сортування закладів за геолокацією клієнта; необов’язково. Вкажіть обидва поля або жодного. Скопіюйте з Google Maps: правий клік — координати.
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <TextField
+            label="Широта"
+            inputMode="decimal"
+            autoComplete="off"
+            value={lat}
+            onChange={(v) => {
+              setLat(v);
+              setSaved(null);
+            }}
+            error={errors.latitude}
+            hint="Від −90 до 90, наприклад 50.4501"
+          />
+          <TextField
+            label="Довгота"
+            inputMode="decimal"
+            autoComplete="off"
+            value={lon}
+            onChange={(v) => {
+              setLon(v);
+              setSaved(null);
+            }}
+            error={errors.longitude}
+            hint="Від −180 до 180, наприклад 30.5234"
+          />
+        </div>
+      </fieldset>
       {isEdit ? (
         <fieldset className="m-0 flex min-w-0 flex-col gap-1 border-0 p-0">
           <legend className="mb-1 text-[13px] font-semibold">Статус</legend>

@@ -1,8 +1,8 @@
 ---
 name: keyboard-and-focus-review
 description: >-
-  Keyboard And Focus Review — Use during a WCAG 2.2 AA review of design specs or built UI.
-x-generated-from: skills/accessibility/keyboard-and-focus-review/SKILL.md
+  Verify keyboard-only operation: tab order, visible focus, skip links, no keyboard traps. Use when reviewing navigation, forms, or overlays for accessibility.
+x-generated-from: .claude/skills/keyboard-and-focus-review/SKILL.md
 ---
 
 # Keyboard And Focus Review

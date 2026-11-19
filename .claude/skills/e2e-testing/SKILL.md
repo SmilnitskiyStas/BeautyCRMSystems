@@ -1,8 +1,8 @@
 ---
 name: e2e-testing
 description: >-
-  e2e Testing — Use when writing or running tests.
-x-generated-from: skills/qa/e2e-testing/SKILL.md
+  Write end-to-end tests for the critical user journeys. Use when a flow spans pages/services or before release.
+x-generated-from: .claude/skills/e2e-testing/SKILL.md
 ---
 
 ## Сценарії (розділ тестування проєктного спеку)

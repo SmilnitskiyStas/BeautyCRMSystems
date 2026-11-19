@@ -197,11 +197,13 @@ public sealed class BookingRegressionTests : IClassFixture<AuthApiFixture>
     [SkippableTheory]
     [InlineData("1h", 60)]
     [InlineData("2h", 120)]
+    [InlineData("24h", 1440)]
     public async Task regression_reminder_option_creates_exactly_one_scheduled_row_before_visit(string option, int minutesBefore)
     {
         NeedDb();
         var s = await _h.CreateSalonAsync();
-        var first = Start((await _h.SlotsAsync(s, RegressionHarness.SlotDate()))[0]);
+        // TASK-737 (§22.4): точка 2h до першого слоту (09:00) потрапляє в тишу 22:00-08:00 і зсувається на 08:00 - беремо слот 10:00
+        var first = Start((await _h.SlotsAsync(s, RegressionHarness.SlotDate()))[4]);
         var created = await _h.BookAsync(s, first, reminder: option);
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         var id = (await Read<JsonElement>(created)).GetProperty("id").GetGuid();
@@ -211,7 +213,7 @@ public sealed class BookingRegressionTests : IClassFixture<AuthApiFixture>
         Assert.Equal(first.AddMinutes(-minutesBefore), r.ScheduledAt);
         // контракт з worker (pg-poll-store.ts): reminders.status = 'scheduled', appointments.reminder_option = '1h'|'2h'
         Assert.Equal(ReminderStatus.Scheduled, r.Status);
-        Assert.Equal(option == "1h" ? ReminderOption.OneHour : ReminderOption.TwoHours,
+        Assert.Equal(option switch { "1h" => ReminderOption.OneHour, "2h" => ReminderOption.TwoHours, _ => ReminderOption.TwentyFourHours },
             (await ctx.Appointments.AsNoTracking().SingleAsync(a => a.Id == id)).ReminderOption);
     }
 

@@ -287,7 +287,7 @@ public sealed class PublicBookingApiTests : IClassFixture<AuthApiFixture>, IDisp
     }
 
     [SkippableFact]
-    public async Task unknown_suspended_and_module_disabled_tenants_are_indistinguishable_404()
+    public async Task unknown_and_module_disabled_tenants_are_indistinguishable_404_and_suspended_is_403_tenant_suspended()
     {
         NeedDb();
         var noModule = await SeedAsync(modules: ["beauty_catalog"]);
@@ -296,8 +296,13 @@ public sealed class PublicBookingApiTests : IClassFixture<AuthApiFixture>, IDisp
             platformKey: PlatformKey);
         Assert.Equal(HttpStatusCode.NoContent, patch.StatusCode);
 
+        // ADR-018 D2 (§27.5): призупинений tenant відрізняється від невідомого - 403 tenant_suspended (каталог і слоти не віддаються).
+        var blocked = await _client.GetAsync($"/api/public/{suspended.Slug}/locations");
+        Assert.Equal(HttpStatusCode.Forbidden, blocked.StatusCode);
+        Assert.Contains("tenant_suspended", await blocked.Content.ReadAsStringAsync());
+
         string? expected = null;
-        foreach (var slug in new[] { "no-such-salon-0000", noModule.Slug, suspended.Slug, "UPPER_and-bad", "x" })
+        foreach (var slug in new[] { "no-such-salon-0000", noModule.Slug, "UPPER_and-bad", "x" })
         {
             var r = await _client.GetAsync($"/api/public/{slug}/locations");
             Assert.Equal(HttpStatusCode.NotFound, r.StatusCode);
@@ -556,6 +561,7 @@ public sealed class PublicBookingApiTests : IClassFixture<AuthApiFixture>, IDisp
         NeedDb();
         var c = NewClient(b =>
         {
+            b.UseSetting("PublicBooking:AllowWeakerClientPaths", "true"); // тест навмисно перевіряє нерівні шляхи
             b.UseSetting("PublicBooking:CaptchaRequired", "true");
             b.ConfigureTestServices(sv => sv.AddSingleton<ICaptchaVerifier, FakeCaptcha>());
         });
@@ -577,7 +583,7 @@ public sealed class PublicBookingApiTests : IClassFixture<AuthApiFixture>, IDisp
     public async Task captcha_required_without_provider_fails_closed()
     {
         NeedDb();
-        var c = NewClient(b => b.UseSetting("PublicBooking:CaptchaRequired", "true"));
+        var c = NewClient(b => { b.UseSetting("PublicBooking:AllowWeakerClientPaths", "true"); b.UseSetting("PublicBooking:CaptchaRequired", "true"); });
         var s = await SeedAsync();
         var at = (await SlotStartsAsync(s, c: c))[0];
         await Err(await PostAsync(s.Slug, Body(s, at, payment: "cash"), c: c, captcha: "anything"), HttpStatusCode.UnprocessableEntity, "captcha_failed");
@@ -610,7 +616,9 @@ public sealed class PublicBookingApiTests : IClassFixture<AuthApiFixture>, IDisp
             Assert.NotEqual(AppointmentStatus.Completed, a.Status);
         });
         Assert.False((await ctx.Clients.SingleAsync(c => c.Phone == "+380501110001")).MarketingConsent); // без поля = немає згоди
-        Assert.True((await ctx.Clients.SingleAsync(c => c.Phone == "+380501110002")).MarketingConsent);
+        Assert.False((await ctx.Clients.SingleAsync(c => c.Phone == "+380501110002")).MarketingConsent); // §26 (TASK-777): поле форми ігнорується
+        Assert.Empty(await ctx.MarketingConsents.ToListAsync());
+        Assert.Empty(await ctx.MarketingConsentEvents.ToListAsync());
 
         // наявний клієнт: згода й профіль не змінюються анонімним запитом
         Assert.Equal(HttpStatusCode.Created, (await PostAsync(s.Slug, Make(starts[8], "+380501110001", consent: true))).StatusCode);
@@ -633,5 +641,112 @@ public sealed class PublicBookingApiTests : IClassFixture<AuthApiFixture>, IDisp
         }
         await Err(await PostAsync(s.Slug, Body(s, starts[12], "+380509998877", payment: "cash"), c: c),
             HttpStatusCode.UnprocessableEntity, "booking_limit_reached");
+    }
+    // ---------- ADR-022: ліміт на заклад, мітки клієнта, політика захисту ----------
+
+    private Task<HttpResponseMessage> PostWithHeadersAsync(Seed s, object body, HttpClient c, params (string, string)[] headers)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Post, $"/api/public/{s.Slug}/appointments") { Content = JsonContent.Create(body, options: Json) };
+        req.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString("N"));
+        foreach (var (k, v) in headers) req.Headers.Add(k, v);
+        return c.SendAsync(req);
+    }
+
+    [SkippableFact]
+    public async Task per_location_hourly_cap_blocks_rotating_phones_but_not_idempotent_replay()
+    {
+        NeedDb();
+        var c = NewClient(b => b.UseSetting("PublicBooking:MaxPublicCreatesPerLocationPerHour", "2"));
+        var s = await SeedAsync();
+        var starts = await SlotStartsAsync(s, c: c);
+        var key = Guid.NewGuid().ToString("N");
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync(s.Slug, Body(s, starts[0], "+380509990011", payment: "cash"), key, c)).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync(s.Slug, Body(s, starts[4], "+380509990012", payment: "cash"), c: c)).StatusCode);
+        await Err(await PostAsync(s.Slug, Body(s, starts[8], "+380509990013", payment: "cash"), c: c), HttpStatusCode.UnprocessableEntity, "booking_limit_reached");
+        // повтор уже виконаного запиту (той самий ключ) повертає збережений результат, а не помилку ліміту
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync(s.Slug, Body(s, starts[0], "+380509990011", payment: "cash"), key, c)).StatusCode);
+    }
+
+    [SkippableFact]
+    public async Task per_location_cap_is_per_location_and_can_be_disabled()
+    {
+        NeedDb();
+        var off = NewClient(b => b.UseSetting("PublicBooking:MaxPublicCreatesPerLocationPerHour", "0"));
+        var s = await SeedAsync();
+        var starts = await SlotStartsAsync(s, c: off);
+        for (var i = 0; i < 3; i++)
+            Assert.Equal(HttpStatusCode.Created, (await PostAsync(s.Slug, Body(s, starts[i * 4], $"+38050999002{i}", payment: "cash"), c: off)).StatusCode);
+    }
+
+    [SkippableFact]
+    public async Task client_protection_policy_none_monitor_enforce_by_client_label()
+    {
+        NeedDb();
+        var c = NewClient(b =>
+        {
+            b.UseSetting("PublicBooking:AllowWeakerClientPaths", "true"); // тест навмисно перевіряє нерівні шляхи
+            b.UseSetting("PublicBooking:Protection:Ios", "enforce");
+            b.UseSetting("PublicBooking:Protection:Android", "monitor");
+        });
+        var s = await SeedAsync();
+        var starts = await SlotStartsAsync(s, c: c);
+        // ios enforce без доказу: fail closed (App Attest ще не реалізовано)
+        await Err(await PostWithHeadersAsync(s, Body(s, starts[0], "+380509990031", payment: "cash"), c, ("X-Booking-Client", "ios"), ("X-Client-Integrity", "token")),
+            HttpStatusCode.UnprocessableEntity, "integrity_failed");
+        // android monitor: не блокує
+        Assert.Equal(HttpStatusCode.Created, (await PostWithHeadersAsync(s, Body(s, starts[4], "+380509990032", payment: "cash"), c, ("X-Booking-Client", "android"))).StatusCode);
+        // web (без мітки / web) = none за замовчуванням
+        Assert.Equal(HttpStatusCode.Created, (await PostWithHeadersAsync(s, Body(s, starts[8], "+380509990033", payment: "cash"), c)).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await PostWithHeadersAsync(s, Body(s, starts[12], "+380509990034", payment: "cash"), c, ("X-Booking-Client", "web"))).StatusCode);
+    }
+
+    [SkippableFact]
+    public async Task custom_integrity_verifier_is_used_for_enforce()
+    {
+        NeedDb();
+        var c = NewClient(b =>
+        {
+            b.UseSetting("PublicBooking:AllowWeakerClientPaths", "true"); // тест навмисно перевіряє нерівні шляхи
+            b.UseSetting("PublicBooking:Protection:Ios", "enforce");
+            b.ConfigureTestServices(sv => sv.AddSingleton<IClientIntegrityVerifier, FakeIntegrity>());
+        });
+        var s = await SeedAsync();
+        var starts = await SlotStartsAsync(s, c: c);
+        await Err(await PostWithHeadersAsync(s, Body(s, starts[0], "+380509990041", payment: "cash"), c, ("X-Booking-Client", "ios")),
+            HttpStatusCode.UnprocessableEntity, "integrity_failed");
+        Assert.Equal(HttpStatusCode.Created, (await PostWithHeadersAsync(s, Body(s, starts[0], "+380509990041", payment: "cash"), c,
+            ("X-Booking-Client", "ios"), ("X-Client-Integrity", "ok-token"))).StatusCode);
+    }
+
+    private sealed class FakeIntegrity : IClientIntegrityVerifier
+    {
+        public Task<bool> VerifyAsync(ClientProof proof, string? remoteIp, CancellationToken ct) =>
+            Task.FromResult(proof is { Kind: ClientProofKind.AppAttest, Token: "ok-token" });
+    }
+
+    [SkippableFact]
+    public async Task old_app_version_gets_426_everywhere_on_public_api_but_labels_never_block_otherwise()
+    {
+        NeedDb();
+        var c = NewClient(b => b.UseSetting("PublicBooking:MinAppVersion:Ios", "2.1.0"));
+        var s = await SeedAsync();
+        HttpRequestMessage Get(string url, string? client, string? version)
+        {
+            var r = new HttpRequestMessage(HttpMethod.Get, url);
+            if (client is not null) r.Headers.Add("X-Booking-Client", client);
+            if (version is not null) r.Headers.Add("X-App-Version", version);
+            return r;
+        }
+        var url = $"/api/public/{s.Slug}/locations";
+        var old = await c.SendAsync(Get(url, "ios", "2.0.9"));
+        await Err(old, HttpStatusCode.UpgradeRequired, "upgrade_required");
+        await Err(await c.SendAsync(Get("/api/public/resolve/ABCD-EFGH", "iOS", "1.0")), HttpStatusCode.UpgradeRequired, "upgrade_required");
+        Assert.Equal(HttpStatusCode.OK, (await c.SendAsync(Get(url, "ios", "2.1.0"))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await c.SendAsync(Get(url, "ios", "10.0.0-beta.1"))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await c.SendAsync(Get(url, "ios", null))).StatusCode);          // мітка, не автентифікація
+        Assert.Equal(HttpStatusCode.OK, (await c.SendAsync(Get(url, "ios", "garbage"))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await c.SendAsync(Get(url, "android", "0.0.1"))).StatusCode);    // для android мінімуму не задано
+        Assert.Equal(HttpStatusCode.OK, (await c.SendAsync(Get(url, "web", "0.0.1"))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await c.SendAsync(Get(url, "toaster", "0.0.1"))).StatusCode);
     }
 }

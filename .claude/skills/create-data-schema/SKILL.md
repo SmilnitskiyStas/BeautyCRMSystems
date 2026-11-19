@@ -1,8 +1,8 @@
 ---
 name: create-data-schema
 description: >-
-  Create Data Schema — Use when implementing a light backend colocated with the frontend.
-x-generated-from: skills/fullstack/create-data-schema/SKILL.md
+  Define the data model and migration for a light colocated backend. Use when a server action or route handler needs persistence.
+x-generated-from: .claude/skills/create-data-schema/SKILL.md
 ---
 
 # Create Data Schema

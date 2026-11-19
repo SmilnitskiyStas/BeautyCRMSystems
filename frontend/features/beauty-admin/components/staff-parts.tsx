@@ -54,6 +54,7 @@ export function TextField({
   disabled,
   autoComplete,
   maxLength,
+  inputMode,
 }: {
   label: string;
   value: string;
@@ -65,6 +66,7 @@ export function TextField({
   disabled?: boolean;
   autoComplete?: string;
   maxLength?: number;
+  inputMode?: "text" | "decimal";
 }) {
   const id = useId();
   const describedBy = [hint ? `${id}-hint` : "", error ? `${id}-err` : ""].filter(Boolean).join(" ") || undefined;
@@ -82,6 +84,7 @@ export function TextField({
         disabled={disabled}
         autoComplete={autoComplete}
         maxLength={maxLength}
+        inputMode={inputMode}
         onChange={(e) => onChange(e.target.value)}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}

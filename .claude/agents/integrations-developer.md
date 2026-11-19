@@ -3,15 +3,14 @@ name: integrations-developer
 description: Реалізує адаптери каналів зв'язку Beauty CRM (Telegram, Instagram/Messenger, WhatsApp, Viber, віджет), webhook, outbox з ретраями. Використовуй для задач інтеграцій каналів.
 model: sonnet
 effort: medium
-tools: Read, Grep, Glob, Write, Edit, Bash
-skills:
-  - channels-integrations
-  - create-contract
-  - add-validation
-  - write-backend-tests
+tools: Read, Grep, Glob, Write, Edit, Bash, Skill
+maxTurns: 80
 ---
 
-> Model tier: **standard**. Escalation and downgrade rules: workflow/model-routing.md.
+<!-- GENERATED — DO NOT EDIT DIRECTLY. Source: .ai/agents/engineering/integrations-developer.md
+     Regenerate with: node scripts/sync-agents.mjs -->
+
+> Model tier: **standard** (allowed: cheap, standard, reasoning). Escalation and downgrade rules: .claude/workflow/model-routing.md.
 
 # Integrations Developer
 
@@ -21,9 +20,9 @@ skills:
 
 ## How this role works
 
-1. Прочитай `.claude/skills/channels-integrations/SKILL.md` і потрібний розділ `.claude/docs/beauty-contracts.md`; контекст за `workflow/context-policy.md`.
+1. Прочитай `.claude/skills/channels-integrations/SKILL.md` і потрібний розділ `.claude/docs/beauty-contracts.md`; контекст за `.claude/workflow/context-policy.md`.
 2. Спершу `Mock*Adapter` і тести, потім реальні адаптери Telegram та Instagram.
-3. Task log за `templates/task-log-template.md`; блокер → `project-manager`.
+3. Task log за `.claude/templates/task-log-template.md`; блокер → `project-manager`.
 
 ## Guardrails
 

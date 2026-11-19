@@ -2,7 +2,7 @@
 name: engineering-standards
 description: >-
   Stack-agnostic engineering standards for this workspace. Use for software engineering, architecture, refactoring, debugging, testing, documentation, and code review.
-x-generated-from: skills/shared/engineering-standards/SKILL.md
+x-generated-from: .claude/skills/engineering-standards/SKILL.md
 ---
 
 # Personal Engineering Standards

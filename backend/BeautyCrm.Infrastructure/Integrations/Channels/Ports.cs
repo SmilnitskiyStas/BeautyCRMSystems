@@ -28,6 +28,8 @@ public interface IChannelMessageRepository
     Task<IReadOnlyList<InboundMessage>> SaveInboundAsync(IReadOnlyList<InboundMessage> messages, CancellationToken ct);
     Task<OutboxItem?> GetOutboxItemAsync(Guid messageId, CancellationToken ct);
     Task MarkSentAsync(Guid messageId, CancellationToken ct);
+    /// <summary>TASK-750 (§23.4): status=sent, sent_at і external_message_id (id повідомлення в каналі) одним UPDATE. За замовчуванням id ігнорується.</summary>
+    Task MarkSentAsync(Guid messageId, string? externalMessageId, CancellationToken ct) => MarkSentAsync(messageId, ct);
     Task MarkAttemptFailedAsync(Guid messageId, int attempts, string error, bool final, CancellationToken ct);
 }
 

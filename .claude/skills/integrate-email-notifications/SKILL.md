@@ -1,8 +1,8 @@
 ---
 name: integrate-email-notifications
 description: >-
-  Integrate Email Notifications — Use when implementing a light backend colocated with the frontend.
-x-generated-from: skills/fullstack/integrate-email-notifications/SKILL.md
+  Send transactional email/notifications behind a thin interface with retries and no secrets in client code. Use when an event must notify someone.
+x-generated-from: .claude/skills/integrate-email-notifications/SKILL.md
 ---
 
 ## Провайдер-абстракція

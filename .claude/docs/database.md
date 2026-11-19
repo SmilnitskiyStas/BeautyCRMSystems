@@ -1,6 +1,6 @@
 # Beauty CRM — Database Schema & RLS
 
-**Current version:** 0.8 (TASK-697/698, 2026-10-08)
+**Current version:** 0.9 (ADR-022 public location catalog, 2026-11-09; TASK-697/698, 2026-10-08)
 **Database:** PostgreSQL 16+ (RLS-enabled)
 **ORM:** EF Core 8.0 with Npgsql 8.0.11
 
@@ -31,18 +31,35 @@ tenant_id       UUID NOT NULL (RLS filtered)
 name            VARCHAR(200) NOT NULL
 address         VARCHAR(500)
 phone           VARCHAR(32)
-timezone        VARCHAR(64) NOT NULL (IANA: "Europe/Kyiv"; validated per §16)
+timezone        VARCHAR(64) NOT NULL (IANA: "Europe/Kyiv"; validated per domain-model §9)
 is_active       BOOLEAN DEFAULT true
 created_at      TIMESTAMPTZ NOT NULL
 updated_at      TIMESTAMPTZ NOT NULL
+closed_weekdays TEXT[] (migration 9, weekly closed days mon..sun)
+working_hours   JSONB (migration 10, location working hours)
+public_code     VARCHAR(8) NOT NULL (ADR-022, DEFAULT public.beauty_generate_public_code(), globally unique, immutable)
+latitude        DOUBLE PRECISION NULL (ADR-022, -90..90)
+longitude       DOUBLE PRECISION NULL (ADR-022, -180..180)
+city            VARCHAR(100) NULL (ADR-022, city search only)
+is_discoverable BOOLEAN NOT NULL DEFAULT false (ADR-022, opt-in to nearby and city search)
 
 UNIQUE (tenant_id, name) -- case-insensitive via lower()
 CHECK (char_length(name) >= 1 AND char_length(name) <= 200)
 CHECK (char_length(address) IS NULL OR char_length(address) <= 500)
+CHECK ck_beauty_locations_public_code: public_code ~ '^[0-9A-HJKMNP-TV-Z]{8}$'
+CHECK ck_beauty_locations_latitude / ck_beauty_locations_longitude: NULL or range
+CHECK ck_beauty_locations_coords_pair: (latitude IS NULL) = (longitude IS NULL)
+CHECK ck_beauty_locations_closed_weekdays: closed_weekdays <@ ARRAY['mon',...,'sun']
 ```
 
-**Indexes:** (tenant_id, id); (tenant_id, is_active).
-**RLS Policy:** `tenant_isolation` (ENABLE ROW LEVEL SECURITY FORCE).
+**Indexes:** (tenant_id, id); (tenant_id, is_active);
+`ux_beauty_locations_public_code` UNIQUE (public_code) — **global**, not per tenant (ADR-022);
+`ix_beauty_locations_discoverable_coords` (latitude, longitude) WHERE is_discoverable AND is_active AND latitude IS NOT NULL;
+`ix_beauty_locations_discoverable_city` (lower(city)) WHERE is_discoverable AND is_active AND city IS NOT NULL.
+
+**RLS Policy:** `tenant_isolation` (ENABLE ROW LEVEL SECURITY FORCE). Cross-tenant public reads of the catalog columns
+(`public_code`, `latitude`, `longitude`, `city`, `is_discoverable`, `name`, `address`, `timezone`, `is_active`) go only via
+the `beautycrm_catalog` role policy `public_catalog_read` and the SECURITY DEFINER functions (§5).
 
 **Notes:** Deactivation blocked if has future pending/confirmed appointments (TASK-697). Timezone change blocked similarly. No delete — only soft deactivation.
 
@@ -60,6 +77,8 @@ phone           VARCHAR(32)
 email           VARCHAR(320)
 photo_url       VARCHAR(2048)
 position        VARCHAR (text, added TASK-691, e.g. "Hairdresser", "Colorist")
+practice_start_year INTEGER NULL  -- CHECK 1950..2100 (поточний рік перевіряє сервіс)
+bio             VARCHAR(500) NULL -- CHECK char_length <= 500
 is_active       BOOLEAN DEFAULT true
 created_at      TIMESTAMPTZ NOT NULL
 updated_at      TIMESTAMPTZ NOT NULL
@@ -69,6 +88,27 @@ UNIQUE (tenant_id, id)
 
 **Indexes:** (tenant_id, id); (tenant_id, is_active).
 **RLS Policy:** `tenant_isolation` (ENABLE ROW LEVEL SECURITY FORCE).
+**Notes (public profile):** `photo_url` — лише https-URL до 500 символів перевіряє сервіс (у БД ліміт лишається 2048, щоб не ламати наявні рядки).
+
+#### beauty_specialist_reviews
+```sql
+id              UUID PRIMARY KEY DEFAULT gen_random_uuid()
+tenant_id       UUID NOT NULL (RLS filtered)
+specialist_id   UUID NOT NULL (composite FK (tenant_id, specialist_id) -> beauty_specialists, ON DELETE CASCADE)
+appointment_id  UUID NULL (composite FK -> beauty_appointments, RESTRICT)
+client_id       UUID NULL (composite FK -> beauty_clients, RESTRICT)
+author_name     VARCHAR(100) NOT NULL  -- вже у вигляді «Ім'я К.», обчислюється при створенні
+rating          SMALLINT NOT NULL      -- CHECK 1..5
+text            VARCHAR(1000) NULL
+is_published    BOOLEAN NOT NULL DEFAULT true
+created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+
+UNIQUE (tenant_id, id)
+```
+
+**Indexes:** UNIQUE `ux_beauty_specialist_reviews_appointment` (tenant_id, appointment_id) WHERE appointment_id IS NOT NULL (один відгук на запис); `ix_beauty_specialist_reviews_specialist_published` (tenant_id, specialist_id, is_published, created_at DESC); (tenant_id, client_id).
+**RLS Policy:** `tenant_isolation` (ENABLE + FORCE).
+**Notes:** публічний API віддає лише `is_published`; client_id/appointment_id у відповідь не потрапляють. Створення відгуків клієнтом і адмін-модерація — окремі кроки (ще не реалізовані).
 
 **Notes:** Deactivation (isActive=false) in transaction: user→is_active=false (except owner), refresh tokens revoked, pending invites→revoked. Does NOT delete appointments.
 
@@ -264,7 +304,7 @@ source          VARCHAR(32) NOT NULL (CHECK IN ('admin','online','telegram','ins
 price_original  NUMERIC(12, 2)
 price_final     NUMERIC(12, 2)
 promotion_id    UUID (nullable, FK beauty_promotions)
-reminder_option VARCHAR(32) NOT NULL (CHECK IN ('none','1h','2h'))
+reminder_option VARCHAR(32) NOT NULL (CHECK IN ('none','1h','2h','24h'))
 payment_method  VARCHAR(32) (nullable, CHECK IN ('card','cash'))
 cancelled_at    TIMESTAMPTZ (nullable, set at cancellation)
 cancelled_by_type VARCHAR(16) (nullable, added TASK-697, CHECK IN ('client','staff','system'))
@@ -349,7 +389,7 @@ ON DELETE CASCADE (if client soft-deleted or hard-deleted)
 id              UUID PRIMARY KEY
 tenant_id       UUID NOT NULL (RLS filtered)
 location_id     UUID (nullable, FK beauty_locations)
-type            VARCHAR(32) NOT NULL (CHECK IN ('telegram','instagram','viber','whatsapp','facebook','widget'))
+type            VARCHAR(32) NOT NULL (CHECK IN ('telegram','instagram','viber','whatsapp','facebook','widget','email'))
 name            VARCHAR(200) NOT NULL
 credentials_encrypted TEXT (nullable, AES-256-GCM encrypted JSON of {token, webhookSecret, appSecret, verifyToken})
 credentials_last4 VARCHAR(4) (nullable, masked display "****abcd")
@@ -362,6 +402,8 @@ UNIQUE (tenant_id, id)
 ```
 
 **Encryption (TASK-689):** `credentials_encrypted` is AES-256-GCM using `Channels__EncryptionKey` (.env, base64 32+ bytes). Decryption in `Infrastructure/Integrations/Channels/AesGcmSecretProtector`. Credentials JSON includes `{token, webhookSecret, appSecret, verifyToken}` (Instagram M5: separate appSecret for HMAC, verifyToken for GET, not webhookSecret anymore).
+
+**Email channel:** `type='email'` (one lazily created row per tenant, no credentials; SMTP is global in the worker). Client address = `beauty_conversations.external_chat_id` (lowercase), `last_message_at` stays NULL so a messenger conversation wins in the worker's `CLIENT_SQL`. Confirmation = `beauty_messages` (outbound, system, `pending`, `idempotency_key = 'confirmation:{appointmentId}'`).
 
 **RLS Policy:** `tenant_isolation` (ENABLE ROW LEVEL SECURITY FORCE).
 **Webhook Policy:** `channel_webhook_lookup` (SELECT only, by channel ID).
@@ -488,6 +530,8 @@ refund_percent_in_window INT NOT NULL
 refund_percent_outside INT NOT NULL
 deduct_fee      BOOLEAN DEFAULT false
 fee_percent     INT NOT NULL
+show_terms_to_client BOOLEAN NOT NULL DEFAULT true  -- показ умов клієнту (лише презентація)
+custom_terms_text TEXT NULL                          -- власний текст умов, ≤ 500
 created_at      TIMESTAMPTZ NOT NULL
 updated_at      TIMESTAMPTZ NOT NULL
 
@@ -495,9 +539,10 @@ CHECK (window_hours BETWEEN 0 AND 720)
 CHECK (refund_percent_in_window BETWEEN 0 AND 100)
 CHECK (refund_percent_outside BETWEEN 0 AND 100)
 CHECK (fee_percent BETWEEN 0 AND 100)
+CHECK (custom_terms_text IS NULL OR char_length(custom_terms_text) <= 500)  -- ck_beauty_cancellation_settings_terms_text
 ```
 
-**Default values (if row absent):** `window_hours=12`, `refund_percent_in_window=50`, `refund_percent_outside=100`, `deduct_fee=false`, `fee_percent=0`.
+**Default values (if row absent):** `window_hours=12`, `refund_percent_in_window=50`, `refund_percent_outside=100`, `deduct_fee=false`, `fee_percent=0`, `show_terms_to_client=true`, `custom_terms_text=NULL`. Прапорець/текст керують лише показом клієнту й не впливають на розрахунок повернення.
 
 **Calculation (TASK-685):** 
 ```
@@ -520,11 +565,17 @@ name            VARCHAR NOT NULL
 slug            VARCHAR NOT NULL UNIQUE (3-64, a-z0-9-)
 modules         TEXT[] (array of feature flags)
 status          VARCHAR (CHECK IN ('active','suspended'))
+external_ref    VARCHAR(64) NULL (CHECK `^[A-Za-z0-9_-]{1,64}$`; ShelfGuard enterprise id, ADR-018)
+external_source VARCHAR(16) NULL (CHECK IN ('shelfguard'); set together with external_ref)
+suspended_at    TIMESTAMPTZ NULL (only while status='suspended')
+suspended_reason VARCHAR(500) NULL
 created_at      TIMESTAMPTZ NOT NULL
 updated_at      TIMESTAMPTZ NOT NULL
+
+UNIQUE (external_source, external_ref) WHERE external_ref IS NOT NULL  -- ux_tenants_external_ref
 ```
 
-**No RLS** (public read for login lookup). Suspended tenant → `403 module_disabled` on any module access.
+**RLS:** ENABLE + FORCE RLS. Policies: `tenant_self` (`app.tenant_id`), `tenants_login_lookup` (SELECT by `app.tenant_slug`), `tenants_control_lookup` (SELECT by `app.tenant_external_ref`, only `external_source='shelfguard'`; see §3). Suspended tenant → `403 module_disabled` on staff module access; public booking/widget → `403 tenant_suspended` (ADR-018).
 
 #### users
 ```sql
@@ -532,14 +583,17 @@ id              UUID PRIMARY KEY
 tenant_id       UUID NOT NULL (FK tenants)
 email           VARCHAR NOT NULL
 full_name       VARCHAR NOT NULL
-role            VARCHAR NOT NULL (CHECK IN ('owner','admin','specialist'))
+role            VARCHAR NOT NULL (CHECK IN ('owner','admin','deputy','specialist'))  -- deputy: ADR-023
+access_version  INTEGER NOT NULL DEFAULT 1  -- ADR-023: +1 за зміни ролі, прав, активності (X-Access-Version)
 specialist_id   UUID (nullable, FK beauty_specialists, composite FK (tenant_id, specialist_id))
 is_active       BOOLEAN DEFAULT true
-password_hash   VARCHAR NOT NULL (bcrypt, workfactor 12)
+password_hash   VARCHAR NULL (bcrypt, workfactor 12; NULL only while state='invited')
+state           VARCHAR NOT NULL DEFAULT 'active' (CHECK IN ('active','invited'))
 created_at      TIMESTAMPTZ NOT NULL
 updated_at      TIMESTAMPTZ NOT NULL
 
 UNIQUE (tenant_id, email) DEFERRABLE INITIALLY DEFERRED
+CHECK (password_hash IS NOT NULL OR state = 'invited')  -- ADR-018, platform_control_plane
 ```
 
 **Deactivation (TASK-696):** owner never auto-disabled; specialist deactivation → user.is_active=false (except owner), refresh tokens revoked, pending invites revoked.
@@ -551,7 +605,8 @@ UNIQUE (tenant_id, email) DEFERRABLE INITIALLY DEFERRED
 id              UUID PRIMARY KEY
 tenant_id       UUID NOT NULL (FK tenants)
 email           VARCHAR NOT NULL
-role            VARCHAR NOT NULL (CHECK IN ('admin','specialist'))
+role            VARCHAR NOT NULL (CHECK IN ('admin','deputy','specialist'))  -- deputy: ADR-023
+permissions     JSONB NOT NULL (CHECK jsonb_typeof = 'object'; ADR-023: повний знімок прав, обрізаний стелею запрошувача; міграція backfill-ить пресет ролі; DEFAULT '{}' лишено для сумісності зі старими образами API, див. known-issues)
 specialist_id   UUID (nullable, FK beauty_specialists, TASK-691)
 token_hash      VARCHAR NOT NULL (SHA-256, one-time)
 is_used         BOOLEAN DEFAULT false
@@ -569,6 +624,40 @@ UNIQUE (tenant_id, email) PARTIAL WHERE is_used=false AND status='pending'
 - One active per specialist_id (new invite revokes pending for same profile, advisory lock)
 
 **RLS Policy:** `tenant_isolation`.
+
+#### user_permissions (ADR-023, міграція 20261115120000)
+```sql
+tenant_id          UUID NOT NULL
+user_id            UUID NOT NULL
+permission         TEXT NOT NULL      -- 'calendar.view'; CHECK ^[a-z_]{1,32}\.[a-z_]{1,32}$
+level              TEXT NOT NULL      -- 'own'; CHECK ^[a-z_]{1,16}$
+updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+updated_by_user_id UUID NULL          -- NULL = міграція/система; FK RESTRICT
+PRIMARY KEY (tenant_id, user_id, permission)
+FK (tenant_id, user_id) -> users (tenant_id, id) ON DELETE CASCADE
+```
+- Матеріалізовані значення: що в БД, те й діє. Для owner рядків немає (права неявні). Валідність ключів і рівнів перевіряє Application за каталогом; БД перевіряє лише формат.
+- **RLS:** ENABLE + FORCE, `tenant_isolation` (`app.tenant_id`).
+
+#### user_access_audit (ADR-023, append-only)
+```sql
+id              UUID PRIMARY KEY
+tenant_id       UUID NOT NULL
+actor_user_id   UUID NULL      -- NULL = міграція/система; FK RESTRICT
+target_user_id  UUID NULL      -- NULL для подій запрошення (Q-C2); FK RESTRICT
+invite_id       UUID NULL      -- FK invites (tenant_id, id) RESTRICT
+action          VARCHAR(32) NOT NULL  -- permissions_changed|role_changed|preset_reset|invited|invite_revoked|invite_accepted|activated|deactivated|migrated
+changes         JSONB NOT NULL        -- array або object (diff: [{permission, from, to}] / {role:{from,to}})
+created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+CHECK (target_user_id IS NOT NULL OR invite_id IS NOT NULL)
+```
+- **RLS:** ENABLE + FORCE, `tenant_isolation`. Додатково політики `audit_purge_select` і `audit_purge_delete` лише `TO beautycrm_audit_purge` (`USING (true)`, для retention між tenant-ами).
+- **Append-only:** `BEFORE UPDATE OR DELETE` (row) і `BEFORE TRUNCATE` (statement) тригер `user_access_audit_block_mutation`, що кидає `42501`. Єдиний виняток: рядковий `DELETE`, коли `current_user = 'beautycrm_audit_purge'`. Роль застосунку має лише `SELECT, INSERT` (`REVOKE UPDATE, DELETE` у `grants.sql`).
+- Індекси: `(tenant_id, target_user_id, created_at DESC)`, `(tenant_id, created_at DESC, id DESC)`, `(tenant_id, actor_user_id)`, часткові `(tenant_id, invite_id, created_at DESC) WHERE invite_id IS NOT NULL`.
+- **Journal не містить ПІІ клієнтів, паролів, токенів чи email.**
+
+#### beauty_appointments.created_by_user_id (ADR-023)
+`uuid NULL`, композитний FK `(tenant_id, created_by_user_id) -> users` RESTRICT, частковий індекс `(tenant_id, created_by_user_id) WHERE NOT NULL`. Наявні рядки NULL. Використовується scope `clients.view = own` (автор скасованого запису scope не розширює). Заповнює `POST /appointments` (TASK-852).
 
 #### refresh_tokens
 ```sql
@@ -642,9 +731,27 @@ CREATE POLICY tenants_login_lookup ON tenants
 
 Similar flow: set `app.tenant_slug`, resolve `tenant_id`, then set `app.tenant_id` for remaining queries.
 
+### Special Policy: `tenants_control_lookup` (tenants, SELECT only, TASK-816 / ADR-018)
+
+For the ShelfGuard control plane, which knows only `external_ref` (not `tenant_id`). `tenants` is FORCE RLS, so without this
+the registry cannot be read by external id:
+
+```sql
+CREATE POLICY tenants_control_lookup ON tenants
+  FOR SELECT
+  USING (external_source = 'shelfguard'
+         AND external_ref = NULLIF(current_setting('app.tenant_external_ref', true), ''));
+```
+
+Set `app.tenant_external_ref` with `set_config(..., true)` (transaction-local), resolve `tenant_id`, then set `app.tenant_id`
+(also transaction-local) for writes. No `BYPASSRLS` role is involved.
+
 ---
 
-## 4. Migrations (in order, 8 total)
+## 4. Migrations (24 total in the Migrations directory; 15 described below)
+
+> Примітка: детально описані міграції 1–15 нижче; не описані тут (джерело істини — `backend/BeautyCrm.Infrastructure/Data/Migrations/`): `20261024091314_beauty_ai_settings_and_usage`, `20261024102153_beauty_chat_assistant`, `20261024193048_beauty_reminders_contacts_inbox`, `20261025080340_beauty_chat_buttons`, `20261026091203_beauty_service_costs`, `20261026093343_beauty_client_phone_capture`, `20261026203521_beauty_marketing`, `20261107134706_beauty_chat_booking_flow`, `20261107145615_beauty_chat_booking_flow_step_checks`.
+
 
 ### 1. `20261007115130_add_beauty_schema` (TASK-674)
 
@@ -678,6 +785,52 @@ Adds cancelled_by_user_id, cancelled_at to beauty_specialist_absences. DO-block 
 
 Adds cancelled_by_type, cancelled_by_user_id, cancel_reason to beauty_appointments. CHECK constraints for cancel metadata. FK RESTRICT on users. Backfill: set cancelled_by_type='system' for existing cancelled rows (under NO FORCE, then FORCE again). DO-block verifies FORCE on beauty_appointments, beauty_locations.
 
+### 9. `20261010130434_beauty_location_closures` (TASK-701)
+
+Adds beauty_locations.closed_weekdays (TEXT[], CHECK on weekday codes). Creates beauty_location_closures (date-range closures per location) with FKs and indexes.
+
+### 10. `20261010135605_beauty_location_working_hours` (TASK-703)
+
+Adds beauty_locations.working_hours (JSONB).
+
+### 11. `20261109075625_beauty_public_location_catalog` (ADR-022)
+
+Adds beauty_locations.public_code (backfilled by `public.beauty_generate_public_code()`), city, is_discoverable; unique index `ux_beauty_locations_public_code`; CHECK `ck_beauty_locations_public_code`. Columns `latitude`/`longitude` (`numeric(9,6)`) and CHECK `ck_beauty_locations_coordinates` already come from `20261107134706_beauty_chat_booking_flow` (agent-system-v2) and are NOT re-created here; partial indexes for nearby and city search. Creates role `beautycrm_catalog` if missing, column grants, `public_catalog_read` policies, and the three SECURITY DEFINER functions (§5). Down drops functions, policies, indexes and checks; the cluster role is kept.
+
+### 12. `20261109135452_beauty_specialist_profile_reviews` (мобільний потік «послуга → майстер → дата → час»)
+
+Adds beauty_specialists.practice_start_year, bio (+ CHECKs). Creates beauty_specialist_reviews (§ вище) with RLS ENABLE+FORCE, `tenant_isolation`, guarded `GRANT SELECT, INSERT, UPDATE, DELETE ... TO beautycrm_app` (лише якщо роль існує) і DO-блоком, що падає, якщо FORCE RLS не ввімкнено. Down робить DROP TABLE відгуків і прибирає колонки/CHECK-и майстра. Покрито `SpecialistReviewsMigrationTests` (Up/Down/Up, RLS, унікальність запису, CHECK-и).
+
+### 13. `20261109150000_beauty_reminder_24h_email_channel` (написана вручну)
+
+Лише заміна CHECK-ів: `ck_beauty_appointments_reminder_option` + `'24h'` (набір: `none, 1h, 2h, custom, 24h` — `custom` з `20261024193048` збережено), `ck_beauty_channels_type` + `'email'`. Down (RAISE EXCEPTION, якщо є рядки з `24h`/`email`) повертає старі CHECK-и. Покрито `ReminderEmailMigrationTests`.
+
+### 14. `20261110090000_beauty_cancellation_terms_visibility` (написана вручну)
+
+`beauty_cancellation_settings` + `show_terms_to_client boolean NOT NULL DEFAULT true`, `custom_terms_text text NULL`, CHECK `ck_beauty_cancellation_settings_terms_text` (≤ 500). `ADD COLUMN IF NOT EXISTS`; наявні рядки = true/NULL. Down видаляє CHECK і колонки. Покрито `CancellationTermsMigrationTests`.
+
+### 16. `20261115120000_auth_user_permissions` (TASK-849, ADR-023; написана вручну)
+
+- `users.access_version` (DEFAULT 1); `ck_users_role` + `deputy`. `invites.role` CHECK + `deputy`; `invites.permissions jsonb` (спочатку NULL, після backfill NOT NULL, `DEFAULT '{}'`, `ck_invites_permissions` jsonb object).
+- `beauty_appointments.created_by_user_id` (див. розділ 2).
+- Таблиці `user_permissions`, `user_access_audit` (див. розділ 2), тригер append-only, RLS FORCE.
+- Backfill: для кожного `admin` і `specialist` вставляються рядки пресету (`ON CONFLICT DO NOTHING`); у журнал `migrated` (`actor = NULL`) лише за фактично вставлені рядки, тож повторний запуск нічого не дублює. Наявні запрошення отримують знімок пресету своєї ролі (лише `permissions IS NULL`). Для owner нічого не пишеться.
+- Роль `beautycrm_audit_purge` (NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT): створюється міграцією, якщо мігратор має `CREATEROLE`; інакше міграція падає з інструкцією ops. Мігратор має бути членом `WITH INHERIT FALSE, SET TRUE` (міграція видає членство сама, якщо може).
+- Функція `public.purge_user_access_audit(p_before timestamptz) RETURNS bigint`, `SECURITY DEFINER`, `search_path = pg_catalog, pg_temp`, власник `beautycrm_audit_purge`. Відмовляє (`22023`), якщо `p_before IS NULL` або `p_before > now() - interval '3 years'`. `REVOKE ALL ... FROM PUBLIC`; EXECUTE лише `beautycrm_worker` (`grants.sql`, `setup-db.ps1`). Викликів з воркера ще немає (див. known-issues).
+- GRANT для `beautycrm_audit_purge`: `USAGE` на schema `public`, `SELECT, DELETE` на `user_access_audit`.
+- **Down (human gate):** `RAISE EXCEPTION` (відкат цілком), якщо є користувачі або запрошення `deputy`, запрошення з нестандартним знімком, права користувачів, що відрізняються від пресетів, або права owner/невідомі ключі. Інакше видаляє таблиці, функцію, тригер, колонки й CHECK-и, повертає `ck_users_role`/`ck_invites_role` до старого набору. Роль `beautycrm_audit_purge` не видаляється (кластерна).
+
+### 15. `20261104182836_platform_control_plane` (TASK-816, ADR-018; за часом застосування стоїть між marketing і chat_booking_flow)
+
+- `tenants`: `external_ref varchar(64) NULL`, `external_source varchar(16) NULL` ('shelfguard'), `suspended_at`, `suspended_reason varchar(500)`. Partial `UNIQUE (external_source, external_ref) WHERE external_ref IS NOT NULL` (`ux_tenants_external_ref`). CHECK: ref format `^[A-Za-z0-9_-]{1,64}$`, source in ('shelfguard'), ref and source set together, `suspended_*` only while `status = 'suspended'`. Policy `tenants_control_lookup` (see section 3).
+- `users`: `password_hash` is NULL-able; new `state` ('active' default | 'invited'); CHECK `password_hash IS NOT NULL OR state = 'invited'`. Login for a user without a hash must be rejected (done in `AuthService`).
+- `platform_owner_invites` (platform table, no tenant RLS): `token_hash bytea` (sha256, 32 bytes, UNIQUE), composite FK `(tenant_id, user_id)` -> users, partial unique "one active invite per user" (`ux_platform_owner_invites_active_user`).
+- `platform_audit_log` (platform table, no tenant RLS, no FK on `tenant_id`): append-only by trigger (UPDATE/DELETE/TRUNCATE -> 42501) and by `REVOKE UPDATE, DELETE` for `beautycrm_app`. `details` must be a JSON object without secrets/tokens/passwords/message text.
+- `control_plane_nonces` (platform table): PK `(key_id, nonce)`, index on `seen_at` for the worker cleanup (> 15 min).
+- `beauty_platform_feedback` (tenant table, ENABLE + FORCE `tenant_isolation`): doubles as the delivery queue (`delivery_status`, `attempts`, `next_attempt_at`, `last_error`, `delivered_at`, `external_lead_id`). There is no generic outbox table in this schema.
+- GRANTs (`deploy/staging/db/grants.sql` and `scripts/dev/setup-db.ps1`): app `REVOKE UPDATE, DELETE ON platform_audit_log`; worker `SELECT, UPDATE` on feedback, `SELECT, DELETE` on nonces, column-level `SELECT (id, tenant_id, email, full_name, role)` on users (no `password_hash`).
+- Down is a human gate: it refuses (RAISE) while any user has `state = 'invited'` / NULL hash, and it drops the audit log, invites, nonces, feedback and the `external_ref` link.
+
 ---
 
 ## 5. Runtime Roles & GRANTs
@@ -710,7 +863,44 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO beautycrm_app;
 
 **Runtime check (TASK-689, H1):** API `DbRoleGuard` queries `pg_roles` on startup, fails if runtime role has `rolsuper` or `rolbypassrls` (except Development + `Beauty__AllowPrivilegedDbRole=true`).
 
+### Public catalog role `beautycrm_catalog` (ADR-022, migration `20261109075625_beauty_public_location_catalog`)
+- Functions (signatures as in the migration; output columns: `public_code, tenant_slug, location_id, name, address, city, timezone` plus `distance_km` for nearby):
+  `beauty_public_resolve_location(p_code text)`, `beauty_public_nearby_locations(p_lat, p_lng, p_radius_km, p_limit)`,
+  `beauty_public_search_locations_by_city(p_city text, p_limit integer)`.
+- Radius is capped at 30 km inside the function; limit at 1..10. Changing the cap requires a new migration.
+- `NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT`; owns the SECURITY DEFINER functions `beauty_public_resolve_location(text)`,
+  `beauty_public_nearby_locations(double precision, double precision, double precision, integer)`,
+  `beauty_public_search_locations_by_city(text, integer)`. Column-level SELECT on public columns of `beauty_locations` and `tenants`
+  plus role-scoped (`TO beautycrm_catalog`) read policies `public_catalog_read`. `beautycrm_app` has EXECUTE only (no membership).
+- The migration creates the role if missing (idempotent; needs `CREATEROLE`). Without `CREATEROLE` ops pre-provision it **before** migrating:
+  ```sql
+  CREATE ROLE beautycrm_catalog NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT;
+  GRANT beautycrm_catalog TO <migrator_role> WITH INHERIT FALSE, SET TRUE;   -- SET: hand function ownership; INHERIT FALSE is mandatory
+  ```
+  Migration fails loudly if the role is LOGIN/SUPERUSER/BYPASSRLS. It grants EXECUTE to `beautycrm_app` only if that role exists;
+  with a differently named runtime role run `GRANT EXECUTE ON FUNCTION ... TO <runtime_role>` for the three functions.
+  Re-creating a function (Down/Up) resets its grants: repeat the GRANT.
+- **Policy scope:** a policy `TO beautycrm_catalog` applies not only when `current_user = beautycrm_catalog` but to every role that
+  inherits its privileges (member with `inherit_option`). Therefore all members (the migrator included) are `WITH INHERIT FALSE, SET TRUE`.
+  The migration (re)grants the migrator's membership so; if a non-admin migrator cannot, it fails with instructions.
+- `DbRoleGuard` also checks (when the role exists): catalog role NOLOGIN/not superuser/not BYPASSRLS/NOINHERIT, no memberships of its own,
+  runtime role not a member, **no member with `inherit_option`**, exactly the three `beauty_public_*` functions (no extra/missing), each owned by
+  the catalog role, SECURITY DEFINER, `proconfig` exactly `search_path=pg_catalog, pg_temp`, not executable by PUBLIC.
+- **Rule for future definer functions (owned by `beautycrm_catalog`):** the existing policies `TO PUBLIC` (tenant isolation) also
+  apply to the catalog role, and the role-scoped policies only add visibility. Every such function MUST check `is_active` /
+  `status = 'active'` / `'beauty_booking' = ANY (modules)` explicitly in its WHERE; eligibility must never rely on a policy.
+  New `beauty_public_*` functions also require updating the expected set in `DbRoleGuard`.
+- `beauty_locations.public_code` is immutable: trigger `trg_beauty_locations_public_code_immutable` (BEFORE UPDATE OF public_code,
+  `restrict_violation` 23001; no-op writes of the same value pass). Down drops the trigger and `beauty_forbid_public_code_change()`.
+- Down drops functions/policies/privileges but does **not** drop the cluster-level role.
+
 ---
+
+### Role `beautycrm_audit_purge` (ADR-023)
+- `NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT`; власник `purge_user_access_audit`. Мігратор (`beautycrm_owner`) членство `WITH INHERIT FALSE, SET TRUE`.
+- Створюється до міграції `20261115120000`: staging — `deploy/staging/db/init-catalog-role.sql` від superuser (ідемпотентний, також видає членство); локально — `scripts/dev/setup-db.ps1`.
+- GRANT-и: `grants.sql` / `setup-db.ps1`: `REVOKE UPDATE, DELETE ON user_access_audit FROM beautycrm_app`; `REVOKE ALL ON FUNCTION public.purge_user_access_audit(timestamptz) FROM PUBLIC`; `GRANT EXECUTE ... TO beautycrm_worker`. `user_permissions` для app: повний набір DML. Воркер і control plane до `user_permissions` і `user_access_audit` доступу не мають.
+- Тригер append-only, а не лише GRANT, захищає журнал (defense in depth).
 
 ## 6. Local Setup
 

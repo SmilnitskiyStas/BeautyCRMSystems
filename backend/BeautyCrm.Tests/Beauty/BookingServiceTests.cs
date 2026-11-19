@@ -149,6 +149,36 @@ public class BookingServiceTests
     }
 
     [Fact]
+    public async Task create_accepts_24h_reminder_and_schedules_it_a_day_before_visit()
+    {
+        var r = await Sut().CreateAsync(Req(T(10), "24h"), default);
+        Assert.True(r.IsOk);
+        Assert.Equal("24h", r.Value!.ReminderOption);
+        Assert.Equal(T(10).AddHours(-24), Assert.Single(_store.Reminders, x => x.AppointmentId == r.Value.Id).At);
+    }
+
+    [Fact]
+    public async Task create_skips_24h_reminder_when_it_is_already_in_the_past()
+    {
+        // візит за < 24 год до «зараз»: 24h-нагадування вже минуло -> не планується (запис створюється)
+        var late = new BookingService(_store, _pay, FakeSettings.Service(), new FakeClock(T(9, 30)));
+        var r = await late.CreateAsync(Req(T(10), "24h"), default);
+        Assert.True(r.IsOk);
+        Assert.Empty(_store.Reminders);
+    }
+
+    [Theory]
+    [InlineData("3h")]
+    [InlineData("48h")]
+    [InlineData("24H")]
+    public async Task create_rejects_unknown_reminder_value(string option)
+    {
+        var r = await Sut().CreateAsync(Req(T(10), option), default);
+        Assert.Equal("invalid_reminder", r.Error!.Code);
+        Assert.Contains("24h", r.Error.Message);
+    }
+
+    [Fact]
     public async Task create_does_not_schedule_reminder_for_none_or_too_late()
     {
         await Sut().CreateAsync(Req(T(10), "none"), default);
@@ -245,7 +275,7 @@ public class BookingServiceTests
         public Task<AppointmentDto?> GetAppointmentAsync(Guid id, CancellationToken ct) => inner.GetAppointmentAsync(id, ct);
         public Task<IReadOnlyList<AppointmentDto>> ListAppointmentsAsync(DateTimeOffset f, DateTimeOffset t, Guid? l, Guid? s, bool ic, CancellationToken ct) => inner.ListAppointmentsAsync(f, t, l, s, ic, ct);
         public Task<StoreResult<AppointmentDto>> RescheduleAsync(Guid id, DateTimeOffset n, DateTimeOffset? r, CancellationToken ct) => inner.RescheduleAsync(id, n, r, ct);
-        public Task<AppointmentDto?> SetStatusAsync(Guid id, string s, CancellationToken ct) => inner.SetStatusAsync(id, s, ct);
+        public Task<StoreResult<AppointmentDto>?> SetStatusAsync(Guid id, string s, CancellationToken ct) => inner.SetStatusAsync(id, s, ct);
         public Task<bool> TryClaimCancelAsync(Guid id, DateTimeOffset at, CancelOrigin origin, string? reason, CancellationToken ct) => inner.TryClaimCancelAsync(id, at, origin, reason, ct);
         public Task ReleaseCancelAsync(Guid id, string previousStatus, CancellationToken ct) => inner.ReleaseCancelAsync(id, previousStatus, ct);
         public Task<AppointmentDto?> MarkCancelledAsync(Guid id, DateTimeOffset at, CancellationToken ct) => inner.MarkCancelledAsync(id, at, ct);
