@@ -357,6 +357,37 @@ Frontend дзеркалить ключі (`access.ts`, `permissions.ts`: пун�
 
 ---
 
+### 10.6 Етап 2b «Telegram-сповіщення власнику» — статус реалізації (станом на 2026-11-19)
+
+Гілка `feature/inventory-stage2b`. Контракт: §32.24 (v0.37, фактичні відхилення — §32.24.13). Рішення — §12.
+
+| Задача | Агент | Стан | Що зроблено |
+|---|---|---|---|
+| TASK-889 | project-architect | review, G1 пройдено | §12, §32.24 v0.37 |
+| TASK-895 | database-engineer | review | міграція `beauty_inventory_stage2b` (4 таблиці, RLS FORCE, CHECK форми, часткові UNIQUE, append-only журнал, GRANT воркера, `schema.sql`, EF) |
+| TASK-890 | integrations-developer | review | `IStaffChatGate` у `InboundIngestCore`, команди бота (`/start inv_`, `iy`/`in`, `/stop`, `/status`), токени, API `/telegram/link`, прапор, хук деактивації |
+| TASK-896 | backend-developer | review | воркер `pollInventoryTelegram`, `sendTelegramText`, тексти, env з валідацією |
+| TASK-891 | frontend-developer | review | картка «Сповіщення складу в Telegram», mock → http |
+| TASK-897 | qa-engineer | review, 2 дефекти | QA-1 (нормалізація форми команди), QA-2 (повторна перевірка чату в пакеті) |
+| TASK-898 | security-reviewer | review | звіт `docs/reviews/security-review-inventory-stage2b-2026-11.md`: Critical 0, High 0, Medium 2 (M1, M2), Low 5 (L1–L5), Info 10 |
+| TASK-899 | documentation-writer | in progress | цей розділ, `database.md`, runbook §2d, `known-issues.md` KI-019…021, контракт §32.24 вирівняно з кодом, §32.24.13 |
+
+**Виправлення в роботі (за звітом TASK-898 і QA):**
+- **M1** (запобіжник прод/staging): окремий ключ staging — `Inventory:TelegramPreL3AllowedEnvironments` і `Inventory:TelegramPreL3TenantIds` (backend), `WORKER_INVENTORY_TELEGRAM_L3_APPROVED` і `WORKER_INVENTORY_TELEGRAM_PRE_L3_TENANT_IDS` (worker); прод вимагає лише `L3Approved`; старт воркера перевіряє запобіжник (за образом `assertMarketingLegalGate`).
+- **M2** (аварійне вимкнення): вимкнути відправку = обидва прапори (backend `TelegramOwnerAlertsEnabled`, worker `WORKER_INVENTORY_TELEGRAM_ENABLED`); `/status` нейтральний.
+- **L1**: відхилення пересланого `/start inv_`; `claimedAt` у `GET` статусу (видно час claim в адмінці); попередження в чаті після активації.
+- **L2**: `DELETE` без `RequireModule` (лише owner).
+- **L3**: ліміт відповідей на підроблені callback / неприв'язані чати (`svc-reply:{channel}:{chat}`).
+- **QA-1**: нормалізація форми команди (Trim, регістр, `/start@bot`) до класифікації. **QA-2**: повторна перевірка чату в межах пакета.
+
+**Не зроблено:**
+- **G2** — перша прив'язка реального акаунта власника на staging (тестовий tenant). Умова: M1, M2, QA-1 закриті й повторна перевірка security. Порядок — runbook §2d.
+- **G3** — прод-вмикання лише після закриття **L3** (юридичний чекліст §32.24.7) і M1/M2. Без L3 прод не вмикається.
+- **L4** (ліміт 60 невдалих спроб на канал/год може заблокувати прив'язку каналу) і **L5** (TOCTOU: повідомлення може піти після відкликання) — прийняті ризики для G2; до G3 переоцінити.
+- **I1** (AES-GCM без AAD) — поза моделлю загроз; **I10** (`chat_id` власника відкрито в `beauty_conversations`) — відомий перетин, рішення в L3.
+
+**Відхилення від ADR §12 у коді:** `Down` міграції відмовляє за наявності історії (`inventory stage2b history exists`) — захисний варіант; подія `declined` не пишеться (факт — `revoked(declined)`). Деталі — §32.24.13.
+
 ## 11. Уточнення етапу 2 (2026-11-19)
 
 **Deciders:** власник (рішення D1–D4, 2026-11-19); проєктування — project-architect (TASK-882). Контракт: §32.15–§32.25 (v0.36, `API-CONTRACT-INVENTORY-V2`). Уточнює §2.7, §2.9, §7.1 (Q11–Q13); семантику §2.4 не змінює, крім явно названого в D3.
@@ -398,7 +429,7 @@ Frontend дзеркалить ключі (`access.ts`, `permissions.ts`: пун�
 
 ## 12. Етап 2b: Telegram-сповіщення власнику (2026-11-19, proposed)
 
-**Статус:** proposed — human gate G1 (схема 2b, 2b-Q1…Q4). **Автор:** project-architect (TASK-889). **Deciders:** власник — рішення «адмінка + Telegram власнику», бот = клієнтський бот салону (D4), реалізація за прапором до закриття L3 (2026-11-19). Контракт: §32.24 (v0.37, `API-CONTRACT-INVENTORY-V3`). Уточнює §2.9; ADR-003 не змінює (новий споживач того самого патерну).
+**Статус:** реалізовано (TASK-889…898), виправлення за security/QA в роботі; G1 пройдено; G2/G3 не закриті — див. §10.6. Попередній статус: proposed — human gate G1 (схема 2b, 2b-Q1…Q4). **Автор:** project-architect (TASK-889). **Deciders:** власник — рішення «адмінка + Telegram власнику», бот = клієнтський бот салону (D4), реалізація за прапором до закриття L3 (2026-11-19). Контракт: §32.24 (v0.37, `API-CONTRACT-INVENTORY-V3`). Уточнює §2.9; ADR-003 не змінює (новий споживач того самого патерну).
 
 ### 12.1 Context
 

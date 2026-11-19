@@ -125,6 +125,38 @@ Description: `GET /operations/{id}` повертає рухи, відсорто�
 
 Resolution: окрема задача: або зберігати порядок списання (наприклад, колонка порядку рядка), або явно задокументувати в §32.6 як не FEFO. Клієнти не повинні покладатися на порядок.
 
+### KI-019: Guard службових повідомлень пропускає неканонічну форму команди
+Severity: medium
+Status: open (виправлення в роботі)
+Discovered in: TASK-897 (QA-1), TASK-898
+Resolved in: —
+Area: backend, security
+
+Description: `IsServiceShape` порівнює сирий текст: `" /start inv_…"`, `"\n/start inv_…"`, `/START`, `/start@Bot` потрапляють у клієнтський потік, і живий токен прив'язки зберігається в `beauty_messages`.
+
+Root cause (з звіту): класифікація службового повідомлення без нормалізації форми команди.
+Правило (до виправлення): перед класифікацією нормалізувати текст (Trim, регістронезалежно, зняти `@botname`); тест на кожну форму; токен, що потрапив у клієнтський потік, — дефект критичності high.
+
+### KI-020: Запобіжник прод-вмикання не розрізняє staging і прод
+Severity: medium
+Status: open (M1, виправлення в роботі)
+Discovered in: TASK-898
+Resolved in: —
+Area: backend, worker, config, ops
+
+Description: `TelegramL3Approved` діє лише поза `Development`; staging не `Development`, тож тестова прив'язка вимагала б `L3Approved=true`, тобто ключ юридичного gate мав би двозначний сенс. Воркер запобіжника не має взагалі.
+Правило (до виправлення): юридичний запобіжник розрізняє staging і прод явно (окремий ключ + allowlist tenant), не за `ASPNETCORE_ENVIRONMENT`; worker перевіряє його на старті так само, як backend. Кожен запобіжник тестувати на обох середовищах.
+
+### KI-021: Два незалежні прапори — аварійне вимкнення вимикало лише backend
+Severity: medium
+Status: open (M2, виправлення в роботі)
+Discovered in: TASK-898
+Resolved in: —
+Area: ops, backend, worker
+
+Description: `/status` казав «вимкнено», а алерти воркера йшли: `TelegramOwnerAlertsEnabled=false` не зупиняв `WORKER_INVENTORY_TELEGRAM_ENABLED=true`.
+Правило: аварійне вимкнення відправки = обидва прапори (runbook §2d); прапор, що керує одним процесом, не є вимикачем; статус, що описує стан системи, має відповідати фактичній поведінці (нейтральний текст, якщо не можна гарантувати).
+
 ## Resolved Issues
 
 ### KI-011: Неявне перетворення null у Result<T> давало 201 з порожнім тілом

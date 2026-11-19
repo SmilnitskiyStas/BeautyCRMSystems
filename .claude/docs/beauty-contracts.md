@@ -5164,7 +5164,7 @@ DAG: 882 → [gate] → 883 → {884 ∥ 885 ∥ 886 ∥ 887} → 892 → 893 �
 
 ### 32.24 Етап 2b: Telegram-сповіщення власнику (v0.37, 2026-11-19, TASK-889, `API-CONTRACT-INVENTORY-V3`)
 
-Статус: **proposed** (human gate G1 — схема 2b і питання 2b-Q1…Q4 нижче). Рішення — ADR-025 §12. Будується за прапорами; поза dev вимкнено до закриття **L3** (ADR-025 §7.2). Заглушку v0.36 замінено; відхилення від неї: (1) окрема службова черга замість `beauty_messages` (§32.24.5, 2b-Q1); (2) замість колонок «надіслано» на `beauty_staff_alerts` — таблиця зв'язку `beauty_staff_notification_alerts` (кілька адресатів, дайджест). Колонки `beauty_staff_alerts` **не змінюються**.
+Статус: **реалізовано в коді** (TASK-889…898; G1 пройдено). Виправлення за security/QA (M1, M2, L1–L3, QA-1, QA-2) — **в роботі**. G2 (перша прив'язка на staging) і G3 (прод після L3) **не закриті**. Статус реалізації — ADR-025 §10.6; рішення — ADR-025 §12; фактичні відхилення від цього розділу — §32.24.13. Будується за прапорами; поза dev вимкнено до закриття **L3** (ADR-025 §7.2). Заглушку v0.36 замінено; відхилення від неї: (1) окрема службова черга замість `beauty_messages` (§32.24.5, 2b-Q1); (2) замість колонок «надіслано» на `beauty_staff_alerts` — таблиця зв'язку `beauty_staff_notification_alerts` (кілька адресатів, дайджест). Колонки `beauty_staff_alerts` **не змінюються**.
 
 #### 32.24.1 Обсяг
 
@@ -5218,7 +5218,7 @@ UNIQUE (часткові):
 **(d) `beauty_staff_notification_alerts`** — які алерти пішли якому адресату.
 `tenant_id`, `notification_id` (FK CASCADE), `alert_id` (FK `beauty_staff_alerts` RESTRICT), `link_id` (FK RESTRICT); PK `(tenant_id, notification_id, alert_id)`; UNIQUE `(tenant_id, link_id, alert_id)` — кожен алерт кожному адресату не більше одного разу (поштучно чи в дайджесті).
 
-**GRANT** (синхронно `scripts/dev/setup-db.ps1`, `deploy/staging/db/grants.sql`, тест `staging-grants-sync`): app-роль — DML на (a), (c), (d) через наявний `ON ALL TABLES`, на (b) лише `SELECT, INSERT`. Worker-роль: (a) `SELECT (id, tenant_id, user_id, channel_id, status, chat_id_encrypted, token_expires_at, activated_at)` + `UPDATE (status, token_hash, chat_id_encrypted, chat_id_hash, revoked_at, revoke_reason, last_delivery_at, updated_at)`; (b) `INSERT`; (c) `SELECT, INSERT, UPDATE, DELETE`; (d) `SELECT, INSERT`; `users` — колонковий `SELECT (id, tenant_id, role, is_active, state)`; розширити колонковий `SELECT` на `beauty_products` полями `name, unit` (без `purchase_price`); `beauty_stock_batches (lot_number)`, `beauty_locations (name, timezone)`, `beauty_staff_alerts` — `SELECT` уже є. `Down`: дозволений (бізнес-даних немає), видаляє 4 таблиці.
+**GRANT** (синхронно `scripts/dev/setup-db.ps1`, `deploy/staging/db/grants.sql`, тест `staging-grants-sync`): app-роль — DML на (a), (c), (d) через наявний `ON ALL TABLES`, на (b) лише `SELECT, INSERT`. Worker-роль: (a) `SELECT (id, tenant_id, user_id, channel_id, status, chat_id_encrypted, token_expires_at, activated_at)` + `UPDATE (status, token_hash, chat_id_encrypted, chat_id_hash, revoked_at, revoke_reason, last_delivery_at, updated_at)`; (b) `INSERT`; (c) `SELECT, INSERT, UPDATE, DELETE`; (d) `SELECT, INSERT`; `users` — колонковий `SELECT (id, tenant_id, role, is_active, state)`; розширити колонковий `SELECT` на `beauty_products` полями `name, unit` (без `purchase_price`); `beauty_stock_batches (lot_number)`, `beauty_locations (name, timezone)`, `beauty_staff_alerts` — `SELECT` уже є. `Down`: **відмовляє** (`RAISE 'inventory stage2b history exists'`), якщо є прив'язка не в `issued` або рядок журналу (§32.24.13, п.5).
 
 #### 32.24.3 Потік прив'язки
 
@@ -5235,7 +5235,7 @@ UNIQUE (часткові):
 - **Точка:** `InboundIngestCore.IngestAsync` (`backend/BeautyCrm.Infrastructure/Integrations/Channels/ChannelServices.cs`) — спільне ядро webhook (`InboundWebhookService.HandleAsync`) і polling (`TelegramPolling` → `IngestAsync`). Новий необов'язковий залежник `IStaffChatGate` (`Integrations/Channels/StaffChatGate.cs`). Крок 0 до побудови `toStore`: `var (staff, client) = await gate.PartitionAsync(parsed, ct)`; `staff` **ніколи** не передається в `repo.SaveInboundAsync` / `queue.EnqueueInboundAsync` (отже немає `beauty_conversations`, `beauty_messages`, клієнта, сигналу ConversationWorker, ШІ, відписки); `AcknowledgeAsync(parsed)` виконується для всіх, як зараз.
 - **Класифікація** (лише `channel = telegram`, tenant і `channelId` — із `ChannelRequestContext`, не з payload): (а) текст починається з `/start inv_` — службове, навіть якщо чат не прив'язаний; (б) `callback` з `CallbackData` `^i[yn]:` — службове; (в) `chat_id_hash(channel, ExternalConversationId)` має рядок `claimed|active` (один запит на пакет: `chat_id_hash = ANY(@hashes)`) — службове будь-якого `kind`; (г) решта — клієнтський потік без змін.
 - **Fail-closed:** помилка запиту guard кидає виняток на весь пакет (polling не зсуває offset, webhook → 5xx, Telegram повторить) — повідомлення службового чату не може «провалитися» в клієнтський потік. Guard діє **незалежно від прапора**.
-- **Обробник службових** (у пам'яті, вміст не зберігається): `/start inv_…` — §32.24.3 п.2; `iy|in` — п.3; `/stop` — відв'язка; `/status` — «Сповіщення складу: увімкнено / вимкнено адміністратором платформи; прив'язано {dd.MM.yyyy}»; будь-що інше (текст, `/start` без токена, контакт, геолокація) — підказка «Це службовий чат сповіщень складу. Команди: /status, /stop» не частіше 1 разу на 10 хв на прив'язку. Відповіді — **пряма best-effort відправка** через `TelegramAdapter.SendAsync` (тайм-аут 3 с, без повторів, адреса — chat id із вхідного повідомлення в пам'яті), не через чергу: інтерактивні відповіді, адресата в БД може ще/вже не бути. Помилка обробника логується (`staff_tg_command_failed reason={code}`) і не перекидається (без циклу повторної доставки).
+- **Обробник службових** (у пам'яті, вміст не зберігається): `/start inv_…` — §32.24.3 п.2; `iy|in` — п.3; `/stop` — відв'язка; `/status` — нейтральний текст без стану прапорів (M2, §32.24.13 п.9): «Сповіщення складу: підключено {dd.MM.yyyy}» або «Сповіщення складу не підключено»; (раніше: «увімкнено / вимкнено адміністратором платформи», що не відповідало фактичній відправці); будь-що інше (текст, `/start` без токена, контакт, геолокація) — підказка «Це службовий чат сповіщень складу. Команди: /status, /stop» не частіше 1 разу на 10 хв на прив'язку. Відповіді — **пряма best-effort відправка** через `TelegramAdapter.SendAsync` (тайм-аут 3 с, без повторів, адреса — chat id із вхідного повідомлення в пам'яті), не через чергу: інтерактивні відповіді, адресата в БД може ще/вже не бути. Помилка обробника логується (`staff_tg_command_failed reason={code}`) і не перекидається (без циклу повторної доставки).
 - **Наслідок:** прив'язаний чат стає службовим — власник не може бути клієнтом через цей самий бот з того ж акаунта; наявна розмова лишається в inbox як історія; нагадування/розсилки клієнту на цей чат ідуть, як раніше (2b-Q8).
 
 #### 32.24.5 Відправка (worker)
@@ -5251,7 +5251,7 @@ UNIQUE (часткові):
    - `403` (`bot_blocked`) / `400 chat not found` (`chat_not_found`) → `failed` + прив'язка `revoked (bot_blocked|chat_not_found)`, дані чату стерто, інші `pending` прив'язки → `cancelled`, подія `revoked` (`actor = system`); в адмінці — `lastRevoke` (§32.24.8);
    - `token_missing` / `channel_inactive` / збій розшифрування → `failed`, прив'язка без змін (проблема каналу, не користувача).
 6. **Прибирання** (завжди, навіть за вимкненого прапора): `issued|claimed` з `token_expires_at < now` → `revoked (expired)`; `beauty_staff_notifications` у фінальному статусі старше 30 днів → `DELETE` (каскадом (d)).
-7. **Логи:** `inventory_tg tenant={id} built={n} sent={n} failed={n} revoked={n} capped={bool}`, `inventory_tg_send_failed tenant={id} notification={id} errorCode={code}`, `inventory_tg_link_revoked tenant={id} link={id} reason={code}`. **Ніколи:** `chat_id`, хеш, токен бота, тіло повідомлення, назви товарів.
+7. **Логи воркера** (фактичні імена, §32.24.13 п.7): `inventory_telegram tenant={id} built={n} sent={n} failed={n} revoked={n} capped={bool}`, `inventory_telegram_send_failed tenant={id} notification={id} errorCode={code}`, `inventory_telegram_link_revoked tenant={id} link={id} reason={code}`, `inventory_telegram_link_failed tenant={id} link={id} errorCode={code}`, `inventory_telegram_build_conflict tenant={id} link={id}`. **Ніколи:** `chat_id`, хеш, токен бота, тіло повідомлення, назви товарів.
 
 **Тексти (uk, без `parse_mode`; константи `worker/src/jobs/inventory-telegram-texts.ts`).** Лише заклад, товар, кількість з одиницею, партія (номер), термін, вид, посилання. **Жодних** ПД клієнтів, імен майстрів, `appointment_id`, `operation_id`, цін. Назви — без керівних символів, обрізання до 80 символів. Число — uk-формат (кома, без зайвих нулів). Посилання — `{WORKER_ADMIN_BASE_URL}/beauty/inventory/alerts?locationId={id}`; змінна не задана → без посилання.
 - `low_stock`: «Склад · {заклад}\nМало: {товар} — залишок {q} {од.} (мінімум {threshold}).\n{url}»
@@ -5265,7 +5265,12 @@ UNIQUE (часткові):
 |---|---|---|---|
 | `Inventory:TelegramOwnerAlertsEnabled` | backend | значення `true` (без регістру); відсутній / порожній / будь-що інше — **вимкнено** (дефолт — вимкнено, на відміну від `AutoConsumptionEnabled`) | `POST` → `403 telegram_alerts_disabled`; `GET` → `featureEnabled: false`; `DELETE`, `/stop`, `/status`, guard — **працюють**; `/start inv_` → «Функцію зараз вимкнено» (`rejected disabled`) |
 | `WORKER_INVENTORY_TELEGRAM_ENABLED` | worker | рядок `true` (без регістру) | немає побудови й відправки; прибирання п.6 працює; `pending` лишаються й скасовуються як старші за 24 год |
-| `Inventory:TelegramL3Approved` | backend | `true` | поза `Development` при `TelegramOwnerAlertsEnabled=true` без цього ключа — помилка старту (технічний запобіжник «прод лише після L3», 2b-Q11) |
+| `Inventory:TelegramL3Approved` | backend | `true` | прод (поза `Development` і поза pre-L3 allowlist) при `TelegramOwnerAlertsEnabled=true` без цього ключа — помилка старту (технічний запобіжник «прод лише після L3», 2b-Q11) |
+| `Inventory:TelegramPreL3AllowedEnvironments` + `Inventory:TelegramPreL3TenantIds` | backend | список середовищ (staging) + tenant зі списку | (M1, **в роботі**) дозвіл на відправку без `L3Approved` лише для тестового tenant на staging; поза списком — правило прод |
+| `WORKER_INVENTORY_TELEGRAM_L3_APPROVED` | worker | `true` | (M1, **в роботі**) старт worker відмовляє, якщо прод-середовище + `WORKER_INVENTORY_TELEGRAM_ENABLED=true` без цього ключа (за образом `assertMarketingLegalGate`) |
+| `WORKER_INVENTORY_TELEGRAM_PRE_L3_TENANT_IDS` | worker | список tenant | (M1, **в роботі**) pre-L3 allowlist для staging; tenant поза списком при прод-правилах — відмова старту |
+
+**Аварійне вимкнення відправки = обидва прапори** `TelegramOwnerAlertsEnabled=false` **і** `WORKER_INVENTORY_TELEGRAM_ENABLED=false` (M2; runbook §2d). Прапор одного процесу не є вимикачем всієї відправки.
 
 Нові env worker (`.env.worker.example`): `WORKER_INVENTORY_TELEGRAM_ENABLED=false`, `WORKER_INVENTORY_TELEGRAM_QUIET_START=21`, `WORKER_INVENTORY_TELEGRAM_QUIET_END=8` (цілі 0–23, `START ≠ END`, інакше помилка старту), `WORKER_ADMIN_BASE_URL=` (лише `https://`, поза dev).
 
@@ -5286,11 +5291,14 @@ UNIQUE (часткові):
 5. Чи можна в майбутньому поширити на не-owner співробітників (добровільність згоди в трудових відносинах).
 6. Чи потрібні зміни в політиці приватності / реєстрі операцій обробки / повідомлення Уповноваженого.
 7. Порядок виконання запиту суб'єкта на видалення (чи достатньо відв'язки + журналу без даних чату).
+8. **Строки й видалення (звіт TASK-898, п.4/п.7):** строки залежать від `WORKER_TENANT_IDS` (L2) і від вимкненого модуля (tenant поза списком не отримує прибирання); журнал подій append-only з FK RESTRICT — рядки не видаляються застосунком; процедура ручного видалення (DISABLE TRIGGER) — human gate. Підтвердити строк журналу (2b-Q10) з урахуванням права на видалення.
+9. **Текст згоди `inv-tg-v1` (звіт, п.2):** чернетка не згадує (а) що повідомлення може надійти протягом кількох хвилин після відключення (L5); (б) що клієнтська розмова власника лишається в inbox (I10). Потрібні формулювання юриста.
+10. **Ризик чужого акаунта (звіт, L1):** посилання прив'язки діє 15 хв і дає право прив'язати чат; якщо його прочитає інша особа, сповіщення підуть на чужий акаунт. Закрити підтвердженням/попередженням у адмінці або текстом згоди — рішення юриста/власника; у коді не вирішено.
 Результат — рішення власника, записане в ADR-025 §7.2 (L3 → закрито) і `Inventory:TelegramL3Approved=true` на gate G3.
 
 #### 32.24.8 API (`/api/beauty/inventory/telegram/link`; `{code, message, …extras}`; `Cache-Control: no-store`)
 
-Доступ: модуль `beauty_inventory` (вимкнено → `403 module_disabled`); **лише роль `owner`** — рольовий фільтр до прив'язки тіла (як L5, §32.26 D9), інакше `403 forbidden_role`; дія завжди над **своїм** `user_id` з JWT (жодного `userId` у запиті — IDOR неможливий).
+Доступ: модуль `beauty_inventory` (вимкнено → `403 module_disabled`) для GET і POST; **DELETE — без `RequireModule`** (L2, §32.24.13 п.8, в роботі); **лише роль `owner`** — рольовий фільтр до прив'язки тіла (як L5, §32.26 D9), інакше `403 forbidden_role`; дія завжди над **своїм** `user_id` з JWT (жодного `userId` у запиті — IDOR неможливий).
 
 | Метод | Відповідь | Ліміт |
 |---|---|---|
@@ -5301,12 +5309,12 @@ UNIQUE (часткові):
 ```
 TelegramLinkStatusDto { featureEnabled: bool,
   state: "none" | "pending" | "awaitingConfirmation" | "active",   // issued | claimed | active
-  channel: {id, name} | null, expiresAt: datetime | null, activatedAt: datetime | null,
-  lastDeliveryAt: datetime | null,
+  channel: {id, name} | null, expiresAt: datetime | null, claimedAt: datetime | null,   // claimedAt — L1, в роботі
+  activatedAt: datetime | null, lastDeliveryAt: datetime | null,
   lastRevoke: {reason: RevokeReason, at: datetime} | null,         // останній revoked за 30 днів, лише при state = none
   consentVersion: "inv-tg-v1" }                                    // поточна версія для UI
 ```
-Без `chat_id`, username, токена. Вибір каналу: `channelId` не задано і активний Telegram-канал один → він; немає → `422 telegram_channel_unavailable`; кілька → `422 telegram_channel_required` з `extras.channels: [{id, name}]` (2b-Q13).
+Без `chat_id`, username, токена. Прострочений `issued` (`token_expires_at < now`) у `GET` показується як `state: none` (відхилення, §32.24.13 п.4). Вибір каналу: `channelId` не задано і активний Telegram-канал один → він; немає → `422 telegram_channel_unavailable`; кілька → `422 telegram_channel_required` з `extras.channels: [{id, name}]` (2b-Q13).
 
 | Статус | `code` | extras | Текст для UI (uk) |
 |---|---|---|---|
@@ -5382,6 +5390,29 @@ DAG: 889 → [G1] → 895 → {890 ∥ 896}; 891 — mock після G1, http п
 | 2b-Q13 | Кілька Telegram-ботів у tenant | `channelId` обов'язковий у `POST` (`422 telegram_channel_required`) |
 | 2b-Q14 | Відкриті алерти на момент активації | Не надсилаються; у відповіді «Готово» — лише їх кількість |
 | 2b-Q15 | QR-код deep-link для входу з десктопа | Ні в 2b |
+
+#### 32.24.13 Фактичні відхилення від §32.24 (стан на 2026-11-19, TASK-899)
+
+Звірено з кодом гілки `feature/inventory-stage2b`. «В роботі» — виправлення TASK-890/891/896/897 за звітом TASK-898; після їх злиття таблиця оновлюється.
+
+| № | Розділ контракту | Очікувано (текст) | Факт / план | Статус |
+|---|---|---|---|---|
+| 1 | §32.24.3 п.2, §32.24.8 POST | ліміт 5 / год на користувача | Ліміт рахується **після валідації тіла** (`consent`, `consentVersion`, `channelId`); невалідний запит ліміт не витрачає | Прийнято як факт; оновити контракт або узгодити |
+| 2 | §32.24.2 (b) | подія `declined` у журналі | Відмова в боті пишеться як `revoked` з `reason = declined` (`StaffChatGate`); CHECK `event` містить `declined` без використання | Узгодити: прибрати `declined` з CHECK (міграція) або писати його |
+| 3 | §32.24.5 п.3 | відбір з фільтром «заклад у scope адресата» | Воркер **не фільтрує за scope закладу**: адресат — лише owner (усі заклади), тож результат однаковий | Відхилення; фільтр додати до розширення на інші ролі (2b-Q4) |
+| 4 | §32.24.8 GET | `state` з чотирьох станів | Прострочений `issued` показується як `none` | Факт (пункт 1 таблиці §32.24.8 не описує `expired`) |
+| 5 | §32.24.2 `Down` | дозволений, видаляє 4 таблиці | `Down` **відмовляє** за історії (`inventory stage2b history exists`) | Захисний варіант; контракт виправлено |
+| 6 | §32.24.3 п.2 | пересланий `/start inv_` приймається як звичайний | (L1, в роботі) відхилення пересланого; причина `forwarded` **не входить** у CHECK `rejected` журналу — потрібна міграція (рішення database-engineer) | В роботі, потребує рішення |
+| 7 | §32.24.5 п.7 | логи `inventory_tg_*` | Фактичні імена `inventory_telegram_*` (контракт виправлено п.7 вище) | Вирівняно |
+| 8 | §32.24.8 DELETE | доступ з `module_disabled` | (L2, в роботі) DELETE без `RequireModule`, лише owner | В роботі |
+| 9 | §32.24.4 `/status` | текст зі станом прапора | (M2, в роботі) нейтральний текст без стану прапорів | В роботі |
+| 10 | §32.24.8 GET | без `claimedAt` | (L1, в роботі) `claimedAt` у DTO | В роботі |
+| 11 | §32.24.6 | запобіжник лише `Inventory:TelegramL3Approved` (backend) | (M1, в роботі) pre-L3 ключі staging і worker-запобіжник `WORKER_INVENTORY_TELEGRAM_L3_APPROVED` | В роботі |
+| 12 | §32.24.4 | відповіді бота без обмеження частоти | (L3, в роботі) `svc-reply:{channel}:{chat}` для відповідей на підроблені callback і неприв'язані чати | В роботі |
+| 13 | §32.24.4 | `/start inv_` одразу в клієнтський потік ні | (QA-1, QA-2, в роботі) нормалізація форми команди; повторна перевірка чату в пакеті | В роботі |
+| 14 | §32.24.4 | після активації — тиша | (L1, в роботі) попередження в чаті після активації, що розмова службова | В роботі |
+
+Перевірка назв ключів у коді (TASK-899, на момент запису): `Inventory:TelegramOwnerAlertsEnabled`, `Inventory:TelegramL3Approved`, `WORKER_INVENTORY_TELEGRAM_ENABLED` — є; pre-L3 ключі і `WORKER_INVENTORY_TELEGRAM_L3_APPROVED` — ще не в коді.
 
 ### 32.25 Відкриті питання етапу 2a
 

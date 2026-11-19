@@ -150,6 +150,56 @@ docker exec beautycrm psql -U postgres -d beautycrm \
 - Повторний `Up` 2a після відкату до етапу 1 — лише після кроку (2), інакше CHECK `(batch_id IS NULL) = is_shortage` і сальдо не зійдуться з історією.
 - Відкат спершу відпрацювати на копії БД (Up → Down → Up). Доки скрипт компенсації не написано й не перевірено, відкат на staging/prod — лише через відновлення з бекапу.
 
+### 2d. Склад етап 2b: Telegram-сповіщення власнику (ADR-025 §10.6, §12; контракт §32.24)
+
+**Прапори.** Відправка вимикається **двома** незалежними прапорами (аварійне вимкнення = обидва, M2):
+
+| Змінна | Де | За замовч. | Призначення |
+|---|---|---|---|
+| `Inventory:TelegramOwnerAlertsEnabled` (`Inventory__TelegramOwnerAlertsEnabled`) | backend | вимкнено | Лише `true` (без регістру) вмикає `POST` прив'язки. Вимкнено → `POST` = `403 telegram_alerts_disabled`; `DELETE`, `/stop`, `/status`, guard працюють |
+| `WORKER_INVENTORY_TELEGRAM_ENABLED` | worker | `false` | Лише `true` вмикає побудову й відправку. Вимкнено → лише прибирання (прострочені токени, 30-денне видалення); `pending` скасовуються як старші 24 год |
+| `Inventory:TelegramL3Approved` | backend | — | Технічний запобіжник «прод лише після L3» (2b-Q11): поза `Development` при `TelegramOwnerAlertsEnabled=true` без нього — помилка старту |
+| `Inventory:TelegramPreL3AllowedEnvironments`, `Inventory:TelegramPreL3TenantIds` | backend | — | (M1, **у роботі**) дозвіл на staging без `L3Approved` лише для tenant зі списку; поза списком — як прод |
+| `WORKER_INVENTORY_TELEGRAM_L3_APPROVED` | worker | — | (M1, **у роботі**) прод-вимога для worker; старт відмовляє, якщо прод-середовище, `WORKER_INVENTORY_TELEGRAM_ENABLED=true` і ключ не `true` |
+| `WORKER_INVENTORY_TELEGRAM_PRE_L3_TENANT_IDS` | worker | — | (M1, **у роботі**) pre-L3 allowlist tenant для staging — має збігатися з backend-списком |
+| `WORKER_INVENTORY_TELEGRAM_QUIET_START` / `_QUIET_END` | worker | `21` / `8` | Тихі години за timezone закладу (0–23, не рівні) |
+| `WORKER_ADMIN_BASE_URL` | worker | порожньо | Посилання в тексті (лише `https://`, поза dev); порожньо → без посилання |
+
+Вмикання на staging — тільки з allowlist тестового tenant (M1). Якщо ключі M1 ще не в коді, вмикання на staging не виконувати.
+
+**Порядок увімкнення на staging** (кожен крок — human gate G2):
+1. Бекап БД (`deploy/staging/README.md`).
+2. Міграція `beauty_inventory_stage2b` від `beautycrm_owner` (Up). Перевірити наявність 4 таблиць `beauty_staff_telegram_*`, `beauty_staff_notification*`.
+3. GRANT: `deploy/staging/db/grants.sql` (той самий набір, що `setup-db.ps1`, тест `staging-grants-sync`). Перевірка: `has_table_privilege('beautycrm_worker','beauty_staff_telegram_link_events','UPDATE')` → `f`; `…,'beauty_staff_telegram_links','DELETE'` → `f`.
+4. Прапори з pre-L3 allowlist тестового tenant: backend `TelegramOwnerAlertsEnabled=true` + M1-ключі; worker `WORKER_INVENTORY_TELEGRAM_ENABLED=true`, `WORKER_TENANT_IDS` містить тестовий tenant (див. «Залежність від WORKER_TENANT_IDS»). Модуль `beauty_inventory` увімкнено для тестового tenant.
+5. **G2:** прив'язка тестового акаунта власника (тестовий tenant, тестовий бот каналу). У адмінці: згода → «Відкрити Telegram» → `/start inv_…` → «Підтверджую». Перевірити статус `active`, рядок `activated` у журналі.
+6. Перевірка алерта: створити тестовий `low_stock` (норма + залишок нижче порогу або інвентаризація) → через ≤ 5 хв воркер надсилає повідомлення; лог `inventory_telegram tenant=… built=… sent=…`. Перевірити текст (без ПД, цін, назв з керівними символами).
+7. Перевірити `/stop` — прив'язка `revoked (bot_stop)`, дані чату стерто, у журналі рядок `revoked`.
+8. Прод (G3) — лише після закриття L3 (§32.24.7) і M1/M2; не раніше.
+
+**Витік посилання прив'язки** (посилання `t.me/…?start=inv_…` діє 15 хв і дає право прив'язати чат):
+1. В адмінці (власник або адмін платформи з доступом): «Відключити» — `DELETE` закриває `issued|claimed|active` (`revoked (user_unlink)`); перевірити, що стан `none`.
+2. Якщо чат уже прив'язаний чужою особою: власник у боті (чат, який міг бути чужим) надсилає `/stop` — або з адмінки «Відключити». Відв'язка стирає ідентифікатор чату.
+3. Перегенерувати посилання лише після відкликання (`POST` замінює незакритий стан `replaced`).
+4. Записати інцидент; перевірити журнал `staff_tg_link_revoked`, `staff_tg_token_rejected`.
+
+**Моніторинг (логи):**
+- Worker: `inventory_telegram tenant=… built=… sent=… failed=… revoked=… capped=…` (підсумок); `inventory_telegram_send_failed tenant=… notification=… errorCode=…` (Error); `inventory_telegram_link_revoked tenant=… link=… reason=…` (бот заблокований, чат не знайдено, користувач деактивований тощо); `inventory_telegram_link_failed`, `inventory_telegram_build_conflict`.
+- Backend: `staff_tg_link_issued|claimed|activated|revoked link=… reason=…`, `staff_tg_token_rejected channel=… reason=…`, `staff_tg_command_failed reason=…`, `staff_tg_bot_unavailable`.
+- Ніколи в логах не має бути `chat_id`, хешу, токена, тіла повідомлення, назв товарів. Якщо такий рядок знайдено — інцидент.
+- Алерт на `inventory_telegram_send_failed` з `errorCode` крім `429`/мережі, та на зростання `staff_tg_command_failed`.
+
+**Видалення даних** (tenant, або запит суб'єкта на видалення):
+- Звичайна відв'язка стирає `chat_id_*` без видалення рядка; рядки `revoked` і журнал `beauty_staff_telegram_link_events` (append-only, FK RESTRICT) не видаляються застосунком.
+- Повне видалення — лише ручно власником БД (`beautycrm_owner`) з бекапом: `ALTER TABLE beauty_staff_telegram_link_events DISABLE TRIGGER …` (тригер append-only), видалення в порядку notification_alerts → notifications → links → events, потім `ENABLE TRIGGER`. **Human gate:** рішення про видалення журналу — після L3 (чекліст §32.24.7, п.4 і п.7).
+- Виконання запиту суб'єкта: відв'язка → перевірка `chat_id_encrypted IS NULL` → рішення про журнал (юрист).
+
+**Відкат:** `Down` міграції `beauty_inventory_stage2b` відмовляє (`inventory stage2b history exists`), якщо є прив'язка не в `issued` або рядок журналу. Порядок відкату лише з бекапом і рішенням людини: вимкнути обидва прапори; видалити історію вручну (п. вище); `Down`; прибрати GRANT-и 2b з `grants.sql`/`setup-db.ps1`. Відкат спершу відпрацювати на копії БД (Up → Down → Up).
+
+**Залежність від `WORKER_TENANT_IDS` (L2):** воркер бере tenant лише зі статичного `WORKER_TENANT_IDS`. Tenant поза списком не отримує відправки **і** прибирання (строки 30 днів і прострочені токени). Вимкнений модуль `beauty_inventory` також зупиняє побудову; `DELETE` прив'язки (L2, у роботі) не залежить від модуля. Перед видаленням tenant з `WORKER_TENANT_IDS` — відкликати прив'язки.
+
+---
+
 ## 3. Секрети й змінні середовища
 Згенеруйте (`openssl rand`): `Auth__JwtSigningKey` (`-base64 48`), `Auth__PlatformKey` (`-base64 36`), `Channels__EncryptionKey` (`-base64 32`, base64 від 32 байт; при заміні ключа вже збережені секрети каналів перестануть розшифровуватись). Файл `.env` у `.gitignore`, комітити заборонено. Повний перелік змінних і коментарі: `.env.example`.
 

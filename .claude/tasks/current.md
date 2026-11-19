@@ -150,9 +150,9 @@
 | TASK-894 | documentation-writer | review | Документація складу 2a: ADR-025 §10.5, контракт §32.18 (v0.36.1) + §32.26, database.md, runbook §2c, known-issues KI-015…018 | .claude/logs/tasks/TASK-894.md |
 | TASK-895 | database-engineer | review | Склад 2b: міграція — beauty_staff_telegram_links, _link_events (append-only), beauty_staff_notifications, _notification_alerts; RLS FORCE, CHECK/UNIQUE, GRANT воркера | .claude/logs/tasks/TASK-895.md |
 | TASK-896 | backend-developer | review | Склад 2b: воркер pollInventoryTelegram (відбір, тихі години, дайджест, sendTelegramText, 403/429, прибирання), env, тексти | .claude/logs/tasks/TASK-896.md |
-| TASK-897 | qa-engineer | blocked (890, 891, 896) | QA складу 2b: відповідність §32.24, наскрізний сценарій у dev-боті, ручний чекліст | .claude/logs/tasks/TASK-897.md |
-| TASK-898 | security-reviewer | blocked (897) | Рев'ю безпеки 2b: токен/replay/brute-force, guard fail-closed, RLS/GRANT, шифрування chat_id, логи, тексти без ПД | .claude/logs/tasks/TASK-898.md |
-| TASK-899 | documentation-writer | blocked (898) | Документація 2b: database.md, runbook (прапори, gates G2/G3, відкат), known-issues, ADR-025 §10 | .claude/logs/tasks/TASK-899.md |
+| TASK-897 | qa-engineer | review (2 дефекти: QA-1, QA-2) | QA складу 2b: відповідність §32.24, наскрізний сценарій у dev-боті, ручний чекліст | .claude/logs/tasks/TASK-897.md |
+| TASK-898 | security-reviewer | review (звіт `docs/reviews/security-review-inventory-stage2b-2026-11.md`: 0 critical/high, M1, M2, L1–L5) | Рев'ю безпеки 2b: токен/replay/brute-force, guard fail-closed, RLS/GRANT, шифрування chat_id, логи, тексти без ПД | .claude/logs/tasks/TASK-898.md |
+| TASK-899 | documentation-writer | in progress | Документація 2b: ADR-025 §10.6/§12, контракт §32.24 (вирівняно, §32.24.13), database.md, runbook §2d, known-issues KI-019…021 | .claude/logs/tasks/TASK-899.md |
 
 ## ADR-017: індивідуальна ціна й тривалість майстра (TASK-804…814)
 
@@ -445,7 +445,7 @@ ADR: `.claude/docs/adr/ADR-018-shelfguard-control-plane-integration.md` (propose
 - **TASK-880 (security-reviewer).** Залежності: TASK-879. Критерії: звіт у `docs/reviews/`; RLS і IDOR за `locationId`; межа `inventory.costs`; append-only журнал; синхронність GRANT (setup-db / grants.sql / staging-grants-sync тест); відсутність ПД і собівартості у відповідях для прав без `costs`.
 - **TASK-881 (documentation-writer).** Залежності: TASK-880. Критерії: §32 позначено статусом, `database.md` (нові таблиці, міграція), runbook (модуль, backfill, відкат, gate), `known-issues.md` за потреби; тригери workflow.
 
-## Склад beauty_inventory, етап 2a (TASK-882…888, 892…894) і 2b (TASK-889…891)
+## Склад beauty_inventory, етап 2a (TASK-882…888, 892…894) і 2b (TASK-889…899)
 
 Джерело: ADR-025 §11 (рішення власника D1–D4, 2026-11-19), контракт §32.15–§32.25 v0.36 (`API-CONTRACT-INVENTORY-V2`). Гілка `feature/inventory-stage2a`. Класифікація: feature, risk high (фінансово критичний потік завершення візиту, зміна CHECK append-only таблиці).
 

@@ -959,6 +959,23 @@ Tests: `TenantIsolationTests.cs`, `CancellationHistoryRlsTests.cs`, `StaffHarden
 
 **Тест-вимоги:** див. контракт §32.22; RLS крос-tenant для нових таблиць; Up → Down → Up на копії.
 
+### Склад, етап 2b — Telegram власнику (`beauty_inventory`, ADR-025 §12, контракт §32.24)
+
+Міграція `20261119142456_beauty_inventory_stage2b` (TASK-895, адитивна). Чотири нові таблиці: RLS ENABLE + FORCE + `tenant_isolation`; FK композитні `(tenant_id, …)`.
+
+- **`beauty_staff_telegram_links`** — прив'язка й одноразовий токен; один рядок = одна спроба. Стани `issued | claimed | active | revoked`. `token_hash` — SHA-256 від 32 байт (`octet_length = 32`), TTL 15 хв. `chat_id_encrypted` — AES-GCM (ключ каналів), `chat_id_hash` — HMAC для пошуку. Згода: `consent_version` (`^inv-tg-v[0-9]+$`), `consent_at`. Часткові UNIQUE: `user_open` (один незакритий рядок на користувача), `chat_open` (один користувач на чат у боті tenant), `token`. CHECK форми стану (`issued`: є токен, немає чату; `claimed`: є токен і чат; `active`: токена немає, є чат; `revoked`: токена і чату немає). `revoked` не видаляється — стирається лише чат. Індекс для прибирання прострочених `issued|claimed`.
+- **`beauty_staff_telegram_link_events`** — append-only журнал (`issued | claimed | activated | declined | revoked | rejected`; `actor = user|bot|system`). Без `chat_id`, хешу, токена, username. `REVOKE UPDATE, DELETE, TRUNCATE` для app- і worker-ролей + тригер. Фактично `declined` не пишеться: відмова — `revoked` з `reason = declined` (§32.24.13).
+- **`beauty_staff_notifications`** — службова черга (outbox, ADR-003): `kind alert|digest`, `status pending|sending|sent|failed|cancelled`, `attempts 0..10`, `next_attempt_at`, `dedupe_key` (UNIQUE `(tenant_id, dedupe_key)`), `body` 1..4096. Без `chat_id` (адреса береться з прив'язки в момент відправки). Фінальні рядки старше 30 днів видаляє воркер.
+- **`beauty_staff_notification_alerts`** — зв'язок адресат × алерт: PK `(tenant_id, notification_id, alert_id)`, UNIQUE `(tenant_id, link_id, alert_id)` — кожен алерт кожному адресату не більше одного разу. FK `notification` CASCADE, `alert` і `link` RESTRICT.
+
+**Інваріанти:** `(chat_id_encrypted IS NULL) = (chat_id_hash IS NULL)`; `(revoke_reason IS NULL) = (status <> 'revoked')`; `(status = 'sent') = (sent_at IS NOT NULL)`; один активний чат на користувача, один користувач на чат у боті tenant. Відв'язка стирає `chat_id_*` і `token_hash` в тому самому `UPDATE`.
+
+**GRANT (синхронно `scripts/dev/setup-db.ps1`, `deploy/staging/db/grants.sql`; тест `staging-grants-sync`):**
+- app-роль: DML на (a), (c), (d) через `ON ALL TABLES`; на журнал (b) — `SELECT, INSERT`.
+- роль воркера (`beautycrm_worker`): (a) колонковий `SELECT (id, tenant_id, user_id, channel_id, status, chat_id_encrypted, token_expires_at, activated_at)` і колонковий `UPDATE (status, token_hash, chat_id_encrypted, chat_id_hash, revoked_at, revoke_reason, last_delivery_at, updated_at)`; (b) `INSERT`; (c) `SELECT, INSERT, UPDATE, DELETE`; (d) `SELECT, INSERT`; `users` — колонковий `SELECT (id, tenant_id, role, is_active, state)`; `beauty_products` — `name, unit` (без `purchase_price`).
+
+**Відкат:** `Down` відмовляє (`inventory stage2b history exists`), якщо є прив'язка не в `issued` або рядок журналу. Видалення історії — лише ручно власником БД з `ALTER TABLE … DISABLE TRIGGER` (human gate, runbook §2d). Схема тестів `worker/src/testing/schema.sql` перегенерована.
+
 ---
 
 ## 9. Known Constraints
