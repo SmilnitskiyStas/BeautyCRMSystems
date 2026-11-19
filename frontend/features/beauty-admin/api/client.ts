@@ -35,6 +35,7 @@ import type {
   ServiceMaterials,
   StaffAlert,
 } from "../inventory/types";
+import type { TelegramLinkCreateRequest, TelegramLinkIssued, TelegramLinkStatus } from "../inventory/telegram-link";
 import type {
   AccessSaveInput,
   AccessSaveResult,
@@ -504,4 +505,16 @@ export interface BeautyAdminApi {
   markInventoryAlertRead(id: string): Promise<StaffAlert>;
   /** POST /inventory/alerts/read-all?locationId: `{updated}`. */
   markAllInventoryAlertsRead(locationId?: string): Promise<number>;
+
+  // ---------- етап 2b (ADR-025 §12, §32.24): Telegram-сповіщення власнику (лише owner; все `no-store`) ----------
+  /** GET /inventory/telegram/link: стан прив'язки (без chat id і токена). */
+  getTelegramLink(): Promise<TelegramLinkStatus>;
+  /**
+   * POST /inventory/telegram/link (5/год): 201 `{linkId, deepLink, expiresAt}`; `deepLink` показується один раз.
+   * 403 telegram_alerts_disabled|forbidden_role, 409 telegram_already_linked, 422 consent_required|consent_version_outdated|
+   * telegram_channel_unavailable|telegram_channel_required (`channels`), 404 channel_not_found, 503 telegram_bot_unavailable, 429 rate_limited.
+   */
+  createTelegramLink(r: TelegramLinkCreateRequest): Promise<TelegramLinkIssued>;
+  /** DELETE /inventory/telegram/link: 204, ідемпотентно; працює і при вимкненому прапорі. */
+  deleteTelegramLink(): Promise<void>;
 }

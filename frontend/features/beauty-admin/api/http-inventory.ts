@@ -32,6 +32,7 @@ import type {
   Supplier,
   WriteOffReason,
 } from "../inventory/types";
+import type { RevokeReason, TelegramLinkIssued, TelegramLinkState, TelegramLinkStatus } from "../inventory/telegram-link";
 
 /**
  * HTTP-клієнт §32 (ADR-025). Явна вибірка полів; ціни (†) копіюються лише коли сервер їх віддав (без `inventory.costs`
@@ -60,6 +61,8 @@ const REASONS = ["expired", "damaged", "lost", "internal_use", "correction", "ot
 const STOCKTAKE_STATUSES = ["draft", "posted", "cancelled"] as const satisfies readonly StocktakeStatus[];
 const ALERT_KINDS = ["low_stock", "expiring", "shortage"] as const satisfies readonly AlertKind[];
 const ALERT_STATUSES = ["open", "read", "resolved"] as const satisfies readonly AlertStatus[];
+const TG_STATES = ["none", "pending", "awaitingConfirmation", "active"] as const satisfies readonly TelegramLinkState[];
+const TG_REVOKES = ["user_unlink", "bot_stop", "declined", "replaced", "expired", "bot_blocked", "chat_not_found", "user_deactivated", "role_changed", "tenant_inactive"] as const satisfies readonly RevokeReason[];
 const COSTS = ["none", "view", "edit"] as const satisfies readonly CostsAccess[];
 
 function ref(v: unknown): NamedRef | null {
@@ -385,7 +388,27 @@ type InventoryApi = Pick<
   | "getInventoryAlertsUnreadCount"
   | "markInventoryAlertRead"
   | "markAllInventoryAlertsRead"
+  | "getTelegramLink"
+  | "createTelegramLink"
+  | "deleteTelegramLink"
 >;
+
+export function toTelegramLinkStatus(v: unknown): TelegramLinkStatus {
+  const o = obj(v);
+  const rev = obj(o.lastRevoke);
+  const reason = str(rev.reason);
+  const at = str(rev.at);
+  return {
+    featureEnabled: o.featureEnabled === true,
+    state: oneOf<TelegramLinkState>(o.state, TG_STATES, "none"),
+    channel: ref(o.channel),
+    expiresAt: str(o.expiresAt),
+    activatedAt: str(o.activatedAt),
+    lastDeliveryAt: str(o.lastDeliveryAt),
+    lastRevoke: reason && at && (TG_REVOKES as readonly string[]).includes(reason) ? { reason: reason as RevokeReason, at } : null,
+    consentVersion: str(o.consentVersion) ?? "inv-tg-v1",
+  };
+}
 
 export const httpInventoryApi: InventoryApi = {
   getInventoryScope: async () => toScope(await get("/scope")),
@@ -449,4 +472,13 @@ export const httpInventoryApi: InventoryApi = {
   getInventoryAlertsUnreadCount: async () => Math.max(0, num0(obj(await get("/alerts/unread-count")).count)),
   markInventoryAlertRead: async (id) => toStaffAlert(await send("POST", `/alerts/${enc(id)}/read`)),
   markAllInventoryAlertsRead: async (locationId) => num0(obj(await send("POST", `/alerts/read-all${qs({ locationId })}`)).updated),
+
+  getTelegramLink: async () => toTelegramLinkStatus(await get("/telegram/link")),
+  createTelegramLink: async (r) => {
+    const o = obj(await send("POST", "/telegram/link", r));
+    return { linkId: str(o.linkId) ?? "", deepLink: str(o.deepLink) ?? "", expiresAt: str(o.expiresAt) ?? "" } satisfies TelegramLinkIssued;
+  },
+  deleteTelegramLink: async () => {
+    await apiJson<void>(`${B}/telegram/link`, { method: "DELETE", cache: "no-store" });
+  },
 };

@@ -6,6 +6,7 @@ import { dateTimeLabel } from "../format";
 import { useMarkAlertRead, useMarkAllAlertsRead, useStaffAlerts } from "../hooks/use-staff-alerts";
 import { ALERT_KIND_LABEL, ALERT_STATUS_LABEL, alertSummary, humanizeInventoryError } from "../inventory/logic";
 import type { AlertKind, AlertStatusFilter, StaffAlert } from "../inventory/types";
+import { TelegramSettingsLink } from "./telegram-notifications-screen";
 import { InventoryPage, LoadMore, LocationChips } from "./inventory-parts";
 import { Badge, Card, Chip, EmptyState, QueryState, SecondaryButton, Table, TD } from "./ui";
 
@@ -132,6 +133,7 @@ export function InventoryAlertsScreen() {
     <InventoryPage title="Сповіщення складу" subtitle="Низький залишок, терміни придатності та нестача після витрати на послуги">
       {(scope) => (
         <>
+          <TelegramSettingsLink />
           <LocationChips locations={scope.locations} value={location} onChange={setLocation} />
           <div className="flex flex-wrap gap-2" role="group" aria-label="Стан сповіщення">
             {STATUS_FILTERS.map((f) => (

@@ -61,6 +61,7 @@ export const beautyKeys = {
   inventory: {
     all: ["beauty", "inventory"] as const,
     scope: ["beauty", "inventory", "scope"] as const,
+    telegramLink: ["beauty", "inventory", "telegram-link"] as const,
     products: (q: object) => ["beauty", "inventory", "products", q] as const,
     product: (id: string) => ["beauty", "inventory", "product", id] as const,
     categories: ["beauty", "inventory", "categories"] as const,
