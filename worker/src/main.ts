@@ -66,7 +66,7 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
     winbackEnabled: /^true$/i.test(env.WORKER_WINBACK_ENABLED ?? ""),
     // §32.20: inventory alerts are off unless explicitly enabled; invalid WORKER_INVENTORY_* => loadInventoryConfig throws (no start).
     inventoryEnabled: /^true$/i.test(env.WORKER_INVENTORY_ENABLED ?? ""),
-    inventory: new PgInventoryAlerts(db),
+    inventory: new PgInventoryAlerts(db, consoleLogger),
     inventoryConfig: loadInventoryConfig(env),
     reminderButtonsEnabled: /^true$/i.test(env.WORKER_REMINDER_BUTTONS_ENABLED ?? ""),
     reminderMinLeadMinutes: Number.isFinite(lead) && lead >= 0 && env.WORKER_REMINDER_MIN_LEAD_MINUTES ? lead : DEFAULT_MIN_LEAD_MINUTES,

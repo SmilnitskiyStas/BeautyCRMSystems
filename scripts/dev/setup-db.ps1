@@ -113,8 +113,10 @@ GRANT SELECT ON beauty_specialists TO beautycrm_worker;
 GRANT INSERT ON beauty_conversations TO beautycrm_worker;
 -- Склад, етап 2a (ADR-025 §11, контракт §32.20, TASK-883): воркер pollInventory читає залишки, партії, товари й налаштування закладів
 -- і веде сповіщення персоналу (INSERT/UPDATE; без DELETE). Норми матеріалів і журнал рухів воркеру не потрібні. app-роль: нові таблиці - через ALL TABLES
-GRANT SELECT ON beauty_stock_levels, beauty_stock_batches, beauty_products, beauty_product_location_settings TO beautycrm_worker;
-GRANT SELECT, INSERT, UPDATE ON beauty_staff_alerts TO beautycrm_worker;
+GRANT SELECT ON beauty_stock_levels, beauty_stock_batches, beauty_product_location_settings TO beautycrm_worker;
+GRANT SELECT (id, tenant_id, is_active, min_stock) ON beauty_products TO beautycrm_worker;
+GRANT SELECT, INSERT ON beauty_staff_alerts TO beautycrm_worker;
+GRANT UPDATE (status, resolved_at, updated_at) ON beauty_staff_alerts TO beautycrm_worker;
 -- Публічний каталог закладів (ADR-022): функції належать beautycrm_catalog, EXECUTE лише для app-ролі, НЕ для PUBLIC і НЕ для воркера
 REVOKE ALL ON FUNCTION public.beauty_public_resolve_location(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.beauty_public_nearby_locations(double precision, double precision, double precision, integer) FROM PUBLIC;

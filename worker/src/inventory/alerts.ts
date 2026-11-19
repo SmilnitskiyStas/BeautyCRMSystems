@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
-import type { TenantDb } from "../db/tenant-db";
+import { currentTenantId, type TenantDb } from "../db/tenant-db";
+import type { Logger } from "../adapters/pg-support";
 
 /** §32.20: thresholds (days), local-hour gate and per-run cap. */
 export interface InventoryAlertConfig {
@@ -68,7 +69,7 @@ const PAIRS = `
   WHERE l.location_id = $1 AND p.is_active AND coalesce(s.is_enabled, true)`;
 
 export class PgInventoryAlerts implements InventoryAlertStore {
-  constructor(private readonly db: TenantDb) {}
+  constructor(private readonly db: TenantDb, private readonly logger?: Logger) {}
 
   async runForTenant(now: Date, cfg: InventoryAlertConfig): Promise<InventoryRunResult> {
     const res: InventoryRunResult = { locations: 0, created: 0, resolved: 0, capped: false, errors: 0 };
@@ -83,8 +84,12 @@ export class PgInventoryAlerts implements InventoryAlertStore {
         res.resolved += r.resolved;
         remaining -= r.created;
         if (r.capped) res.capped = true;
-      } catch {
+      } catch (err) {
         res.errors++; // one broken location (e.g. invalid timezone) does not stop the rest
+        // L3: ids and error code only; never the error message (it may carry product names/quantities)
+        const e = err as { code?: unknown; name?: unknown } | null;
+        const errorCode = typeof e?.code === "string" ? e.code : typeof e?.name === "string" ? e.name : "error";
+        this.logger?.error(`inventory_alerts_location_failed tenant=${currentTenantId()} location=${loc.id} errorCode=${errorCode}`);
       }
     }
     return res;

@@ -1,6 +1,6 @@
 import type { PgPollStore } from "../adapters/pg-poll-store";
 import type { Logger } from "../adapters/pg-support";
-import { withTenant } from "../db/tenant-db";
+import { currentTenantId, withTenant } from "../db/tenant-db";
 import type { TenantDirectory } from "../db/tenants";
 import { processOutbox } from "../jobs/beauty-outbox";
 import { processConfirmation } from "../jobs/beauty-confirmation";
@@ -184,7 +184,7 @@ export function pollInventory(ctx: PollContext): Promise<PollResult> {
   return forEachTenant(ctx, async () => {
     if (!(await ctx.deps.data.isInventoryEnabled())) return { processed: 0, errors: 0 }; // module off, silently idle
     const r = await store.runForTenant(ctx.deps.now(), ctx.inventoryConfig ?? DEFAULT_INVENTORY_CONFIG);
-    ctx.logger.info(`inventory_alerts locations=${r.locations} created=${r.created} resolved=${r.resolved} capped=${r.capped}`);
+    ctx.logger.info(`inventory_alerts tenant=${currentTenantId()} locations=${r.locations} created=${r.created} resolved=${r.resolved} capped=${r.capped}`);
     return { processed: r.created + r.resolved, errors: r.errors };
   }, "pollInventory");
 }

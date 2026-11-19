@@ -250,6 +250,11 @@ describe("pollInventory (PostgreSQL)", () => {
     await pollInventory(ctx([t], AFTER));
     const as = (sql: string, params: unknown[] = []) => withTenant(t.id, () => db.tx(async (c) => { await c.query(sql, params); }));
     await expect(as("DELETE FROM beauty_staff_alerts")).rejects.toMatchObject({ code: "42501" });
+    // L4: column-level UPDATE (status, resolved_at, updated_at only) and column-level SELECT on products
+    await expect(as("UPDATE beauty_staff_alerts SET status = 'resolved', resolved_at = now(), updated_at = now()")).resolves.toBeUndefined();
+    await expect(as("UPDATE beauty_staff_alerts SET kind = 'shortage'")).rejects.toMatchObject({ code: "42501" });
+    await expect(as("UPDATE beauty_staff_alerts SET dedupe_key = 'x'")).rejects.toMatchObject({ code: "42501" });
+    await expect(as("SELECT purchase_price FROM beauty_products")).rejects.toMatchObject({ code: "42501" });
     await expect(as("UPDATE beauty_stock_levels SET quantity = 1")).rejects.toMatchObject({ code: "42501" });
     await expect(as("DELETE FROM beauty_stock_batches")).rejects.toMatchObject({ code: "42501" });
     await expect(as("INSERT INTO beauty_stock_operations (tenant_id, kind, location_id) VALUES ($1,'receipt',$2)", [t.id, t.loc])).rejects.toMatchObject({ code: "42501" });
