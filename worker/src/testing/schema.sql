@@ -7019,3 +7019,357 @@ BEGIN
 END $EF$;
 COMMIT;
 
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    ALTER TABLE beauty_stock_movements DROP CONSTRAINT ck_beauty_stock_movements_batch;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    ALTER TABLE beauty_stocktake_lines ADD expected_shortage numeric(14,3);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    ALTER TABLE beauty_stock_operations ADD appointment_id uuid;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    ALTER TABLE beauty_stock_movements ADD is_shortage boolean NOT NULL DEFAULT FALSE;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    ALTER TABLE beauty_stock_levels ADD shortage_quantity numeric(14,3) NOT NULL DEFAULT 0.0;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    CREATE TABLE beauty_service_material_sets (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        service_id uuid NOT NULL,
+        location_id uuid,
+        updated_by_user_id uuid NOT NULL,
+        tenant_id uuid NOT NULL,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        updated_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_service_material_sets PRIMARY KEY (id),
+        CONSTRAINT ak_beauty_service_material_sets_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT fk_beauty_service_material_sets_beauty_locations_tenant_id_loc FOREIGN KEY (tenant_id, location_id) REFERENCES beauty_locations (tenant_id, id) ON DELETE CASCADE,
+        CONSTRAINT fk_beauty_service_material_sets_beauty_services_tenant_id_serv FOREIGN KEY (tenant_id, service_id) REFERENCES beauty_services (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_service_material_sets_users_tenant_id_updated_by_use FOREIGN KEY (tenant_id, updated_by_user_id) REFERENCES users (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    CREATE TABLE beauty_staff_alerts (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        kind character varying(16) NOT NULL,
+        location_id uuid NOT NULL,
+        product_id uuid NOT NULL,
+        batch_id uuid,
+        operation_id uuid,
+        quantity numeric(14,3) NOT NULL,
+        threshold numeric(14,3),
+        expires_on date,
+        days_bucket smallint,
+        dedupe_key character varying(200) NOT NULL,
+        status character varying(16) NOT NULL DEFAULT 'open',
+        read_at timestamp with time zone,
+        read_by_user_id uuid,
+        resolved_at timestamp with time zone,
+        tenant_id uuid NOT NULL,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        updated_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_staff_alerts PRIMARY KEY (id),
+        CONSTRAINT ak_beauty_staff_alerts_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT ck_beauty_staff_alerts_batch CHECK ((kind = 'expiring') = (batch_id IS NOT NULL)),
+        CONSTRAINT ck_beauty_staff_alerts_days_bucket CHECK (days_bucket IS NULL OR (kind = 'expiring' AND days_bucket BETWEEN 0 AND 365)),
+        CONSTRAINT ck_beauty_staff_alerts_kind CHECK (kind IN ('low_stock', 'expiring', 'shortage')),
+        CONSTRAINT ck_beauty_staff_alerts_operation CHECK ((kind = 'shortage') = (operation_id IS NOT NULL)),
+        CONSTRAINT ck_beauty_staff_alerts_read CHECK (status <> 'read' OR read_at IS NOT NULL),
+        CONSTRAINT ck_beauty_staff_alerts_resolved CHECK ((status = 'resolved') = (resolved_at IS NOT NULL)),
+        CONSTRAINT ck_beauty_staff_alerts_status CHECK (status IN ('open', 'read', 'resolved')),
+        CONSTRAINT ck_beauty_staff_alerts_threshold CHECK (threshold IS NULL OR (kind = 'low_stock' AND threshold >= 0)),
+        CONSTRAINT fk_beauty_staff_alerts_beauty_locations_tenant_id_location_id FOREIGN KEY (tenant_id, location_id) REFERENCES beauty_locations (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_staff_alerts_beauty_products_tenant_id_product_id FOREIGN KEY (tenant_id, product_id) REFERENCES beauty_products (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_staff_alerts_beauty_stock_batches_tenant_id_batch_id FOREIGN KEY (tenant_id, batch_id) REFERENCES beauty_stock_batches (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_staff_alerts_beauty_stock_operations_tenant_id_opera FOREIGN KEY (tenant_id, operation_id) REFERENCES beauty_stock_operations (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_staff_alerts_users_tenant_id_read_by_user_id FOREIGN KEY (tenant_id, read_by_user_id) REFERENCES users (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    CREATE TABLE beauty_service_materials (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        set_id uuid NOT NULL,
+        product_id uuid NOT NULL,
+        quantity numeric(14,3) NOT NULL,
+        tenant_id uuid NOT NULL,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        updated_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_service_materials PRIMARY KEY (id),
+        CONSTRAINT ak_beauty_service_materials_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT ck_beauty_service_materials_quantity CHECK (quantity > 0 AND quantity <= 100000),
+        CONSTRAINT fk_beauty_service_materials_beauty_products_tenant_id_product_ FOREIGN KEY (tenant_id, product_id) REFERENCES beauty_products (tenant_id, id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_service_materials_beauty_service_material_sets_tenan FOREIGN KEY (tenant_id, set_id) REFERENCES beauty_service_material_sets (tenant_id, id) ON DELETE CASCADE
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    ALTER TABLE beauty_stocktake_lines ADD CONSTRAINT ck_beauty_stocktake_lines_expected_shortage CHECK (expected_shortage IS NULL OR expected_shortage >= 0);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    CREATE UNIQUE INDEX ux_beauty_stock_operations_appointment ON beauty_stock_operations (tenant_id, appointment_id) WHERE appointment_id IS NOT NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    ALTER TABLE beauty_stock_operations ADD CONSTRAINT ck_beauty_stock_operations_appointment CHECK ((kind = 'service_consumption') = (appointment_id IS NOT NULL));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    ALTER TABLE beauty_stock_movements ADD CONSTRAINT ck_beauty_stock_movements_batch CHECK ((batch_id IS NULL) = is_shortage);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    ALTER TABLE beauty_stock_movements ADD CONSTRAINT ck_beauty_stock_movements_shortage CHECK (NOT is_shortage OR type = 'service_consumption' OR (type IN ('receipt', 'transfer_in', 'stocktake_adjust') AND quantity > 0));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    ALTER TABLE beauty_stock_levels ADD CONSTRAINT ck_beauty_stock_levels_shortage CHECK (shortage_quantity >= 0);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    CREATE INDEX ix_beauty_service_material_sets_tenant_id_location_id ON beauty_service_material_sets (tenant_id, location_id) WHERE location_id IS NOT NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    CREATE INDEX ix_beauty_service_material_sets_tenant_id_updated_by_user_id ON beauty_service_material_sets (tenant_id, updated_by_user_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    CREATE UNIQUE INDEX ux_beauty_service_material_sets_scope ON beauty_service_material_sets (tenant_id, service_id, location_id) NULLS NOT DISTINCT;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    CREATE INDEX ix_beauty_service_materials_tenant_id_product_id ON beauty_service_materials (tenant_id, product_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    CREATE UNIQUE INDEX ux_beauty_service_materials_pair ON beauty_service_materials (tenant_id, set_id, product_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    CREATE INDEX ix_beauty_staff_alerts_location_status ON beauty_staff_alerts (tenant_id, location_id, status);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    CREATE INDEX ix_beauty_staff_alerts_status_created ON beauty_staff_alerts (tenant_id, status, created_at DESC, id DESC);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    CREATE INDEX ix_beauty_staff_alerts_tenant_id_batch_id ON beauty_staff_alerts (tenant_id, batch_id) WHERE batch_id IS NOT NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    CREATE INDEX ix_beauty_staff_alerts_tenant_id_operation_id ON beauty_staff_alerts (tenant_id, operation_id) WHERE operation_id IS NOT NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    CREATE INDEX ix_beauty_staff_alerts_tenant_id_product_id ON beauty_staff_alerts (tenant_id, product_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    CREATE INDEX ix_beauty_staff_alerts_tenant_id_read_by_user_id ON beauty_staff_alerts (tenant_id, read_by_user_id) WHERE read_by_user_id IS NOT NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    CREATE UNIQUE INDEX ux_beauty_staff_alerts_dedupe ON beauty_staff_alerts (tenant_id, dedupe_key);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    ALTER TABLE beauty_stock_operations ADD CONSTRAINT fk_beauty_stock_operations_beauty_appointments_tenant_id_appoi FOREIGN KEY (tenant_id, appointment_id) REFERENCES beauty_appointments (tenant_id, id) ON DELETE RESTRICT;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    ALTER TABLE beauty_service_material_sets ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    ALTER TABLE beauty_service_material_sets FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_service_material_sets
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    ALTER TABLE beauty_service_materials ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    ALTER TABLE beauty_service_materials FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_service_materials
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    ALTER TABLE beauty_staff_alerts ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    ALTER TABLE beauty_staff_alerts FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_staff_alerts
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+
+    DO $$
+    DECLARE
+        t text;
+    BEGIN
+        FOREACH t IN ARRAY ARRAY['beauty_service_material_sets', 'beauty_service_materials', 'beauty_staff_alerts']
+        LOOP
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_class WHERE oid = to_regclass('public.' || t) AND relrowsecurity AND relforcerowsecurity
+            ) THEN
+                RAISE EXCEPTION 'FORCE ROW LEVEL SECURITY is not enabled on %', t;
+            END IF;
+        END LOOP;
+    END
+    $$;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261119093230_beauty_inventory_stage2a') THEN
+    INSERT INTO "__EFMigrationsHistory" (migration_id, product_version)
+    VALUES ('20261119093230_beauty_inventory_stage2a', '8.0.11');
+    END IF;
+END $EF$;
+COMMIT;
+

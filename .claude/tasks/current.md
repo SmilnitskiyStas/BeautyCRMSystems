@@ -136,7 +136,7 @@
 | TASK-880 | security-reviewer | planned | Рев'ю безпеки складу етап 1: RLS/IDOR, межа inventory.costs, append-only журнал, синхронність GRANT, PII; звіт у docs/reviews/ | .claude/logs/tasks/TASK-880.md |
 | TASK-881 | documentation-writer | planned | Документація складу етап 1: §32 статус, database.md, runbook (модуль, backfill, відкат), known-issues | .claude/logs/tasks/TASK-881.md |
 | TASK-882 | project-architect | review (gate схеми D3) | Склад етап 2a: ADR-025 §11 (D1–D4) + контракт §32.15–§32.25 v0.36 (норми, дефіцит, автосписання, сповіщення, воркер), розбиття 883…894 | .claude/logs/tasks/TASK-882.md |
-| TASK-883 | database-engineer | blocked (gate схеми) | Склад 2a: міграція — набори/рядки норм, shortage_quantity, is_shortage + CHECK, appointment_id + UNIQUE, expected_shortage, beauty_staff_alerts, RLS, GRANT воркера, schema.sql, тести | .claude/logs/tasks/TASK-883.md |
+| TASK-883 | database-engineer | review | Склад 2a: міграція — набори/рядки норм, shortage_quantity, is_shortage + CHECK, appointment_id + UNIQUE, expected_shortage, beauty_staff_alerts, RLS, GRANT воркера, schema.sql, тести | .claude/logs/tasks/TASK-883.md |
 | TASK-884 | backend-developer | planned | Склад 2a: API норм матеріалів (§32.16), unit_locked/purpose_locked, тести | .claude/logs/tasks/TASK-884.md |
 | TASK-885 | backend-developer | planned | Склад 2a: автосписання в CompleteWithCostSnapshotAsync (SAVEPOINT, ідемпотентність за appointment_id), погашення дефіциту (надходження/переміщення/інвентаризація), розширення DTO, тести | .claude/logs/tasks/TASK-885.md |
 | TASK-886 | backend-developer | planned | Склад 2a: API сповіщень /alerts (список, read, read-all, unread-count), scope, тести | .claude/logs/tasks/TASK-886.md |

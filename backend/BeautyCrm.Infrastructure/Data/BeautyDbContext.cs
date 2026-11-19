@@ -79,6 +79,10 @@ public class BeautyDbContext : DbContext
     public DbSet<StockMovement> StockMovements => Set<StockMovement>();
     public DbSet<Stocktake> Stocktakes => Set<Stocktake>();
     public DbSet<StocktakeLine> StocktakeLines => Set<StocktakeLine>();
+    // Склад, етап 2a (TASK-883, §32.16-§32.19)
+    public DbSet<ServiceMaterialSet> ServiceMaterialSets => Set<ServiceMaterialSet>();
+    public DbSet<ServiceMaterial> ServiceMaterials => Set<ServiceMaterial>();
+    public DbSet<StaffAlert> StaffAlerts => Set<StaffAlert>();
 
     // auth (TASK-684)
     public DbSet<Tenant> Tenants => Set<Tenant>();
@@ -758,8 +762,12 @@ public class BeautyDbContext : DbContext
         mb.Entity<StockLevel>(b =>
         {
             Base(b, "beauty_stock_levels", t =>
-                t.HasCheckConstraint("ck_beauty_stock_levels_quantity", "quantity >= 0"));
+            {
+                t.HasCheckConstraint("ck_beauty_stock_levels_quantity", "quantity >= 0");
+                t.HasCheckConstraint("ck_beauty_stock_levels_shortage", "shortage_quantity >= 0");
+            });
             b.Property(x => x.Quantity).HasPrecision(14, 3).HasDefaultValue(0m);
+            b.Property(x => x.ShortageQuantity).HasPrecision(14, 3).HasDefaultValue(0m);
             FkTo<StockLevel, Location>(b, "LocationId", DeleteBehavior.Restrict);
             FkTo<StockLevel, Product>(b, "ProductId", DeleteBehavior.Restrict);
             b.HasIndex(x => new { x.TenantId, x.LocationId, x.ProductId }).IsUnique().HasDatabaseName("ux_beauty_stock_levels_pair");
@@ -781,6 +789,8 @@ public class BeautyDbContext : DbContext
                 t.HasCheckConstraint("ck_beauty_stock_operations_stocktake", "(kind = 'stocktake') = (stocktake_id IS NOT NULL)");
                 t.HasCheckConstraint("ck_beauty_stock_operations_idempotency",
                     "(idempotency_key_hash IS NULL) = (idempotency_request_hash IS NULL)");
+                t.HasCheckConstraint("ck_beauty_stock_operations_appointment",
+                    "(kind = 'service_consumption') = (appointment_id IS NOT NULL)");
             });
             Enum(b.Property(x => x.Kind)).HasMaxLength(24);
             b.Property(x => x.Reason).HasConversion(new EnumMemberConverter<WriteOffReason>()).HasMaxLength(16);
@@ -795,6 +805,9 @@ public class BeautyDbContext : DbContext
             FkTo<StockOperation, Supplier>(b, "SupplierId", DeleteBehavior.Restrict);
             FkTo<StockOperation, Stocktake>(b, "StocktakeId", DeleteBehavior.Restrict);
             FkTo<StockOperation, User>(b, "CreatedByUserId", DeleteBehavior.Restrict);
+            FkTo<StockOperation, Appointment>(b, "AppointmentId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.AppointmentId }).IsUnique().HasDatabaseName("ux_beauty_stock_operations_appointment")
+                .HasFilter("appointment_id IS NOT NULL");
             b.HasIndex(x => new { x.TenantId, x.StocktakeId }).IsUnique().HasDatabaseName("ux_beauty_stock_operations_stocktake")
                 .HasFilter("stocktake_id IS NOT NULL");
             b.HasIndex(x => new { x.TenantId, x.IdempotencyKeyHash }).IsUnique().HasDatabaseName("ux_beauty_stock_operations_idempotency")
@@ -843,13 +856,16 @@ public class BeautyDbContext : DbContext
             KeyOnly(b, "beauty_stock_movements", t =>
             {
                 Check<StockMovementType>(t, "beauty_stock_movements", "type");
-                t.HasCheckConstraint("ck_beauty_stock_movements_batch", "batch_id IS NOT NULL OR type = 'service_consumption'");
+                t.HasCheckConstraint("ck_beauty_stock_movements_batch", "(batch_id IS NULL) = is_shortage");
+                t.HasCheckConstraint("ck_beauty_stock_movements_shortage",
+                    "NOT is_shortage OR type = 'service_consumption' OR (type IN ('receipt', 'transfer_in', 'stocktake_adjust') AND quantity > 0)");
                 t.HasCheckConstraint("ck_beauty_stock_movements_quantity_sign",
                     "(type IN ('receipt', 'transfer_in') AND quantity > 0) " +
                     "OR (type IN ('write_off', 'transfer_out', 'service_consumption', 'sale') AND quantity < 0) " +
                     "OR (type = 'stocktake_adjust' AND quantity <> 0)");
             });
             Enum(b.Property(x => x.Type)).HasMaxLength(24);
+            b.Property(x => x.IsShortage).HasDefaultValue(false);
             b.Property(x => x.Quantity).HasPrecision(14, 3);
             b.Property(x => x.UnitCost).HasPrecision(12, 2);
             b.Property(x => x.OccurredAt).HasDefaultValueSql("now()");
@@ -902,11 +918,13 @@ public class BeautyDbContext : DbContext
             {
                 t.HasCheckConstraint("ck_beauty_stocktake_lines_counted", "counted_quantity IS NULL OR counted_quantity >= 0");
                 t.HasCheckConstraint("ck_beauty_stocktake_lines_expected", "expected_quantity >= 0");
+                t.HasCheckConstraint("ck_beauty_stocktake_lines_expected_shortage", "expected_shortage IS NULL OR expected_shortage >= 0");
                 t.HasCheckConstraint("ck_beauty_stocktake_lines_surplus_expires_on",
                     "surplus_expires_on IS NULL OR surplus_expires_on BETWEEN DATE '2000-01-01' AND DATE '2100-12-31'");
             });
             b.Property(x => x.CountedQuantity).HasPrecision(14, 3);
             b.Property(x => x.ExpectedQuantity).HasPrecision(14, 3);
+            b.Property(x => x.ExpectedShortage).HasPrecision(14, 3);
             b.Property(x => x.SurplusExpiresOn).HasColumnType("date");
             FkTo<StocktakeLine, Stocktake>(b, "StocktakeId", DeleteBehavior.Cascade);
             FkTo<StocktakeLine, Product>(b, "ProductId", DeleteBehavior.Restrict);
@@ -914,6 +932,67 @@ public class BeautyDbContext : DbContext
             b.HasIndex(x => new { x.TenantId, x.StocktakeId, x.ProductId }).IsUnique().HasDatabaseName("ux_beauty_stocktake_lines_pair");
             b.HasIndex(x => new { x.TenantId, x.ProductId });
             b.HasIndex(x => new { x.TenantId, x.UpdatedByUserId }).HasFilter("updated_by_user_id IS NOT NULL");
+        });
+
+        // ---- Етап 2a (TASK-883, §32.16, §32.19) ----
+
+        mb.Entity<ServiceMaterialSet>(b =>
+        {
+            Base(b, "beauty_service_material_sets");
+            FkTo<ServiceMaterialSet, Service>(b, "ServiceId", DeleteBehavior.Restrict);
+            FkTo<ServiceMaterialSet, Location>(b, "LocationId", DeleteBehavior.Cascade);
+            FkTo<ServiceMaterialSet, User>(b, "UpdatedByUserId", DeleteBehavior.Restrict);
+            // одна мережева (location_id NULL) + не більше одного override на заклад; також індекс FK service_id
+            b.HasIndex(x => new { x.TenantId, x.ServiceId, x.LocationId }).IsUnique().AreNullsDistinct(false)
+                .HasDatabaseName("ux_beauty_service_material_sets_scope");
+            b.HasIndex(x => new { x.TenantId, x.LocationId }).HasFilter("location_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.UpdatedByUserId });
+        });
+
+        mb.Entity<ServiceMaterial>(b =>
+        {
+            Base(b, "beauty_service_materials", t =>
+                t.HasCheckConstraint("ck_beauty_service_materials_quantity", "quantity > 0 AND quantity <= 100000"));
+            b.Property(x => x.Quantity).HasPrecision(14, 3);
+            FkTo<ServiceMaterial, ServiceMaterialSet>(b, "SetId", DeleteBehavior.Cascade);
+            FkTo<ServiceMaterial, Product>(b, "ProductId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.SetId, x.ProductId }).IsUnique().HasDatabaseName("ux_beauty_service_materials_pair");
+            b.HasIndex(x => new { x.TenantId, x.ProductId });
+        });
+
+        mb.Entity<StaffAlert>(b =>
+        {
+            Base(b, "beauty_staff_alerts", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_staff_alerts_kind", "kind IN ('low_stock', 'expiring', 'shortage')");
+                t.HasCheckConstraint("ck_beauty_staff_alerts_status", "status IN ('open', 'read', 'resolved')");
+                t.HasCheckConstraint("ck_beauty_staff_alerts_batch", "(kind = 'expiring') = (batch_id IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_staff_alerts_operation", "(kind = 'shortage') = (operation_id IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_staff_alerts_days_bucket",
+                    "days_bucket IS NULL OR (kind = 'expiring' AND days_bucket BETWEEN 0 AND 365)");
+                t.HasCheckConstraint("ck_beauty_staff_alerts_threshold", "threshold IS NULL OR (kind = 'low_stock' AND threshold >= 0)");
+                t.HasCheckConstraint("ck_beauty_staff_alerts_resolved", "(status = 'resolved') = (resolved_at IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_staff_alerts_read", "status <> 'read' OR read_at IS NOT NULL");
+            });
+            b.Property(x => x.Kind).HasMaxLength(16);
+            b.Property(x => x.Status).HasMaxLength(16).HasDefaultValue("open");
+            b.Property(x => x.Quantity).HasPrecision(14, 3);
+            b.Property(x => x.Threshold).HasPrecision(14, 3);
+            b.Property(x => x.ExpiresOn).HasColumnType("date");
+            b.Property(x => x.DedupeKey).HasMaxLength(200);
+            FkTo<StaffAlert, Location>(b, "LocationId", DeleteBehavior.Restrict);
+            FkTo<StaffAlert, Product>(b, "ProductId", DeleteBehavior.Restrict);
+            FkTo<StaffAlert, StockBatch>(b, "BatchId", DeleteBehavior.Restrict);
+            FkTo<StaffAlert, StockOperation>(b, "OperationId", DeleteBehavior.Restrict);
+            FkTo<StaffAlert, User>(b, "ReadByUserId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.DedupeKey }).IsUnique().HasDatabaseName("ux_beauty_staff_alerts_dedupe");
+            b.HasIndex(x => new { x.TenantId, x.Status, x.CreatedAt, x.Id }).IsDescending(false, false, true, true)
+                .HasDatabaseName("ix_beauty_staff_alerts_status_created");
+            b.HasIndex(x => new { x.TenantId, x.LocationId, x.Status }).HasDatabaseName("ix_beauty_staff_alerts_location_status");
+            b.HasIndex(x => new { x.TenantId, x.BatchId }).HasFilter("batch_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.OperationId }).HasFilter("operation_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.ProductId });
+            b.HasIndex(x => new { x.TenantId, x.ReadByUserId }).HasFilter("read_by_user_id IS NOT NULL");
         });
     }
 
