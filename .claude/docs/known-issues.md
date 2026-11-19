@@ -95,7 +95,38 @@ Description: контракт §2.4 передбачав прибрати `DEFAU
 
 Resolution: окрема міграція `DROP DEFAULT` після виведення старих образів API з обігу. Не змінювати без human gate на staging/prod.
 
-### KI-008: Приклади env не містять обов'язкових змінних ADR-024 (API не стартує на staging)
+### KI-008: Пошук складу (ILIKE) залежить від локалі БД
+Severity: low
+Status: open
+Discovered in: TASK-880 (security-review складу)
+Area: backend, database
+
+Description: пошук товарів і залишків (`search`) виконується через `EF.Functions.ILike` з екрануванням `%_\`. Для кирилиці коректний результат потребує UTF-8-локалі БД. Prod і Docker-postgres відповідають; інша локаль може давати хибні збіги або пропуски.
+
+Resolution: планується перевірка локалі в bootstrap або перехід на нормалізований пошук (окрема задача). До того не вважати пошук надійним у нестандартних середовищах.
+
+### KI-009: Сторінка залишків читає всі відфільтровані товари в пам'ять
+Severity: medium
+Status: open
+Discovered in: TASK-880 (security-review складу)
+Area: backend, database, performance
+
+Description: `GET /stock` читає легкі ключі (id, назва) усіх товарів, що пройшли фільтри, а важкі агрегати — лише для сторінки. Для каталогу в десятки тисяч товарів це дорого.
+
+Resolution: keyset-пагінація цілком у SQL з `collate "C"` для сортування за назвою (окремий крок, після заміру плану запиту через `create-indexes`).
+
+### KI-010: Порядок рухів у відповіді операції не відповідає FEFO
+Severity: low
+Status: open
+Discovered in: TASK-881 (звірка документації з кодом)
+Area: backend, api
+
+Description: `GET /operations/{id}` повертає рухи, відсортовані за `occurred_at, id`. Рухи однієї операції мають однаковий час, тому порядок їх списання з партій за FEFO у відповіді не відображається.
+
+Resolution: окрема задача: або зберігати порядок списання (наприклад, колонка порядку рядка), або явно задокументувати в §32.6 як не FEFO. Клієнти не повинні покладатися на порядок.
+
+
+### KI-015: Приклади env не містять обов'язкових змінних ADR-024 (API не стартує на staging)
 Severity: high
 Status: open
 Discovered in: TASK-869 (перевірка env після TASK-863/865)
@@ -104,7 +135,7 @@ Area: infra, backend
 Description: `deploy/staging/.env.api.example` і корневий `.env.example` не містять `Auth__LoginAttemptKeyPepper` (≥ 32 байти) і `Auth__LegacyTenantLogin__DeprecatedAt` / `__SunsetAt`. Поза Development `AuthSetup` кидає виняток на старті. Скопійований приклад дає падіння API.
 Resolution: додати змінні з коментарями в обидва приклади (людина задає значення на сервері); до того — runbook §2b.4 як попередження. Код не змінювався.
 
-### KI-009: Нормалізація пошти в preflight (SQL) і в застосунку (C#) може розходитися
+### KI-016: Нормалізація пошти в preflight (SQL) і в застосунку (C#) може розходитися
 Severity: medium
 Status: open
 Discovered in: TASK-861
@@ -113,7 +144,7 @@ Area: database, backend
 Description: preflight і міграція нормалізують `lower(btrim(email))` (SQL), застосунок — `Trim().ToLowerInvariant()`. Для Unicode-регістру й не-пробільних whitespace результати можуть різнитися. Частина таких адрес у звіті preflight (розділ 4) видна лише як аномалія. Пошта, яку застосунок не знайде через SQL-нормалізацію (або навпаки), може дати дубль або хибне `email_in_use`.
 Resolution: до застосування міграції на staging переглянути розділ 4 звіту preflight; аномалії виправити вручну. Вирівнювання правил нормалізації — окреме рішення (ADR-024: без Unicode-нормалізації).
 
-### KI-010: Лист «Пароль змінено» без часу зміни
+### KI-017: Лист «Пароль змінено» без часу зміни
 Severity: low
 Status: accepted-risk
 Discovered in: TASK-872
@@ -122,7 +153,7 @@ Area: worker, database
 Description: контракт §31.7.3 вимагає час зміни (UTC) у листі. `auth_password_reset_claim_delivery` не повертає timestamp, тому лист без часу. Бюджет повторів (24 год) рахується в пам'яті процесу воркера.
 Accepted-risk: плейсхолдер погоджується людиною. Зміна потребує claim-функції з timestamp і міграції (окрема задача).
 
-### KI-011: Воркер без метрик; бюджети повторів і троттли процес-локальні
+### KI-018: Воркер без метрик; бюджети повторів і троттли процес-локальні
 Severity: low
 Status: accepted-risk
 Discovered in: TASK-865, TASK-872
@@ -131,7 +162,7 @@ Area: worker, infra, backend
 Description: у воркері немає метрик (лише логи без пошти й токенів). Backoff і 24-годинний бюджет листів зберігаються в пам'яті; після рестарту відлік починається знову. У API `LoginEmailThrottle`, ліміти `password/forgot`, `InviteEmailCheckThrottle` — in-memory на інстанс (кожен інстанс рахує окремо).
 Accepted-risk: однаково з `OwnerInviteThrottle`; один інстанс API і воркера на staging. Перед масштабуванням — спільний лічильник (окрема задача). Квоти ідентичностей і блокування в БД і від рестарту не залежать.
 
-### KI-012: Алерти ADR-024 ще не налаштовані
+### KI-019: Алерти ADR-024 ще не налаштовані
 Severity: medium
 Status: open
 Discovered in: TASK-864, TASK-860 (§31.9, §31.12)
@@ -140,7 +171,7 @@ Area: infra
 Description: передбачено алерти (`identity_created{via="staff_invite"}` > 10 / добу на tenant; сплеск `invite_email_in_use`; частка `invalid_credentials`). Метрики в API є, алертів у devops немає.
 Resolution: devops налаштовує алерти (окрема задача). До того — перегляд метрик вручну при релізі.
 
-### KI-013: Вимога релізу F-1 (IP клієнта за BFF) ще не перевірена на сервері
+### KI-020: Вимога релізу F-1 (IP клієнта за BFF) ще не перевірена на сервері
 Severity: high
 Status: open
 Discovered in: TASK-871 (ADR-024 E-14)
@@ -149,7 +180,69 @@ Area: infra, security
 Description: без правильного `Beauty__TrustedProxies` + статичної адреси `web` (`BEAUTY_WEB_IP`) + nginx `X-Forwarded-For $remote_addr` ліміт `auth` (10/хв) спільний для всіх користувачів, тобто будь-хто без автентифікації блокує вхід усім. Код і конфіг у репозиторії готові; на сервері нічого не застосовано, smoke §6.6 не виконано.
 Resolution: людина застосовує конфіг, виконує smoke (`deploy/staging/README.md` §6.6), результат — у `.claude/logs/tasks/TASK-871.md`. Реліз TASK-866 і фази 2 заблоковано до цього.
 
+
 ## Resolved Issues
+
+### KI-011: Неявне перетворення null у Result<T> давало 201 з порожнім тілом
+Severity: high
+Status: resolved
+Discovered in: TASK-877 (review)
+Resolved in: TASK-877
+Area: backend, api
+
+Description: `MapStocktake` повертав `Result` з `null` у `Value`. Неявний оператор `T → Result<T>` на `null` створював успішний результат, тому конфлікт інвентаризації віддавав `201` з порожнім тілом замість `409`.
+
+Root cause: неявне перетворення з `T` вважало `null` успіхом; тип результату не розрізняв «успіх без значення» й «значення відсутнє».
+
+Resolution: `MapStocktake` більше не повертає успішний `Result` з `null`; конфлікт `stocktake_in_progress` (409) перевіряє `InventoryApiTests`.
+
+Prevention: API-тест на конфлікт перевіряє і статус, і тіло відповіді (`Fails(..., HttpStatusCode.Conflict, "<code>")`). Нові `Result<T>` для сутностей, що можуть бути відсутні, будують через явні `Ok`/`Error`, а не через неявне перетворення від `null`.
+
+### KI-012: Колізія імені DTO `NamedRef` ламала генерацію Swagger
+Severity: medium
+Status: resolved
+Discovered in: TASK-877 (review)
+Resolved in: TASK-877
+Area: backend, api
+
+Description: DTO `NamedRef` у модулі складу збігався за назвою зі схемою іншого типу, і Swagger не міг згенерувати документ.
+
+Root cause: схеми Swagger ідентифікуються за коротким іменем типу; два різні типи з однаковою назвою в різних просторах імен конфліктували.
+
+Resolution: тип перейменовано на `InventoryNamedRef`.
+
+Prevention: DTO модуля мають префікс модуля (`Inventory*`). Перед додаванням DTO з загальною назвою перевіряти наявні схеми Swagger.
+
+### KI-013: Нестабільний тест залежав від порядку рухів з однаковим часом
+Severity: low
+Status: resolved
+Discovered in: TASK-880 (security-review складу)
+Resolved in: TASK-880
+Area: backend, tests
+
+Description: `Stocktake_surplus_shortage_zero_and_closed_rules` періодично падав. Усі рухи однієї операції мають однаковий `occurred_at` (час береться з `TimeProvider`), тому порядок їх у вибірці визначався випадковим `id`.
+
+Root cause: тест перевіряв рухи за позицією в списку, а порядок при однаковому часі не детермінований.
+
+Resolution: перевірка йде за складом залишків (сума за заклад і товар), а не за позицією рядка.
+
+Prevention: тести не покладаються на порядок рухів з однаковим `occurred_at`. Для перевірки порядку — різний час у `FakeTimeProvider` або порівняння за агрегатом.
+
+### KI-014: BOM у `schema.sql` ламав завантаження в PostgreSQL
+Severity: high
+Status: resolved
+Discovered in: TASK-876 (database)
+Resolved in: TASK-877 (перегенеровано `worker/src/testing/schema.sql`)
+Area: database, worker, infra
+
+Description: після перегенерації файл `schema.sql` починався з BOM, і завантаження скрипта в PostgreSQL падало на першому оператора.
+
+Root cause: генерація схеми записала BOM на початку файлу; контракт §32.3 вимагає UTF-8 без BOM і LF.
+
+Resolution: файл перегенеровано без BOM, LF; `schema-drift.test.ts` зелений.
+
+Prevention: після генерації схеми перевіряти, що файл починається з `CREATE`/`--`, а не з BOM; генерувати без BOM і LF (правило §32.3).
+
 
 ### KI-R1 (з TASK-862): тестові сиди ламаються від `users.identity_id NOT NULL`
 Severity: medium

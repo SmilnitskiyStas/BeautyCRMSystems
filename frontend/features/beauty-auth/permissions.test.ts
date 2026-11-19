@@ -32,7 +32,7 @@ describe("safeNext", () => {
 
 describe("рольова навігація", () => {
   it("specialist бачить лише календар і власний профіль", () => {
-    expect(navFor("specialist").map((n) => n.href)).toEqual(["/beauty/calendar", "/beauty/staff", "/beauty/promos"]);
+    expect(navFor("specialist").map((n) => n.href)).toEqual(["/beauty/calendar", "/beauty/staff", "/beauty/promos", "/beauty/inventory"]);
     expect(navFor("specialist").find((n) => n.href === "/beauty/staff")?.label).toBe("Мій профіль");
     expect(canOpen("specialist", "/beauty/staff/abc")).toBe(true);
     expect(canOpen("specialist", "/beauty/clients")).toBe(false);
@@ -121,10 +121,10 @@ describe("групи меню (TASK-796)", () => {
   it("4 блоки в заданому порядку з тими самими маршрутами", () => {
     expect(NAV_GROUPS.map((g) => g.label)).toEqual(["Щоденна робота", "Каталог і продажі", "Аналітика та AI", "Система"]);
     expect(NAV_GROUPS[0].items.map((n) => n.href)).toEqual(["/beauty", "/beauty/calendar", "/beauty/inbox", "/beauty/calls", "/beauty/clients"]);
-    expect(NAV_GROUPS[1].items.map((n) => n.href)).toEqual(["/beauty/locations", "/beauty/staff", "/beauty/services", "/beauty/promos", "/beauty/campaigns"]);
+    expect(NAV_GROUPS[1].items.map((n) => n.href)).toEqual(["/beauty/locations", "/beauty/staff", "/beauty/services", "/beauty/promos", "/beauty/campaigns", "/beauty/inventory"]);
     expect(NAV_GROUPS[2].items.map((n) => n.href)).toEqual(["/beauty/analytics", "/beauty/ai"]);
     expect(NAV_GROUPS[3].items.map((n) => n.href)).toEqual(["/beauty/channels", "/beauty/settings", "/beauty/team"]);
-    expect(navFor("owner")).toHaveLength(15);
+    expect(navFor("owner")).toHaveLength(16);
     expect(navFor("deputy").length).toBeGreaterThan(0);
   });
 });

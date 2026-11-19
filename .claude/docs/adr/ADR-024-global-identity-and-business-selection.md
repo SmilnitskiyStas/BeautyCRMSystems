@@ -392,7 +392,7 @@ FROM users GROUP BY 1 HAVING count(*) > 1 OR count(DISTINCT email) > 1;
 7. **Поля й таблиці.** `identities.failed_login_count` і `lockout_until` не створювались (E-2). Блокування — `auth_login_attempts` з HMAC-ключем (pepper).
 8. **Dual-write.** `users.password_hash` пишеться й при скиданні всіх членств до фази 3. Міграція цю колонку не змінює.
 9. **Синонім назви allowlist.** Приймається синонім `beautycrm.identity_merge_allow` (з постановки TASK-862); різні значення → помилка.
-10. **Лист «Пароль змінено».** Без часу зміни (`claim_delivery` не повертає timestamp), 24-годинний бюджет у пам'яті процесу, без метрик у воркері (`beauty-contracts.md` §31.7.3, KI-010, KI-011).
+10. **Лист «Пароль змінено».** Без часу зміни (`claim_delivery` не повертає timestamp), 24-годинний бюджет у пам'яті процесу, без метрик у воркері (`beauty-contracts.md` §31.7.3, KI-017, KI-018).
 11. **Тести.** ~25 сидів `users` переписано на спільний хелпер (`IdentitySeed.cs`, `seed-user.ts`); повний backend-прогін: 0 падінь, окрім відомого flaky `ChatLiveSmokeFixesTests` (KI-003).
 
 ### Відкриті gates (не виконано)
@@ -400,9 +400,9 @@ FROM users GROUP BY 1 HAVING count(*) > 1 OR count(DISTINCT email) > 1;
 - **Q4:** рішення щодо 2 груп дублікатів пошти на staging (злиття чи розведення) за звітом preflight. До цього міграція не застосовується (human gate).
 - **Q7:** текст листів скидання й «Пароль змінено», адреса відправника `EMAIL_FROM`.
 - **Q8:** погодження з ShelfGuard `409 owner_email_in_use` до мерджу TASK-864.
-- **F-1 / E-14:** застосування конфігу на сервері і smoke (`deploy/staging/README.md` §6.6). Реліз TASK-866 і фази 2 на staging/prod заблоковано (KI-013).
+- **F-1 / E-14:** застосування конфігу на сервері і smoke (`deploy/staging/README.md` §6.6). Реліз TASK-866 і фази 2 на staging/prod заблоковано (KI-020).
 - **Міграція на staging:** preflight, allowlist, `grants.sql` (`runbook.md` §2b).
-- **Env-приклади:** `Auth__LoginAttemptKeyPepper` і `Auth__LegacyTenantLogin__*` відсутні в `.env.api.example` / `.env.example` (KI-008).
+- **Env-приклади:** `Auth__LoginAttemptKeyPepper` і `Auth__LegacyTenantLogin__*` відсутні в `.env.api.example` / `.env.example` (KI-015).
 - **Незавершені тести з §31.15:** TASK-867 (QA-матриця), TASK-868 (security-review реалізації).
 - **Примітки «уточнено ADR-024» в ADR-002, ADR-006, ADR-018** (з TASK-869) — не виконано в цьому проході; потрібен окремий крок.
 - **Фаза 3 (TASK-870)** — після Sunset (Q12: 30 днів після релізу фази 2) і стабілізації; human gate.

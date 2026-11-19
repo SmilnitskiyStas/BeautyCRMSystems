@@ -165,6 +165,11 @@ public static class AuthSetup
             config.GetValue("Staff:AbsenceRateLimit:PermitLimit", 20),
             TimeSpan.FromSeconds(config.GetValue("Staff:AbsenceRateLimit:WindowSeconds", 60))));
         services.AddSingleton(new ServiceCostThrottle(config.GetValue("ServiceCosts:WritePerUserPerMinute", ServiceCostThrottle.Default)));
+        services.AddSingleton(new InventoryThrottle(config.GetValue("Inventory:WritePerUserPerMinute", InventoryThrottle.Default)));
+        services.AddSingleton(new BeautyCrm.Application.Features.BeautyInventory.InventoryOptions
+        {
+            ExpiringSoonDays = config.GetValue("Inventory:ExpiringSoonDays", BeautyCrm.Application.Features.BeautyInventory.InventoryOptions.DefaultExpiringSoonDays),
+        });
         services.AddSingleton(config.GetSection("Staff").Get<StaffOptions>() ?? new StaffOptions());
         services.AddScoped<ActiveSpecialistFilter>();
         services.AddScoped<AccessContext>(); // ADR-023: заповнюється AccessContextMiddleware

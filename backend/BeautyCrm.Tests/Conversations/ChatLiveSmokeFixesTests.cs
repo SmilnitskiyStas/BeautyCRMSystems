@@ -45,24 +45,17 @@ public sealed class ChatLiveSmokeFixesTests : IClassFixture<PostgresRlsFixture>
     public async Task five_messages_with_four_model_calls_each_are_not_rate_limited_but_the_ninth_turn_is()
     {
         var h = H(); var s = await h.SeedAsync();
-        // Ліміт ходів - вікно 1 хв за годинником розмови; на повільному CI 9 ходів можуть тривати довше за хвилину реального часу.
-        // Після кожного ходу компенсуємо реальний час, лишаючи ефективний крок 100 мс (годинник залишається монотонним).
-        async Task Say(string text)
-        {
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            await h.SayAsync(s, text);
-            h.Clock.Advance(TimeSpan.FromMilliseconds(100) - sw.Elapsed);
-        }
+        h.Clock.Freeze(); // ковзне вікно 1 хв: без заморозки тест залежить від швидкості середовища (CI падав на 1 хв 16 с)
         for (var i = 0; i < 5; i++)
         {
             h.Ai.Enqueue(Tool("list_locations", new { }, "a"), Tool("list_locations", new { }, "b"), Tool("list_locations", new { }, "c"), Text($"Відповідь {i}."));
-            await Say($"питання {i}");
+            await h.SayAsync(s, $"питання {i}");
         }
         Assert.Equal(20, h.Ai.Calls.Count);
         Assert.DoesNotContain(await h.OutboundAsync(s), m => m.Body == ChatTemplates.RateLimited);
 
-        for (var i = 5; i < 8; i++) await Say($"питання {i}");
-        await Say("питання 9");
+        for (var i = 5; i < 8; i++) await h.SayAsync(s, $"питання {i}");
+        await h.SayAsync(s, "питання 9");
         Assert.Equal(ChatTemplates.RateLimited, (await h.OutboundAsync(s)).Last().Body);
     }
 

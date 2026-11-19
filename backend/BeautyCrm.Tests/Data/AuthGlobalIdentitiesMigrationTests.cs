@@ -62,8 +62,9 @@ public sealed class AuthGlobalIdentitiesMigrationTests
         var sc = env.Super;
         var ctx = env.NewContext();
         var migrator = env.Migrator(ctx);
-        Assert.Equal(Latest, ctx.Database.GetMigrations().Last());
-        Assert.Equal(Target, ctx.Database.GetMigrations().SkipLast(1).Last()); // R-3 (users_identity_id_immutable) іде одразу після неї
+        Assert.Contains(Latest, ctx.Database.GetMigrations()); // пізніші міграції (склад) цей тест не зачіпає
+        var all = ctx.Database.GetMigrations().ToList();
+        Assert.Equal(all.IndexOf(Target) + 1, all.IndexOf(Latest)); // R-3 (users_identity_id_immutable) іде одразу після неї
         await migrator.MigrateAsync(); // усі міграції, під роллю-власником без CREATEROLE
 
         // ---- схема ----

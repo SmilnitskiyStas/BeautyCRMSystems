@@ -25,7 +25,11 @@ export class TenantDb {
   constructor(readonly pool: pg.Pool) {}
 
   static create(connectionString: string, max = 10): TenantDb {
-    return new TenantDb(new pg.Pool({ connectionString, max }));
+    const pool = new pg.Pool({ connectionString, max });
+    // Без обробника pool.emit("error") (клієнта в простої розірвано: рестарт/зупинка БД, 57P01) процес падає з uncaughtException;
+    // pg сам викидає такого клієнта з пулу, наступний запит відкриє нове з'єднання.
+    pool.on("error", (e) => console.error("[tenant-db] idle client error:", e.message));
+    return new TenantDb(pool);
   }
 
   async tx<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {

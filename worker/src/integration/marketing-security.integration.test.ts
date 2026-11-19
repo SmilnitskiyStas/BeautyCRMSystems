@@ -44,6 +44,7 @@ function scriptGrants(role: "worker" | "app"): string {
 beforeAll(async () => {
   container = await new PostgreSqlContainer("postgres:16-alpine").start();
   admin = new pg.Pool({ connectionString: container.getConnectionUri() });
+  admin.on("error", () => {}); // зупинка контейнера в afterAll розриває клієнтів у простої (57P01) - не помилка тесту
   await admin.query(readFileSync(new URL("../testing/schema.sql", import.meta.url), "utf8"));
   await admin.query(`CREATE ROLE ${WORKER} LOGIN PASSWORD 'pw' NOSUPERUSER NOBYPASSRLS`);
   await admin.query(`CREATE ROLE ${APP} LOGIN PASSWORD 'pw' NOSUPERUSER NOBYPASSRLS`);
@@ -55,9 +56,11 @@ beforeAll(async () => {
   u.username = WORKER; u.password = "pw";
   db = TenantDb.create(u.toString(), 8);
   lockPool = new pg.Pool({ connectionString: u.toString(), max: 8 });
+  lockPool.on("error", () => {});
   const a = new URL(container.getConnectionUri());
   a.username = APP; a.password = "pw";
   appPool = new pg.Pool({ connectionString: a.toString(), max: 2 });
+  appPool.on("error", () => {});
 }, 180_000);
 
 afterAll(async () => {

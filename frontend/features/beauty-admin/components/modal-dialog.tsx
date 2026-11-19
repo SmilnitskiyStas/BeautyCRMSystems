@@ -25,11 +25,29 @@ export function ModalDialog({
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  const wrapper = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
     heading.current?.focus();
+    // Решта сторінки недоступна для AT і Tab, поки діалог відкритий (inert); відновлюємо лише те, що поставили самі.
+    const made: Element[] = [];
+    for (const el of Array.from(document.body.children)) {
+      if (el === wrapper.current || el.hasAttribute("inert")) continue;
+      el.setAttribute("inert", "");
+      made.push(el);
+    }
+    const onDocKey = (e: globalThis.KeyboardEvent) => {
+      const r = root.current;
+      if (e.key !== "Tab" || !r || r.contains(document.activeElement)) return;
+      const items = [...r.querySelectorAll<HTMLElement>(FOCUSABLE)];
+      e.preventDefault();
+      (items.length === 0 ? heading.current : e.shiftKey ? items[items.length - 1] : items[0])?.focus();
+    };
+    document.addEventListener("keydown", onDocKey);
     return () => {
+      document.removeEventListener("keydown", onDocKey);
+      for (const el of made) el.removeAttribute("inert");
       if (opener && document.contains(opener)) opener.focus();
     };
   }, []);
@@ -42,11 +60,19 @@ export function ModalDialog({
     }
     if (e.key !== "Tab" || !root.current) return;
     const items = [...root.current.querySelectorAll<HTMLElement>(FOCUSABLE)];
-    if (items.length === 0) return;
+    if (items.length === 0) {
+      e.preventDefault();
+      heading.current?.focus();
+      return;
+    }
     const first = items[0];
     const last = items[items.length - 1];
     const active = document.activeElement;
-    if (e.shiftKey && (active === first || active === heading.current)) {
+    // Фокус поза діалогом (напр. після зникнення елемента) повертаємо всередину.
+    if (!active || !root.current.contains(active)) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+    } else if (e.shiftKey && (active === first || active === heading.current)) {
       e.preventDefault();
       last.focus();
     } else if (!e.shiftKey && active === last) {
@@ -58,7 +84,7 @@ export function ModalDialog({
   // Портал виходить за межі `.beauty-admin`: без обгортки зникають токени теми (--ink, --accent…) і колір тексту стає кольором body (білий на білому у темній темі).
   // `contents` не створює власного блоку: обгортка лише передає змінні й колір нащадкам.
   return createPortal(
-    <div className="beauty-admin contents">
+    <div ref={wrapper} className="beauty-admin contents">
     <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/50 p-3 sm:items-center">
       <div
         ref={root}
@@ -75,7 +101,7 @@ export function ModalDialog({
         <div id={`${id}-d`} className="flex flex-col gap-3 text-sm">
           {children}
         </div>
-        <div className="flex flex-wrap gap-2">{actions}</div>
+        <div className="sticky bottom-0 -mx-5 -mb-5 flex flex-wrap gap-2 border-t border-(--line) bg-white px-5 py-3">{actions}</div>
       </div>
     </div>
     </div>,
