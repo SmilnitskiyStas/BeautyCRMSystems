@@ -481,6 +481,93 @@ public sealed class InventoryConsumptionDbTests : IClassFixture<PostgresRlsFixtu
         await AssertInvariantsAsync(s);
     }
 
+    // M1 (security-review): блокування рівня іншою транзакцією -> lock_timeout, SAVEPOINT поглинає 55P03, візит completed за обмежений час
+    [SkippableFact]
+    public async Task Locked_stock_level_times_out_visit_completes_snapshot_kept_no_movements()
+    {
+        SkipIfNoDb();
+        var s = await SeedAsync();
+        var p = await AddProductAsync(s);
+        await SetNormsAsync(s, null, (p, 2m));
+        await ReceiveAsync(s, s.LocA, p, 5m);
+        await AdminAsync($"INSERT INTO beauty_service_costs (id, tenant_id, service_id, location_id, cost_amount, master_percent, updated_by_user_id) VALUES (gen_random_uuid(), '{s.TenantId}', '{s.ServiceId}', NULL, 9.00, 10, '{s.UserId}')");
+        var a = await AddAppointmentAsync(s);
+        var log = new CaptureLog();
+
+        await using var blocker = new NpgsqlConnection(_db.AdminConnectionString);
+        await blocker.OpenAsync();
+        await using var holder = await blocker.BeginTransactionAsync();
+        await using (var lockCmd = new NpgsqlCommand($"SELECT 1 FROM beauty_stock_levels WHERE tenant_id = '{s.TenantId}' AND product_id = '{p}' FOR UPDATE", blocker, holder))
+            await lockCmd.ExecuteScalarAsync();
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var r = await CompleteAsync(s, a, log: log);
+        sw.Stop();
+        await holder.RollbackAsync();
+
+        Assert.True(r!.Value is not null);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(8), $"completion took {sw.Elapsed}");
+        Assert.Equal("completed", await StatusAsync(s, a));
+        Assert.Equal(9.00m, await AdminScalarAsync<decimal>($"SELECT cost_snapshot FROM beauty_appointments WHERE id = '{a}'"));
+        Assert.Equal(0, await OpCountAsync(s, a));
+        Assert.Equal(0, await AdminScalarAsync<int>($"SELECT count(*) FROM beauty_stock_movements WHERE tenant_id = '{s.TenantId}' AND type = 'service_consumption'"));
+        Assert.Contains(log.Entries, e => e.Level == LogLevel.Error && e.Text.Contains("inventory_consumption_failed") && e.Text.Contains("sqlstate=55P03"));
+        await AssertInvariantsAsync(s);
+    }
+
+    // L1: будь-яке непорожнє значення, крім true (без регістру), вимикає автосписання; порожнє/відсутнє = увімкнено
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("", true)]
+    [InlineData("  ", true)]
+    [InlineData("true", true)]
+    [InlineData("TRUE", true)]
+    [InlineData("false", false)]
+    [InlineData("0", false)]
+    [InlineData("off", false)]
+    [InlineData("no", false)]
+    [InlineData("garbage", false)]
+    public void Auto_consumption_flag_is_fail_safe(string? value, bool expected) =>
+        Assert.Equal(expected, EfBeautyStore.IsAutoConsumptionOn(value));
+
+    [SkippableTheory]
+    [InlineData("0", 0)]
+    [InlineData("off", 0)]
+    [InlineData("no", 0)]
+    [InlineData("false", 0)]
+    [InlineData("true", 1)]
+    [InlineData(null, 1)]
+    public async Task Auto_consumption_flag_value_controls_consumption_end_to_end(string? value, int expectedOps)
+    {
+        SkipIfNoDb();
+        var s = await SeedAsync();
+        var p = await AddProductAsync(s);
+        await SetNormsAsync(s, null, (p, 2m));
+        await ReceiveAsync(s, s.LocA, p, 5m);
+        var a = await AddAppointmentAsync(s);
+        await using var ctx = _db.CreateContext(s.TenantId);
+        var cfg = new ConfigurationBuilder().AddInMemoryCollection(value is null ? [] : new Dictionary<string, string?> { ["Inventory:AutoConsumptionEnabled"] = value }).Build();
+        var r = await new EfBeautyStore(ctx, new NoSecrets(), new FixedTime(Noon), cfg, null).SetStatusAsync(a, "completed", default);
+        Assert.True(r!.Value is not null);
+        Assert.Equal(expectedOps, await OpCountAsync(s, a));
+    }
+
+    // L2: модуль у БД в іншому регістрі все одно вважається ввімкненим (як [RequireModule] і воркер)
+    [SkippableFact]
+    public async Task Module_name_is_matched_case_insensitively()
+    {
+        SkipIfNoDb();
+        var s = await SeedAsync();
+        await AdminAsync($"UPDATE tenants SET modules = '{{BEAUTY_Inventory}}' WHERE id = '{s.TenantId}'");
+        var p = await AddProductAsync(s);
+        await SetNormsAsync(s, null, (p, 2m));
+        await ReceiveAsync(s, s.LocA, p, 5m);
+        var a = await AddAppointmentAsync(s);
+        Assert.True((await CompleteAsync(s, a))!.Value is not null);
+        Assert.Equal(1, await OpCountAsync(s, a));
+        Assert.Equal((3m, 0m), await LevelAsync(s, s.LocA, p));
+    }
+
     // ---------- гонки ----------
 
     [SkippableFact]
@@ -527,6 +614,66 @@ public sealed class InventoryConsumptionDbTests : IClassFixture<PostgresRlsFixtu
         Assert.Equal(5m - 12m - writeOffs, q1 - s1); // сальдо = прихід - норми 6 візитів - ручне списання (якщо встигло)
         await AssertInvariantsAsync(s);
     }
+
+    [SkippableFact]
+    public async Task Parallel_completion_with_reversed_norm_order_and_two_locations_has_no_deadlock_and_isolates_tenants()
+    {
+        SkipIfNoDb();
+        var s = await SeedAsync();
+        var other = await SeedAsync(); // другий tenant: паралельне завершення не повинно його зачіпати
+        var p1 = await AddProductAsync(s, "A");
+        var p2 = await AddProductAsync(s, "B");
+        var op = await AddProductAsync(other, "O");
+        await SetNormsAsync(other, null, (op, 1m));
+        await SetNormsAsync(s, null, (p1, 1m), (p2, 1m)); // service 1: p1, p2
+        Guid svc2;
+        await using (var ctx = _db.CreateContext(s.TenantId))
+        {
+            var sv = new Service { Name = "Svc2", DurationMinutes = 30 };
+            ctx.Add(sv);
+            await ctx.SaveChangesAsync();
+            svc2 = sv.Id;
+            var set = new ServiceMaterialSet { ServiceId = svc2, LocationId = null, UpdatedByUserId = s.UserId };
+            ctx.Add(set);
+            await ctx.SaveChangesAsync();
+            ctx.Add(new ServiceMaterial { SetId = set.Id, ProductId = p2, Quantity = 1m }); // service 2: p2, p1 (зворотний порядок вставки)
+            ctx.Add(new ServiceMaterial { SetId = set.Id, ProductId = p1, Quantity = 1m });
+            await ctx.SaveChangesAsync();
+        }
+        foreach (var loc in new[] { s.LocA, s.LocB })
+        { await ReceiveAsync(s, loc, p1, 4m); await ReceiveAsync(s, loc, p2, 4m); }
+
+        var ids = new List<Guid>();
+        for (var i = 0; i < 4; i++)
+            foreach (var loc in new[] { s.LocA, s.LocB })
+            {
+                ids.Add(await AddAppointmentAsync(s, loc));
+                await using var ctx = _db.CreateContext(s.TenantId);
+                var a2 = new Appointment
+                {
+                    LocationId = loc, SpecialistId = s.SpecialistId, ServiceId = svc2, ClientId = s.ClientId,
+                    StartsAt = DateTimeOffset.UtcNow.AddDays(Interlocked.Increment(ref _day) + 10), DurationMinutes = 30,
+                    Source = AppointmentSource.Admin, PriceOriginal = 10m, PriceFinal = 10m, Status = AppointmentStatus.Confirmed,
+                };
+                ctx.Add(a2);
+                await ctx.SaveChangesAsync();
+                ids.Add(a2.Id);
+            }
+        var done = Task.WhenAll(ids.Select(id => CompleteAsync(s, id)));
+        Assert.Same(done, await Task.WhenAny(done, Task.Delay(TimeSpan.FromSeconds(60)))); // дедлок = таймаут
+        Assert.All(await done, r => Assert.True(r!.Value is not null));
+        Assert.Equal(16, await AdminScalar<int>($"SELECT count(*) FROM beauty_stock_operations WHERE tenant_id = '{s.TenantId}' AND kind = 'service_consumption'"));
+        foreach (var loc in new[] { s.LocA, s.LocB })
+            foreach (var p in new[] { p1, p2 })
+            {
+                var (q, sh) = await LevelAsync(s, loc, p);
+                Assert.Equal(4m - 8m, q - sh); // 8 візитів × 1 одиниця на пару, прийшло 4 -> сальдо -4 (нестача 4)
+            }
+        Assert.Equal(0, await AdminScalar<int>($"SELECT count(*) FROM beauty_stock_operations WHERE tenant_id = '{other.TenantId}'"));
+        await AssertInvariantsAsync(s);
+    }
+
+    private Task<T> AdminScalar<T>(string sql) => AdminScalarAsync<T>(sql);
 
     // ---------- randomized ----------
 

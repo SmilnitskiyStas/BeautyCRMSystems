@@ -168,6 +168,27 @@ public sealed class InventoryStage2aApiTests(AuthApiFixture fx) : IClassFixture<
         Assert.Equal(HttpStatusCode.Unauthorized, (await Call(c, HttpMethod.Put, $"/services/{svc}/materials", null, Body(null, Line(dye, 1)))).StatusCode);
     }
 
+    // L5: рольовий фільтр спрацьовує до прив'язки тіла - deputy отримує 403 forbidden_role навіть на некоректний JSON; owner/admin на кривий JSON - 422
+    [SkippableFact]
+    public async Task Deputy_gets_403_forbidden_role_on_malformed_json_before_body_binding()
+    {
+        NeedDb();
+        var t = await NewTenantAsync();
+        var c = NewClient();
+        var path = $"/api/beauty/inventory/services/{t.Beauty.ServiceId}/materials";
+        async Task<HttpResponseMessage> Raw(HttpMethod m, string token, string? json)
+        {
+            var r = new HttpRequestMessage(m, path);
+            if (json is not null) r.Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+            r.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            return await c.SendAsync(r);
+        }
+        await Fails(await Raw(HttpMethod.Put, t.Deputy, "{not json"), HttpStatusCode.Forbidden, "forbidden_role");
+        await Fails(await Raw(HttpMethod.Put, t.Deputy, "{\"lines\":\"x\"}"), HttpStatusCode.Forbidden, "forbidden_role");
+        await Fails(await Raw(HttpMethod.Delete, t.Deputy, null), HttpStatusCode.Forbidden, "forbidden_role");
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await Raw(HttpMethod.Put, t.Admin, "{not json")).StatusCode); // без фільтра ролі це був би 422 прив'язки
+    }
+
     [SkippableFact]
     public async Task Norms_validation_and_not_found_over_http()
     {

@@ -45,6 +45,7 @@ public sealed class InventoryNormsController(InventoryNormsService norms, Invent
     /// <summary>404 service_not_found | location_not_found | product_not_found; 422 invalid_lines | too_many_lines | duplicate_line | invalid_quantity | product_not_for_salon_use | product_disabled_for_location.</summary>
     [HttpPut("services/{serviceId:guid}/materials")]
     [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.All)]
+    [OwnerAdminOnly] // L5: роль до прив'язки тіла (deputy -> 403 forbidden_role навіть на кривий JSON)
     [RequestSizeLimit(Body)]
     [ProducesResponseType<MaterialSetDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -60,6 +61,7 @@ public sealed class InventoryNormsController(InventoryNormsService norms, Invent
     /// <summary>Без locationId видаляється мережевий набір. 404 service_not_found | location_not_found | materials_not_found.</summary>
     [HttpDelete("services/{serviceId:guid}/materials")]
     [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.All)]
+    [OwnerAdminOnly] // L5: роль до прив'язки тіла (deputy -> 403 forbidden_role навіть на кривий JSON)
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]

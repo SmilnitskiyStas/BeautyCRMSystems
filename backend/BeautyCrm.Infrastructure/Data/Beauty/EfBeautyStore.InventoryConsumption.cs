@@ -13,22 +13,35 @@ namespace BeautyCrm.Infrastructure.Data.Beauty;
 public sealed partial class EfBeautyStore
 {
     public const string AutoConsumptionKey = "Inventory:AutoConsumptionEnabled";
-    private const string InventoryModule = "beauty_inventory";
     private const string ConsumptionSavepoint = "inventory_consumption";
 
-    private bool AutoConsumptionEnabled => !bool.TryParse(config?[AutoConsumptionKey], out var on) || on; // за замовчуванням true
+    /// <summary>Security-review L1: порожнє/відсутнє = увімкнено (за замовчуванням); будь-яке інше значення, крім <c>true</c> (без регістру), вимикає (fail-safe для 0/off/no).</summary>
+    private bool AutoConsumptionEnabled => IsAutoConsumptionOn(config?[AutoConsumptionKey]);
+
+    public static bool IsAutoConsumptionOn(string? value) =>
+        string.IsNullOrWhiteSpace(value) || value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Security-review M1: найдовше очікування блокування рядка (рівень/товар) у складському кроці; далі 55P03 поглинає SAVEPOINT.</summary>
+    private const string ConsumptionLockTimeout = "2000ms";
 
     private void LogConsumptionSkipped(Guid appointmentId, string reason) =>
         log?.LogInformation("inventory_consumption_skipped appointment={Appointment} reason={Reason}", appointmentId, reason);
 
-    private async Task ConsumeMaterialsAsync(IDbContextTransaction tx, Guid appointmentId, CancellationToken ct)
+    // ІНВАРІАНТ (security-review I5): складський крок працює лише через raw SQL / ExecuteUpdate та власні tracked-сутності кроку. До його початку
+    // у ChangeTracker не має бути незбережених змін: SaveChangesAsync кроку зберіг би їх, а ChangeTracker.Clear() у catch - відкинув би.
+    // CancellationToken: крок і його SAVEPOINT-команди виконуються з CancellationToken.None - після умовного UPDATE статусу скасування HTTP-запиту
+    // не повинно відкочувати completed + знімок ADR-014 (§32.18 «візит завершується завжди»). Тривалість обмежена lock_timeout (+ CommandTimeout).
+    private async Task ConsumeMaterialsAsync(IDbContextTransaction tx, Guid appointmentId)
     {
+        var ct = CancellationToken.None;
         if (!AutoConsumptionEnabled) { LogConsumptionSkipped(appointmentId, "disabled"); return; }
 
         // SAVEPOINT береться ДО читань кроку: помилка будь-якого запиту (транзакція Postgres стає aborted) відкочує лише складський крок
         await tx.CreateSavepointAsync(ConsumptionSavepoint, ct);
         try
         {
+            // одразу після SAVEPOINT: SET LOCAL відкочується разом із ним; 55P03 (lock_not_available) -> лог Error, візит лишається completed
+            await db.Database.ExecuteSqlInterpolatedAsync($"SELECT set_config('lock_timeout', {ConsumptionLockTimeout}, true)", ct);
             await ConsumeMaterialsCoreAsync(appointmentId, ct);
             await tx.ReleaseSavepointAsync(ConsumptionSavepoint, ct);
         }
@@ -46,7 +59,7 @@ public sealed partial class EfBeautyStore
     private async Task ConsumeMaterialsCoreAsync(Guid appointmentId, CancellationToken ct)
     {
         // 2. модуль вимкнено для tenant -> нічого (читання в межах транзакції; tenants видно лише власний рядок через RLS)
-        if (!await db.Tenants.AsNoTracking().AnyAsync(t => t.Status == "active" && t.Modules.Contains(InventoryModule), ct))
+        if (!await InventoryModuleGate.IsEnabledAsync(db, ct))
         { LogConsumptionSkipped(appointmentId, "module_off"); return; }
 
         var appt = await db.Appointments.AsNoTracking().Where(a => a.Id == appointmentId).Select(a => new { a.ServiceId, a.LocationId }).SingleAsync(ct);
