@@ -170,6 +170,30 @@ describe("pollInventoryTelegram (PostgreSQL)", () => {
     expect((await q("SELECT alert_id FROM beauty_staff_notification_alerts WHERE tenant_id = $1", [t2.id])).rows.map((r) => r.alert_id)).toEqual([ok]);
   });
 
+  it("M1: pre-L3 allowlist processes only the listed tenants", async () => {
+    const a = await tenant(), b = await tenant();
+    for (const t of [a, b]) { await link(t); await alert(t); }
+    const f = fake();
+    await run([a, b], NOW, f.send, { inventoryTelegramTenantAllowlist: new Set([a.id.toLowerCase()]) });
+    expect(await notes(a)).toHaveLength(1);
+    expect(await notes(b)).toHaveLength(0);
+    expect(f.calls).toHaveLength(1);
+  });
+
+  it("L5/I7: a link revoked during the send does not get last_delivery_at written back", async () => {
+    const t = await tenant();
+    const l = await link(t);
+    await alert(t);
+    const f = fake(async () => {
+      await q(`UPDATE beauty_staff_telegram_links SET status = 'revoked', chat_id_encrypted = NULL, chat_id_hash = NULL, token_hash = NULL, revoked_at = now(), revoke_reason = 'user_deactivated' WHERE id = $1`, [l]);
+      return { externalMessageId: "1" };
+    });
+    await run([t], NOW, f.send);
+    const row = await linkRow(l);
+    expect(row.status).toBe("revoked");
+    expect(row.last_delivery_at).toBeNull();
+  });
+
   it("sends once: state sent, link.last_delivery_at, no duplicates across runs, text has no PII/ids", async () => {
     const t = await tenant();
     const l = await link(t);
@@ -506,5 +530,34 @@ describe("pollInventoryTelegram (PostgreSQL)", () => {
     await as((c) => c.query(`INSERT INTO beauty_staff_telegram_link_events (tenant_id, link_id, user_id, event, reason, actor) VALUES ($1,$2,$3,'revoked','expired','system')`, [t.id, l, t.user]));
     await expect(as((c) => c.query("UPDATE beauty_staff_telegram_link_events SET actor = 'user'"))).rejects.toThrow(/permission denied/);
     await expect(as((c) => c.query("DELETE FROM beauty_staff_telegram_link_events"))).rejects.toThrow(/permission denied/);
+  });
+
+  it("TASK-897 cross-stack: a link whose chat_id was encrypted by the .NET protector is delivered to that chat; 403 then erases it", async () => {
+    const vec = JSON.parse(readFileSync(new URL("../../../.ai/artifacts/contracts/ADR-025-chat-id-secret-vector.json", import.meta.url), "utf8")) as
+      { keyBase64: string; cases: { chatId: string; protectedValue: string }[] };
+    const vkey = Buffer.from(vec.keyBase64, "base64"), vc = vec.cases[1]!; // negative id
+    const t = await tenant();
+    await q("UPDATE beauty_channels SET credentials_encrypted = $2 WHERE id = $1", [t.channel, writeCredentials(vkey, { token: t.token })]);
+    const l = randomUUID();
+    await q(`INSERT INTO beauty_staff_telegram_links (id, tenant_id, user_id, channel_id, status, chat_id_encrypted, chat_id_hash, consent_version, consent_at, claimed_at, bot_confirmed_at, activated_at)
+             VALUES ($1,$2,$3,$4,'active',$5,$6,'inv-tg-v1',$7,$7,$7,$7)`, [l, t.id, t.user, t.channel, vc.protectedValue, randomBytes(32), ago(6 * HOUR)]);
+    await alert(t);
+    const f = fake();
+    const mk = (send: TelegramSend, now: Date) => ctx([t], now, send, { inventoryTelegram: new PgInventoryTelegram(db, vkey, send, undefined, { sleep: async () => {}, gapMs: 0 }) });
+    await pollInventoryTelegram(mk(f.send, NOW));
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]!.chatId).toBe(vc.chatId);
+    expect(f.calls[0]!.token).toBe(t.token);
+    await alert(t, { created: ago(30 * MIN) });
+    const blocked = fake(() => { throw new ChannelSendError("blocked", true, "bot_blocked", { httpStatus: 403 }); });
+    await pollInventoryTelegram(mk(blocked.send, new Date(NOW.getTime() + 5 * MIN)));
+    const row = await linkRow(l);
+    expect(row.status).toBe("revoked");
+    expect(row.chat_id_encrypted).toBeNull();
+    expect(row.chat_id_hash).toBeNull();
+    expect(row.token_hash).toBeNull();
+    const ev = (await q("SELECT to_jsonb(e)::text AS j FROM beauty_staff_telegram_link_events e WHERE link_id = $1", [l])).rows.map((r) => r.j).join(" ");
+    expect(ev).not.toContain(vc.chatId);
+    expect(ev).toContain("bot_blocked");
   });
 });

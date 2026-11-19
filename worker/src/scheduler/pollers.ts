@@ -41,6 +41,8 @@ export interface PollContext {
   inventoryConfig?: InventoryAlertConfig;
   /** WORKER_INVENTORY_TELEGRAM_ENABLED (§32.24.6, default false): ONLY the literal `true` enables build+send; cleanup always runs. */
   inventoryTelegramEnabled?: boolean;
+  /** M1 pre-L3 mode: when set, build+send only for these tenant ids (lower-case UUIDs). */
+  inventoryTelegramTenantAllowlist?: ReadonlySet<string>;
   inventoryTelegram?: InventoryTelegramStore;
   inventoryTelegramConfig?: InventoryTelegramConfig;
 }
@@ -206,6 +208,9 @@ export function pollInventoryTelegram(ctx: PollContext): Promise<PollResult> {
     const now = ctx.deps.now();
     await store.cleanup(now);
     if (ctx.inventoryTelegramEnabled !== true) return { processed: 0, errors: 0 };
+    // M1: pre-L3 staging mode: only allowlisted tenants are processed (cleanup above still runs for all).
+    const allow = ctx.inventoryTelegramTenantAllowlist;
+    if (allow && !allow.has(String(currentTenantId()).toLowerCase())) return { processed: 0, errors: 0 };
     if (!(await ctx.deps.data.isInventoryEnabled())) return { processed: 0, errors: 0 }; // module off, silently idle
     const r = await store.runForTenant(now, ctx.inventoryTelegramConfig ?? DEFAULT_TELEGRAM_CONFIG);
     ctx.logger.info(`inventory_telegram tenant=${currentTenantId()} built=${r.built} sent=${r.sent} failed=${r.failed} revoked=${r.revoked} capped=${r.capped}`);

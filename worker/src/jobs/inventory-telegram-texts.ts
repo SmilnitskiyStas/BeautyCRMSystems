@@ -21,7 +21,22 @@ const MAX_NAME = 80;
 export function cleanName(s: string | null | undefined): string {
   const t = (s ?? "").replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").replace(/\s+/g, " ").trim(); // control, format/bidi, line separators
   const chars = [...t];
-  return chars.length > MAX_NAME ? `${chars.slice(0, MAX_NAME - 1).join("")}…` : t;
+  return neutralizeLinks(chars.length > MAX_NAME ? `${chars.slice(0, MAX_NAME - 1).join("")}…` : t);
+}
+
+const ZWSP = "​";
+
+/**
+ * I2: Telegram auto-links URLs, @mentions, /commands and domains in plain text. A zero-width space breaks the entity detection
+ * without changing how the name reads: `://`, `@` before a letter/digit, `/` at the start of a word, `t.me`, a dot between letters.
+ */
+export function neutralizeLinks(s: string): string {
+  return s
+    .replace(/:\/\//g, `:${ZWSP}//`)
+    .replace(/@(?=[\p{L}\p{N}_])/gu, `@${ZWSP}`)
+    .replace(/(^|\s)\/(?=\S)/g, `$1/${ZWSP}`)
+    .replace(/t\.me/gi, (m) => `${m[0]}${ZWSP}${m.slice(1)}`)
+    .replace(/(?<=\p{L})\.(?=\p{L})/gu, `.${ZWSP}`);
 }
 
 /** uk number format: comma, no trailing zeros (numeric(14,3) arrives as a string). */

@@ -272,7 +272,8 @@ export class PgInventoryTelegram implements InventoryTelegramStore {
                 next_attempt_at = coalesce($6::timestamptz, next_attempt_at), sent_at = CASE WHEN $2::varchar = 'sent' THEN $7::timestamptz ELSE sent_at END, updated_at = $7::timestamptz
          WHERE id = $1`, [notificationId, status, f.attempts ?? null, f.error ?? null, f.externalId ?? null, f.nextAt ?? null, now]);
       if (status === "sent" && f.linkId)
-        await c.query(`UPDATE beauty_staff_telegram_links SET last_delivery_at = $2, updated_at = $2 WHERE id = $1`, [f.linkId, now]);
+        // L5/I7: a link revoked meanwhile keeps its erased state (no last_delivery_at write on a non-active row).
+        await c.query(`UPDATE beauty_staff_telegram_links SET last_delivery_at = $2, updated_at = $2 WHERE id = $1 AND status = 'active'`, [f.linkId, now]);
     });
   }
 

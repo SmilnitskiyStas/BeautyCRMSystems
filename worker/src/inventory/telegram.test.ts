@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { ChannelSendError, TELEGRAM_API, sendTelegramText } from "../adapters/channel-sender";
 import { protect, unprotect } from "../adapters/channel-crypto";
@@ -52,6 +53,20 @@ describe("texts (§32.24.5)", () => {
     expect([...cleanName("x".repeat(200))]).toHaveLength(80);
     expect(fmtNum("3.000")).toBe("3");
   });
+  it("I2: cleanName neutralizes URLs, mentions, commands and t.me in names, keeping them readable", () => {
+    const strip = (s: string) => s.replace(/​/g, "");
+    const inputs = ["https://evil.example/x", "@owner_bot тест", "/start inv_abc", "див. t.me/evil", "cool.com"];
+    for (const i of inputs) {
+      const out = cleanName(i);
+      expect(strip(out)).toBe(i);
+      expect(out).not.toMatch(/:\/\//);
+      expect(out).not.toMatch(/@[\p{L}\p{N}_]/u);
+      expect(out).not.toMatch(/(^|\s)\/[^\s​]/);
+      expect(out).not.toMatch(/t\.me/i);
+      expect(out).not.toMatch(/\p{L}\.\p{L}/u);
+    }
+    expect(cleanName("Крем 50 мл. Новий")).toBe("Крем 50 мл. Новий");
+  });
   it("digest lists venues, caps at 30 rows", () => {
     const rows = Array.from({ length: 32 }, (_, i) => ({ location: `Z${String(i).padStart(2, "0")}`, low: 1, expiring: 0, shortage: 0 }));
     const t = digestText(32, rows, "");
@@ -90,5 +105,24 @@ describe("chat_id secret format", () => {
   it("raw string round-trips through the credentials cipher (ISecretProtector layout, not JSON)", () => {
     const key = Buffer.alloc(32, 7);
     expect(unprotect(key, protect(key, "-1001234567890"))).toBe("-1001234567890");
+  });
+});
+
+// TASK-897 (a): ciphertexts produced by the real .NET AesGcmSecretProtector.Protect(chatId) (backend StaffChatSecretVectorTests).
+const chatVector = JSON.parse(readFileSync(new URL("../../../.ai/artifacts/contracts/ADR-025-chat-id-secret-vector.json", import.meta.url), "utf8")) as
+  { keyBase64: string; cases: { chatId: string; protectedValue: string }[] };
+
+describe("backend -> worker chat_id compatibility (.NET vector)", () => {
+  it("worker unprotect decrypts what .NET ISecretProtector.Protect produced, incl. negative supergroup ids", () => {
+    const key = Buffer.from(chatVector.keyBase64, "base64");
+    expect(key).toHaveLength(32);
+    expect(chatVector.cases.length).toBeGreaterThanOrEqual(3);
+    for (const c of chatVector.cases) expect(unprotect(key, c.protectedValue)).toBe(c.chatId);
+  });
+  it("a wrong key or a tampered vector fails closed (GCM tag)", () => {
+    const c = chatVector.cases[0]!;
+    expect(() => unprotect(Buffer.alloc(32, 1), c.protectedValue)).toThrow();
+    const raw = Buffer.from(c.protectedValue, "base64"); raw[raw.length - 1]! ^= 1;
+    expect(() => unprotect(Buffer.from(chatVector.keyBase64, "base64"), raw.toString("base64"))).toThrow();
   });
 });
