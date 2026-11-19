@@ -1,8 +1,8 @@
 ---
 name: accessible-components-review
 description: >-
-  Accessible Components Review — Use during a WCAG 2.2 AA review of design specs or built UI.
-x-generated-from: skills/accessibility/accessible-components-review/SKILL.md
+  Audit interactive components (modal, menu, tabs, accordion, dropdown) for WCAG 2.2 AA behavior and ARIA patterns. Use when reviewing a built or specced component for accessibility.
+x-generated-from: .claude/skills/accessible-components-review/SKILL.md
 ---
 
 # Accessible Components Review

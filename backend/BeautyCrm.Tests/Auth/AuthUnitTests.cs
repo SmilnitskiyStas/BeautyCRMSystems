@@ -24,7 +24,7 @@ public class RolePolicyTests
 
 public class SpecialistScopeTests
 {
-    private static Actor Make(string role, Guid? specialistId) => new(Guid.NewGuid(), Guid.NewGuid(), role, specialistId);
+    private static Actor Make(string role, Guid? specialistId) => Actor.ForTest(role, specialistId, Guid.NewGuid(), Guid.NewGuid());
 
     [Fact]
     public void effectiveSpecialistId_forces_own_profile_for_specialist_and_ignores_requested()

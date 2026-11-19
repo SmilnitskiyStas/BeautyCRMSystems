@@ -1,0 +1,14 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "types": ["jest"],
+    "paths": {
+      "@/*": ["./src/*"],
+      "@beauty/booking-core": ["../packages/booking-core/src/index.ts"],
+      "zod": ["./node_modules/zod"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts", "app.config.ts"],
+  "exclude": ["node_modules"]
+}

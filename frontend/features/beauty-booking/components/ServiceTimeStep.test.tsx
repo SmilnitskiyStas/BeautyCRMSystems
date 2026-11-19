@@ -110,4 +110,24 @@ describe("вибір дати: закриті дні закладу (§17)", () 
     expect(useSlots).toHaveBeenLastCalledWith(expect.objectContaining({ enabled: false }));
     expect(screen.getByText(/У найближчі дні заклад не працює/)).toBeInTheDocument();
   });
+
+  it("F8: при заданих годинах закладу день без інтервалів не пропонується (навіть без вихідного)", () => {
+    // Субота 10.10 - початок; заклад працює лише пн-пт: сб (10) і нд (11), 17, 18 відключені.
+    const weekdays = Object.fromEntries(["mon", "tue", "wed", "thu", "fri"].map((d) => [d, [{ from: "10:00", to: "19:00" }]]));
+    flow.location = location({ closedWeekdays: [], closures: [], workingHours: weekdays });
+    render(<ServiceTimeStep />);
+    const o = options();
+    expect(o[0]).toHaveAttribute("aria-disabled", "true"); // сб 10.10
+    expect(o[1]).toHaveAttribute("aria-disabled", "true"); // нд 11.10
+    expect(o[2]).not.toHaveAttribute("aria-disabled"); // пн 12.10
+    // початкова дата - перший день, коли заклад працює
+    expect(useSlots).toHaveBeenLastCalledWith(expect.objectContaining({ date: "2026-10-12", enabled: true }));
+    expect(o[2]).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("F8: години закладу не задано (null) - обмежень немає", () => {
+    flow.location = location({ closedWeekdays: [], closures: [], workingHours: null });
+    render(<ServiceTimeStep />);
+    options().forEach((b) => expect(b).not.toHaveAttribute("aria-disabled"));
+  });
 });

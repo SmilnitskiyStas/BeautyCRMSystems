@@ -5,7 +5,7 @@ namespace BeautyCrm.Infrastructure.AI.Beauty;
 
 public sealed record SlotDto(Guid StaffId, DateTimeOffset Start, DateTimeOffset End);
 public sealed record PriceDto(Guid ServiceId, string Name, decimal Price, int DurationMinutes);
-public sealed record PromotionDto(Guid Id, string Title, decimal DiscountPercent, DateTimeOffset? EndsAt);
+public sealed record PromotionDto(Guid Id, string Title, decimal DiscountPercent, DateTimeOffset? EndsAt, IReadOnlyList<Guid>? ServiceIds = null);
 public sealed record ClientContextDto(
     Guid ClientId, string Name, string? Notes, int Visits, DateTimeOffset? NextAppointment,
     bool MarketingConsent, bool Unsubscribed);

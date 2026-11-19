@@ -9,24 +9,31 @@ public sealed class UserAdminService(IAuthStore store, AuthOptions options, Time
     public async Task<AuthResult<InviteCreatedDto>> CreateInviteAsync(Actor actor, CreateInviteRequest req, CancellationToken ct)
     {
         var role = req.Role.Trim().ToLowerInvariant();
-        if (role is not (Roles.Admin or Roles.Specialist))
-            return AuthError.Validation("invalid_role", "Role must be admin or specialist.");
+        if (role is not (Roles.Admin or Roles.Deputy or Roles.Specialist))
+            return AuthError.Validation("invalid_role", "Role must be admin, deputy or specialist.");
+        // team.manage (§30.9.5): ключ перевіряє [RequirePermission]; тут повторно для викликів поза HTTP (StaffInviteService)
+        if (!actor.Access.AtLeast(PermissionKeys.TeamManage, PermissionLevels.Manage))
+            return AuthError.ForbiddenPermission(PermissionKeys.TeamManage, PermissionLevels.Manage);
         if (!RolePolicy.CanInvite(actor.Role, role))
             return AuthError.Forbidden("forbidden_role", "You cannot invite this role.");
 
         if (role == Roles.Specialist)
         {
             if (req.SpecialistId is not { } specialistId)
-                return AuthError.Validation("specialist_required", "specialistId is required for role specialist.");
+                return AuthError.Validation("invalid_specialist", "specialistId is required for role specialist.");
             if (!await store.SpecialistExistsAsync(specialistId, ct))
-                return AuthError.Validation("specialist_not_found", "Specialist profile not found.");
+                return AuthError.Validation("invalid_specialist", "Specialist profile not found.");
             if (!await store.SpecialistIsActiveAsync(specialistId, ct))
                 return AuthError.Conflict("specialist_inactive", "The specialist profile is deactivated; reactivate it first.");
             if (await store.SpecialistHasUserAsync(specialistId, ct))
                 return AuthError.Conflict("specialist_linked", "This specialist profile already has a user.");
         }
         else if (req.SpecialistId is not null)
-            return AuthError.Validation("specialist_not_allowed", "specialistId is only for role specialist.");
+            return AuthError.Validation("invalid_specialist", "specialistId is only for role specialist.");
+
+        // повний матеріалізований знімок прав (B1): пресет + перевизначення, кожен ключ обрізано стелею запрошувача
+        var snapshot = AccessPolicy.BuildInviteSnapshot(actor.Access, role, req.Permissions);
+        if (!snapshot.IsOk) return snapshot.Error!;
 
         var email = AuthService.NormalizeEmail(req.Email);
         if ((await store.ListUsersAsync(ct)).Any(u => u.Email == email))
@@ -34,10 +41,15 @@ public sealed class UserAdminService(IAuthStore store, AuthOptions options, Time
 
         var now = clock.GetUtcNow();
         var (token, hash) = TokenCodec.Generate(actor.TenantId);
+        var permissionsJson = System.Text.Json.JsonSerializer.Serialize(snapshot.Value!.Permissions);
+        var auditJson = System.Text.Json.JsonSerializer.Serialize(
+            new { role, specialistId = role == Roles.Specialist ? req.SpecialistId : null, clamped = snapshot.Value.Clamped },
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
         var invite = await store.AddInviteAsync(
-            new NewInvite(email, role, role == Roles.Specialist ? req.SpecialistId : null, hash, now.AddDays(options.InviteDays), actor.UserId), ct);
+            new NewInvite(email, role, role == Roles.Specialist ? req.SpecialistId : null, hash, now.AddDays(options.InviteDays), actor.UserId,
+                permissionsJson, auditJson), ct);
         if (invite is null) return AuthError.Conflict("specialist_inactive", "The specialist profile is deactivated; reactivate it first.");
-        return new InviteCreatedDto(ToDto(invite, now), token);
+        return new InviteCreatedDto(ToDto(invite, now), token, snapshot.Value.Clamped);
     }
 
     public async Task<IReadOnlyList<InviteDto>> ListInvitesAsync(CancellationToken ct)
@@ -51,40 +63,46 @@ public sealed class UserAdminService(IAuthStore store, AuthOptions options, Time
         var invite = (await store.ListInvitesAsync(ct)).FirstOrDefault(i => i.Id == inviteId);
         if (invite is null) return AuthError.NotFound("invite_not_found", "Invite not found.");
         if (!RolePolicy.CanManage(actor.Role, invite.Role)) return AuthError.Forbidden("forbidden_role", "You cannot manage this invite.");
-        return await store.RevokeInviteAsync(inviteId, clock.GetUtcNow(), ct)
+        return await store.RevokeInviteAsync(inviteId, clock.GetUtcNow(), actor.UserId, ct)
             ? true
             : AuthError.Conflict("invite_closed", "Invite is already accepted or revoked.");
     }
 
-    public async Task<IReadOnlyList<UserDto>> ListUsersAsync(CancellationToken ct) =>
-        (await store.ListUsersAsync(ct)).Select(AuthService.ToDto).ToList();
-
-    public async Task<AuthResult<UserDto>> SetUserActiveAsync(Actor actor, Guid userId, bool active, CancellationToken ct)
-    {
-        var target = await store.GetUserAsync(userId, ct);
-        if (target is null) return AuthError.NotFound("user_not_found", "User not found.");
-        if (target.Id == actor.UserId) return AuthError.Validation("cannot_modify_self", "You cannot change your own status.");
-        if (!RolePolicy.CanManage(actor.Role, target.Role)) return AuthError.Forbidden("forbidden_role", "You cannot manage this user.");
-
-        await store.SetUserActiveAsync(userId, active, clock.GetUtcNow(), ct);
-        return AuthService.ToDto(target with { IsActive = active });
-    }
+    /// <summary>Список з <c>accessVersion</c> і <c>manageable</c> (§30.6.1).</summary>
+    public async Task<IReadOnlyList<UserDto>> ListUsersAsync(Actor actor, CancellationToken ct) =>
+        (await store.ListUsersAsync(ct)).Select(u => AuthService.ToDto(u) with
+        {
+            AccessVersion = u.AccessVersion,
+            Manageable = u.Id != actor.UserId && RolePolicy.CanManage(actor.Role, u.Role),
+        }).ToList();
 
     private static InviteDto ToDto(InviteRecord i, DateTimeOffset now) => new(
         i.Id, i.Email, i.Role, i.SpecialistId, i.ExpiresAt,
-        i.AcceptedAt is not null ? "accepted" : i.RevokedAt is not null ? "revoked" : i.ExpiresAt <= now ? "expired" : "pending");
+        i.AcceptedAt is not null ? "accepted" : i.RevokedAt is not null ? "revoked" : i.ExpiresAt <= now ? "expired" : "pending",
+        AccessPolicy.Materialize(ParseSnapshot(i.PermissionsJson)), i.InvitedByUserId);
+
+    private static Dictionary<string, string>? ParseSnapshot(string json)
+    {
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
 }
 
 /// <summary>Операції оператора платформи: tenant + власник, модулі, статус. Публічної самореєстрації немає.</summary>
-public sealed partial class PlatformTenantService(IAuthStore store, IPasswordHasher hasher, AuthOptions options, TimeProvider clock)
+public sealed class PlatformTenantService(IAuthStore store, IPasswordHasher hasher, AuthOptions options, TimeProvider clock)
 {
-    [GeneratedRegex("^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")]
-    private static partial Regex SlugPattern();
-
     public async Task<AuthResult<TenantCreatedDto>> CreateTenantAsync(CreateTenantRequest req, CancellationToken ct)
     {
-        var slug = req.Slug.Trim().ToLowerInvariant();
-        if (!SlugPattern().IsMatch(slug)) return AuthError.Validation("invalid_slug", "Slug: 3-64 chars, a-z, 0-9, hyphen.");
+        var slug = TenantRules.NormalizeSlug(req.Slug);
+        if (slug is null) return AuthError.Validation("invalid_slug", "Slug: 3-64 chars, a-z, 0-9, hyphen.");
+        if (BeautyPublicBooking.PublicTenantResolver.ReservedSlugs.Contains(slug))
+            return AuthError.Validation("slug_reserved", "This slug is reserved.");
         var modules = NormalizeModules(req.Modules) ?? BeautyModules.All;
         if (req.Modules is not null && NormalizeModules(req.Modules) is null)
             return AuthError.Validation("invalid_modules", "Unknown module name.");
@@ -112,28 +130,5 @@ public sealed partial class PlatformTenantService(IAuthStore store, IPasswordHas
     }
 
     /// <summary>null = містить невідомий модуль.</summary>
-    private static IReadOnlyList<string>? NormalizeModules(IReadOnlyList<string>? modules)
-    {
-        if (modules is null) return null;
-        var list = modules.Select(m => m.Trim().ToLowerInvariant()).Distinct().ToList();
-        return list.All(m => BeautyModules.All.Contains(m)) ? list : null;
-    }
-}
-
-/// <summary>Обмеження доступу спеціаліста: лише власні записи. Чужі записи недоступні (404, без витоку існування).</summary>
-public sealed class AppointmentAccessService(BookingService booking)
-{
-    /// <summary>Для спеціаліста — завжди власний профіль (навіть без профілю: порожня вибірка), для решти — як запитано.</summary>
-    public static Guid? EffectiveSpecialistId(Actor actor, Guid? requested) =>
-        actor.Role == Roles.Specialist ? actor.SpecialistId ?? Guid.Empty : requested;
-
-    public static bool CanCreateFor(Actor actor, Guid specialistId) =>
-        actor.Role != Roles.Specialist || (actor.SpecialistId is { } own && own == specialistId);
-
-    public async Task<bool> CanAccessAsync(Actor actor, Guid appointmentId, CancellationToken ct)
-    {
-        if (actor.Role != Roles.Specialist) return true; // існування перевірить сам сервіс (404)
-        var r = await booking.GetAsync(appointmentId, ct);
-        return r.IsOk && actor.SpecialistId is { } own && r.Value!.SpecialistId == own;
-    }
+    private static IReadOnlyList<string>? NormalizeModules(IReadOnlyList<string>? modules) => TenantRules.NormalizeModules(modules);
 }

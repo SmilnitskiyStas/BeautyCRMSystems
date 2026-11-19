@@ -9,6 +9,7 @@
 ### Структурні одиниці (каталог)
 
 - **Location** — заклад (салон, барбершоп). Містить таймзону (`timezone` за IANA, валідована), адресу, телефон. Деактивація (is_active=false) блокується, якщо є майбутні pending/confirmed записи. Видалення немає — лише м'яка дез активація.
+  - **Публічні поля каталогу (ADR-022):** `publicCode` (8 символів Crockford Base32, глобально унікальний, незмінний; людям — `XXXX-XXXX`), `latitude`/`longitude` (адреса закладу, разом або обидва null), `city` (до 100 символів, для пошуку за містом), `isDiscoverable` (opt-in, за замовч. `false`, для кожного закладу окремо). Див. §16.
 - **Specialist** — майстер (перукар, косметолог). Може працювати в кількох закладах. Поля: full_name, title, phone, email, photo_url, position (новий, TASK-691). Деактивація (is_active=false) в одній трансакції: користувач (якщо є, крім owner) — is_active=false, refresh-токени відкликані, pending запрошення — revoked.
 - **SpecialistLocation** — зв'язок майстра з закладом + графік роботи (`working_hours` — JSON, JSONB: per IANA-таймзона закладу, формат {mon: [{from: "09:00", to: "18:00"}, ...], ...}). Деактивація = is_active=false при видаленні з закладу (графік зберігається). Перевірка: майбутні active записи блокують видалення.
 - **SpecialistService** — призначення послуги до майстра (M2M). Порожна множина = невидимий майстер в слотах. При create слоти перевіряють наявність послуги; при PATCH запису теж.
@@ -136,7 +137,8 @@ refund_amount = round_down(paid * refund_percent / 100 * (100 - fee) / 100)
 **Специ́альні ендпоінти для неактивного користувача:**
 - `GET /appointments`, POST/PATCH, `/cancel` → 403 specialist_inactive
 - `POST /absences`, `/approve`, `/reject`, `/cancel` → 403 specialist_inactive
-- Інші ендпоінти (каталог, клієнти) — доступні (поки access-token не закінчився)
+- Інші tenant-ендпоінти: `403 specialist_inactive` (ADR-023 M7, глобально, крім `GET /auth/me`, `GET /access/catalog`, `POST /feedback`). Власні `own`-вибірки порожні.
+- Вимкнення користувача діє з наступного запиту (`401 session_revoked`), без очікування TTL access-токена (ADR-023 §2.5).
 
 **Публічний API:** За словником «спеціаліст» вибираються тільки активні профілі з графіком і послугами.
 
@@ -213,19 +215,64 @@ refund_amount = round_down(paid * refund_percent / 100 * (100 - fee) / 100)
 
 ---
 
-## 11. Ролі користувачів
+## 11. Ролі користувачів і права доступу (ADR-023, контракт §30)
 
-- **`platform_operator`** — створення tenant (API-ключ `.env`, не користувач у БД)
-- **`owner`** — власник tenant (один на tenant, не може бути видалено; керує адмін/спеціалістами, контрактами)
-- **`admin`** — адміністратор; керує спеціалістами, каталогом, каналами, звітами, але не власником
-- **`specialist`** — майстер; бачить/змінює лише власні записи, може запрошувати на власну відсутність (requested)
+### 11.1 Ролі (ранг)
 
-**Матриця доступу:**
-- Booking endpoints: читання — усі staff; зміни — owner/admin; specialist — лише власні + can_create_for_self
-- Catalog: читання — усі; зміни — owner/admin
-- Clients/Analytics/Channels/AI: owner/admin
-- Staff management: owner/admin керують; specialist читає довідник (без телефону)
-- Platform API: тільки platform_operator (X-Platform-Key)
+| Код | UI | Ранг | Створюється | Керує (права/статус/запрошення) |
+|---|---|---|---|---|
+| `owner` | Директор | 4 | лише control plane (ADR-018) | admin, deputy, specialist; сам незмінний через tenant API |
+| `admin` | Адміністратор | 3 | запрошення від owner | deputy, specialist (за `team.manage = manage`) |
+| `deputy` | Заступник | 2 | запрошення від owner або admin | нікого (`team.manage` для deputy заборонено стелею ролі) |
+| `specialist` | Майстер | 1 | запрошення від owner або admin | нікого |
+
+- Роль задає **пресет** прав; права налаштовуються **на користувача** поверх нього (`user_permissions`). Пресет застосовується при прийнятті запрошення, зміні ролі (V1: лише `admin ↔ deputy`) і скиданні; далі рядки є звичайними значеннями, і зміна пресету в коді їх не переписує.
+- `owner` має всі права неявно: рядків у `user_permissions` немає, через tenant API він не створюється, не змінюється і не вимикається.
+- Ієрархія: `RolePolicy.CanManage(actor, target) = rank(actor) > rank(target) && target ≠ owner`.
+- Майстер (`specialist`) прив'язаний до профілю `beauty_specialists` (`users.specialist_id`). Прив'язка для інших ролей у V1 не існує (Q5).
+- Platform API: `platform_operator` (X-Platform-Key, не користувач у БД).
+
+### 11.2 Каталог прав (`catalogVersion = 1`, код: `PermissionCatalog`)
+
+Ключ має вигляд `блок.підпункт`; рівні впорядковані за зростанням, перший — найнижчий (fail-closed: відсутній рядок = найнижчий рівень).
+
+| Блок (розділ меню) | Ключ | Рівні | Модуль |
+|---|---|---|---|
+| Календар (`/beauty`, `/beauty/calendar`) | `calendar.view` | none · own · all | beauty_booking |
+| | `calendar.manage` | none · own · all (≤ calendar.view) | beauty_booking |
+| Клієнти (`/beauty/clients`, `/beauty/calls`) | `clients.view` | none · own · all | beauty_clients |
+| | `clients.edit` | none · own · all (≤ clients.view) | beauty_clients |
+| | `clients.contacts` | masked · full | beauty_clients |
+| | `clients.calls` | none · all (потребує clients.view = all) | beauty_clients |
+| Виторг (`/beauty/analytics`) | `revenue.view` | none · own («свій виторг») · all | beauty_analytics |
+| | `revenue.costs` | none · view · edit (потребує revenue.view = all) | beauty_analytics |
+| Розмови (`/beauty/inbox`, `/beauty/channels`) | `channels.inbox` | none · view · reply | beauty_channels |
+| | `channels.settings` | none · edit | beauty_channels |
+| ШІ (`/beauty/ai`) | `ai.use` | none · use | beauty_ai |
+| | `ai.settings` | none · edit | beauty_ai |
+| Послуги, акції (`/beauty/services`, `/beauty/promos`) | `services.catalog` | view · edit | beauty_catalog |
+| Розсилки (`/beauty/campaigns`) | `marketing.campaigns` | none · edit (потребує clients.view = all) | beauty_marketing |
+| Спеціалісти (`/beauty/staff`) | `staff.access` | own («Мій профіль») · all · edit (лише меню для own/all) | beauty_booking |
+| Заклади (`/beauty/locations`) | `locations.access` | own · all · edit (лише меню для own/all) | beauty_booking |
+| Налаштування (`/beauty/settings`) | `settings.general` | none · view · edit | — |
+| Команда (`/beauty/team`) | `team.manage` | none · manage (стеля ролі: лише admin) | — |
+
+**Семантика `own`** — дані, прив'язані до `users.specialist_id`: власні записи, клієнти з власними записами (крім скасованих, створених самим актором), виторг за власними записами. Без прив'язки `own` дає порожню вибірку.
+
+**Зарезервовано за owner (не делегується):** ключі провайдера ШІ, режим ШІ `auto`, керування адміністраторами, політика скасування й повернень, журнал доступу, дії control plane.
+
+### 11.3 Рівні правил
+
+- **Модулі — верхня межа:** `effective(key) = модулі ввімкнені ? granted : lowest`. Рядки в БД не змінюються; після ввімкнення модуля права повертаються.
+- **Обмеження** (`lte`, `requires`, `roleCeiling`) застосовуються під час читання: порушений залежний ключ знижується (наприклад, вимкнений `beauty_clients` знімає `marketing.campaigns`). Під час запису порушення дає `422 permission_inconsistent`.
+- **Не можна видати більше, ніж маєш:** нове значення ≤ ефективного рівня актора; `403 permission_ceiling`. Ключі, видані вищим за стелю актора, для нього `locked`.
+- **Ціни й контакти:** виторг і ціни в списках — лише за `revenue.view = all` (або на власних записах майстра); клієнтські телефон/email маскуються за `clients.contacts = masked`.
+
+### 11.4 Матриця (короткий огляд)
+
+- Пресети: owner (максимум) · admin (усе, крім `team.manage = manage` для інших ролей, `revenue.costs` = edit, `settings.general` = view) · deputy (календар і клієнти повні, без виторгу, без налаштувань і маркетингу, `team.manage` немає) · specialist (календар і профіль лише свої, без клієнтів, `staff.access` і `locations.access` = own).
+- Повна таблиця пресетів: контракт §30.3 (`PermissionPresets` у коді).
+- Platform API: тільки platform_operator (X-Platform-Key).
 
 ---
 
@@ -265,6 +312,23 @@ refund_amount = round_down(paid * refund_percent / 100 * (100 - fee) / 100)
 - **Partial unique indexes:** public_token_hash, idempotency_key_hash (дозволяють NULL).
 
 ---
+
+## 16. Публічний каталог закладів (ADR-022)
+
+- **Ідентифікатор заклада для посилань:** `Location.publicCode` (8 символів Crockford Base32, без I, L, O, U). Генерується БД
+  при вставці; посилання виду `https://{domain}/l/{publicCode}` (домен — плейсхолдер, див. ADR-021). Код не є секретом і
+  не дає доступу понад те, що видно на публічній сторінці запису.
+- **Пошук закладів без входу:**
+  - за кодом (resolve) — один заклад;
+  - поблизу (nearby) — координати з тіла POST, радіус до 30 км, до 10 результатів; лише закладів з `isDiscoverable`;
+  - за містом (city search) — точний збіг `city` без урахування регістру, лише з `isDiscoverable`.
+- **Вилучення з каталогу:** заклад неактивний, або tenant призупинений, або модуль `beauty_booking` вимкнений — заклад не
+  повертається.
+- **Координати користувача** (позиція пристрою в nearby) — персональні дані: не зберігаються, не логуються, не передаються
+  в аналітику. Зберігаються лише координати самого закладу.
+- **Ліміт бронювань на заклад:** `MaxPublicCreatesPerLocationPerHour` (за замовч. 60, 0 = вимкнено) — обмежує публічні записи
+  одного закладу за годину; персонал може записувати далі.
+- Деталі API — `.claude/docs/api.md` (розділ «Public Location Catalog»); схема й функції БД — `.claude/docs/database.md` §5.
 
 ## 15. Інтеграційні точки (не реалізовано)
 

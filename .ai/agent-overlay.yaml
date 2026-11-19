@@ -1,0 +1,18 @@
+# Project overlay for the vendored agent library (.agent-system/). Edit THIS, never .agent-system/.
+# Separate backend service (backend-developer + database-engineer) — not the colocated fullstack role.
+exclude_agents:
+  - fullstack-developer
+
+agents:
+  backend-developer:
+    skills_add: [stacks/beauty/beauty-booking-api, stacks/beauty/beauty-worker-jobs]
+  database-engineer:
+    skills_add: [stacks/beauty/beauty-schema]
+  frontend-developer:
+    skills_add: [stacks/beauty/beauty-admin-ui, stacks/beauty/beauty-booking-ui]
+  qa-engineer:
+    skills_add: [stacks/beauty/beauty-qa]
+  security-reviewer:
+    skills_add: [stacks/beauty/beauty-security]
+  documentation-writer:
+    skills_add: [stacks/beauty/beauty-docs]

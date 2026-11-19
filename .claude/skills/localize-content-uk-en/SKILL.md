@@ -1,8 +1,8 @@
 ---
 name: localize-content-uk-en
 description: >-
-  Localize Content uk/en — Use when writing page copy, case studies, or blog content.
-x-generated-from: skills/copywriting/localize-content-uk-en/SKILL.md
+  Author parallel uk/en content (not machine translation) and keep strings in the content layer. Use when adding or changing user-facing text in more than one language.
+x-generated-from: .claude/skills/localize-content-uk-en/SKILL.md
 ---
 
 ## Правило (розділи i18n та тону комунікації проєктного спеку)

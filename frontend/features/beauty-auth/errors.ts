@@ -15,6 +15,14 @@ export class BeautyApiError extends Error {
     message: string,
     public readonly retryAfterSeconds?: number,
     public readonly conflicts?: ApiConflict[],
+    /** 409 key_affects_other_roles (§20.5): сценарії, яких торкнеться зміна ключа. */
+    public readonly affectedRoles?: string[],
+    /** 409 task_already_closed (§22.6.3): поточний стан задачі дзвінка. Лише для UI-оновлення рядка. */
+    public readonly task?: unknown,
+    /** 403 forbidden_role (§30.5 п.8): ключ права, якого бракує. Відсутній для рангу/owner-only (перечитування `me` не потрібне). */
+    public readonly permission?: string,
+    /** Розібране JSON-тіло помилки (§30.11: `currentVersion`, `permissions[]`, `violations[]`...). Без ПІІ. */
+    public readonly body?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "BeautyApiError";
@@ -31,6 +39,16 @@ const BY_CODE: Record<string, string> = {
   no_session: "Сесія завершилась. Увійдіть знову.",
   forbidden_role: "У вас немає прав на цю дію.",
   module_disabled: "Цей розділ не підключено для вашого бізнесу.",
+  specialist_inactive: "Ваш профіль майстра вимкнено. Зверніться до керівника.",
+  session_revoked: "Сесію завершено. Увійдіть знову.",
+  access_version_conflict: "Права цього користувача щойно змінили. Ми оновили дані: перегляньте їх і повторіть зміну.",
+  cannot_modify_self: "Власні права й статус змінювати не можна.",
+  user_not_found: "Користувача не знайдено.",
+  permission_ceiling: "Не можна видати більше, ніж маєте самі, або змінити права, видані директором.",
+  role_change_not_supported: "Зміна ролі на таку не підтримується: доступна лише пара «Адміністратор» і «Заступник».",
+  permission_not_allowed_for_role: "Це право не можна видати цій ролі.",
+  permission_inconsistent: "Налаштування суперечать одне одному. Перевірте підсвічені права.",
+  access_unavailable: "Не вдалося перевірити права доступу. Спробуйте за хвилину.",
   invite_invalid: "Запрошення недійсне або термін його дії минув. Попросіть надіслати нове.",
   invite_closed: "Це запрошення вже використано або скасовано.",
   user_exists: "Користувач із такою поштою вже існує.",
@@ -68,7 +86,155 @@ const BY_CODE: Record<string, string> = {
   invalid_reason: "Причина занадто довга: закриття - до 200 символів, скасування запису - до 300.",
   invalid_closed_weekdays: "Некоректний перелік вихідних днів тижня.",
   api_unreachable: "Сервер недоступний. Перевірте з'єднання й спробуйте ще раз.",
+  // §20.5: налаштування ШІ
+  unknown_provider: "Невідомий провайдер ШІ.",
+  provider_not_available: "Цей провайдер ШІ ще недоступний. Оберіть іншого.",
+  unknown_model: "Ця модель недоступна. Оновіть сторінку й оберіть модель зі списку.",
+  model_provider_mismatch: "Модель не належить обраному провайдеру. Оберіть модель зі списку.",
+  invalid_mode: "Невідомий режим автономності.",
+  auto_mode_ack_required: "Для режиму «Діє сам» потрібне підтвердження. Оберіть режим ще раз і підтвердьте.",
+  invalid_limits: "Некоректні ліміти. Перевірте діапазони значень.",
+  prompt_addendum_too_long: "Промпт задовгий: максимум 4000 символів.",
+  prompt_addendum_forbidden: "У промпті є заборонені службові теги або рядки, що починаються з «===». Приберіть їх.",
+  prompt_addendum_contains_secret: "У промпті схоже на ключ доступу. Приберіть його: ключі вводяться лише в полі ключа API.",
+  invalid_key_format: "Ключ має неправильний формат. Скопіюйте його з кабінету провайдера повністю.",
+  key_rejected: "Провайдер відхилив цей ключ. Перевірте його й спробуйте ще раз.",
+  key_affects_other_roles: "Ключ використовує інший сценарій. Підтвердіть зміну в діалозі.",
+  invalid_months: "Некоректна кількість місяців.",
+  provider_unavailable: "Провайдер ШІ тимчасово недоступний, ключ не збережено. Спробуйте пізніше.",
+  ai_secrets_unavailable: "Сховище ключів на сервері не налаштовано. Зверніться до підтримки.",
+  ai_unavailable: "ШІ зараз недоступний. Перевірте стан у налаштуваннях.",
+  ai_quota_exceeded: "Місячний ліміт ШІ вичерпано.",
+  ai_rate_limited: "Забагато запитів до ШІ. Зачекайте хвилину.",
   not_supported: "Ця можливість ще не підключена до сервера.",
+  // §22: нагадування, вподобання, задачі дзвінків, inbox
+  conversation_not_found: "Розмову не знайдено. Можливо, її вже немає в списку.",
+  channel_inactive: "Канал вимкнено, тому відповісти клієнту зараз не можна. Увімкніть канал у розділі «Канали».",
+  channel_unsupported: "У цьому каналі відповідь із вебу поки недоступна. Відповідайте клієнту в самому каналі.",
+  idempotency_conflict: "Це повідомлення вже надсилалося з іншим текстом. Оновіть розмову й спробуйте ще раз.",
+  idempotency_key_required: "Не вдалося надіслати повідомлення. Оновіть сторінку й спробуйте ще раз.",
+  invalid_text: "Текст відповіді має містити від 1 до 3500 символів, без службових символів.",
+  client_not_found: "Клієнта не знайдено.",
+  invalid_method: "Невідомий спосіб нагадування.",
+  invalid_offsets: "Некоректні точки нагадування. Оберіть 1, 2 або 24 години; для дзвінка — лише одну точку.",
+  invalid_reminder_method: "Невідомий спосіб нагадування.",
+  invalid_reminder_offsets: "Некоректні точки нагадування. Оберіть 1, 2 або 24 години; для дзвінка — лише одну точку.",
+  reminder_conflict: "Вкажіть або нові налаштування нагадувань, або старий варіант, не обидва.",
+  telegram_unavailable: "У клієнта немає розмови в підключеному Telegram-каналі, тому нагадати там не вдасться.",
+  phone_required: "У клієнта немає телефону, тож дзвінок-нагадування неможливий.",
+  call_reminders_disabled: "Дзвінки-нагадування вимкнено в налаштуваннях закладу.",
+  telegram_reminders_disabled: "Нагадування в Telegram вимкнено в налаштуваннях закладу.",
+  call_task_not_found: "Задачу дзвінка не знайдено.",
+  invalid_day: "Некоректний день. Оберіть сьогодні, завтра або дату.",
+  invalid_status: "Некоректний статус задачі.",
+  invalid_note: "Нотатка задовга: максимум 300 символів.",
+  task_already_closed: "Цю задачу вже закрив інший адміністратор.",
+  task_cancelled: "Задачу скасовано системою (запис змінено або скасовано).",
+  channel_not_found: "Канал не знайдено. Оновіть сторінку.",
+  invalid_settings: "Некоректні налаштування каналу. Перевірте значення й спробуйте ще раз.",
+  invalid_coordinates: "Некоректні координати: вкажіть і широту (від −90 до 90), і довготу (від −180 до 180) або залиште обидва поля порожніми.",
+  // §24: собівартість і деталі періоду
+  service_not_found: "Послугу не знайдено. Оновіть сторінку.",
+  cost_not_found: "Собівартість для цього закладу вже видалено. Оновіть сторінку.",
+  invalid_cost: "Собівартість має бути числом від 0 до 1 000 000, не більше 2 знаків після коми.",
+  invalid_master_percent: "Відсоток майстру має бути від 0 до 100, не більше 2 знаків після коми.",
+  invalid_date: "Некоректна дата.",
+  invalid_cursor: "Список змінився. Закрийте деталі й відкрийте їх знову.",
+  // §25: телефон клієнта
+  no_pending_phone: "Нового номера вже немає: рішення прийнято раніше. Оновіть картку клієнта.",
+  invalid_action: "Невідома дія з номером.",
+  invalid_quiet_hours: "Некоректні години тиші: формат ГГ:ХХ, початок і кінець різні, тиша не довша за 12 годин.",
+  // §26: згода, розсилки, купони
+  campaign_changed: "Кампанію змінили, поки ви переглядали. Перегляд оновлено, перевірте його ще раз.",
+  revision_changed: "Кампанію змінили, поки ви переглядали. Перегляд оновлено, перевірте його ще раз.",
+  campaign_not_draft: "Кампанію вже підтверджено або скасовано, змінити її не можна.",
+  campaign_finished: "Кампанія вже завершена, скасувати її не можна.",
+  campaign_not_found: "Розсилку не знайдено. Можливо, її видалено.",
+  audience_empty: "У вибраній аудиторії немає клієнтів, яким можна надіслати повідомлення. Змініть сегмент.",
+  audience_too_large: "Аудиторія завелика: максимум 5000 одержувачів. Звузьте сегмент.",
+  promotion_inactive: "Акція вимкнена або закінчиться раніше запланованого часу відправки.",
+  promotion_in_campaign: "Акція бере участь у розсилці. Змінити знижку, період, послуги чи доступ не можна; можна лише вимкнути акцію.",
+  invalid_schedule: "Некоректний час відправки: не раніше ніж зараз і не далі ніж за 30 днів.",
+  invalid_name: "Некоректна назва: від 1 до 200 символів.",
+  invalid_duration: "Некоректна тривалість: ціле число хвилин від 5 до 720.",
+  invalid_type: "Невідомий тип розсилки.",
+  invalid_discount: "Знижка має бути від 1% до 100%.",
+  invalid_access: "Некоректний доступ до акції.",
+  unknown_reference: "Заклад або послугу не знайдено. Оновіть сторінку й оберіть їх знову.",
+  promotion_required: "Для розсилки про акцію оберіть акцію.",
+  promotion_not_found: "Акцію не знайдено. Оновіть сторінку.",
+  promotion_not_code_only: "Купон можна створити лише для акції «Лише за кодом».",
+  promotion_must_be_public: "Без купона розсилку можна робити лише про публічну акцію.",
+  invalid_segment: "Некоректні параметри аудиторії. Перевірте числа й виберіть вид сегмента.",
+  invalid_template: "Текст повідомлення не пройшов перевірку: перевірте підстановки, довжину й службові символи.",
+  invalid_coupon_mode: "Некоректний тип купона.",
+  coupon_not_found: "Код не знайдено. Оновіть список кодів.",
+  coupon_not_shared: "Для розсилки можна вибрати лише загальний код.",
+  coupon_promotion_mismatch: "Цей код належить іншій акції.",
+  coupon_period_outside_promotion: "Строк дії купона має лежати в періоді акції.",
+  invalid_code: "Код: від 4 до 20 символів, лише латинські літери й цифри.",
+  invalid_period: "Некоректний строк дії: кінець має бути пізніше за початок.",
+  invalid_max_uses: "Ліміт використань: ціле число від 1 до 100 000.",
+  coupon_code_taken: "Такий код уже існує. Придумайте інший.",
+  coupon_expired: "Строк дії коду минув.",
+  coupon_not_started: "Код ще не діє.",
+  coupon_exhausted: "Код уже використано максимальну кількість разів.",
+  coupon_revoked: "Код відкликано.",
+  coupon_foreign_client: "Цей код належить іншому клієнту.",
+  coupon_already_used: "Клієнт уже користувався цим кодом.",
+  coupon_invalid: "Код не підходить: він недійсний, використаний або вже не діє.",
+  coupon_unavailable: "Купон щойно став недоступним. Спробуйте без нього.",
+  invalid_coupon_format: "Перевірте формат коду: від 4 до 24 символів, літери, цифри, пробіл чи дефіс.",
+  marketing_disabled: "Розсилки вимкнено для вашого закладу. Зверніться до підтримки, щоб їх підключити.",
+  invalid_level: "Невідомий рівень згоди.",
+  basis_required: "Щоб підвищити згоду, вкажіть підставу.",
+  invalid_basis: "Оберіть підставу зі списку.",
+  invalid_basis_note: "Нотатка до підстави: від 1 до 200 символів.",
+  admin_grant_disabled: "Підвищувати згоду за клієнта вимкнено. Клієнт може обрати рівень сам у боті (команда /marketing).",
+  // §32: склад. Коди, що вже мають інший зміст вище (invalid_name|note|reason|date|range|cursor, idempotency_key_required),
+  // для складу беруться з `humanizeInventoryError` (features/beauty-admin/inventory/logic.ts).
+  product_not_found: "Товар не знайдено.",
+  supplier_not_found: "Постачальника не знайдено.",
+  batch_not_found: "Партію не знайдено.",
+  operation_not_found: "Операцію не знайдено.",
+  stocktake_not_found: "Інвентаризацію не знайдено.",
+  setting_not_found: "Налаштування закладу для товару немає.",
+  barcode_taken: "Товар з таким штрихкодом уже є.",
+  supplier_name_taken: "Постачальник з такою назвою вже є.",
+  stocktake_in_progress: "У закладі вже триває інвентаризація.",
+  stocktake_closed: "Інвентаризацію вже проведено або скасовано.",
+  stocktake_version_conflict: "Інвентаризацію змінив інший користувач. Оновіть сторінку.",
+  insufficient_stock: "Недостатньо товару на залишку.",
+  product_inactive: "Товар неактивний.",
+  product_disabled_for_location: "Товар вимкнено для цього закладу.",
+  location_inactive: "Заклад неактивний.",
+  supplier_inactive: "Постачальник неактивний.",
+  same_location: "Оберіть інший заклад призначення.",
+  batch_expired: "Партія прострочена, її не можна переміщувати.",
+  unit_locked: "Одиницю виміру не можна змінити: товар уже має рух.",
+  expiry_required: "Вкажіть термін придатності.",
+  invalid_expiry: "Термін придатності вже минув.",
+  note_required: "Додайте коментар до списання.",
+  stocktake_empty: "Внесіть хоча б один підрахунок.",
+  idempotency_key_reused: "Цю операцію вже надіслано з іншими даними. Оновіть сторінку.",
+  invalid_idempotency_key: "Технічна помилка запиту. Спробуйте ще раз.",
+  invalid_quantity: "Кількість: більше нуля, до 1 000 000, до 3 знаків; для штук і упаковок - ціле.",
+  invalid_price: "Ціна: від 0 до 1 000 000, до 2 знаків після коми.",
+  invalid_min_stock: "Мінімальний залишок: від 0 до 1 000 000, до 3 знаків; для штук і упаковок - ціле.",
+  invalid_unit: "Оберіть одиницю виміру зі списку.",
+  invalid_barcode: "Штрихкод: до 64 символів, літери, цифри та . _ -",
+  invalid_purpose: "Оберіть призначення зі списку.",
+  invalid_category: "Категорія: до 100 символів.",
+  invalid_lines: "Додайте від 1 до 100 рядків.",
+  too_many_lines: "Забагато рядків.",
+  duplicate_line: "Цей товар (партія) повторюється.",
+  invalid_document_number: "Номер документа: до 64 символів.",
+  invalid_lot_number: "Номер партії: до 64 символів.",
+  invalid_contact_name: "Контактна особа: до 200 символів.",
+  invalid_phone: "Телефон: до 32 символів, цифри та + ( ) - . пробіл.",
+  invalid_email: "Вкажіть коректну пошту.",
+  location_required: "Оберіть заклад.",
+  expected_version_required: "Технічна помилка запиту. Оновіть сторінку.",
 };
 
 const BY_STATUS: Record<number, string> = {
@@ -80,6 +246,70 @@ const BY_STATUS: Record<number, string> = {
   423: "Обліковий запис тимчасово заблоковано. Спробуйте пізніше.",
   429: "Забагато запитів. Зачекайте хвилину і спробуйте ще раз.",
 };
+
+/** Тексти для «Оновити меню команд бота» (§23.4): коди `channel_unsupported` / `telegram_unavailable` тут означають інше, ніж у відповіді клієнту. */
+const SYNC_COMMANDS_BY_CODE: Record<string, string> = {
+  channel_not_found: "Канал не знайдено. Оновіть сторінку й спробуйте ще раз.",
+  channel_unsupported: "Меню команд можна оновити лише для Telegram-бота.",
+  channel_inactive: "Канал вимкнено. Увімкніть його й спробуйте ще раз.",
+  token_missing: "Для каналу не вказано токен бота. Підключіть бота заново.",
+  telegram_unavailable: "Telegram зараз недоступний. Спробуйте ще раз за кілька хвилин.",
+};
+
+export function humanizeSyncCommandsError(e: unknown): string {
+  if (e instanceof BeautyApiError) {
+    const text = SYNC_COMMANDS_BY_CODE[e.code];
+    if (text) return text;
+    if (e.status === 404) return SYNC_COMMANDS_BY_CODE.channel_not_found;
+    if (e.status === 502) return SYNC_COMMANDS_BY_CODE.telegram_unavailable;
+  }
+  return humanizeError(e, "Не вдалося оновити меню команд. Спробуйте ще раз.");
+}
+
+/** Тексти форми «Звернення до розробників» (§27.9): коди `invalid_type` тощо тут мають власний зміст, тож окрема мапа. */
+const FEEDBACK_BY_CODE: Record<string, string> = {
+  invalid_type: "Оберіть тип звернення: співпраця, покращити або не працює.",
+  invalid_severity: "Оберіть критичність зі списку.",
+  invalid_message: "Текст звернення має містити від 10 до 2000 символів, без службових символів.",
+  invalid_page_url: "Не вдалося визначити сторінку. Оновіть її й надішліть звернення ще раз.",
+  tenant_suspended: "Роботу вашого закладу призупинено, тому надіслати звернення зараз не можна. Зверніться до постачальника послуги.",
+  user_inactive: "Ваш обліковий запис вимкнено. Зверніться до власника закладу.",
+};
+
+/** Людський час очікування за `Retry-After` (секунди) для 429. */
+export function retryWaitText(seconds: number): string {
+  if (seconds < 60) return "менше хвилини";
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes} хв`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m === 0 ? `${h} год` : `${h} год ${m} хв`;
+}
+
+export function humanizeFeedbackError(e: unknown): string {
+  if (e instanceof BeautyApiError) {
+    if (e.status === 429) {
+      return e.retryAfterSeconds
+        ? `Ви вже надіслали забагато звернень. Спробуйте ще раз приблизно через ${retryWaitText(e.retryAfterSeconds)}.`
+        : "Ви вже надіслали забагато звернень (до 5 на годину). Спробуйте пізніше.";
+    }
+    const text = FEEDBACK_BY_CODE[e.code];
+    if (text && (e.status === 403 || e.status === 422)) return text;
+    if (e.status === 422) return "Перевірте введені дані: тип, критичність і текст звернення.";
+  }
+  return humanizeError(e, "Не вдалося надіслати звернення. Спробуйте ще раз.");
+}
+
+/** Тексти для «Опрацьовано» (§22.6.5): серверний message не показуємо. */
+export function humanizeResolveError(e: unknown): string {
+  if (e instanceof BeautyApiError) {
+    if (e.status === 403) return "У вас немає прав позначати розмови опрацьованими.";
+    if (e.status === 404) return "Розмову не знайдено. Можливо, її вже немає в списку.";
+    if (e.status === 409) return "Стан розмови вже змінився. Оновіть її й спробуйте ще раз.";
+    if (e.status === 429) return "Забагато запитів. Зачекайте хвилину і спробуйте ще раз.";
+  }
+  return humanizeError(e, "Не вдалося позначити розмову опрацьованою. Спробуйте ще раз.");
+}
 
 export function humanizeError(e: unknown, fallback = "Щось пішло не так. Спробуйте ще раз."): string {
   if (e instanceof BeautyApiError) {
@@ -108,14 +338,22 @@ export async function readApiError(res: Response): Promise<BeautyApiError> {
   let code = "";
   let message = res.statusText;
   let conflicts: ApiConflict[] | undefined;
+  let affectedRoles: string[] | undefined;
+  let task: unknown;
+  let permission: string | undefined;
+  let parsed: Record<string, unknown> | undefined;
   try {
-    const body = (await res.json()) as { code?: unknown; message?: unknown; conflicts?: unknown };
+    const body = (await res.json()) as { code?: unknown; message?: unknown; conflicts?: unknown; affectedRoles?: unknown; task?: unknown; permission?: unknown };
+    if (typeof body.permission === "string" && body.permission) permission = body.permission;
+    if (body && typeof body === "object") parsed = body as Record<string, unknown>;
     if (typeof body.code === "string") code = body.code;
     if (typeof body.message === "string") message = body.message;
     if (Array.isArray(body.conflicts)) conflicts = body.conflicts.flatMap(parseConflict);
+    if (Array.isArray(body.affectedRoles)) affectedRoles = body.affectedRoles.filter((r): r is string => typeof r === "string");
+    if (body.task && typeof body.task === "object") task = body.task;
   } catch {
     /* не JSON */
   }
   const retry = Number(res.headers.get("Retry-After"));
-  return new BeautyApiError(res.status, code, message, Number.isFinite(retry) && retry > 0 ? retry : undefined, conflicts);
+  return new BeautyApiError(res.status, code, message, Number.isFinite(retry) && retry > 0 ? retry : undefined, conflicts, affectedRoles, task, permission, parsed);
 }

@@ -12,7 +12,7 @@ public sealed partial class EfBeautyStore
     public async Task<CancellationSettings?> GetCancellationSettingsAsync(CancellationToken ct)
     {
         var r = await db.CancellationSettings.AsNoTracking().FirstOrDefaultAsync(ct); // RLS: лише рядок свого tenant
-        return r is null ? null : new CancellationSettings(r.WindowHours, r.RefundPercentInWindow, r.RefundPercentOutside, r.DeductFee, r.FeePercent);
+        return r is null ? null : new CancellationSettings(r.WindowHours, r.RefundPercentInWindow, r.RefundPercentOutside, r.DeductFee, r.FeePercent, r.ShowTermsToClient, r.CustomTermsText);
     }
 
     public async Task SaveCancellationSettingsAsync(CancellationSettings s, CancellationToken ct)
@@ -26,6 +26,8 @@ public sealed partial class EfBeautyStore
             row.RefundPercentOutside = s.RefundPercentOutside;
             row.DeductFee = s.DeductFee;
             row.FeePercent = s.FeePercent;
+            row.ShowTermsToClient = s.ShowTermsToClient;
+            row.CustomTermsText = s.CustomTermsText;
             try
             {
                 await db.SaveChangesAsync(ct);

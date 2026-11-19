@@ -67,18 +67,18 @@ public class BeautyAssistantTests
         await rig.Assistant(ai).HandleAsync(new AssistantRequest(Tenant, Client, "Запишіть мене"), default);
         var pending = rig.Journal.Items.Single(r => r.Action == "create_appointment");
 
-        var r1 = await rig.Tools.ConfirmAsync(Tenant, pending.Id, default);
+        var r1 = await rig.Tools.ConfirmAsync(BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: Tenant), pending.Id, default);
         Assert.False(r1.IsError);
         Assert.Single(rig.Ports.CreatedAppointments);
         var done = (await rig.Journal.GetAsync(Tenant, pending.Id, default))!;
         Assert.Equal(AiActionStatus.Done, done.Status);
         Assert.True(done.Revertible);
 
-        var r2 = await rig.Tools.ConfirmAsync(Tenant, pending.Id, default); // повторне підтвердження не дублює
+        var r2 = await rig.Tools.ConfirmAsync(BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: Tenant), pending.Id, default); // повторне підтвердження не дублює
         Assert.True(r2.IsError);
         Assert.Single(rig.Ports.CreatedAppointments);
 
-        await rig.Tools.RevertAsync(Tenant, pending.Id, default);
+        await rig.Tools.RevertAsync(BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: Tenant), pending.Id, default);
         Assert.Single(rig.Ports.CancelledAppointments);
         Assert.Equal(AiActionStatus.Reverted, (await rig.Journal.GetAsync(Tenant, pending.Id, default))!.Status);
     }
@@ -90,7 +90,7 @@ public class BeautyAssistantTests
         await rig.Assistant(new ScriptedAiClient(ScriptedAiClient.Tool("create_appointment", Appt())))
             .HandleAsync(new AssistantRequest(Tenant, Client, "Запишіть"), default);
         var id = rig.Journal.Items.Single(r => r.Action == "create_appointment").Id;
-        await rig.Tools.RejectPendingAsync(Tenant, id, default);
+        await rig.Tools.RejectPendingAsync(BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: Tenant), id, default);
         Assert.Empty(rig.Ports.CreatedAppointments);
         Assert.Equal(AiActionStatus.Rejected, (await rig.Journal.GetAsync(Tenant, id, default))!.Status);
     }
@@ -155,7 +155,7 @@ public class BeautyAssistantTests
     {
         var rig = new Rig();
         var ai = new ScriptedAiClient(ScriptedAiClient.Tool("suggest_promotion", new { goal = "fill", discountPercent = 90, text = "x" }));
-        await rig.Assistant(ai).HandleAsync(new AssistantRequest(Tenant, null, "план акції", AiMode.Auto, AiScope.Manager), default);
+        await rig.Assistant(ai).HandleAsync(new AssistantRequest(Tenant, null, "план акції", AiMode.Auto, AiScope.Manager, Actor: BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: Tenant)), default);
         Assert.Empty(rig.Ports.Proposals);
         Assert.Equal(AiActionStatus.Rejected, rig.Journal.Items.Single(r => r.Action == "suggest_promotion").Status);
     }
@@ -166,7 +166,7 @@ public class BeautyAssistantTests
         var rig = new Rig();
         var ai = new ScriptedAiClient(ScriptedAiClient.Tool("suggest_promotion",
             new { goal = "fill", discountPercent = 15, text = "x", sendAt = "2026-10-20T03:00:00+00:00" }));
-        await rig.Assistant(ai).HandleAsync(new AssistantRequest(Tenant, null, "акція", AiMode.Auto, AiScope.Manager), default);
+        await rig.Assistant(ai).HandleAsync(new AssistantRequest(Tenant, null, "акція", AiMode.Auto, AiScope.Manager, Actor: BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: Tenant)), default);
         Assert.Empty(rig.Ports.Proposals);
         Assert.Equal(AiActionStatus.Rejected, rig.Journal.Items.Single(r => r.Action == "suggest_promotion").Status);
     }
@@ -177,7 +177,7 @@ public class BeautyAssistantTests
         var rig = new Rig();
         var ai = new ScriptedAiClient(ScriptedAiClient.Tool("suggest_promotion",
             new { goal = "fill", discountPercent = 15, text = "x", sendAt = "2026-10-20T12:00:00+00:00" }));
-        await rig.Assistant(ai).HandleAsync(new AssistantRequest(Tenant, null, "акція", null, AiScope.Manager), default);
+        await rig.Assistant(ai).HandleAsync(new AssistantRequest(Tenant, null, "акція", null, AiScope.Manager, Actor: BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: Tenant)), default);
         Assert.Empty(rig.Ports.Proposals);
         Assert.Equal(AiActionStatus.PendingConfirmation, rig.Journal.Items.Single(r => r.Action == "suggest_promotion").Status);
     }
@@ -190,7 +190,7 @@ public class BeautyAssistantTests
         rig.Ports.Audience.Add(new AudienceMemberDto(ok, "telegram", true, false));
         rig.Ports.Audience.Add(new AudienceMemberDto(Guid.NewGuid(), "telegram", false, false));
         rig.Ports.Audience.Add(new AudienceMemberDto(Guid.NewGuid(), "telegram", true, true));
-        var r = await rig.Tools.ExecuteAsync(new AiToolContext(Tenant, null, AiMode.Confirm, AiScope.Manager),
+        var r = await rig.Tools.ExecuteAsync(new AiToolContext(Tenant, null, AiMode.Confirm, AiScope.Manager, Actor: BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner, tenantId: Tenant)),
             "build_audience", JsonSerializer.SerializeToElement(new { segment = "sleeping" }), default);
         Assert.False(r.IsError);
         Assert.Contains(ok.ToString(), r.Content);
@@ -232,14 +232,63 @@ public class BeautyAssistantTests
         Assert.Contains("ДАНИМИ", ai.Requests[0].System);
     }
 
-    [Fact]
-    public void anthropicClient_buildBody_uses_sonnet_4_5_and_tools()
+    // ---------- TASK-853 (§30.6.10): права актора в staff-tools ----------
+
+    private static BeautyCrm.Application.Features.BeautyAuth.Actor Deputy(params (string Key, string Level)[] over)
     {
-        var settings = new AiSettings();
-        var c = new AnthropicAiClient(new HttpClient(), settings);
-        var body = c.BuildBody(new AiRequest("sys", new[] { AiMessage.User("hi") }, AiToolCatalog.All));
-        using var doc = JsonDocument.Parse(body);
-        Assert.Equal("claude-sonnet-4-5", doc.RootElement.GetProperty("model").GetString());
-        Assert.Equal(8, doc.RootElement.GetProperty("tools").GetArrayLength());
+        var perms = new Dictionary<string, string>(BeautyCrm.Application.Features.BeautyAuth.PermissionPresets.For(BeautyCrm.Application.Features.BeautyAuth.Roles.Deputy));
+        foreach (var (k, l) in over) perms[k] = l;
+        return BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Deputy, tenantId: Tenant, permissions: perms);
+    }
+
+    [Fact]
+    public async Task manager_scope_without_actor_is_refused_fail_closed()
+    {
+        var rig = new Rig();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.Tools.ExecuteAsync(
+            new AiToolContext(Tenant, null, AiMode.Confirm, AiScope.Manager), "get_prices", JsonSerializer.SerializeToElement(new { }), default));
+    }
+
+    [Fact]
+    public async Task tool_without_right_is_denied_at_execution_with_permission_and_required()
+    {
+        var rig = new Rig();
+        var actor = Deputy(("calendar.manage", "own"));
+        var r = await rig.Tools.ExecuteAsync(new AiToolContext(Tenant, null, AiMode.Confirm, AiScope.Manager, Actor: actor),
+            "create_appointment", JsonSerializer.SerializeToElement(Appt()), default);
+        Assert.True(r.IsError);
+        Assert.Equal(("calendar.manage", "all"), (r.Denied!.Permission, r.Denied.Required));
+        Assert.Empty(rig.Journal.Items);
+    }
+
+    [Fact]
+    public async Task confirm_after_right_revoked_is_denied_and_action_stays_pending()
+    {
+        var rig = new Rig();
+        await rig.Assistant(new ScriptedAiClient(ScriptedAiClient.Tool("create_appointment", Appt())))
+            .HandleAsync(new AssistantRequest(Tenant, Client, "Запишіть"), default);
+        var id = rig.Journal.Items.Single(r => r.Action == "create_appointment").Id;
+
+        var denied = await rig.Tools.ConfirmAsync(Deputy(("calendar.manage", "own")), id, default);
+        Assert.NotNull(denied.Denied);
+        Assert.Empty(rig.Ports.CreatedAppointments);
+        Assert.Equal(AiActionStatus.PendingConfirmation, (await rig.Journal.GetAsync(Tenant, id, default))!.Status);
+
+        Assert.False((await rig.Tools.ConfirmAsync(Deputy(), id, default)).IsError); // право є -> виконується
+        Assert.Single(rig.Ports.CreatedAppointments);
+    }
+
+    [Fact]
+    public void manager_tool_list_is_filtered_by_actor_rights_and_table_is_complete()
+    {
+        var all = BeautyCrm.Application.Features.BeautyAuth.Actor.ForTest(BeautyCrm.Application.Features.BeautyAuth.Roles.Owner).Access;
+        Assert.All(AiToolCatalog.For(AiScope.Manager).Select(t => t.Name), n => Assert.True(AiToolPermissions.IsKnown(n), n));
+        Assert.Equal(AiToolCatalog.For(AiScope.Manager).Count, AiToolCatalog.ForManager(all).Count);
+
+        var noMarketing = Deputy().Access; // пресет deputy: marketing.campaigns = none
+        var names = AiToolCatalog.ForManager(noMarketing).Select(t => t.Name).ToList();
+        Assert.DoesNotContain("suggest_promotion", names);
+        Assert.DoesNotContain("build_audience", names);
+        Assert.Contains("create_appointment", names);
     }
 }

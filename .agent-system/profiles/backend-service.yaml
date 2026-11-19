@@ -1,0 +1,18 @@
+description: Separate backend service + web + mobile (e.g. ASP.NET API, React/Next, Expo). No marketing/design roles, no fullstack-developer. 16 roles.
+include:
+  - task-intake
+  - requirements-analyst
+  - project-researcher
+  - context-manager
+  - project-architect
+  - project-manager
+  - review-orchestrator
+  - integration-steward
+  - backend-developer
+  - database-engineer
+  - frontend-developer
+  - mobile-developer
+  - devops-engineer
+  - qa-engineer
+  - security-reviewer
+  - documentation-writer

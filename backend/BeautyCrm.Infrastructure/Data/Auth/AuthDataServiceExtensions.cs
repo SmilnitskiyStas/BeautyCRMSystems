@@ -11,6 +11,10 @@ public static class AuthDataServiceExtensions
     {
         services.TryAddSingleton<IPasswordHasher, BcryptPasswordHasher>();
         services.AddScoped<IAuthStore, EfAuthStore>();
+        services.AddScoped<IAccessAdminStore, EfAccessAdminStore>(); // ADR-023 (TASK-851)
+        services.AddScoped<IAccessStore, EfAccessStore>(); // ADR-023: доступ користувача для AccessContextMiddleware
+        services.AddScoped<BeautyCrm.Application.Features.BeautyControlPlane.IControlPlaneStore, EfControlPlaneStore>();
+        services.AddScoped<BeautyCrm.Application.Features.BeautyControlPlane.IOwnerInviteStore, EfOwnerInviteStore>();
         return services;
     }
 }

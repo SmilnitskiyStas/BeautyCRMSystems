@@ -61,7 +61,7 @@ public sealed class InstagramAdapter(HttpClient http, IChannelCredentialsProvide
         return Task.FromResult<IReadOnlyList<InboundMessage>>(result);
     }
 
-    public async Task SendAsync(OutboundMessage msg, CancellationToken ct)
+    public async Task<ChannelSendReceipt> SendAsync(OutboundMessage msg, CancellationToken ct)
     {
         if (msg.LastInboundAt is null || DateTimeOffset.UtcNow - msg.LastInboundAt > MessagingWindow)
             throw new PermanentChannelException(
@@ -78,5 +78,6 @@ public sealed class InstagramAdapter(HttpClient http, IChannelCredentialsProvide
         };
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         await HttpSend.PostAsync(http, req, "Instagram send", ct);
+        return new ChannelSendReceipt(null); // Actions ігноруються (SupportsActions=false); id повідомлення Meta не зберігаємо
     }
 }

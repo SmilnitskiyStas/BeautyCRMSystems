@@ -1,12 +1,12 @@
 ---
 name: create-content-model
 description: >-
-  Create Content Model — Use during the discovery phase — positioning, IA, content model.
-x-generated-from: skills/product-design/create-content-model/SKILL.md
+  Define content types and fields for pages, cases, and posts. Use during discovery or when adding a new content type.
+x-generated-from: .claude/skills/create-content-model/SKILL.md
 ---
 
 ## Purpose
-Визначає повторювані структури контенту (content models) для кейсів і галузевих сторінок, які потім споживає типізований content layer (див. `.claude/skills/frontend/integrate-content.md`).
+Визначає повторювані структури контенту (content models) для кейсів і галузевих сторінок, які потім споживає типізований content layer (див. `.claude/.claude/skills/integrate-content/SKILL.md`).
 
 ## Case Study Content Model
 1. Назва

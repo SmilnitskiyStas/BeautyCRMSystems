@@ -39,10 +39,7 @@ public static class RolePolicy
 {
     public static bool CanInvite(string actorRole, string targetRole) => CanManage(actorRole, targetRole);
 
-    public static bool CanManage(string actorRole, string targetRole) => (actorRole, targetRole) switch
-    {
-        (Roles.Owner, Roles.Admin or Roles.Specialist) => true,
-        (Roles.Admin, Roles.Specialist) => true,
-        _ => false,
-    };
+    /// <summary>§30.1: <c>rank(actor) &gt; rank(target) &amp;&amp; target != owner</c> (owner недоторканний; нові пари owner/admin -> deputy).</summary>
+    public static bool CanManage(string actorRole, string targetRole) =>
+        targetRole != Roles.Owner && Roles.Rank(actorRole) > Roles.Rank(targetRole) && Roles.IsTenantRole(targetRole);
 }

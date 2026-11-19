@@ -16,17 +16,29 @@ public interface IAiActionReader
 public static class TenantGuard
 {
     /// <summary>
-    /// Порти AI приймають tenantId явно. Якщо tenant у scope вже встановлено (HTTP middleware) — він має збігатися;
-    /// якщо ні (фонова обробка) — встановлюється до першого звернення до БД.
+    /// Порти AI приймають tenantId явно, але tenant scope має бути вже встановлений автентифікацією (JWT middleware, канал
+    /// webhook після перевірки підпису): він має збігатися із заданим. Порожній scope = помилка (L3): шлях, що не встановив
+    /// tenant, не може обрати його сам із параметра. Платформні/воркерні шляхи використовують <see cref="EnsureOrSetForTrustedJob"/>.
     /// </summary>
     public static void Ensure(TenantContext tenant, Guid tenantId)
     {
         if (tenant.TenantId is { } current)
         {
-            if (current != tenantId) throw new InvalidOperationException("Tenant mismatch between request scope and AI port call.");
+            // TenantMismatchException (не InvalidOperationException): AiToolExecutor його не маскує як invalid_arguments, запуск переривається.
+            if (current != tenantId) throw new TenantMismatchException(current, tenantId);
             return;
         }
-        tenant.SetTenant(tenantId);
+        throw new TenantScopeMissingException();
+    }
+
+    /// <summary>
+    /// Лише для довірених платформних/воркерних шляхів (джоби, CLI), де tenant береться з перевіреного джерела, а не із запиту.
+    /// Порожній scope -> встановлює tenant; непорожній -> як <see cref="Ensure"/>. НЕ викликати з HTTP/webhook/асистента.
+    /// </summary>
+    public static void EnsureOrSetForTrustedJob(TenantContext tenant, Guid tenantId)
+    {
+        if (tenant.TenantId is null) { tenant.SetTenant(tenantId); return; }
+        Ensure(tenant, tenantId);
     }
 }
 
@@ -80,7 +92,9 @@ public sealed class EfAiActionJournal(BeautyDbContext db, TenantContext tenant) 
 
     public async Task<IReadOnlyList<AiActionRecord>> ListAsync(int take, string? status, CancellationToken ct)
     {
-        var rows = await db.AiActions.AsNoTracking().OrderByDescending(a => a.CreatedAt).Take(Math.Clamp(take, 1, 500)).ToListAsync(ct);
+        // Службовий облік запитів LLM чату (chat_llm_usage) - не дія для менеджера.
+        var rows = await db.AiActions.AsNoTracking().Where(a => a.ToolName != Conversations.ChatJournal.LlmUsage)
+            .OrderByDescending(a => a.CreatedAt).Take(Math.Clamp(take, 1, 500)).ToListAsync(ct);
         var list = rows.Select(ToRecord);
         return (status is null ? list : list.Where(r => r.Status == status)).ToList();
     }
@@ -88,6 +102,7 @@ public sealed class EfAiActionJournal(BeautyDbContext db, TenantContext tenant) 
     private static void Apply(AiAction e, AiActionRecord r)
     {
         e.ToolName = r.Action;
+        if (r.ConversationId is not null) e.ConversationId = r.ConversationId;
         e.Payload = IsJson(r.PayloadJson) ? r.PayloadJson : JsonSerializer.Serialize(r.PayloadJson);
         e.Status = ColumnStatus(r.Status);
         e.Result = JsonSerializer.Serialize(new Envelope(r.Target, r.Status, r.Revertible, r.Mode.ToString()));
@@ -105,7 +120,7 @@ public sealed class EfAiActionJournal(BeautyDbContext db, TenantContext tenant) 
         var env = e.Result is null ? null : JsonSerializer.Deserialize<Envelope>(e.Result);
         var mode = env is not null && Enum.TryParse<AiMode>(env.Mode, out var m) ? m : AiMode.Confirm;
         return new AiActionRecord(e.Id, e.TenantId, e.ToolName, env?.Target ?? "-", e.CreatedAt,
-            env?.Status ?? Beauty.AiActionStatus.Done, env?.Revertible ?? false, mode, e.Payload);
+            env?.Status ?? Beauty.AiActionStatus.Done, env?.Revertible ?? false, mode, e.Payload, e.ConversationId);
     }
 
     private static bool IsJson(string s)

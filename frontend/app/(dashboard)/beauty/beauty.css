@@ -18,7 +18,7 @@
   font-family: var(--font-unbounded), var(--font-onest), sans-serif;
 }
 
-.beauty-admin :is(a, button, input, select, textarea):focus-visible {
+.beauty-admin :is(a, button, input, select, textarea, [role="region"][tabindex]):focus-visible {
   outline: 3px solid #2f4a8c;
   outline-offset: 2px;
 }

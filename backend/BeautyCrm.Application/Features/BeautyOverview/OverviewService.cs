@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using BeautyCrm.Application.Features.BeautyAuth;
 using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Application.Features.BeautyCommon;
 
@@ -8,16 +10,20 @@ namespace BeautyCrm.Application.Features.BeautyOverview;
 /// Заклад для адмінки (GET /locations). Address може бути null. ClosedWeekdays — щотижневі вихідні (mon..sun, §17;
 /// порожньо = працює 7 днів).
 /// </summary>
+/// <remarks>ADR-022: PublicCode — публічний код закладу (XXXXXXXX, незмінний; людям показується як XXXX-XXXX); Latitude/Longitude/City — адреса для каталогу; IsDiscoverable — opt-in до nearby/пошуку за містом.</remarks>
 /// <remarks>WorkingHours — години роботи закладу (§18.1, формат §9); null = не задано (обмеження немає).</remarks>
 public sealed record LocationDto(Guid Id, string Name, string? Address, string Timezone, bool IsActive, string? Phone = null,
-    IReadOnlyList<string>? ClosedWeekdays = null, JsonElement? WorkingHours = null);
+    IReadOnlyList<string>? ClosedWeekdays = null, JsonElement? WorkingHours = null, decimal? Latitude = null, decimal? Longitude = null,
+    string? PublicCode = null, string? City = null, bool IsDiscoverable = false);
 
 /// <summary>
 /// KPI дня. AppointmentsCount — усі записи дня, крім скасованих; Revenue — сума price_final завершених (як в аналітиці);
 /// NewClients — клієнти, створені в цю локальну добу (за часовою зоною еталонного закладу); FreeSlots — кількість вільних
 /// слотів, що не перетинаються, найкоротшої активної послуги майстра в робочих інтервалах (минулі й зайняті виключено).
 /// </summary>
-public sealed record OverviewKpi(int AppointmentsCount, decimal Revenue, int NewClients, int FreeSlots);
+/// <remarks><c>Revenue</c> (M4, §30.5): лише за <c>revenue.view = all</c>; інакше поле відсутнє в JSON (не 0 і не null).</remarks>
+public sealed record OverviewKpi(int AppointmentsCount,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? Revenue, int NewClients, int FreeSlots);
 
 /// <param name="Timezone">Часова зона еталонного закладу (вибраного або першого за назвою) — по ній визначено NewClients і за замовчуванням date.</param>
 public sealed record OverviewDto(DateOnly Date, string Timezone, IReadOnlyList<AppointmentDto> Appointments, OverviewKpi Kpi);
@@ -38,7 +44,7 @@ public sealed class OverviewService(IOverviewStore overview, IBookingStore booki
         await overview.ListLocationsAsync(ct);
 
     /// <summary>Записи дня (локальна доба кожного закладу) + KPI. Лише для керівників (виручка).</summary>
-    public async Task<Result<OverviewDto>> GetAsync(DateOnly? date, Guid? locationId, CancellationToken ct)
+    public async Task<Result<OverviewDto>> GetAsync(Actor actor, DateOnly? date, Guid? locationId, CancellationToken ct)
     {
         var all = (await overview.ListLocationsAsync(ct)).Where(l => l.IsActive).OrderBy(l => l.Name).ThenBy(l => l.Id).ToList();
         if (locationId is { } wanted && all.All(l => l.Id != wanted))
@@ -48,7 +54,7 @@ public sealed class OverviewService(IOverviewStore overview, IBookingStore booki
         if (locations.Count == 0)
         {
             var today = date ?? DateOnly.FromDateTime(now.UtcDateTime);
-            return new OverviewDto(today, "UTC", [], new OverviewKpi(0, 0m, 0, 0));
+            return new OverviewDto(today, "UTC", [], new OverviewKpi(0, ShowRevenue(actor) ? 0m : null, 0, 0));
         }
 
         var reference = TimeZoneInfo.FindSystemTimeZoneById(locations[0].Timezone);
@@ -85,11 +91,14 @@ public sealed class OverviewService(IOverviewStore overview, IBookingStore booki
         var refTo = SlotCalculator.ToOffset(day.AddDays(1), TimeOnly.MinValue, reference);
         var kpi = new OverviewKpi(
             active.Count,
-            appointments.Where(a => a.Status == "completed").Sum(a => a.PriceFinal),
+            ShowRevenue(actor) ? appointments.Where(a => a.Status == "completed").Sum(a => a.PriceFinal ?? 0m) : null,
             await overview.CountNewClientsAsync(refFrom, refTo, ct),
             freeSlots);
-        return new OverviewDto(day, locations[0].Timezone, appointments, kpi);
+        // ціни записів - за правилом списків (M4); KPI вже пораховано з повних даних
+        return new OverviewDto(day, locations[0].Timezone, appointments.Select(a => a.ForList(actor)).ToList(), kpi);
     }
+
+    private static bool ShowRevenue(Actor actor) => actor.Access.AtLeast(PermissionKeys.RevenueView, PermissionLevels.All);
 
     /// <summary>Найкоротша активна послуга, яку пропонує майстер (ServiceIds = null — усі активні).</summary>
     private static int? MinDuration(SpecialistSchedule schedule, IReadOnlyDictionary<Guid, int> durations)

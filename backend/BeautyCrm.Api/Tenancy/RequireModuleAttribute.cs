@@ -23,13 +23,20 @@ public sealed class ConfigTenantModuleProvider(IConfiguration config) : ITenantM
     }
 }
 
-/// <summary>401 без tenant, 403 якщо модуль вимкнений для tenant.</summary>
+/// <summary>
+/// 401 без tenant, 403 якщо модуль вимкнений для tenant. Authorization-фільтр з Order = -3100 (ADR-023, §30.5 п.7):
+/// після <see cref="TenantActiveFilter"/> (-3200) і ДО <c>[RequirePermission]</c> (-3000), тіло запиту ще не прив'язане.
+/// </summary>
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = true)]
-public sealed class RequireModuleAttribute(string module) : Attribute, IAsyncActionFilter
+public sealed class RequireModuleAttribute(string module) : Attribute, IAsyncAuthorizationFilter, IOrderedFilter
 {
+    public const int FilterOrder = -3100;
+
     public string Module { get; } = module;
 
-    public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
+    public int Order => FilterOrder;
+
+    public async Task OnAuthorizationAsync(AuthorizationFilterContext context)
     {
         var services = context.HttpContext.RequestServices;
         var tenantId = services.GetRequiredService<ITenantContext>().TenantId;
@@ -41,9 +48,9 @@ public sealed class RequireModuleAttribute(string module) : Attribute, IAsyncAct
         var modules = services.GetRequiredService<ITenantModuleProvider>();
         if (!await modules.IsEnabledAsync(tenantId.Value, Module, context.HttpContext.RequestAborted))
         {
+            if (context.ActionDescriptor.EndpointMetadata.OfType<BeautyCrm.Api.Controllers.InboxNoStoreAttribute>().Any())
+                context.HttpContext.Response.Headers.CacheControl = "no-store";
             context.Result = new ObjectResult(new { code = "module_disabled", message = $"Module '{Module}' is not enabled." }) { StatusCode = 403 };
-            return;
         }
-        await next();
     }
 }

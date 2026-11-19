@@ -1,8 +1,8 @@
 ---
 name: create-form
 description: >-
-  Create Form — Use when building the user-facing web layer.
-x-generated-from: skills/frontend/create-form/SKILL.md
+  Build a form with client validation sharing the server schema, with loading/error/success states. Use when adding or changing a form.
+x-generated-from: .claude/skills/create-form/SKILL.md
 ---
 
 ## Libraries

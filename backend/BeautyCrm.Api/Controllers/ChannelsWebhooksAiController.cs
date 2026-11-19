@@ -2,6 +2,7 @@ using System.Text.Json;
 using BeautyCrm.Api.Auth;
 using BeautyCrm.Api.Infrastructure;
 using BeautyCrm.Api.Tenancy;
+using BeautyCrm.Application.Features.BeautyAuth;
 using BeautyCrm.Application.Features.BeautyChannels;
 using BeautyCrm.Infrastructure.AI.Beauty;
 using BeautyCrm.Infrastructure.AI.Beauty.Adapters;
@@ -15,16 +16,39 @@ namespace BeautyCrm.Api.Controllers;
 [ApiController]
 [Route("api/beauty/channels")]
 [RequireModule("beauty_channels")]
-[Authorize(Policy = AuthPolicies.Management)]
-public sealed class ChannelsController(ChannelSettingsService channels) : ControllerBase
+[Authorize(Policy = AuthPolicies.Staff)]
+[RequirePermission(PermissionKeys.ChannelsSettings, PermissionLevels.Edit)]
+public sealed class ChannelsController(
+    ChannelSettingsService channels, IChannelSettingsStore store, TelegramCommandsService commands) : ControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> List(CancellationToken ct) => Ok(await channels.ListAsync(ct));
 
     /// <summary>Створює або оновлює канал за id (type обов'язковий при створенні).</summary>
     [HttpPut("{id:guid}")]
-    public async Task<IActionResult> Upsert(Guid id, [FromBody] UpsertChannelRequest request, CancellationToken ct) =>
-        this.ToResult(await channels.UpsertAsync(id, request, ct));
+    public async Task<IActionResult> Upsert(Guid id, [FromBody] UpsertChannelRequest request, CancellationToken ct)
+    {
+        var wasActive = (await store.GetAsync(id, ct))?.IsActive ?? false;
+        var result = await channels.UpsertAsync(id, request, ct);
+        // §23.4: меню команд Telegram після коміту, якщо змінено токен або isActive false -> true. Best-effort, тайм-аут 5 с,
+        // відповідь PUT від результату не залежить.
+        if (result.IsOk && result.Value!.Type == ChannelIds.Telegram && result.Value.IsActive && (request.Token is not null || !wasActive))
+            await commands.TrySyncAfterSaveAsync(id, ct);
+        return this.ToResult(result);
+    }
+
+    /// <summary>Оновлює меню команд бота (setMyCommands: default і uk). 204; помилки Telegram без тексту.</summary>
+    [HttpPost("{id:guid}/telegram/sync-commands")]
+    public async Task<IActionResult> SyncCommands(Guid id, CancellationToken ct) =>
+        await commands.SyncAsync(id, ct) switch
+        {
+            ChannelActionResult.Ok => NoContent(),
+            ChannelActionResult.ChannelNotFound => NotFound(new ApiError("channel_not_found", "Channel not found.")),
+            ChannelActionResult.Unsupported => Conflict(new ApiError("channel_unsupported", "Channel is not a Telegram channel.")),
+            ChannelActionResult.Inactive => Conflict(new ApiError("channel_inactive", "Channel is inactive.")),
+            ChannelActionResult.TokenMissing => Conflict(new ApiError("token_missing", "Channel token is not configured.")),
+            _ => StatusCode(StatusCodes.Status502BadGateway, new ApiError("telegram_unavailable", "Telegram is unavailable.")),
+        };
 }
 
 /// <summary>
@@ -78,35 +102,52 @@ public sealed record AiActionResponse(string Content, bool IsError, string? Stat
 [ApiController]
 [Route("api/beauty/ai/actions")]
 [RequireModule("beauty_ai")]
-[Authorize(Policy = AuthPolicies.Management)]
-public sealed class AiActionsController(IAiActionReader reader, AiToolExecutor executor, AiSettings settings) : ControllerBase
+[Authorize(Policy = AuthPolicies.Staff)]
+[RequirePermission(PermissionKeys.AiUse, PermissionLevels.Use)]
+public sealed class AiActionsController(IAiActionReader reader, AiToolExecutor executor, AiTenantRuntime runtime) : ControllerBase
 {
+    /// <summary>Журнал: дії, tool яких поточний користувач не має права виконувати, приховані (§30.6.10).</summary>
     [HttpGet]
-    public async Task<IActionResult> List([FromQuery] int take = 100, [FromQuery] string? status = null, CancellationToken ct = default) =>
-        Ok((await reader.ListAsync(take, status, ct))
+    public async Task<IActionResult> List([FromQuery] int take = 100, [FromQuery] string? status = null, CancellationToken ct = default)
+    {
+        if (User.ToActor() is not { } actor) return Unauthorized();
+        return Ok((await reader.ListAsync(take, status, ct))
+            .Where(a => AiToolPermissions.Allows(actor.Access, a.Action))
             .Select(a => new { a.Id, a.Action, a.Target, a.CreatedAt, a.Status, a.Revertible, mode = a.Mode.ToString().ToLowerInvariant() }));
+    }
 
-    /// <summary>Запуск tool менеджером; режим автономності — з налаштувань (за замовчуванням confirm).</summary>
+    /// <summary>Запуск tool менеджером; режим автономності - з налаштувань tenant (немає рядка = confirm; auto лише за збереженою згодою).</summary>
     [HttpPost]
-    public async Task<IActionResult> Run([FromBody] RunAiToolRequest request, CancellationToken ct) =>
-        Map(await executor.ExecuteAsync(new AiToolContext(this.TenantId(), request.ClientId, settings.DefaultMode, AiScope.Manager),
+    public async Task<IActionResult> Run([FromBody] RunAiToolRequest request, CancellationToken ct)
+    {
+        if (User.ToActor() is not { } actor) return Unauthorized();
+        var mode = await runtime.GetModeAsync(actor.TenantId, ct);
+        return Map(await executor.ExecuteAsync(new AiToolContext(actor.TenantId, request.ClientId, mode, AiScope.Manager, Actor: actor),
             request.Tool, request.Input, ct), StatusCodes.Status422UnprocessableEntity);
+    }
 
     [HttpPost("{id:guid}/approve")]
     public async Task<IActionResult> Approve(Guid id, CancellationToken ct) =>
-        Map(await executor.ConfirmAsync(this.TenantId(), id, ct), StatusCodes.Status409Conflict);
+        User.ToActor() is not { } actor ? Unauthorized() : Map(await executor.ConfirmAsync(actor, id, ct), StatusCodes.Status409Conflict);
 
     [HttpPost("{id:guid}/reject")]
     public async Task<IActionResult> Reject(Guid id, CancellationToken ct) =>
-        Map(await executor.RejectPendingAsync(this.TenantId(), id, ct), StatusCodes.Status409Conflict);
+        User.ToActor() is not { } actor ? Unauthorized() : Map(await executor.RejectPendingAsync(actor, id, ct), StatusCodes.Status409Conflict);
 
     [HttpPost("{id:guid}/revert")]
     public async Task<IActionResult> Revert(Guid id, CancellationToken ct) =>
-        Map(await executor.RevertAsync(this.TenantId(), id, ct), StatusCodes.Status409Conflict);
+        User.ToActor() is not { } actor ? Unauthorized() : Map(await executor.RevertAsync(actor, id, ct), StatusCodes.Status409Conflict);
 
     private IActionResult Map(AiToolResult r, int errorStatus)
     {
+        if (r.Denied is { } d)
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                code = "forbidden_role", message = "This action is not available for your access level.",
+                permission = d.Permission, required = d.Required,
+            });
         var body = new AiActionResponse(r.Content, r.IsError, r.ActionStatus);
         return r.IsError ? StatusCode(errorStatus, body) : Ok(body);
     }
 }
+

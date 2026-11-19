@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import type { AppointmentStatus, ClientTag, OverviewKpi } from "../types";
 
 export const TONES = {
@@ -103,15 +103,16 @@ export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { id: 
   );
 }
 
-export function Switch({ label, checked, onChange }: { label: string; checked: boolean; onChange: (next: boolean) => void }) {
+export function Switch({ label, checked, onChange, disabled }: { label: string; checked: boolean; onChange: (next: boolean) => void; disabled?: boolean }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
-      className="flex h-11 w-[52px] flex-none cursor-pointer items-center border-0 bg-transparent p-0"
+      className="flex h-11 w-[52px] flex-none cursor-pointer items-center border-0 bg-transparent p-0 disabled:cursor-not-allowed disabled:opacity-50"
     >
       <span className={`relative block h-[30px] w-[52px] rounded-full ${checked ? "bg-(--accent)" : "bg-[#6F6985]"}`}>
         <span className={`absolute top-[3px] block h-6 w-6 rounded-full bg-white transition-[left] ${checked ? "left-[25px]" : "left-[3px]"}`} />
@@ -120,7 +121,7 @@ export function Switch({ label, checked, onChange }: { label: string; checked: b
   );
 }
 
-export function PrimaryButton({ children, ...rest }: ButtonHTMLAttributes<HTMLButtonElement>) {
+export function PrimaryButton({ children, ...rest }: ComponentProps<"button">) {
   return (
     <button
       type="button"
@@ -132,7 +133,7 @@ export function PrimaryButton({ children, ...rest }: ButtonHTMLAttributes<HTMLBu
   );
 }
 
-export function SecondaryButton({ children, ...rest }: ButtonHTMLAttributes<HTMLButtonElement>) {
+export function SecondaryButton({ children, ...rest }: ComponentProps<"button">) {
   return (
     <button
       type="button"
@@ -211,10 +212,12 @@ export function Avatar({ text, size = 40 }: { text: string; size?: number }) {
   );
 }
 
-export function Table({ headers, children, minWidth = 560 }: { headers: string[]; children: ReactNode; minWidth?: number }) {
+/** `caption` - підпис таблиці для скрінрідерів (sr-only) і назва прокручуваної області (клавіатурний скрол). */
+export function Table({ headers, children, minWidth = 560, caption }: { headers: string[]; children: ReactNode; minWidth?: number; caption?: string }) {
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto" role="region" aria-label={caption ?? "Таблиця"} tabIndex={0}>
       <table className="w-full border-collapse text-sm" style={{ minWidth }}>
+        {caption ? <caption className="sr-only">{caption}</caption> : null}
         <thead>
           <tr className="text-left text-[13px] text-(--muted)">
             {headers.map((h) => (
@@ -267,5 +270,5 @@ export function EmptyState({ children }: { children: ReactNode }) {
 }
 
 export const FIELD_INPUT =
-  "min-h-11 w-full rounded-xl border border-(--line-strong) bg-white px-3.5 text-[15px] text-(--ink)";
+  "min-h-11 w-full rounded-xl border border-[#8a849c] bg-white px-3.5 text-[15px] text-(--ink)";
 export const FIELD_LABEL = "text-[13px] font-semibold";

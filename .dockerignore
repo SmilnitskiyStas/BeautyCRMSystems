@@ -1,0 +1,28 @@
+# Контекст збірки Docker = корінь репозиторію (frontend залежить від packages/booking-core).
+# Усе зайве (залежності, mobile, git, артефакти збірки, секрети) у контекст не потрапляє.
+**/node_modules
+**/.next
+**/bin
+**/obj
+**/dist
+**/coverage
+**/.expo
+**/.turbo
+**/*.log
+**/*.tsbuildinfo
+.git
+.github
+.claude
+.ai
+mobile
+docs
+templates
+workflow
+schemas
+frontend/e2e
+**/.env
+**/.env.*
+!**/.env.example
+deploy/.env
+**/*.bak
+backend/BeautyCrm.Tests

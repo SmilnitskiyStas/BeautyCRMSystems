@@ -1,8 +1,8 @@
 ---
 name: create-indexes
 description: >-
-  Create Indexes — Use when working on database schema, migrations, or query performance.
-x-generated-from: skills/database/create-indexes/SKILL.md
+  Add database indexes only for measured or clearly critical queries, and verify with the query plan. Use when a query is slow or a new hot path appears.
+x-generated-from: .claude/skills/create-indexes/SKILL.md
 ---
 
 ## Правило

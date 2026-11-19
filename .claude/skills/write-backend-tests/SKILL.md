@@ -1,8 +1,8 @@
 ---
 name: write-backend-tests
 description: >-
-  Write Backend Tests — Use when implementing a standalone backend service.
-x-generated-from: skills/backend/write-backend-tests/SKILL.md
+  Write unit and integration tests for services and endpoints: happy path, not-found, conflict, auth guard. Use after implementing backend logic.
+x-generated-from: .claude/skills/write-backend-tests/SKILL.md
 ---
 
 ## Налаштування

@@ -1,8 +1,8 @@
 ---
 name: design-theme-system
 description: >-
-  Design Theme System — Use when producing the design foundation — tokens, specs, theme, motion.
-x-generated-from: skills/ui-ux-design/design-theme-system/SKILL.md
+  Design light/dark theming with persisted choice and no load flicker. Use when adding or changing theme support.
+x-generated-from: .claude/skills/design-theme-system/SKILL.md
 ---
 
 ## Purpose

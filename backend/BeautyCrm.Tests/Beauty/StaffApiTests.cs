@@ -203,7 +203,7 @@ public sealed class StaffApiTests : IClassFixture<AuthApiFixture>, IDisposable
     }
 
     [SkippableFact]
-    public async Task admin_cannot_modify_profile_linked_to_owner_but_owner_can()
+    public async Task admin_cannot_modify_profile_linked_to_owner_and_owner_not_own_M2()
     {
         NeedDb();
         var c = await NewCtxAsync();
@@ -226,9 +226,9 @@ public sealed class StaffApiTests : IClassFixture<AuthApiFixture>, IDisposable
         Assert.Equal(HttpStatusCode.Forbidden,
             (await Api(HttpMethod.Post, $"/api/beauty/specialists/{ownerProfile}/invite", c.Admin, new { email = "x@y.test" })).StatusCode);
 
+        // M2: профіль, прив'язаний до самого актора (навіть owner), цим шляхом не змінюється
         var own = await Api(Put, $"/api/beauty/specialists/{ownerProfile}", c.Owner, new { name = "Owner Renamed" });
-        Assert.Equal(HttpStatusCode.OK, own.StatusCode);
-        Assert.Equal("Owner Renamed", (await J(own)).GetProperty("name").GetString());
+        Assert.Equal(HttpStatusCode.Forbidden, own.StatusCode);
     }
 
     // ---------- запрошення ----------
@@ -417,10 +417,10 @@ public sealed class StaffApiTests : IClassFixture<AuthApiFixture>, IDisposable
         Assert.Empty((await SlotsAsync(c.Owner, c, a, c.Salon.ServiceId, 8)).EnumerateArray());
         Assert.Equal("absence_not_pending", await Code(await Api(HttpMethod.Post, $"/api/beauty/absences/{id}/approve", c.Admin)));
 
-        // тип бачить усіх, note колеги — ні; автор і керівник бачать
+        // D7 (§30.7): тип чужої відсутності колега без staff.access = edit не бачить (поле відсутнє), note теж ні
         var listB2 = await J(await Api(HttpMethod.Get, $"/api/beauty/absences?from={Day(1)}&to={Day(30)}", spB.AccessToken));
         var seenByB = listB2.EnumerateArray().Single(x => x.GetProperty("id").GetGuid() == id);
-        Assert.Equal("vacation", seenByB.GetProperty("type").GetString());
+        Assert.False(seenByB.TryGetProperty("type", out _));
         Assert.False(seenByB.TryGetProperty("note", out _));
         Assert.DoesNotContain("family reasons", listB2.GetRawText());
         var seenByA = (await J(await Api(HttpMethod.Get, $"/api/beauty/absences?from={Day(1)}&to={Day(30)}", spA.AccessToken)))

@@ -25,9 +25,10 @@ describe("validateDay", () => {
   it("порядок введення не важливий для перевірки перетину", () => {
     expect(validateDay([{ from: "14:00", to: "18:00" }, { from: "09:00", to: "15:00" }])).toMatch(/перетин/);
   });
-  it("обмежує кількість інтервалів на день", () => {
-    const many = Array.from({ length: 5 }, (_, i) => ({ from: `${String(8 + i * 2).padStart(2, "0")}:00`, to: `${String(9 + i * 2).padStart(2, "0")}:00` }));
-    expect(validateDay(many)).toMatch(/Не більше/);
+  it("обмежує кількість інтервалів на день: до 8 як у backend (F9)", () => {
+    const make = (n: number) => Array.from({ length: n }, (_, i) => ({ from: `${String(6 + i * 2).padStart(2, "0")}:00`, to: `${String(7 + i * 2).padStart(2, "0")}:00` }));
+    expect(validateDay(make(8))).toBeNull();
+    expect(validateDay(make(9))).toMatch(/Не більше 8/);
   });
 });
 

@@ -35,7 +35,7 @@ public sealed class StaffController(StaffService staff, StaffInviteService invit
 
     /// <summary>201 SpecialistDto; 422 валідація (invalid_name, invalid_working_hours, service_not_found, ...).</summary>
     [HttpPost]
-    [Authorize(Policy = AuthPolicies.Management)]
+    [RequirePermission(PermissionKeys.StaffAccess, PermissionLevels.Edit)]
     [RequestSizeLimit(SmallBody)]
     [ProducesResponseType<SpecialistDto>(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
@@ -46,7 +46,7 @@ public sealed class StaffController(StaffService staff, StaffInviteService invit
 
     /// <summary>Повна заміна name/phone/position; isActive = false деактивує (записи лишаються, слоти зникають).</summary>
     [HttpPut("{id:guid}")]
-    [Authorize(Policy = AuthPolicies.Management)]
+    [RequirePermission(PermissionKeys.StaffAccess, PermissionLevels.Edit)]
     [RequestSizeLimit(SmallBody)]
     [ProducesResponseType<SpecialistDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateSpecialistRequest request, CancellationToken ct) =>
@@ -54,7 +54,7 @@ public sealed class StaffController(StaffService staff, StaffInviteService invit
 
     /// <summary>Повна заміна переліку призначених послуг.</summary>
     [HttpPut("{id:guid}/services")]
-    [Authorize(Policy = AuthPolicies.Management)]
+    [RequirePermission(PermissionKeys.StaffAccess, PermissionLevels.Edit)]
     [RequestSizeLimit(SmallBody)]
     [ProducesResponseType<SpecialistDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> SetServices(Guid id, [FromBody] SetSpecialistServicesRequest request, CancellationToken ct) =>
@@ -62,7 +62,7 @@ public sealed class StaffController(StaffService staff, StaffInviteService invit
 
     /// <summary>Графік у закладі (формат §9); 422 invalid_working_hours.</summary>
     [HttpPut("{id:guid}/schedule")]
-    [Authorize(Policy = AuthPolicies.Management)]
+    [RequirePermission(PermissionKeys.StaffAccess, PermissionLevels.Edit)]
     [RequestSizeLimit(SmallBody)]
     [ProducesResponseType<SpecialistDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> SetSchedule(Guid id, [FromBody] SetScheduleRequest request, CancellationToken ct) =>
@@ -70,7 +70,7 @@ public sealed class StaffController(StaffService staff, StaffInviteService invit
 
     /// <summary>Додати заклад майстру (опційно з графіком). 200 SpecialistDto; 409 location_already_assigned; 404 location_not_found.</summary>
     [HttpPost("{id:guid}/locations")]
-    [Authorize(Policy = AuthPolicies.Management)]
+    [RequirePermission(PermissionKeys.StaffAccess, PermissionLevels.Edit)]
     [RequestSizeLimit(SmallBody)]
     [ProducesResponseType<SpecialistDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
@@ -79,7 +79,7 @@ public sealed class StaffController(StaffService staff, StaffInviteService invit
 
     /// <summary>Прибрати заклад (графік зберігається неактивним). 409 has_future_appointments; 404 location_not_assigned.</summary>
     [HttpDelete("{id:guid}/locations/{locationId:guid}")]
-    [Authorize(Policy = AuthPolicies.Management)]
+    [RequirePermission(PermissionKeys.StaffAccess, PermissionLevels.Edit)]
     [ProducesResponseType<SpecialistDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> RemoveLocation(Guid id, Guid locationId, CancellationToken ct) =>
@@ -90,7 +90,7 @@ public sealed class StaffController(StaffService staff, StaffInviteService invit
     /// Нове запрошення відкликає попереднє pending для цього профілю; 409 specialist_inactive для деактивованого.
     /// </summary>
     [HttpPost("{id:guid}/invite")]
-    [Authorize(Policy = AuthPolicies.Management)]
+    [RequirePermission(PermissionKeys.TeamManage, PermissionLevels.Manage)]
     [RequestSizeLimit(SmallBody)]
     [ProducesResponseType<InviteCreatedDto>(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
@@ -108,7 +108,6 @@ public sealed class StaffController(StaffService staff, StaffInviteService invit
 [Route("api/beauty")]
 [RequireModule("beauty_booking")]
 [Authorize(Policy = AuthPolicies.Staff)]
-[ServiceFilter(typeof(ActiveSpecialistFilter))] // specialist з деактивованим профілем -> 403 specialist_inactive
 [ProducesResponseType(StatusCodes.Status401Unauthorized)]
 [ProducesResponseType(StatusCodes.Status403Forbidden)]
 public sealed class AbsencesController(AbsenceService absences, AbsenceThrottle throttle) : ControllerBase
@@ -140,13 +139,13 @@ public sealed class AbsencesController(AbsenceService absences, AbsenceThrottle 
     }
 
     [HttpPost("absences/{id:guid}/approve")]
-    [Authorize(Policy = AuthPolicies.Management)]
+    [RequirePermission(PermissionKeys.StaffAccess, PermissionLevels.Edit)]
     [ProducesResponseType<AbsenceDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> Approve(Guid id, CancellationToken ct) =>
         User.ToActor() is { } actor ? this.ToResult(await absences.ApproveAsync(actor, id, ct)) : Unauthorized();
 
     [HttpPost("absences/{id:guid}/reject")]
-    [Authorize(Policy = AuthPolicies.Management)]
+    [RequirePermission(PermissionKeys.StaffAccess, PermissionLevels.Edit)]
     [ProducesResponseType<AbsenceDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> Reject(Guid id, CancellationToken ct) =>
         User.ToActor() is { } actor ? this.ToResult(await absences.RejectAsync(actor, id, ct)) : Unauthorized();

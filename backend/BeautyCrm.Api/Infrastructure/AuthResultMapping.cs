@@ -7,7 +7,13 @@ public static class AuthResultMapping
 {
     public static IActionResult ToAuthError(this ControllerBase c, AuthError e)
     {
-        var body = new ApiError(e.Code, e.Message);
+        object body = new ApiError(e.Code, e.Message);
+        if (e.Extras is { Count: > 0 })
+        {
+            var map = new Dictionary<string, object?> { ["code"] = e.Code, ["message"] = e.Message };
+            foreach (var (k, v) in e.Extras) map[k] = v;
+            body = map;
+        }
         return e.Kind switch
         {
             AuthErrorKind.Unauthorized => c.Unauthorized(body),
@@ -15,6 +21,7 @@ public static class AuthResultMapping
             AuthErrorKind.NotFound => c.NotFound(body),
             AuthErrorKind.Conflict => c.Conflict(body),
             AuthErrorKind.Locked => c.StatusCode(StatusCodes.Status423Locked, body),
+            AuthErrorKind.Gone => c.StatusCode(StatusCodes.Status410Gone, body),
             _ => c.UnprocessableEntity(body),
         };
     }

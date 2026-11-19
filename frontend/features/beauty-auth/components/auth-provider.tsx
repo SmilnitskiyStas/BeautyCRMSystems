@@ -4,8 +4,10 @@ import { useQueryClient } from "@tanstack/react-query";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { BeautyApiError } from "../errors";
+import Link from "next/link";
+import { ROLE_PRESETS, accessOf, type Access } from "../access";
 import { canOpen, homeFor } from "../permissions";
-import { clearSession, logout as apiLogout, onSessionEnd, refreshSession } from "../session";
+import { clearSession, logout as apiLogout, onSessionEnd, onUserChange, refreshSession, reloadMe, reloadMeSoon } from "../session";
 import { USE_MOCK, type Role, type SessionUser } from "../types";
 
 interface AuthValue {
@@ -21,10 +23,20 @@ export function useAuth(): AuthValue {
   return v;
 }
 
+/**
+ * Права поточного користувача (§30.8): `can(key, level)`, `level(key)`, `hasModule(m)`. Береться з `me.permissions`;
+ * до першого `me` (mock/старий backend) - пресет ролі лише для відображення, backend перевіряє незалежно.
+ */
+export function useAccess(): Access {
+  const { user } = useAuth();
+  return useMemo(() => accessOf(user), [user]);
+}
+
 /** Демо-користувач для `NEXT_PUBLIC_USE_MOCK=1` (роль: `NEXT_PUBLIC_MOCK_ROLE`, за замовчуванням owner). */
 function mockUser(): SessionUser {
-  const role = (["owner", "admin", "specialist"] as Role[]).find((r) => r === process.env.NEXT_PUBLIC_MOCK_ROLE) ?? "owner";
+  const role = (["owner", "admin", "deputy", "specialist"] as Role[]).find((r) => r === process.env.NEXT_PUBLIC_MOCK_ROLE) ?? "owner";
   return {
+    permissions: { ...ROLE_PRESETS[role] },
     id: "mock-user",
     email: "demo@beauty.test",
     fullName: "Демо користувач",
@@ -37,6 +49,19 @@ function Splash({ text }: { text: string }) {
   return (
     <div role="status" aria-live="polite" className="flex min-h-screen items-center justify-center text-sm text-(--muted)">
       {text}
+    </div>
+  );
+}
+
+/** Відкрита сторінка без доступу (§30.8): права могли змінитися, поки вкладка була відкрита. */
+export function AccessChanged({ home }: { home: string }) {
+  return (
+    <div role="alert" className="flex min-h-screen flex-col items-center justify-center gap-3 px-6 text-center text-sm">
+      <h1 className="text-lg font-semibold">Доступ змінено керівником</h1>
+      <p className="max-w-sm text-(--muted)">У вас більше немає доступу до цієї сторінки. Якщо це помилка, зверніться до керівника.</p>
+      <Link href={home} className="inline-flex min-h-[44px] items-center rounded-lg border px-4 font-semibold">
+        На головну
+      </Link>
     </div>
   );
 }
@@ -64,9 +89,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (USE_MOCK) return;
     let alive = true;
+    // Права беремо з `me` (§30.9.1): refresh віддає лише профіль. Помилка `me` трактується як збій сесії (повторити).
     refreshSession()
-      .then((s) => {
-        if (alive) setUser(s.user);
+      .then(() => reloadMe())
+      .then((u) => {
+        if (alive) setUser(u);
       })
       .catch((e: unknown) => {
         if (!alive) return;
@@ -77,17 +104,42 @@ export function AuthGate({ children }: { children: ReactNode }) {
     const off = onSessionEnd(() => {
       if (alive) toLogin();
     });
+    // Нові права після перечитування `me` (X-Access-Version, 403, focus) оновлюють меню й маршрути без перезавантаження.
+    const offUser = onUserChange((u) => {
+      if (!alive) return;
+      setUser((prev) => {
+        // Нові права = дані в кеші могли змінити видимість полів (ціни, контакти): оновлюємо активні запити.
+        if (prev && prev.accessStamp !== u.accessStamp) void qc.invalidateQueries();
+        return u;
+      });
+    });
     return () => {
       alive = false;
       off();
+      offUser();
     };
-  }, [toLogin, attempt]);
+  }, [toLogin, attempt, qc]);
 
-  const role = user?.role;
-  const allowed = !role || canOpen(role, pathname);
+  // §30.8: вкладка повертає фокус - перечитуємо `me`.
   useEffect(() => {
-    if (role && !allowed) router.replace(homeFor(role));
-  }, [role, allowed, router]);
+    if (USE_MOCK) return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") reloadMeSoon();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, []);
+
+  const allowed = !user || canOpen(user, pathname);
+  // Кореневий `/beauty` без права «Огляд» непомітно веде на домашню сторінку; інші закриті сторінки пояснюємо (§30.8).
+  const redirectHome = !!user && !allowed && (pathname === "/beauty" || pathname === "/beauty/");
+  useEffect(() => {
+    if (user && redirectHome) router.replace(homeFor(user));
+  }, [user, redirectHome, router]);
 
   const logout = useCallback(async () => {
     if (!USE_MOCK) await apiLogout();
@@ -116,6 +168,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     );
   }
   if (!value) return <Splash text="Перевіряємо сесію…" />;
-  if (!allowed) return <Splash text="Перенаправляємо…" />;
+  if (redirectHome) return <Splash text="Перенаправляємо…" />;
+  if (!allowed) return <AccessChanged home={homeFor(value.user)} />;
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

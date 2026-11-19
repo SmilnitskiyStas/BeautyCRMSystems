@@ -3,6 +3,7 @@ using BeautyCrm.Api.Infrastructure;
 using BeautyCrm.Api.Tenancy;
 using BeautyCrm.Application.Features.BeautyLocations;
 using BeautyCrm.Application.Features.BeautyOverview;
+using BeautyCrm.Application.Features.BeautyAuth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -27,7 +28,7 @@ public sealed class LocationsController(LocationService locations) : ControllerB
         User.ToActor() is { } actor ? Ok(await locations.ListAsync(actor, includeInactive, ct)) : Unauthorized();
 
     [HttpPost]
-    [Authorize(Policy = AuthPolicies.Management)]
+    [RequirePermission(PermissionKeys.LocationsAccess, PermissionLevels.Edit)]
     [RequestSizeLimit(16 * 1024)]
     [ProducesResponseType<LocationDto>(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
@@ -38,7 +39,7 @@ public sealed class LocationsController(LocationService locations) : ControllerB
             : Unauthorized();
 
     [HttpPut("{id:guid}")]
-    [Authorize(Policy = AuthPolicies.Management)]
+    [RequirePermission(PermissionKeys.LocationsAccess, PermissionLevels.Edit)]
     [RequestSizeLimit(16 * 1024)]
     [ProducesResponseType<LocationDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -54,7 +55,7 @@ public sealed class LocationsController(LocationService locations) : ControllerB
     /// вихідні є майбутні активні записи й не передано confirm=true; зміни тоді немає.
     /// </summary>
     [HttpPut("{id:guid}/closed-weekdays")]
-    [Authorize(Policy = AuthPolicies.Management)]
+    [RequirePermission(PermissionKeys.LocationsAccess, PermissionLevels.Edit)]
     [RequestSizeLimit(16 * 1024)]
     [ProducesResponseType<LocationDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -68,7 +69,7 @@ public sealed class LocationsController(LocationService locations) : ControllerB
     /// conflicts[] (без даних клієнта), якщо майбутні активні записи опиняються поза новими годинами й не передано confirm=true.
     /// </summary>
     [HttpPut("{id:guid}/working-hours")]
-    [Authorize(Policy = AuthPolicies.Management)]
+    [RequirePermission(PermissionKeys.LocationsAccess, PermissionLevels.Edit)]
     [RequestSizeLimit(16 * 1024)]
     [ProducesResponseType<LocationDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -86,7 +87,7 @@ public sealed class LocationsController(LocationService locations) : ControllerB
         User.ToActor() is { } actor ? this.ToResult(await locations.ListClosuresAsync(actor, id, from, to, ct)) : Unauthorized();
 
     [HttpPost("{id:guid}/closures")]
-    [Authorize(Policy = AuthPolicies.Management)]
+    [RequirePermission(PermissionKeys.LocationsAccess, PermissionLevels.Edit)]
     [RequestSizeLimit(16 * 1024)]
     [ProducesResponseType<ClosureDto>(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -98,7 +99,7 @@ public sealed class LocationsController(LocationService locations) : ControllerB
             : Unauthorized();
 
     [HttpDelete("{id:guid}/closures/{closureId:guid}")]
-    [Authorize(Policy = AuthPolicies.Management)]
+    [RequirePermission(PermissionKeys.LocationsAccess, PermissionLevels.Edit)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> DeleteClosure(Guid id, Guid closureId, CancellationToken ct) =>

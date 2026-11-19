@@ -1,0 +1,272 @@
+using BeautyCrm.Api.Auth;
+using BeautyCrm.Api.Infrastructure;
+using BeautyCrm.Api.Tenancy;
+using BeautyCrm.Application.Features.BeautyAuth;
+using BeautyCrm.Application.Features.BeautyCommon;
+using BeautyCrm.Application.Features.BeautyInventory;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+
+namespace BeautyCrm.Api.Controllers;
+
+/// <summary>
+/// Склад (ADR-025, контракт §32.5): модуль beauty_inventory, права inventory.* (§32.2). Порядок фільтрів: tenant_suspended ->
+/// module_disabled -> forbidden_role -> 422 прив'язки -> specialist_inactive. Scope own (заклади профілю) застосовує Application;
+/// чужий заклад/партія/операція -> 404 без розкриття. Усі відповіді Cache-Control: no-store. Ціни, контакти й кількості не логуються.
+/// Контролер лише маршрутизує: уся логіка в <see cref="InventoryService"/>.
+/// </summary>
+[ApiController]
+[Route("api/beauty/inventory")]
+[RequireModule(BeautyModules.Inventory)]
+[Authorize(Policy = AuthPolicies.Staff)]
+[RequirePermission(PermissionKeys.InventoryView, PermissionLevels.Own)]
+[InboxNoStore]
+[ProducesResponseType(StatusCodes.Status401Unauthorized)]
+[ProducesResponseType(StatusCodes.Status403Forbidden)]
+public sealed class InventoryController(InventoryService inventory, InventoryThrottle throttle) : ControllerBase
+{
+    private const int SmallBody = 8 * 1024, BigBody = 64 * 1024;
+    public const string IdempotencyHeader = "Idempotency-Key";
+
+    private IActionResult RateLimited()
+    {
+        Response.Headers.RetryAfter = "60";
+        return StatusCode(StatusCodes.Status429TooManyRequests, new ApiError("rate_limited", "Too many requests. Try again later."));
+    }
+
+    private async Task<IActionResult> Run<T>(Func<Actor, Task<Result<T>>> call, Func<T, IActionResult>? ok = null, bool write = false)
+    {
+        if (User.ToActor() is not { } actor) return Unauthorized();
+        if (write && !throttle.TryAcquire(actor.TenantId, actor.UserId)) return RateLimited();
+        return this.ToResult(await call(actor), ok);
+    }
+
+    private IActionResult Created<T>(T v) => StatusCode(StatusCodes.Status201Created, v);
+
+    private IActionResult OperationResponse(OperationResult r)
+    {
+        if (!r.Replayed) return Created(r.Operation);
+        Response.Headers["Idempotent-Replayed"] = "true";
+        return Ok(r.Operation);
+    }
+
+    private string? Key => Request.Headers[IdempotencyHeader].FirstOrDefault();
+
+    // ---------- довідники ----------
+
+    [HttpGet("scope")]
+    [ProducesResponseType<InventoryScopeDto>(StatusCodes.Status200OK)]
+    public Task<IActionResult> Scope(CancellationToken ct) => Run(a => inventory.GetScopeAsync(a, ct));
+
+    // ---------- товари ----------
+
+    [HttpGet("products")]
+    [ProducesResponseType<Page<ProductDto>>(StatusCodes.Status200OK)]
+    public Task<IActionResult> Products([FromQuery] string? search, [FromQuery] string? category, [FromQuery] string? purpose, [FromQuery] Guid? supplierId,
+        [FromQuery] string? active, [FromQuery] string? cursor, [FromQuery] int? take, CancellationToken ct) =>
+        Run(a => inventory.ListProductsAsync(a, new ProductListQuery(search, category, purpose, supplierId, active, cursor, take), ct));
+
+    [HttpGet("products/by-barcode")]
+    [ProducesResponseType<ProductDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public Task<IActionResult> ByBarcode([FromQuery] string? code, CancellationToken ct) => Run(a => inventory.GetProductByBarcodeAsync(a, code, ct));
+
+    [HttpGet("products/{id:guid}")]
+    [ProducesResponseType<ProductDetailDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public Task<IActionResult> Product(Guid id, CancellationToken ct) => Run(a => inventory.GetProductAsync(a, id, ct));
+
+    [HttpGet("categories")]
+    public Task<IActionResult> Categories(CancellationToken ct) =>
+        Run(a => inventory.ListCategoriesAsync(a, ct), items => Ok(new { items }));
+
+    [HttpPost("products")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.All)]
+    [RequestSizeLimit(SmallBody)]
+    [ProducesResponseType<ProductDto>(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> CreateProduct([FromBody] ProductRequest request, CancellationToken ct) =>
+        Run(a => inventory.CreateProductAsync(a, request, ct), Created, write: true);
+
+    [HttpPut("products/{id:guid}")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.All)]
+    [RequestSizeLimit(SmallBody)]
+    [ProducesResponseType<ProductDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> UpdateProduct(Guid id, [FromBody] ProductRequest request, CancellationToken ct) =>
+        Run(a => inventory.UpdateProductAsync(a, id, request, ct), write: true);
+
+    [HttpPut("products/{id:guid}/locations/{locationId:guid}")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.Own)]
+    [RequestSizeLimit(SmallBody)]
+    [ProducesResponseType<LocationSettingDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> PutSetting(Guid id, Guid locationId, [FromBody] LocationSettingRequest request, CancellationToken ct) =>
+        Run(a => inventory.PutLocationSettingAsync(a, id, locationId, request, ct), write: true);
+
+    [HttpDelete("products/{id:guid}/locations/{locationId:guid}")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.Own)]
+    [RequestSizeLimit(SmallBody)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> DeleteSetting(Guid id, Guid locationId, CancellationToken ct) =>
+        Run(a => inventory.DeleteLocationSettingAsync(a, id, locationId, ct), _ => NoContent(), write: true);
+
+    // ---------- постачальники ----------
+
+    [HttpGet("suppliers")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.Own)]
+    [ProducesResponseType<Page<SupplierDto>>(StatusCodes.Status200OK)]
+    public Task<IActionResult> Suppliers([FromQuery] string? search, [FromQuery] string? active, [FromQuery] string? cursor, [FromQuery] int? take, CancellationToken ct) =>
+        Run(a => inventory.ListSuppliersAsync(a, new SupplierListQuery(search, active, cursor, take), ct));
+
+    [HttpPost("suppliers")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.All)]
+    [RequestSizeLimit(SmallBody)]
+    [ProducesResponseType<SupplierDto>(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> CreateSupplier([FromBody] SupplierRequest request, CancellationToken ct) =>
+        Run(a => inventory.CreateSupplierAsync(a, request, ct), Created, write: true);
+
+    [HttpPut("suppliers/{id:guid}")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.All)]
+    [RequestSizeLimit(SmallBody)]
+    [ProducesResponseType<SupplierDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> UpdateSupplier(Guid id, [FromBody] SupplierRequest request, CancellationToken ct) =>
+        Run(a => inventory.UpdateSupplierAsync(a, id, request, ct), write: true);
+
+    // ---------- залишки, партії, журнал ----------
+
+    [HttpGet("stock")]
+    [ProducesResponseType<StockPageDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public Task<IActionResult> Stock([FromQuery] Guid? locationId, [FromQuery] string? search, [FromQuery] string? category, [FromQuery] string? purpose,
+        [FromQuery] string? state, [FromQuery] int? expiringWithinDays, [FromQuery] string? cursor, [FromQuery] int? take, CancellationToken ct) =>
+        Run(a => inventory.GetStockAsync(a, new StockListQuery(locationId, search, category, purpose, state, expiringWithinDays, cursor, take), ct));
+
+    [HttpGet("stock/summary")]
+    [ProducesResponseType<StockSummaryPageDto>(StatusCodes.Status200OK)]
+    public Task<IActionResult> Summary([FromQuery] string? search, [FromQuery] string? category, [FromQuery] string? purpose, [FromQuery] bool? lowOnly,
+        [FromQuery] string? cursor, [FromQuery] int? take, CancellationToken ct) =>
+        Run(a => inventory.GetSummaryAsync(a, new SummaryListQuery(search, category, purpose, lowOnly, cursor, take), ct));
+
+    [HttpGet("batches")]
+    [ProducesResponseType<Page<BatchDto>>(StatusCodes.Status200OK)]
+    public Task<IActionResult> Batches([FromQuery] Guid? locationId, [FromQuery] Guid? productId, [FromQuery] string? status, [FromQuery] int? expiringWithinDays,
+        [FromQuery] string? cursor, [FromQuery] int? take, CancellationToken ct) =>
+        Run(a => inventory.ListBatchesAsync(a, new BatchListQuery(locationId, productId, status, expiringWithinDays, cursor, take), ct));
+
+    [HttpGet("movements")]
+    [ProducesResponseType<Page<MovementDto>>(StatusCodes.Status200OK)]
+    public Task<IActionResult> Movements([FromQuery] Guid? locationId, [FromQuery] Guid? productId, [FromQuery] string? type, [FromQuery] Guid? operationId,
+        [FromQuery] string? from, [FromQuery] string? to, [FromQuery] string? cursor, [FromQuery] int? take, CancellationToken ct) =>
+        Run(a => inventory.ListMovementsAsync(a, new MovementListQuery(locationId, productId, type, operationId, from, to, cursor, take), ct));
+
+    [HttpGet("operations")]
+    [ProducesResponseType<Page<OperationSummaryDto>>(StatusCodes.Status200OK)]
+    public Task<IActionResult> Operations([FromQuery] string? kind, [FromQuery] Guid? locationId, [FromQuery] string? from, [FromQuery] string? to,
+        [FromQuery] string? cursor, [FromQuery] int? take, CancellationToken ct) =>
+        Run(a => inventory.ListOperationsAsync(a, new OperationListQuery(kind, locationId, from, to, cursor, take), ct));
+
+    [HttpGet("operations/{id:guid}")]
+    [ProducesResponseType<OperationDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public Task<IActionResult> Operation(Guid id, CancellationToken ct) => Run(a => inventory.GetOperationAsync(a, id, ct));
+
+    // ---------- операції (Idempotency-Key обов'язковий) ----------
+
+    /// <summary>201 або 200 + Idempotent-Replayed. 404 location_not_found | product_not_found | supplier_not_found; 422 валідація, insufficient_stock.</summary>
+    [HttpPost("receipts")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.Own)]
+    [RequestSizeLimit(BigBody)]
+    [ProducesResponseType<OperationDto>(StatusCodes.Status201Created)]
+    [ProducesResponseType<OperationDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> Receipt([FromBody] ReceiptRequest request, CancellationToken ct) =>
+        Run(a => inventory.ReceiveAsync(a, Key, request, ct), OperationResponse, write: true);
+
+    [HttpPost("write-offs")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.Own)]
+    [RequestSizeLimit(BigBody)]
+    [ProducesResponseType<OperationDto>(StatusCodes.Status201Created)]
+    [ProducesResponseType<OperationDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> WriteOff([FromBody] WriteOffRequest request, CancellationToken ct) =>
+        Run(a => inventory.WriteOffAsync(a, Key, request, ct), OperationResponse, write: true);
+
+    [HttpPost("transfers")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.Own)]
+    [RequestSizeLimit(BigBody)]
+    [ProducesResponseType<OperationDto>(StatusCodes.Status201Created)]
+    [ProducesResponseType<OperationDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> Transfer([FromBody] TransferRequest request, CancellationToken ct) =>
+        Run(a => inventory.TransferAsync(a, Key, request, ct), OperationResponse, write: true);
+
+    // ---------- інвентаризації ----------
+
+    [HttpGet("stocktakes")]
+    [ProducesResponseType<Page<StocktakeSummaryDto>>(StatusCodes.Status200OK)]
+    public Task<IActionResult> Stocktakes([FromQuery] Guid? locationId, [FromQuery] string? status, [FromQuery] string? cursor, [FromQuery] int? take, CancellationToken ct) =>
+        Run(a => inventory.ListStocktakesAsync(a, new StocktakeListQuery(locationId, status, cursor, take), ct));
+
+    [HttpPost("stocktakes")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.Own)]
+    [RequestSizeLimit(BigBody)]
+    [ProducesResponseType<StocktakeDto>(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> CreateStocktake([FromBody] StocktakeCreateRequest request, CancellationToken ct) =>
+        Run(a => inventory.CreateStocktakeAsync(a, request, ct), Created, write: true);
+
+    [HttpGet("stocktakes/{id:guid}")]
+    [ProducesResponseType<StocktakeDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public Task<IActionResult> Stocktake(Guid id, CancellationToken ct) => Run(a => inventory.GetStocktakeAsync(a, id, ct));
+
+    [HttpPut("stocktakes/{id:guid}/lines")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.Own)]
+    [RequestSizeLimit(BigBody)]
+    [ProducesResponseType<StocktakeDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> PutLines(Guid id, [FromBody] StocktakeLinesRequest request, CancellationToken ct) =>
+        Run(a => inventory.PutStocktakeLinesAsync(a, id, request, ct), write: true);
+
+    [HttpPost("stocktakes/{id:guid}/post")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.Own)]
+    [RequestSizeLimit(BigBody)]
+    [ProducesResponseType<StocktakePostDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> PostStocktake(Guid id, [FromBody] StocktakeVersionRequest request, CancellationToken ct) =>
+        Run(a => inventory.PostStocktakeAsync(a, id, request, ct), write: true);
+
+    [HttpPost("stocktakes/{id:guid}/cancel")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.Own)]
+    [RequestSizeLimit(BigBody)]
+    [ProducesResponseType<StocktakeDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> CancelStocktake(Guid id, [FromBody] StocktakeVersionRequest request, CancellationToken ct) =>
+        Run(a => inventory.CancelStocktakeAsync(a, id, request, ct), write: true);
+}

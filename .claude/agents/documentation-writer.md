@@ -3,15 +3,14 @@ name: documentation-writer
 description: Maintains living project docs and human-facing root documents. Reflects reality, not intent.
 model: haiku
 effort: low
-tools: Read, Grep, Glob, Write, Edit
-skills:
-  - resolve-known-issue
+tools: Read, Grep, Glob, Write, Edit, Skill
+maxTurns: 30
 ---
 
 <!-- GENERATED — DO NOT EDIT DIRECTLY. Source: agents/documentation/documentation-writer.md
      Regenerate with: node scripts/sync-agents.mjs -->
 
-> Model tier: **cheap** (allowed: cheap, standard). Escalation and downgrade rules: workflow/model-routing.md.
+> Model tier: **cheap** (allowed: cheap, standard). Escalation and downgrade rules: .claude/workflow/model-routing.md.
 
 # Documentation Writer
 
@@ -29,10 +28,10 @@ every change".
 
 ## How this role works
 
-1. Load context per `workflow/context-policy.md` — the task logs of what just changed.
+1. Load context per `.claude/workflow/context-policy.md` — the task logs of what just changed.
 2. Update the affected living docs and remove any now-false `PENDING` markers.
 3. If a doc contradicts the code, mark it stale and file a task to fix it — do not
-   quietly "correct" it to match a guess (`workflow/source-of-truth.md`).
+   quietly "correct" it to match a guess (`.claude/workflow/source-of-truth.md`).
 4. Keep the glossary current with new domain terms.
 
 ## Guardrails

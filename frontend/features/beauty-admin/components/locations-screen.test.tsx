@@ -101,7 +101,7 @@ describe("список закладів: лише перегляд", () => {
     auth.user.role = "specialist";
     getManagedLocations.mockClear();
     renderScreen();
-    expect(screen.getByText(/лише власник і адміністратор/)).toBeInTheDocument();
+    expect(screen.getByText(/Список закладів недоступний/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Додати заклад" })).not.toBeInTheDocument();
     expect(getManagedLocations).not.toHaveBeenCalled();
   });

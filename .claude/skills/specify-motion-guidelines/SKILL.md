@@ -1,8 +1,8 @@
 ---
 name: specify-motion-guidelines
 description: >-
-  Specify Motion Guidelines — Use when producing the design foundation — tokens, specs, theme, motion.
-x-generated-from: skills/ui-ux-design/specify-motion-guidelines/SKILL.md
+  Write motion principles, durations, easing, a do-not list and reduced-motion behavior. Use when defining animation rules.
+x-generated-from: .claude/skills/specify-motion-guidelines/SKILL.md
 ---
 
 ## Purpose

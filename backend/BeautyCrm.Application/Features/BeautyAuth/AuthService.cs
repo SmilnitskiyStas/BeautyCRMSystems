@@ -18,7 +18,8 @@ public sealed class AuthService(
 
         store.UseTenant(tenant.Id);
         var user = await store.FindUserByEmailAsync(email, ct);
-        if (user is null) return RejectUnknown(key, req.Password, now);
+        // ADR-018: власник у стані invited ще без пароля (password_hash NULL) - вхід неможливий, відповідь як для невідомого.
+        if (user is null || user.PasswordHash is null || user.State != UserStates.Active) return RejectUnknown(key, req.Password, now);
 
         if (user.LockoutUntil is { } until && until > now) return AccountLocked;
         if (user.LockoutUntil is not null)
@@ -55,7 +56,7 @@ public sealed class AuthService(
 
         var tenant = await store.GetTenantAsync(ct);
         var user = await store.GetUserAsync(record.UserId, ct);
-        if (tenant is not { IsActive: true } || user is not { IsActive: true }) return AuthError.InvalidToken;
+        if (tenant is not { IsActive: true } || user is not { IsActive: true, State: UserStates.Active }) return AuthError.InvalidToken;
         return await IssueAsync(user, now, ct);
     }
 
@@ -83,7 +84,7 @@ public sealed class AuthService(
             return InviteInvalid;
 
         var (outcome, user) = await store.AcceptInviteAsync(
-            invite.Id, new NewUser(invite.Email, req.FullName.Trim(), hasher.Hash(req.Password), invite.Role, invite.SpecialistId), now, ct);
+            invite, new NewUser(invite.Email, req.FullName.Trim(), hasher.Hash(req.Password), invite.Role, invite.SpecialistId), now, ct);
         return outcome switch
         {
             WriteOutcome.Ok => ToDto(user!),

@@ -687,9 +687,9 @@ public class CancellationOriginUnitTests
         {
             Status = "cancelled", CancelledAt = Now, CancelledBy = new CancelledByDto("staff", "Olga"), CancelReason = "why",
         };
-        var owner = new Actor(Guid.NewGuid(), Guid.NewGuid(), Roles.Owner, null);
-        var admin = owner with { Role = Roles.Admin };
-        var spec = owner with { Role = Roles.Specialist, SpecialistId = Guid.NewGuid() };
+        var owner = Actor.ForTest(Roles.Owner, null, Guid.NewGuid(), Guid.NewGuid());
+        var admin = Actor.ForTest(Roles.Admin, null, Guid.NewGuid(), Guid.NewGuid());
+        var spec = Actor.ForTest(Roles.Specialist, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
         Assert.Equal(dto, dto.ForViewer(owner));
         Assert.Equal(dto, dto.ForViewer(admin));
         var seen = dto.ForViewer(spec);

@@ -134,13 +134,14 @@ public sealed class StaffHardeningTests : IClassFixture<AuthApiFixture>, IDispos
         var invites = (await J(await Api(HttpMethod.Get, "/api/invites", c.Owner))).EnumerateArray().ToList();
         Assert.Equal("revoked", invites.Single(i => i.GetProperty("specialistId").ValueKind == JsonValueKind.String && i.GetProperty("specialistId").GetGuid() == withInvite).GetProperty("status").GetString());
 
-        // ще чинний access-токен не дає діяти від імені деактивованого профілю
+        // ще чинний access-токен не дає діяти від імені деактивованого користувача: ADR-023 D4, 401 session_revoked з наступного запиту
+        // (раніше 403 specialist_inactive; AccessContextMiddleware перевіряє активність користувача раніше за профіль)
         var booking = await Api(HttpMethod.Get, "/api/beauty/appointments", sp.AccessToken);
-        Assert.Equal(HttpStatusCode.Forbidden, booking.StatusCode);
-        Assert.Equal("specialist_inactive", await Code(booking));
+        Assert.Equal(HttpStatusCode.Unauthorized, booking.StatusCode);
+        Assert.Equal("session_revoked", await Code(booking));
         var absence = await AbsenceRawAsync(sp.AccessToken, master, 3, 3);
-        Assert.Equal(HttpStatusCode.Forbidden, absence.StatusCode);
-        Assert.Equal("specialist_inactive", await Code(absence));
+        Assert.Equal(HttpStatusCode.Unauthorized, absence.StatusCode);
+        Assert.Equal("session_revoked", await Code(absence));
 
         // керівник бачить профіль неактивним, записи не чіпаються
         Assert.False((await J(await Api(HttpMethod.Get, $"/api/beauty/specialists/{master}", c.Admin))).GetProperty("isActive").GetBoolean());
@@ -177,7 +178,8 @@ public sealed class StaffHardeningTests : IClassFixture<AuthApiFixture>, IDispos
         await using (var ctx = _fx.Db.CreateContext(c.Tenant.TenantId))
             await ctx.Users.Where(u => u.Id == c.Tenant.OwnerId).ExecuteUpdateAsync(s => s.SetProperty(u => u.SpecialistId, master));
 
-        Assert.Equal(HttpStatusCode.OK, (await Api(Put, $"/api/beauty/specialists/{master}", c.Owner, new { name = "Owner Profile", isActive = false })).StatusCode);
+        // M2/M1: власний профіль owner цим шляхом не змінюється, owner не вимикається - замкнути себе неможливо
+        Assert.Equal(HttpStatusCode.Forbidden, (await Api(Put, $"/api/beauty/specialists/{master}", c.Owner, new { name = "Owner Profile", isActive = false })).StatusCode);
         var login = await _fx.Send(HttpMethod.Post, "/api/auth/login", new { tenant = c.Tenant.Slug, email = c.Tenant.OwnerEmail, password = Password });
         Assert.Equal(HttpStatusCode.OK, login.StatusCode);
     }
@@ -469,8 +471,8 @@ public class StaffHardeningUnitTests
 {
     private static readonly DateTimeOffset Now = new(2030, 1, 6, 8, 0, 0, TimeSpan.Zero);
     private readonly FakeStaffStore _store = new();
-    private static Actor Specialist(Guid specialistId) => new(Guid.NewGuid(), Guid.NewGuid(), Roles.Specialist, specialistId);
-    private static Actor Admin() => new(Guid.NewGuid(), Guid.NewGuid(), Roles.Admin, null);
+    private static Actor Specialist(Guid specialistId) => Actor.ForTest(Roles.Specialist, specialistId, Guid.NewGuid(), Guid.NewGuid());
+    private static Actor Admin() => Actor.ForTest(Roles.Admin, null, Guid.NewGuid(), Guid.NewGuid());
     private static CreateAbsenceRequest Req(int day) => new("day_off", new DateOnly(2030, 1, day), new DateOnly(2030, 1, day), null);
 
     [Theory]

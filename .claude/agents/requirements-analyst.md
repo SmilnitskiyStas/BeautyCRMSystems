@@ -5,12 +5,13 @@ model: haiku
 effort: low
 tools: Read, Grep, Glob
 disallowedTools: Write, Edit
+maxTurns: 12
 ---
 
 <!-- GENERATED — DO NOT EDIT DIRECTLY. Source: agents/control/requirements-analyst.md
      Regenerate with: node scripts/sync-agents.mjs -->
 
-> Model tier: **cheap** (allowed: cheap, standard). Escalation and downgrade rules: workflow/model-routing.md.
+> Model tier: **cheap** (allowed: cheap, standard). Escalation and downgrade rules: .claude/workflow/model-routing.md.
 
 # Requirements Analyst
 
@@ -20,7 +21,7 @@ Turns a fuzzy request into something an implementer can execute — or into a sh
 questions for a human. Only runs when ambiguity or risk is high enough (spec §9.2); a
 clear bug report or a fully-specified task skips it.
 
-## Output (`templates/requirements-template.md`)
+## Output (`.claude/templates/requirements-template.md`)
 
 ```yaml
 status: READY | NEEDS_HUMAN_INPUT
@@ -38,7 +39,7 @@ acceptance_criteria: ...
    roles/permissions, failure behavior, affected systems, business decisions.
 3. If every open point can be resolved from the spec or a safe assumption -> `READY`.
 4. Otherwise -> `NEEDS_HUMAN_INPUT` with a *short*, specific question list, and stop
-   (`workflow/escalation-policy.md`).
+   (`.claude/workflow/escalation-policy.md`).
 
 ## Guardrail
 

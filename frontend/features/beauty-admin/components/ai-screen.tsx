@@ -2,16 +2,17 @@
 
 import { useId, useState } from "react";
 import {
+  useAiSettings,
   useAiChat,
   useAiPromoPlan,
   useAiRequests,
   useApproveAiRequest,
-  useLaunchAiCampaign,
   useSendAiChatMessage,
 } from "../hooks/use-beauty-admin";
 import { money } from "../format";
+import { overallStatusText } from "../ai-settings/messages";
 import type { AiPromoPlan, PromoGoalId } from "../types";
-import { Badge, Card, PageHeader, PrimaryButton, QueryState, SecondaryButton, Table, TD, Tabs, TextLink } from "./ui";
+import { Badge, Card, LinkButton, PageHeader, PrimaryButton, QueryState, SecondaryButton, Table, TD, Tabs, TextLink } from "./ui";
 
 type Tab = "req" | "chat" | "promo";
 
@@ -125,7 +126,6 @@ function ChatTab() {
 function PromoPlanView({ plan }: { plan: AiPromoPlan }) {
   const [text, setText] = useState<string | null>(null);
   const [segs, setSegs] = useState<string[] | null>(null);
-  const launch = useLaunchAiCampaign();
   const textId = useId();
   const selected = segs ?? plan.recommendedSegmentIds;
   const reach = plan.segments.filter((s) => selected.includes(s.id)).reduce((a, s) => a + s.count, 0);
@@ -187,16 +187,12 @@ function PromoPlanView({ plan }: { plan: AiPromoPlan }) {
           </div>
         </Card>
         <Card as="div" className="flex flex-col gap-2.5">
-          <h2 className="text-lg font-semibold">Запуск</h2>
-          <button
-            type="button"
-            disabled={launch.isPending || launch.isSuccess || reach === 0}
-            onClick={() => launch.mutate({ goalId: plan.goalId, segmentIds: selected, text: body })}
-            className="min-h-[52px] cursor-pointer rounded-[26px] border-0 bg-(--accent) text-base font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {launch.isSuccess ? "Розсилку заплановано" : launch.isPending ? "Плануємо…" : `Надіслати ${reach} клієнтам`}
-          </button>
-          {launch.isError ? <p role="alert" className="text-sm text-[#8A1F1F]">Не вдалося запланувати розсилку.</p> : null}
+          <h2 className="text-lg font-semibold">Запуск розсилки</h2>
+          <LinkButton href="/beauty/campaigns/new">Створити розсилку</LinkButton>
+          <p className="m-0 text-[13px] text-(--muted)">
+            Розсилку запускаєте ви в майстрі: оберіть акцію, перегляньте аудиторію (лише кількості, без імен) і підтвердьте відправку. Розсилки від ШІ без вашого підтвердження не надсилаються. Автоматичні ШІ-чернетки з&apos;являться пізніше.
+          </p>
+          <TextLink href="/beauty/campaigns">Усі розсилки</TextLink>
           <TextLink href="/beauty/promos">Налаштувати в розділі «Ціни та акції»</TextLink>
           <div className="text-[13px] text-(--muted)">AI лише пропонує. Ціни, текст і список клієнтів ви підтверджуєте самі.</div>
         </Card>
@@ -235,6 +231,19 @@ function PromoTab() {
   );
 }
 
+/** Банер, коли ШІ вимкнено (`status.chat.state=unavailable`, §20.9): тихий, якщо налаштувань не вдалося отримати. */
+function AiUnavailableBanner() {
+  const q = useAiSettings();
+  const status = q.data?.status.chat;
+  if (!status || status.state !== "unavailable") return null;
+  return (
+    <div role="status" className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl bg-[#FFF1CC] px-4 py-2.5 text-sm text-[#5C3900]">
+      <span>{overallStatusText(status)}</span>
+      <TextLink href="/beauty/settings#ai">Налаштування ШІ</TextLink>
+    </div>
+  );
+}
+
 export function AiScreen() {
   const [tab, setTab] = useState<Tab>("req");
   return (
@@ -254,6 +263,7 @@ export function AiScreen() {
           />
         }
       />
+      <AiUnavailableBanner />
       {tab === "req" ? <RequestsTab /> : null}
       {tab === "chat" ? <ChatTab /> : null}
       {tab === "promo" ? <PromoTab /> : null}

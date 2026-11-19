@@ -1,8 +1,8 @@
 ---
 name: seo-testing
 description: >-
-  SEO Testing — Use when writing or running tests.
-x-generated-from: skills/qa/seo-testing/SKILL.md
+  Test metadata, canonical, hreflang, sitemap, robots, and structured data. Use after SEO-affecting changes.
+x-generated-from: .claude/skills/seo-testing/SKILL.md
 ---
 
 ## Категорія тестів (розділ тестування проєктного спеку)

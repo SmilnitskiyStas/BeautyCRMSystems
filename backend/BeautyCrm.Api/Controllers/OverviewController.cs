@@ -1,6 +1,7 @@
 using BeautyCrm.Api.Auth;
 using BeautyCrm.Api.Infrastructure;
 using BeautyCrm.Api.Tenancy;
+using BeautyCrm.Application.Features.BeautyAuth;
 using BeautyCrm.Application.Features.BeautyOverview;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -16,13 +17,14 @@ namespace BeautyCrm.Api.Controllers;
 public sealed class OverviewController(OverviewService overview) : ControllerBase
 {
     /// <summary>
-    /// Записи дня + KPI (кількість записів, виручка за день, нові клієнти, вільні слоти). Лише owner/admin (містить виручку).
+    /// Записи дня + KPI (кількість записів, виручка за день, нові клієнти, вільні слоти). Потрібен calendar.view = all; kpi.revenue лише за revenue.view = all (M4).
     /// date — локальна дата закладу (за замовчуванням сьогодні); locationId — необов'язково (інакше всі активні заклади).
     /// </summary>
     [HttpGet("overview")]
-    [Authorize(Policy = AuthPolicies.Management)]
+    [Authorize(Policy = AuthPolicies.Staff)]
+    [RequirePermission(PermissionKeys.CalendarView, PermissionLevels.All)]
     [ProducesResponseType<OverviewDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Overview([FromQuery] DateOnly? date, [FromQuery] Guid? locationId, CancellationToken ct) =>
-        this.ToResult(await overview.GetAsync(date, locationId, ct));
+        User.ToActor() is { } actor ? this.ToResult(await overview.GetAsync(actor, date, locationId, ct)) : Unauthorized();
 }

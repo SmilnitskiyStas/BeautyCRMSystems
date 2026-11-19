@@ -198,14 +198,26 @@ internal sealed class FakeStaffStore : IStaffStore
 
     public Task<Guid> CreateSpecialistAsync(NewSpecialist n, CancellationToken ct)
     {
-        var s = new StaffSpecialistRecord(Guid.NewGuid(), n.Name, n.Phone, n.Position, null, true, null, [], []);
+        var s = new StaffSpecialistRecord(Guid.NewGuid(), n.Name, n.Phone, n.Position, n.PhotoUrl, true, null, [], [], n.PracticeStartYear, n.Bio);
         Specialists.Add(s);
         return Task.FromResult(s.Id);
     }
-    public Task UpdateSpecialistAsync(Guid id, string name, string? phone, string? position, bool? isActive, DateTimeOffset now, CancellationToken ct)
+    public Task UpdateSpecialistAsync(Guid id, string name, string? phone, string? position, bool? isActive, DateTimeOffset now, Guid actorUserId, CancellationToken ct)
     {
         var i = Specialists.FindIndex(s => s.Id == id);
         Specialists[i] = Specialists[i] with { FullName = name, Phone = phone, Position = position, IsActive = isActive ?? Specialists[i].IsActive };
+        return Task.CompletedTask;
+    }
+    public Task UpdateSpecialistProfileAsync(Guid id, SpecialistProfilePatch patch, CancellationToken ct)
+    {
+        var i = Specialists.FindIndex(s => s.Id == id);
+        var cur = Specialists[i];
+        Specialists[i] = cur with
+        {
+            PracticeStartYear = patch.SetYear ? patch.PracticeStartYear : cur.PracticeStartYear,
+            Bio = patch.SetBio ? patch.Bio : cur.Bio,
+            PhotoUrl = patch.SetPhoto ? patch.PhotoUrl : cur.PhotoUrl,
+        };
         return Task.CompletedTask;
     }
     public Task ReplaceServicesAsync(Guid specialistId, IReadOnlyCollection<Guid> serviceIds, CancellationToken ct) => Task.CompletedTask;
@@ -250,9 +262,9 @@ public class AbsenceServiceTests
     private readonly FakeStaffStore _store = new();
     private AbsenceService Sut() => new(_store, new FakeClock(Now));
 
-    private static Actor Owner() => new(Guid.NewGuid(), Guid.NewGuid(), Roles.Owner, null);
-    private static Actor Admin() => new(Guid.NewGuid(), Guid.NewGuid(), Roles.Admin, null);
-    private static Actor Specialist(Guid specialistId) => new(Guid.NewGuid(), Guid.NewGuid(), Roles.Specialist, specialistId);
+    private static Actor Owner() => Actor.ForTest(Roles.Owner, null, Guid.NewGuid(), Guid.NewGuid());
+    private static Actor Admin() => Actor.ForTest(Roles.Admin, null, Guid.NewGuid(), Guid.NewGuid());
+    private static Actor Specialist(Guid specialistId) => Actor.ForTest(Roles.Specialist, specialistId, Guid.NewGuid(), Guid.NewGuid());
 
     private static CreateAbsenceRequest Req(DateOnly from, DateOnly to, string type = "sick", string? note = "private note") =>
         new(type, from, to, note);
@@ -308,7 +320,7 @@ public class AbsenceServiceTests
     public async Task create_by_specialist_without_profile_is_forbidden()
     {
         var sp = _store.AddSpecialist();
-        var r = await Sut().CreateAsync(new Actor(Guid.NewGuid(), Guid.NewGuid(), Roles.Specialist, null), sp.Id, Req(D7, D7), default);
+        var r = await Sut().CreateAsync(Actor.ForTest(Roles.Specialist, null, Guid.NewGuid(), Guid.NewGuid()), sp.Id, Req(D7, D7), default);
         Assert.Equal(ErrorKind.Forbidden, r.Error!.Kind);
     }
 
@@ -324,7 +336,8 @@ public class AbsenceServiceTests
     {
         var ownerProfile = _store.AddSpecialist(Roles.Owner);
         Assert.Equal(ErrorKind.Forbidden, (await Sut().CreateAsync(Admin(), ownerProfile.Id, Req(D7, D7), default)).Error!.Kind);
-        Assert.True((await Sut().CreateAsync(Owner(), ownerProfile.Id, Req(D7, D7), default)).IsOk);
+        // M2: вищого за owner рангу немає, тож профіль, прив'язаний до користувача-owner, цим шляхом не змінюється нікому
+        Assert.Equal(ErrorKind.Forbidden, (await Sut().CreateAsync(Owner(), ownerProfile.Id, Req(D7, D7), default)).Error!.Kind);
     }
 
     // ---- валідація й перетини ----
@@ -513,9 +526,9 @@ public class StaffServiceTests
     private readonly FakeStaffStore _store = new();
     private StaffService Sut() => new(_store, TimeProvider.System);
 
-    private static Actor Owner() => new(Guid.NewGuid(), Guid.NewGuid(), Roles.Owner, null);
-    private static Actor Admin() => new(Guid.NewGuid(), Guid.NewGuid(), Roles.Admin, null);
-    private static Actor Specialist() => new(Guid.NewGuid(), Guid.NewGuid(), Roles.Specialist, Guid.NewGuid());
+    private static Actor Owner() => Actor.ForTest(Roles.Owner, null, Guid.NewGuid(), Guid.NewGuid());
+    private static Actor Admin() => Actor.ForTest(Roles.Admin, null, Guid.NewGuid(), Guid.NewGuid());
+    private static Actor Specialist() => Actor.ForTest(Roles.Specialist, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
 
     private static readonly JsonElement Hours = JsonDocument.Parse("""{"mon":[{"from":"09:00","to":"18:00"}]}""").RootElement;
 
@@ -532,13 +545,14 @@ public class StaffServiceTests
     }
 
     [Fact]
-    public async Task admin_cannot_change_profile_linked_to_owner_but_owner_can()
+    public async Task admin_cannot_change_profile_linked_to_owner_and_owner_not_own_linked_profile_M2()
     {
+        // M2 (§30.1): CanModify = linked == null || (linked.id != actor.id && rank(actor) > rank(linked.role)); вищого за owner рангу немає
         var ownerProfile = _store.AddSpecialist(Roles.Owner);
         var req = new UpdateSpecialistRequest("Renamed", null, null, null);
         Assert.Equal(ErrorKind.Forbidden, (await Sut().UpdateAsync(Admin(), ownerProfile.Id, req, default)).Error!.Kind);
+        Assert.Equal(ErrorKind.Forbidden, (await Sut().UpdateAsync(Owner(), ownerProfile.Id, req, default)).Error!.Kind);
         Assert.Equal("Master", _store.Specialists.Single().FullName);
-        Assert.Equal("Renamed", (await Sut().UpdateAsync(Owner(), ownerProfile.Id, req, default)).Value!.Name);
     }
 
     [Fact]

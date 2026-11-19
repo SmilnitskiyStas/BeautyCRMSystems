@@ -12,7 +12,8 @@ export const WEEKDAYS: { key: Weekday; label: string; short: string }[] = [
 ];
 
 export const DEFAULT_INTERVAL: TimeInterval = { from: "09:00", to: "18:00" };
-export const MAX_INTERVALS_PER_DAY = 4;
+/** Як у backend (§13): не більше 8 інтервалів на день. */
+export const MAX_INTERVALS_PER_DAY = 8;
 
 /**
  * Шаблон нового графіка: усі 7 днів 09:00-18:00 (§17). Вихідні задає заклад (closedWeekdays/closures), а не відсутність

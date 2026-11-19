@@ -27,6 +27,9 @@ public enum ReminderOption
     [EnumMember(Value = "none")] None,
     [EnumMember(Value = "1h")] OneHour,
     [EnumMember(Value = "2h")] TwoHours,
+    /// <summary>TASK-736 (§22.3): будь-який інший набір точок; дзеркало плану reminder_method/reminder_offsets.</summary>
+    [EnumMember(Value = "custom")] Custom,
+    [EnumMember(Value = "24h")] TwentyFourHours,
 }
 
 public enum PaymentMethod
@@ -57,6 +60,8 @@ public enum ChannelType
     [EnumMember(Value = "whatsapp")] WhatsApp,
     [EnumMember(Value = "viber")] Viber,
     [EnumMember(Value = "widget")] Widget,
+    /// <summary>Email-доставка (підтвердження запису): адреса клієнта — у beauty_conversations.external_chat_id; SMTP — глобальний, без секретів у каналі.</summary>
+    [EnumMember(Value = "email")] Email,
 }
 
 public enum ConversationStatus
@@ -93,5 +98,66 @@ public enum ReminderStatus
     [EnumMember(Value = "scheduled")] Scheduled,
     [EnumMember(Value = "sent")] Sent,
     [EnumMember(Value = "failed")] Failed,
+    [EnumMember(Value = "cancelled")] Cancelled,
+    /// <summary>TASK-736 (§22.3): точку не буде надіслано; причина в skip_reason (код).</summary>
+    [EnumMember(Value = "skipped")] Skipped,
+}
+
+// ---------- Склад (ADR-025, §32.3, TASK-876) ----------
+
+public enum ProductUnit
+{
+    [EnumMember(Value = "pcs")] Pcs,
+    [EnumMember(Value = "ml")] Ml,
+    [EnumMember(Value = "g")] G,
+    [EnumMember(Value = "l")] L,
+    [EnumMember(Value = "kg")] Kg,
+    [EnumMember(Value = "pack")] Pack,
+}
+
+public enum ProductPurpose
+{
+    [EnumMember(Value = "sale")] Sale,
+    [EnumMember(Value = "salon_use")] SalonUse,
+    [EnumMember(Value = "both")] Both,
+}
+
+public enum StockOperationKind
+{
+    [EnumMember(Value = "receipt")] Receipt,
+    [EnumMember(Value = "write_off")] WriteOff,
+    [EnumMember(Value = "transfer")] Transfer,
+    [EnumMember(Value = "stocktake")] Stocktake,
+    /// <summary>Етап 2 (автосписання за послугою); CHECK одразу надмножиною.</summary>
+    [EnumMember(Value = "service_consumption")] ServiceConsumption,
+    /// <summary>Етап 3 (продаж).</summary>
+    [EnumMember(Value = "sale")] Sale,
+}
+
+public enum WriteOffReason
+{
+    [EnumMember(Value = "expired")] Expired,
+    [EnumMember(Value = "damaged")] Damaged,
+    [EnumMember(Value = "lost")] Lost,
+    [EnumMember(Value = "internal_use")] InternalUse,
+    [EnumMember(Value = "correction")] Correction,
+    [EnumMember(Value = "other")] Other,
+}
+
+public enum StockMovementType
+{
+    [EnumMember(Value = "receipt")] Receipt,
+    [EnumMember(Value = "write_off")] WriteOff,
+    [EnumMember(Value = "transfer_out")] TransferOut,
+    [EnumMember(Value = "transfer_in")] TransferIn,
+    [EnumMember(Value = "stocktake_adjust")] StocktakeAdjust,
+    [EnumMember(Value = "service_consumption")] ServiceConsumption,
+    [EnumMember(Value = "sale")] Sale,
+}
+
+public enum StocktakeStatus
+{
+    [EnumMember(Value = "draft")] Draft,
+    [EnumMember(Value = "posted")] Posted,
     [EnumMember(Value = "cancelled")] Cancelled,
 }

@@ -141,6 +141,72 @@ public sealed class CancellationSettingsApiTests(AuthApiFixture fx) : IClassFixt
             Assert.Equal(24, s.GetProperty("cancellation").GetProperty("windowHours").GetInt32());
     }
 
+    [SkippableFact]
+    public async Task terms_visibility_fields_roundtrip_and_old_put_keeps_them()
+    {
+        NeedDb();
+        var t = await fx.CreateTenantAsync();
+        var owner = await fx.LoginAsync(t.Slug, t.OwnerEmail);
+        var seed = await fx.SeedBeautyAsync(t.TenantId);
+
+        var def = await Json(await fx.Send(HttpMethod.Get, Url, bearer: owner.AccessToken));
+        Assert.True(def.GetProperty("showTermsToClient").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, def.GetProperty("customTermsText").ValueKind);
+
+        var put = await fx.Send(HttpMethod.Put, Url, new
+        {
+            windowHours = 24, refundPercentInWindow = 30, refundPercentOutside = 90, deductFee = true, feePercent = 10,
+            showTermsToClient = false, customTermsText = "  Свій текст  ",
+        }, owner.AccessToken);
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+        var j = await Json(await fx.Send(HttpMethod.Get, Url, bearer: owner.AccessToken));
+        Assert.False(j.GetProperty("showTermsToClient").GetBoolean());
+        Assert.Equal("Свій текст", j.GetProperty("customTermsText").GetString());
+
+        // старий клієнт (без нових полів) не затирає
+        Assert.Equal(HttpStatusCode.OK, (await fx.Send(HttpMethod.Put, Url, Valid, owner.AccessToken)).StatusCode);
+        j = await Json(await fx.Send(HttpMethod.Get, Url, bearer: owner.AccessToken));
+        Assert.False(j.GetProperty("showTermsToClient").GetBoolean());
+        Assert.Equal("Свій текст", j.GetProperty("customTermsText").GetString());
+
+        // показ вимкнено: текст не віддається, числа - як раніше
+        var appt = await Json(await fx.Send(HttpMethod.Get, $"/api/beauty/appointments/{seed.AppointmentA}", bearer: owner.AccessToken));
+        var terms = appt.GetProperty("cancellation");
+        Assert.False(terms.GetProperty("showToClient").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, terms.GetProperty("customText").ValueKind);
+        Assert.Equal(24, terms.GetProperty("windowHours").GetInt32());
+        Assert.Equal(30, terms.GetProperty("refundPercentInWindow").GetInt32());
+        Assert.Equal(10, terms.GetProperty("feePercent").GetInt32());
+
+        // показ увімкнено: текст віддається
+        Assert.Equal(HttpStatusCode.OK, (await fx.Send(HttpMethod.Put, Url, new
+        {
+            windowHours = 24, refundPercentInWindow = 30, refundPercentOutside = 90, deductFee = true, feePercent = 10,
+            showTermsToClient = true,
+        }, owner.AccessToken)).StatusCode);
+        appt = await Json(await fx.Send(HttpMethod.Get, $"/api/beauty/appointments/{seed.AppointmentA}", bearer: owner.AccessToken));
+        Assert.True(appt.GetProperty("cancellation").GetProperty("showToClient").GetBoolean());
+        Assert.Equal("Свій текст", appt.GetProperty("cancellation").GetProperty("customText").GetString());
+
+        // валідація
+        foreach (var bad in new[] { new string('x', 501), "a\u0001b" })
+        {
+            var r = await fx.Send(HttpMethod.Put, Url, new
+            {
+                windowHours = 24, refundPercentInWindow = 30, refundPercentOutside = 90, deductFee = true, feePercent = 10, customTermsText = bad,
+            }, owner.AccessToken);
+            Assert.Equal(HttpStatusCode.UnprocessableEntity, r.StatusCode);
+            Assert.Equal("invalid_terms_text", (await Json(r)).GetProperty("code").GetString());
+        }
+
+        // порожній рядок -> null
+        Assert.Equal(HttpStatusCode.OK, (await fx.Send(HttpMethod.Put, Url, new
+        {
+            windowHours = 24, refundPercentInWindow = 30, refundPercentOutside = 90, deductFee = true, feePercent = 10, customTermsText = "   ",
+        }, owner.AccessToken)).StatusCode);
+        Assert.Equal(JsonValueKind.Null, (await Json(await fx.Send(HttpMethod.Get, Url, bearer: owner.AccessToken))).GetProperty("customTermsText").ValueKind);
+    }
+
     // ---------- міграція / RLS на рівні БД ----------
 
     [SkippableFact]
@@ -168,6 +234,8 @@ public sealed class CancellationSettingsApiTests(AuthApiFixture fx) : IClassFixt
             Assert.Equal(100, row.RefundPercentOutside);
             Assert.False(row.DeductFee);
             Assert.Equal(0, row.FeePercent);
+            Assert.True(row.ShowTermsToClient); // DEFAULT true
+            Assert.Null(row.CustomTermsText);
         }
 
         // WITH CHECK: запис рядка з чужим tenant_id відхиляється
@@ -192,6 +260,7 @@ public sealed class CancellationSettingsApiTests(AuthApiFixture fx) : IClassFixt
                      new CancellationSettingsRow { FeePercent = 101 },
                      new CancellationSettingsRow { WindowHours = 721 },
                      new CancellationSettingsRow { WindowHours = -1 },
+                     new CancellationSettingsRow { CustomTermsText = new string('x', 501) },
                  })
         {
             await using var c = fx.Db.CreateContext(Guid.NewGuid());
