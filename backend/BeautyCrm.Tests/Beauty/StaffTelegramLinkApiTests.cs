@@ -117,6 +117,7 @@ public sealed class StaffTelegramLinkApiTests(AuthApiFixture fx) : IClassFixture
         Assert.DoesNotContain("chat", pendingBody, StringComparison.OrdinalIgnoreCase);
         using var doc = JsonDocument.Parse(pendingBody);
         Assert.Equal("pending", doc.RootElement.GetProperty("state").GetString());
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("claimedAt").ValueKind); // L1: ще не claimed
         Assert.Equal("SalonBot", doc.RootElement.GetProperty("channel").GetProperty("name").GetString());
 
         await Json200(await Call(c, HttpMethod.Post, t.Owner, Consent), HttpStatusCode.Created); // новий токен замінює попередній
@@ -164,7 +165,28 @@ public sealed class StaffTelegramLinkApiTests(AuthApiFixture fx) : IClassFixture
         var t = await NewTenantAsync(inventory: false);
         await Fails(await Call(c, HttpMethod.Get, t.Owner), HttpStatusCode.Forbidden, "module_disabled");
         await Fails(await Call(c, HttpMethod.Post, t.Owner, Consent), HttpStatusCode.Forbidden, "module_disabled");
-        await Fails(await Call(c, HttpMethod.Delete, t.Owner), HttpStatusCode.Forbidden, "module_disabled");
+        // L2: відв'язка не під RequireModule - працює і при вимкненому модулі (лише owner)
+        Assert.Equal(HttpStatusCode.NoContent, (await Call(c, HttpMethod.Delete, t.Owner)).StatusCode);
+        await Fails(await Call(c, HttpMethod.Delete, t.Admin), HttpStatusCode.Forbidden, "forbidden_role");
+        Assert.Equal(HttpStatusCode.Unauthorized, (await Call(c, HttpMethod.Delete, null)).StatusCode);
+    }
+
+    /// <summary>L2: відкрита прив'язка закривається DELETE, навіть коли модуль склад вимкнено після видачі.</summary>
+    [SkippableFact]
+    public async Task Delete_revokes_open_link_after_module_is_switched_off()
+    {
+        NeedDb();
+        var c = Host(enabled: true).CreateClient();
+        var t = await NewTenantAsync();
+        await Json200(await Call(c, HttpMethod.Post, t.Owner, Consent), HttpStatusCode.Created);
+        await using (var conn = new Npgsql.NpgsqlConnection(fx.Db.AdminConnectionString))
+        {
+            await conn.OpenAsync();
+            await using var cmd = new Npgsql.NpgsqlCommand($"UPDATE tenants SET modules = '{{}}' WHERE id = '{t.T.TenantId}'", conn);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        Assert.Equal(HttpStatusCode.NoContent, (await Call(c, HttpMethod.Delete, t.Owner)).StatusCode);
+        Assert.Equal(1, await CountAsync(t.T.TenantId, "status = 'revoked' AND revoke_reason = 'user_unlink'"));
     }
 
     [SkippableFact]
@@ -178,6 +200,23 @@ public sealed class StaffTelegramLinkApiTests(AuthApiFixture fx) : IClassFixture
         Assert.False(st.GetProperty("featureEnabled").GetBoolean());
         Assert.Equal(HttpStatusCode.NoContent, (await Call(c, HttpMethod.Delete, t.Owner)).StatusCode);
         Assert.Equal(0, await CountAsync(t.T.TenantId, "true"));
+    }
+
+    /// <summary>TASK-897 (в): webhook and polling both resolve the shared ingest core; the real DI graph must inject the guard (an unregistered optional gate would silently fail open).</summary>
+    [SkippableFact]
+    public async Task Di_graph_injects_staff_gate_into_ingest_core_and_webhook_service()
+    {
+        NeedDb();
+        var f = Host(enabled: false);
+        using var scope = f.Services.CreateScope();
+        static bool HasGate(object o) => o.GetType().GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            .Any(x => typeof(IStaffChatGate).IsAssignableFrom(x.FieldType) && x.GetValue(o) is not null);
+        var core = scope.ServiceProvider.GetRequiredService<InboundIngestCore>();
+        Assert.True(HasGate(core), "InboundIngestCore (polling path) has no IStaffChatGate");
+        var web = scope.ServiceProvider.GetRequiredService<InboundWebhookService>();
+        var inner = web.GetType().GetField("_core", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(web)!;
+        Assert.True(HasGate(inner), "InboundWebhookService core has no IStaffChatGate");
+        await Task.CompletedTask;
     }
 
     [SkippableFact]

@@ -577,6 +577,144 @@ public sealed class StaffTelegramLinkDbTests : IClassFixture<PostgresRlsFixture>
         Assert.Equal(0, await Scalar<long>($"SELECT count(*) FROM beauty_conversations WHERE tenant_id='{t.TenantId}' AND external_chat_id IN ('91','92')"));
     }
 
+    /// <summary>TASK-897 QA-1: handler trims the text but the guard shape check does not -> a live token pasted with a leading space reaches beauty_messages.</summary>
+    [SkippableTheory]
+    [InlineData(" /start inv_")]
+    [InlineData("\n/start inv_")]
+    [InlineData("/start@SalonBot inv_")]
+    [InlineData("/START inv_")]
+    public async Task Guard_live_token_variants_from_unlinked_chat_never_reach_client_flow(string prefix)
+    {
+        SkipIfNoDb();
+        var t = await SeedAsync();
+        var rig = NewRig(t);
+        using var _ = rig.Begin();
+        var token = await rig.IssueTokenAsync();
+        var fresh = await rig.Core().IngestAsync([Msg("77", prefix + token)], default);
+        Assert.Empty(fresh);
+        Assert.Equal(0, await Count("beauty_messages", t.TenantId));
+        Assert.Equal(0, await Count("beauty_conversations", t.TenantId));
+    }
+
+    /// <summary>TASK-897 QA-2: partition is computed once per batch; a chat that is claimed by the first message of the same batch is still partitioned as client for the rest.</summary>
+    [SkippableFact]
+    public async Task Guard_same_batch_message_after_claim_stays_out_of_client_flow()
+    {
+        SkipIfNoDb();
+        var t = await SeedAsync();
+        var rig = NewRig(t);
+        using var _ = rig.Begin();
+        var token = await rig.IssueTokenAsync();
+        var fresh = await rig.Core().IngestAsync([Msg("88", "/start inv_" + token), Msg("88", "привіт, це я")], default);
+        Assert.Empty(fresh);
+        Assert.Equal(0, await Count("beauty_messages", t.TenantId));
+    }
+
+    /// <summary>QA-2: у пакеті до /start inv_ повідомлення лишається клієнтським, після - службове; ще й claim відбувся.</summary>
+    [SkippableFact]
+    public async Task Guard_batch_order_messages_after_start_in_same_chat_are_staff_before_are_client()
+    {
+        SkipIfNoDb();
+        var t = await SeedAsync();
+        var rig = NewRig(t);
+        using var _ = rig.Begin();
+        var token = await rig.IssueTokenAsync();
+        var batch = new List<InboundMessage>
+        {
+            Msg("89", "до"), Msg("89", "/Start@SalonBot inv_" + token), Msg("89", "після"), Callback("89", "i:book"), Msg("90", "інший клієнт"),
+        };
+        var part = await rig.Gate().PartitionAsync(batch, default);
+        Assert.Equal(["/Start@SalonBot inv_" + token, "після", "[кнопка]"], part.Staff.Select(s => s.Text));
+        Assert.Equal(["до", "інший клієнт"], part.Client.Select(s => s.Text));
+        await rig.Core().IngestAsync(batch, default);
+        Assert.Equal("claimed", await Status(t)); // /start@bot inv_ з іншим регістром теж виконує claim
+    }
+
+    /// <summary>L1: переслане /start inv_… відхиляється, токен не спалюється; перенаправлене не потрапляє в клієнтський потік.</summary>
+    [SkippableFact]
+    public async Task Forwarded_start_is_rejected_without_burning_token_and_stays_out_of_client_flow()
+    {
+        SkipIfNoDb();
+        var t = await SeedAsync();
+        var rig = NewRig(t);
+        using var _ = rig.Begin();
+        var token = await rig.IssueTokenAsync();
+        var fresh = await rig.Core().IngestAsync([Msg("66", "/start inv_" + token) with { Forwarded = true }], default);
+        Assert.Empty(fresh);
+        Assert.Equal("issued", await Status(t));
+        Assert.Equal(StaffTelegramTexts.InvalidLink, rig.Transport.LastText("66"));
+        Assert.Equal(0, await Count("beauty_messages", t.TenantId));
+        // подію журналу не пишемо (reason=forwarded не входить у CHECK): лише issued, лог без токена
+        Assert.Equal(0, await Scalar<long>($"SELECT count(*) FROM beauty_staff_telegram_link_events WHERE tenant_id='{t.TenantId}' AND event='rejected'"));
+        Assert.Contains("forwarded", rig.Log.All);
+        Assert.DoesNotContain(token, rig.Log.All);
+        var mixed = await rig.Core().IngestAsync([Msg("66", "/start inv_" + token) with { Forwarded = true }, Msg("c66", "клієнт")], default);
+        Assert.Single(mixed); // пакет не зламано
+        await rig.SayAsync("66", "/start inv_" + token); // справжнє (не переслане) ще працює
+        Assert.Equal("claimed", await Status(t));
+    }
+
+    [Fact]
+    public void Telegram_adapter_marks_forwarded_messages()
+    {
+        var adapter = new TelegramAdapter(new HttpClient(), new NoCreds());
+        string Body(string extra) => $$$"""{"update_id":1,"message":{"message_id":7,"date":1,"chat":{"id":5,"type":"private"},"from":{"id":5,"is_bot":false},"text":"/start inv_x"{{{extra}}}}}""";
+        var plain = adapter.ParseInboundAsync(Body("")).GetAwaiter().GetResult();
+        var fwd = adapter.ParseInboundAsync(Body(""","forward_origin":{"type":"user"}""")).GetAwaiter().GetResult();
+        var legacy = adapter.ParseInboundAsync(Body(""","forward_date":5""")).GetAwaiter().GetResult();
+        Assert.False(plain.Single().Forwarded);
+        Assert.True(fwd.Single().Forwarded);
+        Assert.True(legacy.Single().Forwarded);
+    }
+
+    private sealed class NoCreds : IChannelCredentialsProvider
+    {
+        public ChannelCredentials? Get(string channel) => new("tok", "sec");
+    }
+
+    /// <summary>L1: підтвердження активації нагадує «якщо це були не ви»; GET статусу віддає claimedAt (null до claim).</summary>
+    [SkippableFact]
+    public async Task Activation_reply_warns_not_you_and_status_exposes_claimed_at()
+    {
+        SkipIfNoDb();
+        var t = await SeedAsync();
+        var rig = NewRig(t);
+        using var _ = rig.Begin();
+        var token = await rig.IssueTokenAsync();
+        Assert.Null((await rig.Service().GetStatusAsync(rig.OwnerActor, default)).Value!.ClaimedAt);
+        rig.Clock.Advance(TimeSpan.FromMinutes(2));
+        await rig.SayAsync("55", "/start inv_" + token);
+        var claimedAt = (await rig.Service().GetStatusAsync(rig.OwnerActor, default)).Value!.ClaimedAt;
+        Assert.Equal(T0.AddMinutes(2), claimedAt);
+        Assert.DoesNotContain(StaffTelegramTexts.NotYouWarning, rig.Transport.LastText("55")); // у запиті згоди ще немає
+        await rig.PressAsync("55", rig.Transport.Sent.Single(s => s.Chat == "55").Actions!.Rows[0][0].Data);
+        Assert.Contains(StaffTelegramTexts.NotYouWarning, rig.Transport.LastText("55"));
+        Assert.Contains("відключіть", rig.Transport.LastText("55"));
+    }
+
+    /// <summary>L3: відповіді на невідомі iy/in та підказки для неприв'язаного чату обмежені (мовчки після ліміту, вікно ковзне).</summary>
+    [SkippableFact]
+    public async Task Replies_to_unknown_service_callbacks_and_unlinked_chat_hints_are_limited()
+    {
+        SkipIfNoDb();
+        var t = await SeedAsync();
+        var rig = NewRig(t);
+        using var _ = rig.Begin();
+        var fake = "iy:" + StaffLinkToken.LinkId22(Guid.NewGuid());
+        for (var i = 0; i < 12; i++) await rig.PressAsync("44", fake);
+        Assert.Equal(StaffChatGate.SvcReplyPerWindow, rig.Transport.Count("44"));
+        // невідомий формат (HintAsync для неприв'язаного чату) ділить той самий ліміт
+        await rig.PressAsync("44", "iy:short");
+        Assert.Equal(StaffChatGate.SvcReplyPerWindow, rig.Transport.Count("44"));
+        // інший чат не зачеплено
+        await rig.PressAsync("45", fake);
+        Assert.Equal(1, rig.Transport.Count("45"));
+        rig.Clock.Advance(TimeSpan.FromMinutes(10) + TimeSpan.FromSeconds(1));
+        await rig.PressAsync("44", fake);
+        Assert.Equal(StaffChatGate.SvcReplyPerWindow + 1, rig.Transport.Count("44"));
+        Assert.Equal(0, await Count("beauty_messages", t.TenantId));
+    }
+
     [SkippableFact]
     public async Task Guard_ordinary_client_messages_are_stored_as_before_regression()
     {
@@ -666,7 +804,8 @@ public sealed class StaffTelegramLinkDbTests : IClassFixture<PostgresRlsFixture>
             var r = await off.Service().IssueAsync(off.OwnerActor, new IssueTelegramLinkRequest(true, "inv-tg-v1", null), default);
             Assert.Equal(("telegram_alerts_disabled", ErrorKind.Forbidden), (r.Error!.Code, r.Error.Kind));
             await off.SayAsync("121", "/status");
-            Assert.Contains("вимкнено адміністратором платформи", off.Transport.LastText("121"));
+            Assert.Contains(StaffTelegramTexts.PlatformPaused, off.Transport.LastText("121")); // M2: нейтрально, без категоричності
+            Assert.DoesNotContain("адміністратором", off.Transport.LastText("121"));
             await off.SayAsync("121", "/stop");
             Assert.Equal("revoked", await Status(t));
         }
@@ -738,6 +877,85 @@ public sealed class StaffTelegramLinkDbTests : IClassFixture<PostgresRlsFixture>
         Assert.False(StaffTelegramOptions.Read(FlagCfg("true", null), new FakeEnv("Staging")).Active);
         Assert.Throws<InvalidOperationException>(() =>
             new StaffTelegramStartupGuard(StaffTelegramOptions.Read(FlagCfg("true", null), new FakeEnv("Production"))).StartAsync(default).GetAwaiter().GetResult());
+    }
+
+    private static IConfiguration PreL3Cfg(string? l3, string? envs, string? tenants) => new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+    {
+        [StaffTelegramOptions.EnabledKey] = "true", [StaffTelegramOptions.L3Key] = l3,
+        [StaffTelegramOptions.PreL3EnvironmentsKey] = envs, [StaffTelegramOptions.PreL3TenantsKey] = tenants,
+    }).Build();
+
+    /// <summary>M1: staging-ключ + allowlist tenant-ів; Production без L3Approved відмовляє на старті, з L3Approved - глобально активно.</summary>
+    [Fact]
+    public void Pre_l3_staging_key_activates_only_allowlisted_tenants_and_production_still_needs_l3()
+    {
+        var a = Guid.NewGuid();
+        var b = Guid.NewGuid();
+        // Development: активно для всіх без L3
+        var dev = StaffTelegramOptions.Read(PreL3Cfg(null, null, null), new FakeEnv("Development"));
+        Assert.True(dev.IsActiveFor(a));
+        // Staging у списку, allowlist {a}: лише a; старт не падає; глобальний Active = false
+        var stg = StaffTelegramOptions.Read(PreL3Cfg(null, "Staging", a.ToString()), new FakeEnv("Staging"));
+        stg.ValidateForHost();
+        Assert.True(stg.IsActiveFor(a));
+        Assert.False(stg.IsActiveFor(b));
+        Assert.False(stg.Active);
+        new StaffTelegramStartupGuard(stg).StartAsync(default).GetAwaiter().GetResult();
+        // список через кому, регістр середовища не важливий, кілька tenant-ів
+        var multi = StaffTelegramOptions.Read(PreL3Cfg(null, "qa, STAGING", $"{a}, {b}"), new FakeEnv("Staging"));
+        Assert.True(multi.IsActiveFor(a) && multi.IsActiveFor(b));
+        // Staging у списку, allowlist порожній: нікому (але старт не падає)
+        var empty = StaffTelegramOptions.Read(PreL3Cfg(null, "Staging", null), new FakeEnv("Staging"));
+        empty.ValidateForHost();
+        Assert.False(empty.IsActiveFor(a));
+        var garbage = StaffTelegramOptions.Read(PreL3Cfg(null, "Staging", "not-a-guid,,"), new FakeEnv("Staging"));
+        Assert.False(garbage.IsActiveFor(a));
+        // Staging НЕ у списку: як раніше - відмова на старті
+        Assert.Throws<InvalidOperationException>(() => StaffTelegramOptions.Read(PreL3Cfg(null, null, a.ToString()), new FakeEnv("Staging")).ValidateForHost());
+        // Production: allowlist не діє, без L3Approved - відмова на старті, навіть якщо Production потрапила у список
+        var prodNoL3 = StaffTelegramOptions.Read(PreL3Cfg(null, null, a.ToString()), new FakeEnv("Production"));
+        Assert.Throws<InvalidOperationException>(() => prodNoL3.ValidateForHost());
+        Assert.False(prodNoL3.IsActiveFor(a));
+        // Production з L3Approved - активно для всіх
+        var prod = StaffTelegramOptions.Read(PreL3Cfg("true", null, null), new FakeEnv("Production"));
+        prod.ValidateForHost();
+        Assert.True(prod.Active);
+        Assert.True(prod.IsActiveFor(a) && prod.IsActiveFor(b));
+        // прапор вимкнено: ніхто, навіть allowlist
+        var off = StaffTelegramOptions.Read(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            { [StaffTelegramOptions.PreL3EnvironmentsKey] = "Staging", [StaffTelegramOptions.PreL3TenantsKey] = a.ToString() }).Build(), new FakeEnv("Staging"));
+        Assert.False(off.IsActiveFor(a));
+    }
+
+    /// <summary>M1 на реальній БД: у staging без L3 issue/claim/status працюють лише для tenant-а з allowlist.</summary>
+    [SkippableFact]
+    public async Task Pre_l3_allowlist_gates_issue_claim_and_status_per_tenant()
+    {
+        SkipIfNoDb();
+        var allowed = await SeedAsync();
+        var other = await SeedAsync();
+        var c = new StepClock(T0);
+        StaffTelegramOptions Opts() => new()
+        {
+            Enabled = true, L3Approved = false, IsDevelopment = false, IsPreL3Environment = true,
+            PreL3TenantIds = new HashSet<Guid> { allowed.TenantId },
+        };
+        Rig Mk(Tn t) => new(_db, t, c, new FakeStaffTransport(), new StaffTelegramLimits(c), Opts(), new LogCapture());
+        var ra = Mk(allowed);
+        using (ra.Begin())
+        {
+            Assert.True((await ra.Service().GetStatusAsync(ra.OwnerActor, default)).Value!.FeatureEnabled);
+            var token = await ra.IssueTokenAsync();
+            await ra.SayAsync("201", "/start inv_" + token);
+            Assert.Equal("claimed", await Status(allowed));
+        }
+        var ro = Mk(other);
+        using (ro.Begin())
+        {
+            Assert.False((await ro.Service().GetStatusAsync(ro.OwnerActor, default)).Value!.FeatureEnabled);
+            var r = await ro.Service().IssueAsync(ro.OwnerActor, new IssueTelegramLinkRequest(true, "inv-tg-v1", null), default);
+            Assert.Equal("telegram_alerts_disabled", r.Error!.Code);
+        }
     }
 
     private sealed class FakeEnv(string name) : IHostEnvironment

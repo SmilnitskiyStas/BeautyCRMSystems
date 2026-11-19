@@ -14,7 +14,6 @@ namespace BeautyCrm.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/beauty/inventory/telegram/link")]
-[RequireModule(BeautyModules.Inventory)]
 [Authorize(Policy = AuthPolicies.Staff)]
 [OwnerOnly]
 [InboxNoStore]
@@ -29,6 +28,7 @@ public sealed class InventoryTelegramLinkController(StaffTelegramLinkService lin
     }
 
     [HttpGet]
+    [RequireModule(BeautyModules.Inventory)]
     [ProducesResponseType<TelegramLinkStatusDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> Get(CancellationToken ct)
     {
@@ -39,6 +39,7 @@ public sealed class InventoryTelegramLinkController(StaffTelegramLinkService lin
 
     /// <summary>403 telegram_alerts_disabled; 409 telegram_already_linked; 422 consent_required | consent_version_outdated | telegram_channel_unavailable | telegram_channel_required; 404 channel_not_found; 503 telegram_bot_unavailable; 429 rate_limited.</summary>
     [HttpPost]
+    [RequireModule(BeautyModules.Inventory)]
     [RequestSizeLimit(4 * 1024)]
     [ProducesResponseType<TelegramLinkIssuedDto>(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
@@ -53,7 +54,7 @@ public sealed class InventoryTelegramLinkController(StaffTelegramLinkService lin
         return this.ToResult(result, dto => StatusCode(StatusCodes.Status201Created, dto));
     }
 
-    /// <summary>Ідемпотентно: закриває issued|claimed|active; працює й за вимкненого прапора.</summary>
+    /// <summary>Ідемпотентно: закриває issued|claimed|active; працює й за вимкненого прапора та вимкненого модуля (без [RequireModule], L2; лише owner).</summary>
     [HttpDelete]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> Delete(CancellationToken ct)

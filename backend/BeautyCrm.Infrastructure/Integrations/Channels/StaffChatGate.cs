@@ -26,17 +26,23 @@ public sealed partial class StaffChatGate(
     BeautyDbContext db, ChannelRequestContext context, TimeProvider clock, StaffTelegramOptions options, StaffTelegramLimits limits,
     StaffChatCodec codec, IStaffTelegramTransport transport, ILogger<StaffChatGate> log) : IStaffChatGate
 {
-    private const string StartPrefix = "/start inv_";
     private static readonly TimeSpan Hour = TimeSpan.FromHours(1);
     private static readonly TimeSpan HintWindow = TimeSpan.FromMinutes(10);
-    public const int ClaimPerChatPerHour = 10, FailedPerChannelPerHour = 60;
+    private static readonly TimeSpan SvcReplyWindow = TimeSpan.FromMinutes(10);
+    public const int ClaimPerChatPerHour = 10, FailedPerChannelPerHour = 60, SvcReplyPerWindow = 5;
 
     [GeneratedRegex(@"^i[yn]:")]
     private static partial Regex ServiceCallback();
 
+    /// <summary>Службова форма: <c>/start inv_…</c> після TrimStart, без регістру, з необов'язковим <c>@bot</c> (QA-1/I5).</summary>
+    [GeneratedRegex(@"^/start(@[A-Za-z0-9_]*)?\s+inv_", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex StartInv();
+
+    private static bool IsStartInv(string? text) => text is not null && StartInv().IsMatch(text.TrimStart());
+
     private static bool IsServiceShape(InboundMessage m) =>
         (m.Kind == InboundKinds.Callback && (m.CallbackData is { } d && ServiceCallback().IsMatch(d)))
-        || (m.Kind is InboundKinds.Command or InboundKinds.Text && m.Text.StartsWith(StartPrefix, StringComparison.Ordinal));
+        || (m.Kind is InboundKinds.Command or InboundKinds.Text && IsStartInv(m.Text));
 
     public async Task<StaffPartition> PartitionAsync(IReadOnlyList<InboundMessage> parsed, CancellationToken ct)
     {
@@ -46,6 +52,15 @@ public sealed partial class StaffChatGate(
         var channel = context.Value ?? throw new InvalidOperationException("No channel context for staff chat guard."); // fail-closed
 
         var staff = new HashSet<int>(idx.Where(i => IsServiceShape(parsed[i])));
+        // QA-2: після /start inv_… того ж чату в межах пакета решта його повідомлень лишається в службовому потоці
+        // (claim виконується пізніше, у HandleAsync, тож БД ще не знає про claimed). Fail-closed: пакет, а не окреме повідомлення.
+        var startChats = new HashSet<string>();
+        foreach (var i in idx)
+        {
+            var p = parsed[i];
+            if (staff.Contains(i)) { if (p.Kind != InboundKinds.Callback) startChats.Add(p.ExternalConversationId); }
+            else if (startChats.Contains(p.ExternalConversationId)) staff.Add(i);
+        }
         var rest = idx.Where(i => !staff.Contains(i)).ToList();
         if (rest.Count > 0)
         {
@@ -85,7 +100,17 @@ public sealed partial class StaffChatGate(
         var chatId = m.ExternalConversationId;
         if (m.Kind == InboundKinds.Callback) { await HandleCallbackAsync(m, ch, ct); return; }
         var text = (m.Text ?? "").Trim();
-        if (text.StartsWith(StartPrefix, StringComparison.Ordinal)) { await ClaimAsync(chatId, text, ch, ct); return; }
+        if (IsStartInv(text))
+        {
+            if (m.Forwarded) // L1: переслане посилання не приймаємо (токен не спалюється)
+            {
+                log.LogInformation("staff_tg_token_rejected channel={ChannelId} reason={Reason}", ch.ChannelId, "forwarded");
+                await ReplyLimitedAsync(ch, chatId, StaffTelegramTexts.InvalidLink, ct);
+                return;
+            }
+            await ClaimAsync(chatId, text, ch, ct);
+            return;
+        }
         var cmd = text.Split(' ', 2)[0];
         var at = cmd.IndexOf('@');
         if (at > 0) cmd = cmd[..at];
@@ -111,7 +136,7 @@ public sealed partial class StaffChatGate(
             await ReplyAsync(ch, chatId, StaffTelegramTexts.InvalidLink, null, ct);
         }
 
-        var token = text[StartPrefix.Length..];
+        var token = text[StartInv().Match(text).Length..];
         if (!StaffLinkToken.TryHash(token, out var hash)) { await Fail(); return; }
         var now = clock.GetUtcNow();
         var link = await db.StaffTelegramLinks.AsNoTracking().Where(l => l.TokenHash == hash)
@@ -130,7 +155,7 @@ public sealed partial class StaffChatGate(
             log.LogInformation("staff_tg_token_rejected channel={ChannelId} reason={Reason}", ch.ChannelId, reason);
         }
 
-        if (!options.Active || !await InventoryModuleGate.IsEnabledAsync(db, ct))
+        if (!options.IsActiveFor(ch.TenantId) || !await InventoryModuleGate.IsEnabledAsync(db, ct))
         {
             await Reject("disabled");
             await ReplyAsync(ch, chatId, StaffTelegramTexts.Disabled, null, ct);
@@ -203,7 +228,7 @@ public sealed partial class StaffChatGate(
             .Select(l => new { l.Id, l.UserId, l.Status, l.TokenExpiresAt, l.ChatIdHash }).FirstOrDefaultAsync(ct);
         if (row is null || row.ChatIdHash is not { } h || !h.AsSpan().SequenceEqual(chatHash) || row.Status is not ("claimed" or "active"))
         {
-            await ReplyAsync(ch, chatId, StaffTelegramTexts.InvalidLink, null, ct); // чужий чат / не той стан: без деталей
+            await ReplyLimitedAsync(ch, chatId, StaffTelegramTexts.InvalidLink, ct); // чужий чат / не той стан: без деталей; L3 - з лімітом
             return;
         }
 
@@ -225,7 +250,7 @@ public sealed partial class StaffChatGate(
             await ReplyAsync(ch, chatId, StaffTelegramTexts.InvalidLink, null, ct);
             return;
         }
-        if (!options.Active || !await InventoryModuleGate.IsEnabledAsync(db, ct))
+        if (!options.IsActiveFor(ch.TenantId) || !await InventoryModuleGate.IsEnabledAsync(db, ct))
         {
             StaffTelegramRevocation.AddEvent(db, row.Id, row.UserId, "rejected", "disabled", "bot", null, now);
             await db.SaveChangesAsync(ct);
@@ -247,7 +272,7 @@ public sealed partial class StaffChatGate(
         StaffTelegramRevocation.AddEvent(db, linkId, uid, "activated", null, "bot", null, now);
         await db.SaveChangesAsync(ct);
         log.LogInformation("staff_tg_link_activated link={LinkId}", linkId);
-        await ReplyAsync(ch, chatId, StaffTelegramTexts.Done(await OpenAlertsAsync(ct)), null, ct);
+        await ReplyAsync(ch, chatId, StaffTelegramTexts.Activated(await OpenAlertsAsync(ct)), null, ct);
     }
 
     private Task<int> OpenAlertsAsync(CancellationToken ct) => db.StaffAlerts.AsNoTracking().CountAsync(a => a.Status == "open", ct);
@@ -275,13 +300,20 @@ public sealed partial class StaffChatGate(
     private async Task StatusAsync(string chatId, ResolvedChannel ch, CancellationToken ct)
     {
         if (await FindByChatAsync(chatId, ch, ct) is not { } l) return;
-        await ReplyAsync(ch, chatId, StaffTelegramTexts.Status(options.Active, l.ActivatedAt, l.Status == "claimed"), null, ct);
+        await ReplyAsync(ch, chatId, StaffTelegramTexts.Status(options.IsActiveFor(ch.TenantId), l.ActivatedAt, l.Status == "claimed"), null, ct);
     }
 
     private async Task HintAsync(string chatId, ResolvedChannel ch, CancellationToken ct)
     {
-        if (await FindByChatAsync(chatId, ch, ct) is not { } l) { await ReplyAsync(ch, chatId, StaffTelegramTexts.InvalidLink, null, ct); return; }
+        if (await FindByChatAsync(chatId, ch, ct) is not { } l) { await ReplyLimitedAsync(ch, chatId, StaffTelegramTexts.InvalidLink, ct); return; }
         if (limits.TryHit($"hint:{l.Id:N}", 1, HintWindow)) await ReplyAsync(ch, chatId, StaffTelegramTexts.Hint, null, ct);
+    }
+
+    /// <summary>L3: відповіді на підроблені callback / неприв'язані чати - не частіше SvcReplyPerWindow за вікно на чат (мовчки).</summary>
+    private async Task ReplyLimitedAsync(ResolvedChannel ch, string chatId, string text, CancellationToken ct)
+    {
+        if (!limits.TryHit($"svc-reply:{ch.ChannelId:N}:{chatId}", SvcReplyPerWindow, SvcReplyWindow)) return;
+        await ReplyAsync(ch, chatId, text, null, ct);
     }
 
     // ---------------------------------------------------------------- transport

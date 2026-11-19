@@ -20,28 +20,56 @@ public sealed class StaffTelegramOptions
     public const string L3Key = "Inventory:TelegramL3Approved";
     public const string ConsentVersion = "inv-tg-v1";
 
+    /// <summary>Середовища (список або через кому), де без L3Approved функція доступна лише tenant-ам з allowlist (M1: staging).</summary>
+    public const string PreL3EnvironmentsKey = "Inventory:TelegramPreL3AllowedEnvironments";
+    /// <summary>Allowlist tenant-ів (GUID; список або через кому) для pre-L3 середовища; порожньо = ніхто.</summary>
+    public const string PreL3TenantsKey = "Inventory:TelegramPreL3TenantIds";
+
     public bool Enabled { get; init; }
     public bool L3Approved { get; init; }
     public bool IsDevelopment { get; init; }
+    /// <summary>Поточне середовище входить у <see cref="PreL3EnvironmentsKey"/>.</summary>
+    public bool IsPreL3Environment { get; init; }
+    public IReadOnlySet<Guid> PreL3TenantIds { get; init; } = new HashSet<Guid>();
 
-    /// <summary>Функція реально доступна: прапор увімкнено й (Development або L3 закрито).</summary>
+    /// <summary>Функція доступна глобально: прапор увімкнено й (Development або L3 закрито). Без урахування allowlist pre-L3.</summary>
     public bool Active => Enabled && (IsDevelopment || L3Approved);
+
+    /// <summary>Функція доступна для tenant-а: <see cref="Active"/> або (pre-L3 середовище й tenant в allowlist).</summary>
+    public bool IsActiveFor(Guid tenantId) => Active || (Enabled && IsPreL3Environment && PreL3TenantIds.Contains(tenantId));
 
     public static bool IsOn(string? value) => value is not null && value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
 
-    public static StaffTelegramOptions Read(IConfiguration config, IHostEnvironment? env = null) => new()
+    private static List<string> ReadList(IConfiguration config, string key)
     {
-        Enabled = IsOn(config[EnabledKey]),
-        L3Approved = IsOn(config[L3Key]),
-        IsDevelopment = env?.IsDevelopment() ?? false,
-    };
+        var section = config.GetSection(key);
+        var raw = new List<string>();
+        if (section.Value is { } v) raw.AddRange(v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        foreach (var c in section.GetChildren())
+            if (c.Value is { } cv) raw.AddRange(cv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return raw;
+    }
 
-    /// <summary>Поза Development з увімкненим прапором без запобіжника L3 - помилка старту.</summary>
+    public static StaffTelegramOptions Read(IConfiguration config, IHostEnvironment? env = null)
+    {
+        var envName = env?.EnvironmentName;
+        return new()
+        {
+            Enabled = IsOn(config[EnabledKey]),
+            L3Approved = IsOn(config[L3Key]),
+            IsDevelopment = env?.IsDevelopment() ?? false,
+            IsPreL3Environment = envName is not null && ReadList(config, PreL3EnvironmentsKey).Contains(envName, StringComparer.OrdinalIgnoreCase),
+            PreL3TenantIds = ReadList(config, PreL3TenantsKey).Select(s => Guid.TryParse(s, out var g) ? g : Guid.Empty).Where(g => g != Guid.Empty).ToHashSet(),
+        };
+    }
+
+    /// <summary>Поза Development з увімкненим прапором без L3Approved - помилка старту, окрім pre-L3 середовища (там лише allowlist).</summary>
     public void ValidateForHost()
     {
-        if (Enabled && !IsDevelopment && !L3Approved)
+        if (Enabled && !IsDevelopment && !L3Approved && !IsPreL3Environment)
             throw new InvalidOperationException(
-                $"{EnabledKey}=true outside Development requires {L3Key}=true (L3 legal gate, ADR-025 §7.2).");
+                $"{EnabledKey}=true outside Development requires {L3Key}=true (L3 legal gate, ADR-025 §7.2) " +
+                $"or the environment listed in {PreL3EnvironmentsKey} (tenant allowlist {PreL3TenantsKey}).");
     }
 }
 
@@ -246,11 +274,17 @@ public static class StaffTelegramTexts
         "вигляді лише для надсилання цих сповіщень: заклад, товар, кількість, термін придатності. Дані клієнтів у сповіщеннях не надсилаються. " +
         "Повідомлення передаються через сервіс Telegram. Вимкнути можна будь-коли в адмінці або командою /stop у боті - ідентифікатор чату буде видалено.";
 
+    public const string NotYouWarning = "Якщо це були не ви - відключіть сповіщення в налаштуваннях адмінки (або командою /stop).";
+    public const string PlatformPaused = "Сповіщення зараз призупинені або вимкнені платформою";
+
     public static string Done(int openAlerts) => $"Готово. Сповіщення складу увімкнено. Відкритих сповіщень зараз: {openAlerts}. Вимкнути: /stop.";
+
+    /// <summary>Підтвердження активації (лише при переході claimed -> active): з нагадуванням L1.</summary>
+    public static string Activated(int openAlerts) => $"{Done(openAlerts)}\n{NotYouWarning}";
 
     public static string Status(bool featureOn, DateTimeOffset? since, bool awaiting) =>
         awaiting ? "Сповіщення складу: очікує підтвердження"
-        : $"Сповіщення складу: {(featureOn ? "увімкнено" : "вимкнено адміністратором платформи")}; прив'язано {(since is { } s ? s.ToString("dd.MM.yyyy") : "-")}";
+        : $"Сповіщення складу: {(featureOn ? "увімкнено" : PlatformPaused)}; прив'язано {(since is { } s ? s.ToString("dd.MM.yyyy") : "-")}";
 }
 
 /// <summary>Відкликання прив'язок (стирання даних чату, скасування черги, подія журналу). Спільне для API, бота й хуків деактивації.</summary>

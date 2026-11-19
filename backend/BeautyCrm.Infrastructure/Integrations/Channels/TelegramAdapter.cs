@@ -110,7 +110,8 @@ public sealed class TelegramAdapter(HttpClient http, IChannelCredentialsProvider
             var ts = m.TryGetProperty("date", out var d)
                 ? DateTimeOffset.FromUnixTimeSeconds(d.GetInt64()) : DateTimeOffset.UtcNow;
             var inbound = new InboundMessage(Channel, $"{chatId}:{m.GetProperty("message_id").GetRawText()}", chatId,
-                from.GetProperty("id").GetRawText(), SenderName(from), text, ts, kind);
+                from.GetProperty("id").GetRawText(), SenderName(from), text, ts, kind)
+            { Forwarded = ForwardKeys.Any(k => m.TryGetProperty(k, out _)) };
             if (kind == InboundKinds.Contact) inbound = inbound with { ContactVerdict = ContactVerdict(m, chat, from, out var phone), ContactPhone = phone };
             if (kind == InboundKinds.Location && TryTransientPoint(m, out var lat, out var lon))
                 inbound = inbound with { TransientLatitude = lat, TransientLongitude = lon };

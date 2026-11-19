@@ -16,7 +16,7 @@ public sealed record StaffRevokeInfo(string Reason, DateTimeOffset At);
 /// <summary>§32.24.8: без chat_id, username і токена.</summary>
 public sealed record TelegramLinkStatusDto(
     bool FeatureEnabled, string State, StaffChannelRef? Channel, DateTimeOffset? ExpiresAt, DateTimeOffset? ActivatedAt,
-    DateTimeOffset? LastDeliveryAt, StaffRevokeInfo? LastRevoke, string ConsentVersion);
+    DateTimeOffset? LastDeliveryAt, StaffRevokeInfo? LastRevoke, string ConsentVersion, DateTimeOffset? ClaimedAt = null);
 
 public sealed record IssueTelegramLinkRequest(bool? Consent, string? ConsentVersion, Guid? ChannelId);
 public sealed record TelegramLinkIssuedDto(Guid LinkId, string DeepLink, DateTimeOffset ExpiresAt);
@@ -44,7 +44,7 @@ public sealed class StaffTelegramLinkService(
         var now = clock.GetUtcNow();
         var open = await db.StaffTelegramLinks.AsNoTracking()
             .Where(l => l.UserId == actor.UserId && StaffTelegramRevocation.OpenStatuses.Contains(l.Status))
-            .Select(l => new { l.Status, l.ChannelId, l.TokenExpiresAt, l.ActivatedAt, l.LastDeliveryAt }).FirstOrDefaultAsync(ct);
+            .Select(l => new { l.Status, l.ChannelId, l.TokenExpiresAt, l.ActivatedAt, l.LastDeliveryAt, l.ClaimedAt }).FirstOrDefaultAsync(ct);
         // issued/claimed із простроченим токеном для UI вже не діють (фізично закриє воркер)
         if (open is not null && open.Status != "active" && open.TokenExpiresAt <= now) open = null;
         if (open is null)
@@ -53,19 +53,19 @@ public sealed class StaffTelegramLinkService(
             var last = await db.StaffTelegramLinks.AsNoTracking()
                 .Where(l => l.UserId == actor.UserId && l.Status == "revoked" && l.RevokedAt >= since)
                 .OrderByDescending(l => l.RevokedAt).Select(l => new { l.RevokeReason, l.RevokedAt }).FirstOrDefaultAsync(ct);
-            return new TelegramLinkStatusDto(options.Active, "none", null, null, null, null,
+            return new TelegramLinkStatusDto(options.IsActiveFor(actor.TenantId), "none", null, null, null, null,
                 last is null ? null : new StaffRevokeInfo(last.RevokeReason!, last.RevokedAt!.Value), StaffTelegramOptions.ConsentVersion);
         }
         var ch = await db.Channels.AsNoTracking().Where(c => c.Id == open.ChannelId).Select(c => new StaffChannelRef(c.Id, c.Name)).FirstOrDefaultAsync(ct);
         var state = open.Status switch { "issued" => "pending", "claimed" => "awaitingConfirmation", _ => "active" };
-        return new TelegramLinkStatusDto(options.Active, state, ch, open.Status == "active" ? null : open.TokenExpiresAt, open.ActivatedAt, open.LastDeliveryAt,
-            null, StaffTelegramOptions.ConsentVersion);
+        return new TelegramLinkStatusDto(options.IsActiveFor(actor.TenantId), state, ch, open.Status == "active" ? null : open.TokenExpiresAt, open.ActivatedAt, open.LastDeliveryAt,
+            null, StaffTelegramOptions.ConsentVersion, open.ClaimedAt);
     }
 
     public async Task<Result<TelegramLinkIssuedDto>> IssueAsync(Actor actor, IssueTelegramLinkRequest? req, CancellationToken ct)
     {
         if (actor.Role != Roles.Owner) return Err(ErrorKind.Forbidden, "forbidden_role", "Only the owner can use Telegram alerts.");
-        if (!options.Active) return Err(ErrorKind.Forbidden, "telegram_alerts_disabled", "Telegram alerts are not available.");
+        if (!options.IsActiveFor(actor.TenantId)) return Err(ErrorKind.Forbidden, "telegram_alerts_disabled", "Telegram alerts are not available.");
         if (!IsActiveOwner(actor.UserId)) return Err(ErrorKind.Forbidden, "forbidden_role", "Only the owner can use Telegram alerts.");
         if (req?.Consent != true) return Err(ErrorKind.Validation, "consent_required", "Consent is required.");
         if (req.ConsentVersion != StaffTelegramOptions.ConsentVersion)
