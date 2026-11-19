@@ -61,6 +61,9 @@ public static class DataServiceExtensions
         services.AddScoped<IOverviewStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<ILocationStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<BeautyCrm.Application.Features.BeautyInventory.IInventoryStore>(sp => sp.GetRequiredService<EfBeautyStore>()); // ADR-025: склад
+        services.AddScoped<BeautyCrm.Application.Features.BeautyInventory.IInventoryNormsStore>(sp => sp.GetRequiredService<EfBeautyStore>()); // етап 2a: норми
+        services.AddScoped<BeautyCrm.Application.Features.BeautyInventory.IStaffAlertStore>(sp => sp.GetRequiredService<EfBeautyStore>()); // етап 2a: сповіщення
+        services.AddScoped<BeautyCrm.Application.Features.BeautyInventory.IStaffAlertWriter>(sp => sp.GetRequiredService<EfBeautyStore>()); // етап 2a: спільний writer
         services.AddScoped<BeautyCrm.Application.Features.BeautyCoupons.ICouponStore>(sp => sp.GetRequiredService<EfBeautyStore>()); // TASK-778
         services.AddScoped<BeautyCrm.Application.Features.BeautyReminders.IReminderContextStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<BeautyCrm.Application.Features.BeautyReminders.IReminderReplanStore>(sp => sp.GetRequiredService<EfBeautyStore>());

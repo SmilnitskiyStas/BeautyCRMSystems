@@ -37,8 +37,8 @@ public sealed partial class InventoryService
         var rows = raw.Select(r =>
         {
             var eff = r.SettingMinStock ?? r.ProductMinStock;
-            return new StockRowDto(r.Product, locId, r.Quantity, eff, IsLow(r.Quantity, eff), r.IsEnabled, r.NearestExpiresOn, r.ExpiredQuantity, r.ExpiringQuantity,
-                costs ? r.Value : null, costs ? r.ValueIncomplete : null);
+            return new StockRowDto(r.Product, locId, r.Quantity, eff, IsLow(r.Quantity - r.Shortage, eff), r.IsEnabled, r.NearestExpiresOn, r.ExpiredQuantity, r.ExpiringQuantity,
+                costs ? r.Value : null, costs ? r.ValueIncomplete : null, r.Shortage, r.Quantity - r.Shortage);
         }).ToList();
         var next = hasMore ? EncodeCursor(hash, NameKey(rows[^1].Product.Name), rows[^1].Product.Id.ToString()) : null;
         return new StockPageDto(new StockLocationBrief(loc.Id, loc.Name, loc.Timezone, loc.IsActive), rows, hasMore, next);
@@ -66,9 +66,9 @@ public sealed partial class InventoryService
             foreach (var g in groups.Take(n))
             {
                 var p = g.First().Product;
-                var perLoc = g.Select(r => new StockSummaryLocationQty(r.LocationId, r.Quantity, IsLow(r.Quantity, r.SettingMinStock ?? r.ProductMinStock))).ToList();
+                var perLoc = g.Select(r => new StockSummaryLocationQty(r.LocationId, r.Quantity, IsLow(r.Quantity - r.Shortage, r.SettingMinStock ?? r.ProductMinStock), r.Shortage, r.Quantity - r.Shortage)).ToList();
                 items.Add(new StockSummaryRowDto(p, g.Sum(r => r.Quantity), perLoc.Any(x => x.IsLow), perLoc,
-                    SeesCosts(actor) ? g.Sum(r => r.Value) : null, SeesCosts(actor) ? g.Any(r => r.ValueIncomplete) : null));
+                    SeesCosts(actor) ? g.Sum(r => r.Value) : null, SeesCosts(actor) ? g.Any(r => r.ValueIncomplete) : null, g.Sum(r => r.Shortage)));
             }
         }
         var next = hasMore ? EncodeCursor(hash, NameKey(items[^1].Product.Name), items[^1].Product.Id.ToString()) : null;

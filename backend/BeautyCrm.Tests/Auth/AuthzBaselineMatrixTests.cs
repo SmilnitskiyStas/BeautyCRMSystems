@@ -227,6 +227,15 @@ public sealed class AuthzBaselineMatrixTests(AuthApiFixture fx) : IClassFixture<
         MgmtFilter("PUT", "api/beauty/inventory/stocktakes/{id:guid}/lines", "422"),
         MgmtFilter("POST", "api/beauty/inventory/stocktakes/{id:guid}/post", "422"),
         MgmtFilter("POST", "api/beauty/inventory/stocktakes/{id:guid}/cancel", "422"),
+        // ---- склад, етап 2a (TASK-884/886): норми матеріалів (читання - view>=own, зміна - owner/admin + manage=all) і сповіщення персоналу
+        Open("GET", "api/beauty/inventory/service-materials", "200"),
+        Open("GET", "api/beauty/inventory/services/{serviceId:guid}/materials", "404"),
+        MgmtFilter("PUT", "api/beauty/inventory/services/{serviceId:guid}/materials", "422"),
+        MgmtFilter("DELETE", "api/beauty/inventory/services/{serviceId:guid}/materials", "404"),
+        Open("GET", "api/beauty/inventory/alerts", "200"),
+        Open("GET", "api/beauty/inventory/alerts/unread-count", "200"),
+        Open("POST", "api/beauty/inventory/alerts/{id:guid}/read", "404"),
+        Open("POST", "api/beauty/inventory/alerts/read-all", "200"),
 
         // ---- спеціалісти (читання - всі, зміни - Management)
         Open("GET", "api/beauty/specialists", "200"),
