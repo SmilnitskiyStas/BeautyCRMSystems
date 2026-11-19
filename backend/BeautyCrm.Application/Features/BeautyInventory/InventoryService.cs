@@ -120,7 +120,7 @@ public sealed partial class InventoryService(IInventoryStore store, TimeProvider
     /// kinds - тип кожної частини: n = рядок, g = Guid, t = ticks (long у межах DateTimeOffset), d = дата yyyy-MM-dd, D = дата або порожньо, f = "0"/"1".
     /// Повернуті частини гарантовано парсяться відповідним типом.
     /// </summary>
-    private static Result<string[]?> DecodeCursor(string? cursor, string hash, string kinds)
+    internal static Result<string[]?> DecodeCursor(string? cursor, string hash, string kinds)
     {
         if (string.IsNullOrEmpty(cursor)) return Result<string[]?>.Ok(null);
         try
@@ -269,6 +269,7 @@ public sealed partial class InventoryService(IInventoryStore store, TimeProvider
         CatalogWriteOutcome.NotFound => ProductNotFound,
         CatalogWriteOutcome.BarcodeTaken => Error.Conflict("barcode_taken", "A product with this barcode already exists."),
         CatalogWriteOutcome.UnitLocked => UnitLocked,
+        CatalogWriteOutcome.PurposeLocked => Error.Validation("purpose_locked", "The product is used in service materials: remove it from the norms first."),
         _ => Error.Conflict("barcode_taken", "A product with this barcode already exists."),
     };
 

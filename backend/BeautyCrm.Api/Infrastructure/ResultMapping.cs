@@ -28,6 +28,7 @@ public static class ResultMapping
             ErrorKind.Conflict => c.Conflict(body),
             ErrorKind.Forbidden => c.StatusCode(StatusCodes.Status403Forbidden, body),
             ErrorKind.TooManyRequests => c.StatusCode(StatusCodes.Status429TooManyRequests, body),
+            ErrorKind.Unavailable => c.StatusCode(StatusCodes.Status503ServiceUnavailable, body),
             ErrorKind.PaymentFailed => c.StatusCode(StatusCodes.Status402PaymentRequired, body),
             _ => c.UnprocessableEntity(body),
         };

@@ -102,7 +102,9 @@ interface MovementRec {
   occurredAt: string;
   locationId: string;
   productId: string;
-  batchId: string;
+  batchId: string | null;
+  /** §32.17: рух нестачі / погашення нестачі (без партії). */
+  isShortage?: boolean;
   quantity: number;
   unitCost: number | null;
   reason: WriteOffReason | null;
@@ -123,6 +125,7 @@ interface OperationRec {
   receivedOn: string | null;
   note: string | null;
   stocktakeId: string | null;
+  appointmentId?: string | null;
 }
 interface ProductRec {
   id: string;
@@ -150,7 +153,7 @@ interface StocktakeRec {
   createdAt: string;
   postedAt: string | null;
   cancelledAt: string | null;
-  lines: { productId: string; counted: number | null; expected: number | null; surplusExpiresOn: string | null }[];
+  lines: { productId: string; counted: number | null; expected: number | null; expectedShortage?: number | null; surplusExpiresOn: string | null }[];
 }
 
 export function createMockInventory(deps: InventoryMockDeps) {
@@ -212,6 +215,9 @@ export function createMockInventory(deps: InventoryMockDeps) {
     return s ? { id: s.id, name: s.name } : null;
   };
   const productRef = (p: ProductRec): ProductRef => ({ id: p.id, name: p.name, unit: p.unit, purpose: p.purpose, category: p.category, barcode: p.barcode, isActive: p.isActive });
+  /** §32.17: нестача пари (заклад, товар); у демо - лише сид. */
+  const shortages = new Map<string, number>();
+  const shortageOf = (locationId: string, productId: string) => shortages.get(`${locationId}|${productId}`) ?? 0;
   const levelOf = (locationId: string, productId: string) =>
     fromMilli(batches.filter((b) => b.locationId === locationId && b.productId === productId).reduce((s, b) => s + toMilli(b.quantity), 0));
   const hasMovements = (productId: string) => movements.some((m) => m.productId === productId);
@@ -275,6 +281,7 @@ export function createMockInventory(deps: InventoryMockDeps) {
     product: productRef(productById(m.productId)!),
     batchId: m.batchId,
     quantity: m.quantity,
+    isShortage: m.isShortage === true,
     ...(costs() !== "none" ? { unitCost: m.unitCost } : {}),
     reason: m.reason,
     note: m.note,
@@ -297,6 +304,7 @@ export function createMockInventory(deps: InventoryMockDeps) {
     createdAt: op.createdAt,
     createdBy: me,
     productCount: new Set(movements.filter((m) => m.operationId === op.id).map((m) => m.productId)).size,
+    appointmentId: op.appointmentId ?? null,
     ...(costs() !== "none" ? { totalCost: totalCost(op) } : {}),
   });
   const toOperation = (op: OperationRec): Operation => ({
@@ -426,6 +434,10 @@ export function createMockInventory(deps: InventoryMockDeps) {
       { p: gel, qty: 9 },
       { p: gloves, qty: 30 },
     ], 25);
+    // нестача (§32.17): автосписання «Дезінфікуючий розчин» у закладі P без залишку -> сальдо −0,3 л
+    const sop = newOperation({ kind: "service_consumption", locationId: P, appointmentId: "demo-appt" }, now() - 2 * DAY);
+    pushMovement(sop, { type: "service_consumption", locationId: P, productId: disinfect.id, batchId: null, isShortage: true, quantity: -0.3, unitCost: null, reason: null, counterpartLocationId: null }, now() - 2 * DAY);
+    shortages.set(`${P}|${disinfect.id}`, 0.3);
     // списання: відображається в журналі рухів
     const wo = newOperation({ kind: "write_off", locationId: C, reason: "damaged", note: "Розбита пляшка" }, now() - 10 * DAY);
     const sb = batches.find((b) => b.locationId === C && b.productId === shampoo.id && b.lotNumber === "SH-0412")!;
@@ -593,6 +605,8 @@ export function createMockInventory(deps: InventoryMockDeps) {
         .map((p): StockRow => {
           const own = batches.filter((b) => b.locationId === loc.id && b.productId === p.id && b.quantity > 0);
           const quantity = levelOf(loc.id, p.id);
+          const shortage = shortageOf(loc.id, p.id);
+          const balance = fromMilli(toMilli(quantity) - toMilli(shortage));
           const min = effectiveMin(p, loc.id);
           const expiries = own.map((b) => b.expiresOn).filter((d): d is string => d !== null).sort();
           const sumBy = (st: "expired" | "expiring") => fromMilli(own.filter((b) => batchStatus(b, today, q.expiringWithinDays ?? EXPIRING_SOON_DAYS) === st).reduce((a, b) => a + toMilli(b.quantity), 0));
@@ -602,7 +616,9 @@ export function createMockInventory(deps: InventoryMockDeps) {
             locationId: loc.id,
             quantity,
             minStock: min,
-            isLow: isLow(quantity, min),
+            shortageQuantity: shortage,
+            balance,
+            isLow: isLow(balance, min),
             isEnabled: enabledAt(p, loc.id),
             nearestExpiresOn: expiries[0] ?? null,
             expiredQuantity: sumBy("expired"),
@@ -627,7 +643,7 @@ export function createMockInventory(deps: InventoryMockDeps) {
       const locs = scopeLocations();
       const s = norm(q.search ?? "");
       const rows = products
-        .filter((p) => p.isActive || locs.some((l) => levelOf(l.id, p.id) > 0))
+        .filter((p) => p.isActive || locs.some((l) => levelOf(l.id, p.id) > 0 || shortageOf(l.id, p.id) > 0))
         .filter((p) => !s || norm(p.name).includes(s) || norm(p.barcode ?? "").includes(s))
         .filter((p) => !q.category || p.category === q.category)
         .filter((p) => !q.purpose || p.purpose === q.purpose)
@@ -635,13 +651,16 @@ export function createMockInventory(deps: InventoryMockDeps) {
         .map((p) => {
           const per = locs.map((l) => {
             const quantity = levelOf(l.id, p.id);
-            return { locationId: l.id, quantity, isLow: isLow(quantity, effectiveMin(p, l.id)) };
+            const shortageQuantity = shortageOf(l.id, p.id);
+            const balance = fromMilli(toMilli(quantity) - toMilli(shortageQuantity));
+            return { locationId: l.id, quantity, shortageQuantity, balance, isLow: isLow(balance, effectiveMin(p, l.id)) };
           });
           const own = batches.filter((b) => b.productId === p.id && b.quantity > 0 && locs.some((l) => l.id === b.locationId));
           const priced = own.filter((b) => b.unitCost !== null);
           return {
             product: productRef(p),
             totalQuantity: fromMilli(per.reduce((a, x) => a + toMilli(x.quantity), 0)),
+            totalShortage: fromMilli(per.reduce((a, x) => a + toMilli(x.shortageQuantity), 0)),
             isLowAnywhere: per.some((x) => x.isLow),
             locations: per,
             ...(costs() !== "none"
@@ -946,6 +965,13 @@ export function createMockInventory(deps: InventoryMockDeps) {
         const p = productById(l.productId)!;
         const level = levelOf(loc.id, p.id);
         l.expected = level;
+        const sh = shortageOf(loc.id, p.id);
+        l.expectedShortage = sh;
+        if (sh > 0) {
+          op ??= newOperation({ kind: "stocktake", locationId: loc.id, stocktakeId: st.id, note: st.note });
+          pushMovement(op, { type: "stocktake_adjust", locationId: loc.id, productId: p.id, batchId: null, isShortage: true, quantity: sh, unitCost: null, reason: null, counterpartLocationId: null });
+          shortages.delete(`${loc.id}|${p.id}`);
+        }
         const diff = toMilli(l.counted!) - toMilli(level);
         if (diff === 0) continue;
         op ??= newOperation({ kind: "stocktake", locationId: loc.id, stocktakeId: st.id, note: st.note });
@@ -1010,8 +1036,9 @@ export function createMockInventory(deps: InventoryMockDeps) {
           return {
             product: productRef(p),
             expectedQuantity: expected,
+            expectedShortage: s.status === "draft" ? shortageOf(s.locationId, p.id) : (l.expectedShortage ?? 0),
             countedQuantity: l.counted,
-            difference: l.counted === null || expected === null ? null : fromMilli(toMilli(l.counted) - toMilli(expected)),
+            difference: l.counted === null || expected === null ? null : fromMilli(toMilli(l.counted) - (toMilli(expected) - toMilli(s.status === "draft" ? shortageOf(s.locationId, p.id) : (l.expectedShortage ?? 0)))),
             surplusExpiresOn: l.surplusExpiresOn,
           };
         })
@@ -1075,7 +1102,40 @@ export function createMockInventory(deps: InventoryMockDeps) {
     if (isUpdate && r.isActive !== undefined && r.isActive !== null) s.isActive = r.isActive;
   }
 
+  peeks.set(api, () => {
+    const out: AlertSeed = { lows: [], expiring: [], shortages: [] };
+    for (const l of allLocations().filter((x) => x.isActive !== false)) {
+      const today = todayOf(l);
+      for (const p of products.filter((x) => x.isActive && enabledAt(x, l.id))) {
+        const quantity = levelOf(l.id, p.id);
+        const balance = fromMilli(toMilli(quantity) - toMilli(shortageOf(l.id, p.id)));
+        const min = effectiveMin(p, l.id);
+        const has = batches.some((b) => b.locationId === l.id && b.productId === p.id) || shortageOf(l.id, p.id) > 0;
+        if (has && min !== null && isLow(balance, min)) out.lows.push({ location: { id: l.id, name: l.name }, product: productRef(p), balance, threshold: min });
+      }
+      for (const b of batches.filter((x) => x.locationId === l.id && x.quantity > 0 && x.expiresOn)) {
+        const days = daysToExpiry(b.expiresOn, today);
+        if (days !== null && days <= EXPIRING_SOON_DAYS) out.expiring.push({ location: { id: l.id, name: l.name }, product: productRef(productById(b.productId)!), batchId: b.id, expiresOn: b.expiresOn!, lotNumber: b.lotNumber, quantity: b.quantity, days });
+      }
+    }
+    for (const [key, qty] of shortages) {
+      const [lid, pid] = key.split("|") as [string, string];
+      const m = movements.find((x) => x.isShortage && x.locationId === lid && x.productId === pid && x.type === "service_consumption");
+      const l = locationById(lid);
+      if (m && l) out.shortages.push({ location: { id: l.id, name: l.name }, product: productRef(productById(pid)!), operationId: m.operationId, quantity: qty });
+    }
+    return out;
+  });
   return api;
 }
+
+/** Знімок для демо-сповіщень (§32.19): те, що воркер знайшов би в поточному стані складу, без урахування ролі. */
+export interface AlertSeed {
+  lows: { location: NamedRef; product: ProductRef; balance: number; threshold: number }[];
+  expiring: { location: NamedRef; product: ProductRef; batchId: string; expiresOn: string; lotNumber: string | null; quantity: number; days: number }[];
+  shortages: { location: NamedRef; product: ProductRef; operationId: string; quantity: number }[];
+}
+const peeks = new WeakMap<object, () => AlertSeed>();
+export const peekInventory = (api: object): AlertSeed => peeks.get(api)?.() ?? { lows: [], expiring: [], shortages: [] };
 
 export type MockInventory = ReturnType<typeof createMockInventory>;

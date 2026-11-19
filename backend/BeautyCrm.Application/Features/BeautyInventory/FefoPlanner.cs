@@ -24,7 +24,11 @@ public static class FefoPlanner
 
     public static bool IsExpired(DateOnly? expiresOn, DateOnly today) => expiresOn is { } e && e < today;
 
-    public static FefoPlan Allocate(IReadOnlyList<StockLine> lines, IReadOnlyList<BatchRow> batches, bool skipExpired, DateOnly today)
+    /// <param name="allowPartial">
+    /// Автосписання (§32.18): FEFO-рядок без явної партії при нестачі бере все доступне (скільки є), а непокрита частина
+    /// (<c>Requested - Available</c>) повертається записом у Shortages. Для ручних операцій false: нестача = відмова без взяттів.
+    /// </param>
+    public static FefoPlan Allocate(IReadOnlyList<StockLine> lines, IReadOnlyList<BatchRow> batches, bool skipExpired, DateOnly today, bool allowPartial = false)
     {
         var remaining = batches.ToDictionary(b => b.Id, b => b.Quantity);
         var byProduct = batches.GroupBy(b => b.ProductId).ToDictionary(g => g.Key, g => g.OrderBy(x => x, Comparer<BatchRow>.Create(Compare)).ToList());
@@ -52,8 +56,8 @@ public static class FefoPlanner
             var list = byProduct.TryGetValue(l.ProductId, out var bs) ? bs : [];
             var usable = list.Where(b => remaining[b.Id] > 0 && !(skipExpired && IsExpired(b.ExpiresOn, today))).ToList();
             var total = usable.Sum(b => remaining[b.Id]);
-            if (l.Quantity > total) { shortages.Add(new(l.Line, l.ProductId, null, l.Quantity, total)); continue; }
-            var need = l.Quantity;
+            if (l.Quantity > total) { shortages.Add(new(l.Line, l.ProductId, null, l.Quantity, total)); if (!allowPartial) continue; }
+            var need = Math.Min(l.Quantity, total);
             foreach (var b in usable)
             {
                 if (need <= 0) break;

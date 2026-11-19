@@ -79,6 +79,15 @@ public class BeautyDbContext : DbContext
     public DbSet<StockMovement> StockMovements => Set<StockMovement>();
     public DbSet<Stocktake> Stocktakes => Set<Stocktake>();
     public DbSet<StocktakeLine> StocktakeLines => Set<StocktakeLine>();
+    // Склад, етап 2a (TASK-883, §32.16-§32.19)
+    public DbSet<ServiceMaterialSet> ServiceMaterialSets => Set<ServiceMaterialSet>();
+    public DbSet<ServiceMaterial> ServiceMaterials => Set<ServiceMaterial>();
+    public DbSet<StaffAlert> StaffAlerts => Set<StaffAlert>();
+    // Склад, етап 2b (TASK-895, §32.24.2): Telegram-сповіщення власнику
+    public DbSet<StaffTelegramLink> StaffTelegramLinks => Set<StaffTelegramLink>();
+    public DbSet<StaffTelegramLinkEvent> StaffTelegramLinkEvents => Set<StaffTelegramLinkEvent>();
+    public DbSet<StaffNotification> StaffNotifications => Set<StaffNotification>();
+    public DbSet<StaffNotificationAlert> StaffNotificationAlerts => Set<StaffNotificationAlert>();
 
     // auth (TASK-684)
     public DbSet<Tenant> Tenants => Set<Tenant>();
@@ -625,6 +634,7 @@ public class BeautyDbContext : DbContext
         ConfigureServiceCosts(mb);
         ConfigureMarketing(mb);
         ConfigureInventory(mb);
+        ConfigureStaffTelegram(mb);
         ConfigureAuth(mb);
         ConfigurePlatform(mb);
     }
@@ -758,8 +768,12 @@ public class BeautyDbContext : DbContext
         mb.Entity<StockLevel>(b =>
         {
             Base(b, "beauty_stock_levels", t =>
-                t.HasCheckConstraint("ck_beauty_stock_levels_quantity", "quantity >= 0"));
+            {
+                t.HasCheckConstraint("ck_beauty_stock_levels_quantity", "quantity >= 0");
+                t.HasCheckConstraint("ck_beauty_stock_levels_shortage", "shortage_quantity >= 0");
+            });
             b.Property(x => x.Quantity).HasPrecision(14, 3).HasDefaultValue(0m);
+            b.Property(x => x.ShortageQuantity).HasPrecision(14, 3).HasDefaultValue(0m);
             FkTo<StockLevel, Location>(b, "LocationId", DeleteBehavior.Restrict);
             FkTo<StockLevel, Product>(b, "ProductId", DeleteBehavior.Restrict);
             b.HasIndex(x => new { x.TenantId, x.LocationId, x.ProductId }).IsUnique().HasDatabaseName("ux_beauty_stock_levels_pair");
@@ -781,6 +795,8 @@ public class BeautyDbContext : DbContext
                 t.HasCheckConstraint("ck_beauty_stock_operations_stocktake", "(kind = 'stocktake') = (stocktake_id IS NOT NULL)");
                 t.HasCheckConstraint("ck_beauty_stock_operations_idempotency",
                     "(idempotency_key_hash IS NULL) = (idempotency_request_hash IS NULL)");
+                t.HasCheckConstraint("ck_beauty_stock_operations_appointment",
+                    "(kind = 'service_consumption') = (appointment_id IS NOT NULL)");
             });
             Enum(b.Property(x => x.Kind)).HasMaxLength(24);
             b.Property(x => x.Reason).HasConversion(new EnumMemberConverter<WriteOffReason>()).HasMaxLength(16);
@@ -795,6 +811,9 @@ public class BeautyDbContext : DbContext
             FkTo<StockOperation, Supplier>(b, "SupplierId", DeleteBehavior.Restrict);
             FkTo<StockOperation, Stocktake>(b, "StocktakeId", DeleteBehavior.Restrict);
             FkTo<StockOperation, User>(b, "CreatedByUserId", DeleteBehavior.Restrict);
+            FkTo<StockOperation, Appointment>(b, "AppointmentId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.AppointmentId }).IsUnique().HasDatabaseName("ux_beauty_stock_operations_appointment")
+                .HasFilter("appointment_id IS NOT NULL");
             b.HasIndex(x => new { x.TenantId, x.StocktakeId }).IsUnique().HasDatabaseName("ux_beauty_stock_operations_stocktake")
                 .HasFilter("stocktake_id IS NOT NULL");
             b.HasIndex(x => new { x.TenantId, x.IdempotencyKeyHash }).IsUnique().HasDatabaseName("ux_beauty_stock_operations_idempotency")
@@ -843,13 +862,16 @@ public class BeautyDbContext : DbContext
             KeyOnly(b, "beauty_stock_movements", t =>
             {
                 Check<StockMovementType>(t, "beauty_stock_movements", "type");
-                t.HasCheckConstraint("ck_beauty_stock_movements_batch", "batch_id IS NOT NULL OR type = 'service_consumption'");
+                t.HasCheckConstraint("ck_beauty_stock_movements_batch", "(batch_id IS NULL) = is_shortage");
+                t.HasCheckConstraint("ck_beauty_stock_movements_shortage",
+                    "NOT is_shortage OR type = 'service_consumption' OR (type IN ('receipt', 'transfer_in', 'stocktake_adjust') AND quantity > 0)");
                 t.HasCheckConstraint("ck_beauty_stock_movements_quantity_sign",
                     "(type IN ('receipt', 'transfer_in') AND quantity > 0) " +
                     "OR (type IN ('write_off', 'transfer_out', 'service_consumption', 'sale') AND quantity < 0) " +
                     "OR (type = 'stocktake_adjust' AND quantity <> 0)");
             });
             Enum(b.Property(x => x.Type)).HasMaxLength(24);
+            b.Property(x => x.IsShortage).HasDefaultValue(false);
             b.Property(x => x.Quantity).HasPrecision(14, 3);
             b.Property(x => x.UnitCost).HasPrecision(12, 2);
             b.Property(x => x.OccurredAt).HasDefaultValueSql("now()");
@@ -902,11 +924,13 @@ public class BeautyDbContext : DbContext
             {
                 t.HasCheckConstraint("ck_beauty_stocktake_lines_counted", "counted_quantity IS NULL OR counted_quantity >= 0");
                 t.HasCheckConstraint("ck_beauty_stocktake_lines_expected", "expected_quantity >= 0");
+                t.HasCheckConstraint("ck_beauty_stocktake_lines_expected_shortage", "expected_shortage IS NULL OR expected_shortage >= 0");
                 t.HasCheckConstraint("ck_beauty_stocktake_lines_surplus_expires_on",
                     "surplus_expires_on IS NULL OR surplus_expires_on BETWEEN DATE '2000-01-01' AND DATE '2100-12-31'");
             });
             b.Property(x => x.CountedQuantity).HasPrecision(14, 3);
             b.Property(x => x.ExpectedQuantity).HasPrecision(14, 3);
+            b.Property(x => x.ExpectedShortage).HasPrecision(14, 3);
             b.Property(x => x.SurplusExpiresOn).HasColumnType("date");
             FkTo<StocktakeLine, Stocktake>(b, "StocktakeId", DeleteBehavior.Cascade);
             FkTo<StocktakeLine, Product>(b, "ProductId", DeleteBehavior.Restrict);
@@ -914,6 +938,182 @@ public class BeautyDbContext : DbContext
             b.HasIndex(x => new { x.TenantId, x.StocktakeId, x.ProductId }).IsUnique().HasDatabaseName("ux_beauty_stocktake_lines_pair");
             b.HasIndex(x => new { x.TenantId, x.ProductId });
             b.HasIndex(x => new { x.TenantId, x.UpdatedByUserId }).HasFilter("updated_by_user_id IS NOT NULL");
+        });
+
+        // ---- Етап 2a (TASK-883, §32.16, §32.19) ----
+
+        mb.Entity<ServiceMaterialSet>(b =>
+        {
+            Base(b, "beauty_service_material_sets");
+            FkTo<ServiceMaterialSet, Service>(b, "ServiceId", DeleteBehavior.Restrict);
+            FkTo<ServiceMaterialSet, Location>(b, "LocationId", DeleteBehavior.Cascade);
+            FkTo<ServiceMaterialSet, User>(b, "UpdatedByUserId", DeleteBehavior.Restrict);
+            // одна мережева (location_id NULL) + не більше одного override на заклад; також індекс FK service_id
+            b.HasIndex(x => new { x.TenantId, x.ServiceId, x.LocationId }).IsUnique().AreNullsDistinct(false)
+                .HasDatabaseName("ux_beauty_service_material_sets_scope");
+            b.HasIndex(x => new { x.TenantId, x.LocationId }).HasFilter("location_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.UpdatedByUserId });
+        });
+
+        mb.Entity<ServiceMaterial>(b =>
+        {
+            Base(b, "beauty_service_materials", t =>
+                t.HasCheckConstraint("ck_beauty_service_materials_quantity", "quantity > 0 AND quantity <= 100000"));
+            b.Property(x => x.Quantity).HasPrecision(14, 3);
+            FkTo<ServiceMaterial, ServiceMaterialSet>(b, "SetId", DeleteBehavior.Cascade);
+            FkTo<ServiceMaterial, Product>(b, "ProductId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.SetId, x.ProductId }).IsUnique().HasDatabaseName("ux_beauty_service_materials_pair");
+            b.HasIndex(x => new { x.TenantId, x.ProductId });
+        });
+
+        mb.Entity<StaffAlert>(b =>
+        {
+            Base(b, "beauty_staff_alerts", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_staff_alerts_kind", "kind IN ('low_stock', 'expiring', 'shortage')");
+                t.HasCheckConstraint("ck_beauty_staff_alerts_status", "status IN ('open', 'read', 'resolved')");
+                t.HasCheckConstraint("ck_beauty_staff_alerts_batch", "(kind = 'expiring') = (batch_id IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_staff_alerts_operation", "(kind = 'shortage') = (operation_id IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_staff_alerts_days_bucket",
+                    "days_bucket IS NULL OR (kind = 'expiring' AND days_bucket BETWEEN 0 AND 365)");
+                t.HasCheckConstraint("ck_beauty_staff_alerts_threshold", "threshold IS NULL OR (kind = 'low_stock' AND threshold >= 0)");
+                t.HasCheckConstraint("ck_beauty_staff_alerts_resolved", "(status = 'resolved') = (resolved_at IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_staff_alerts_read", "status <> 'read' OR read_at IS NOT NULL");
+            });
+            b.Property(x => x.Kind).HasMaxLength(16);
+            b.Property(x => x.Status).HasMaxLength(16).HasDefaultValue("open");
+            b.Property(x => x.Quantity).HasPrecision(14, 3);
+            b.Property(x => x.Threshold).HasPrecision(14, 3);
+            b.Property(x => x.ExpiresOn).HasColumnType("date");
+            b.Property(x => x.DedupeKey).HasMaxLength(200);
+            FkTo<StaffAlert, Location>(b, "LocationId", DeleteBehavior.Restrict);
+            FkTo<StaffAlert, Product>(b, "ProductId", DeleteBehavior.Restrict);
+            FkTo<StaffAlert, StockBatch>(b, "BatchId", DeleteBehavior.Restrict);
+            FkTo<StaffAlert, StockOperation>(b, "OperationId", DeleteBehavior.Restrict);
+            FkTo<StaffAlert, User>(b, "ReadByUserId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.DedupeKey }).IsUnique().HasDatabaseName("ux_beauty_staff_alerts_dedupe");
+            b.HasIndex(x => new { x.TenantId, x.Status, x.CreatedAt, x.Id }).IsDescending(false, false, true, true)
+                .HasDatabaseName("ix_beauty_staff_alerts_status_created");
+            b.HasIndex(x => new { x.TenantId, x.LocationId, x.Status }).HasDatabaseName("ix_beauty_staff_alerts_location_status");
+            b.HasIndex(x => new { x.TenantId, x.BatchId }).HasFilter("batch_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.OperationId }).HasFilter("operation_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.ProductId });
+            b.HasIndex(x => new { x.TenantId, x.ReadByUserId }).HasFilter("read_by_user_id IS NOT NULL");
+        });
+    }
+
+    // ---------- Склад, етап 2b: Telegram-сповіщення власнику (TASK-895, ADR-025 §12, §32.24.2; RLS/тригери в міграції beauty_inventory_stage2b) ----------
+
+    private static void ConfigureStaffTelegram(ModelBuilder mb)
+    {
+        const string OpenStates = "status IN ('issued', 'claimed', 'active')";
+        const string RevokeReasons = "'user_unlink', 'bot_stop', 'declined', 'replaced', 'expired', 'bot_blocked', 'chat_not_found', " +
+                                     "'user_deactivated', 'role_changed', 'tenant_inactive'";
+        const string RejectReasons = "'expired', 'used', 'channel_mismatch', 'chat_conflict', 'user_inactive', 'disabled'";
+
+        mb.Entity<StaffTelegramLink>(b =>
+        {
+            Base(b, "beauty_staff_telegram_links", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_staff_telegram_links_status", "status IN ('issued', 'claimed', 'active', 'revoked')");
+                // форма кожного стану (§32.24.2): у revoked дані чату й токен стерто; у issued/claimed ще немає підтвердження й доставок
+                t.HasCheckConstraint("ck_beauty_staff_telegram_links_shape",
+                    "(status = 'issued' AND token_hash IS NOT NULL AND token_expires_at IS NOT NULL AND chat_id_encrypted IS NULL AND chat_id_hash IS NULL " +
+                    "AND claimed_at IS NULL AND bot_confirmed_at IS NULL AND activated_at IS NULL AND revoked_at IS NULL AND last_delivery_at IS NULL) " +
+                    "OR (status = 'claimed' AND token_hash IS NOT NULL AND token_expires_at IS NOT NULL AND chat_id_encrypted IS NOT NULL AND chat_id_hash IS NOT NULL " +
+                    "AND claimed_at IS NOT NULL AND bot_confirmed_at IS NULL AND activated_at IS NULL AND revoked_at IS NULL AND last_delivery_at IS NULL) " +
+                    "OR (status = 'active' AND token_hash IS NULL AND chat_id_encrypted IS NOT NULL AND chat_id_hash IS NOT NULL " +
+                    "AND bot_confirmed_at IS NOT NULL AND activated_at IS NOT NULL AND revoked_at IS NULL) " +
+                    "OR (status = 'revoked' AND token_hash IS NULL AND chat_id_encrypted IS NULL AND chat_id_hash IS NULL AND revoked_at IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_staff_telegram_links_revoke_reason",
+                    $"(revoke_reason IS NULL) = (status <> 'revoked') AND (revoke_reason IS NULL OR revoke_reason IN ({RevokeReasons}))");
+                t.HasCheckConstraint("ck_beauty_staff_telegram_links_chat", "(chat_id_encrypted IS NULL) = (chat_id_hash IS NULL)");
+                t.HasCheckConstraint("ck_beauty_staff_telegram_links_token_hash", "token_hash IS NULL OR octet_length(token_hash) = 32");
+                t.HasCheckConstraint("ck_beauty_staff_telegram_links_chat_hash", "chat_id_hash IS NULL OR octet_length(chat_id_hash) = 32");
+                t.HasCheckConstraint("ck_beauty_staff_telegram_links_consent", "consent_version ~ '^inv-tg-v[0-9]+$'");
+            });
+            b.Property(x => x.Status).HasMaxLength(16).HasDefaultValue("issued");
+            b.Property(x => x.TokenHash).HasColumnType("bytea");
+            b.Property(x => x.ChatIdEncrypted).HasColumnType("text");
+            b.Property(x => x.ChatIdHash).HasColumnType("bytea");
+            b.Property(x => x.ConsentVersion).HasMaxLength(32);
+            b.Property(x => x.RevokeReason).HasMaxLength(24);
+            FkTo<StaffTelegramLink, User>(b, "UserId", DeleteBehavior.Restrict);
+            FkTo<StaffTelegramLink, Channel>(b, "ChannelId", DeleteBehavior.Restrict);
+            // один незакритий рядок (отже один активний чат) на користувача
+            b.HasIndex(x => new { x.TenantId, x.UserId }).IsUnique().HasFilter(OpenStates)
+                .HasDatabaseName("ux_beauty_staff_telegram_links_user_open");
+            // один користувач на чат у боті tenant (хеш чату тримають лише claimed|active)
+            b.HasIndex(x => new { x.TenantId, x.ChannelId, x.ChatIdHash }).IsUnique().HasFilter("status IN ('claimed', 'active')")
+                .HasDatabaseName("ux_beauty_staff_telegram_links_chat_open");
+            b.HasIndex(x => new { x.TenantId, x.TokenHash }).IsUnique().HasFilter("token_hash IS NOT NULL")
+                .HasDatabaseName("ux_beauty_staff_telegram_links_token");
+            // прибирання прострочених
+            b.HasIndex(x => new { x.TenantId, x.Status, x.TokenExpiresAt }).HasFilter("status IN ('issued', 'claimed')")
+                .HasDatabaseName("ix_beauty_staff_telegram_links_expiry");
+            // FK-індекси (часткові ux_ не покривають revoked-рядки; (user, created_at) обслуговує й lastRevoke за 30 днів)
+            b.HasIndex(x => new { x.TenantId, x.UserId, x.CreatedAt }).HasDatabaseName("ix_beauty_staff_telegram_links_user_created");
+            b.HasIndex(x => new { x.TenantId, x.ChannelId }).HasDatabaseName("ix_beauty_staff_telegram_links_channel");
+        });
+
+        mb.Entity<StaffTelegramLinkEvent>(b =>
+        {
+            KeyOnly(b, "beauty_staff_telegram_link_events", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_staff_telegram_link_events_event",
+                    "event IN ('issued', 'claimed', 'activated', 'declined', 'revoked', 'rejected')");
+                t.HasCheckConstraint("ck_beauty_staff_telegram_link_events_actor", "actor IN ('user', 'bot', 'system')");
+                t.HasCheckConstraint("ck_beauty_staff_telegram_link_events_reason",
+                    $"(reason IS NULL OR reason IN ({RevokeReasons}, {RejectReasons})) AND (event NOT IN ('revoked', 'rejected') OR reason IS NOT NULL)");
+            });
+            b.Property(x => x.Event).HasMaxLength(16);
+            b.Property(x => x.Reason).HasMaxLength(24);
+            b.Property(x => x.Actor).HasMaxLength(8);
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            FkTo<StaffTelegramLinkEvent, StaffTelegramLink>(b, "LinkId", DeleteBehavior.Restrict);
+            FkTo<StaffTelegramLinkEvent, User>(b, "UserId", DeleteBehavior.Restrict);
+            FkTo<StaffTelegramLinkEvent, User>(b, "ActorUserId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.LinkId, x.CreatedAt }).HasDatabaseName("ix_beauty_staff_telegram_link_events_link");
+            b.HasIndex(x => new { x.TenantId, x.UserId }).HasDatabaseName("ix_beauty_staff_telegram_link_events_user");
+            b.HasIndex(x => new { x.TenantId, x.ActorUserId }).HasFilter("actor_user_id IS NOT NULL")
+                .HasDatabaseName("ix_beauty_staff_telegram_link_events_actor");
+        });
+
+        mb.Entity<StaffNotification>(b =>
+        {
+            Base(b, "beauty_staff_notifications", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_staff_notifications_kind", "kind IN ('alert', 'digest')");
+                t.HasCheckConstraint("ck_beauty_staff_notifications_body", "char_length(body) BETWEEN 1 AND 4096");
+                t.HasCheckConstraint("ck_beauty_staff_notifications_status", "status IN ('pending', 'sending', 'sent', 'failed', 'cancelled')");
+                t.HasCheckConstraint("ck_beauty_staff_notifications_attempts", "attempts BETWEEN 0 AND 10");
+                t.HasCheckConstraint("ck_beauty_staff_notifications_sent", "(status = 'sent') = (sent_at IS NOT NULL)");
+            });
+            b.Property(x => x.Kind).HasMaxLength(8);
+            b.Property(x => x.Body).HasColumnType("text");
+            b.Property(x => x.Status).HasMaxLength(16).HasDefaultValue("pending");
+            b.Property(x => x.Attempts).HasDefaultValue((short)0);
+            b.Property(x => x.NextAttemptAt).HasDefaultValueSql("now()");
+            b.Property(x => x.LastError).HasMaxLength(32);
+            b.Property(x => x.ExternalMessageId).HasMaxLength(32);
+            b.Property(x => x.DedupeKey).HasMaxLength(200);
+            FkTo<StaffNotification, StaffTelegramLink>(b, "LinkId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.DedupeKey }).IsUnique().HasDatabaseName("ux_beauty_staff_notifications_dedupe");
+            b.HasIndex(x => new { x.TenantId, x.Status, x.NextAttemptAt }).HasFilter("status IN ('pending', 'sending')")
+                .HasDatabaseName("ix_beauty_staff_notifications_due");
+            b.HasIndex(x => new { x.TenantId, x.LinkId }).HasDatabaseName("ix_beauty_staff_notifications_link");
+        });
+
+        mb.Entity<StaffNotificationAlert>(b =>
+        {
+            b.ToTable("beauty_staff_notification_alerts");
+            b.HasKey(x => new { x.TenantId, x.NotificationId, x.AlertId });
+            FkTo<StaffNotificationAlert, StaffNotification>(b, "NotificationId", DeleteBehavior.Cascade);
+            FkTo<StaffNotificationAlert, StaffAlert>(b, "AlertId", DeleteBehavior.Restrict);
+            FkTo<StaffNotificationAlert, StaffTelegramLink>(b, "LinkId", DeleteBehavior.Restrict);
+            // кожен алерт кожному адресату не більше одного разу; також покриває FK link_id
+            b.HasIndex(x => new { x.TenantId, x.LinkId, x.AlertId }).IsUnique().HasDatabaseName("ux_beauty_staff_notification_alerts_link_alert");
+            b.HasIndex(x => new { x.TenantId, x.AlertId }).HasDatabaseName("ix_beauty_staff_notification_alerts_alert");
         });
     }
 

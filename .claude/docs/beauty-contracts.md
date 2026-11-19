@@ -4559,6 +4559,7 @@ POST /reset { "expectedVersion": 4, "dryRun": false }
 
 Артефакт `API-CONTRACT-INVENTORY-V1` (TASK-875). Джерело рішень: **ADR-025** (статус `accepted` 2026-11-18; етап 1 реалізовано, див. ADR-025 §10). При розбіжності діє ADR, а зміна семантики потребує нового ADR. Позначка *(дефолт Qn)* — рекомендований дефолт відкритого питання ADR-025 §7; його змінюють правкою цього розділу.
 - **Нумерація:** §31 і версія v0.34 зайняті гілкою mobile (ADR-024, global identity, не злито в цю гілку), тому цей розділ — §32, v0.35. §29–§31 цей розділ не змінює.
+- **Версії §32:** v0.35 (2026-11-18, TASK-875) — етап 1, §32.1–§32.14. **v0.36** (2026-11-19, TASK-882, `API-CONTRACT-INVENTORY-V2`) — етап 2a, §32.15–§32.25: норми матеріалів, дефіцит, автосписання, сповіщення персоналу, воркер. Адитивно змінює §32.3, §32.4, §32.6 (дефіцит, позначено «з v0.36»). Етап 2b (Telegram власнику) — лише заглушка §32.24. **v0.37** (2026-11-19, TASK-889, `API-CONTRACT-INVENTORY-V3`, proposed) — етап 2b: §32.24 замінено повною специфікацією (прив'язка чату owner, guard вхідних, службова черга, прапори, приватність, API, UI, задачі); інші підрозділи §32 не змінено.
 - **Обсяг цієї версії:** **етап 1** (каталог товарів, постачальники, залишки по закладах і зведено, партії й терміни, надходження, списання, переміщення, інвентаризація) — детально. **Етапи 2–3** — лише орієнтовно в §32.13, позначено «не специфіковано в цій версії».
 - **Розширює** §30.2/§30.3 (блок `inventory` у каталозі прав, `catalogVersion = 2`; §32.2) і §30.6 (карта «ендпоінт → право» для `/api/beauty/inventory/*` — у §32.5). Інші розділи не змінюються.
 
@@ -4668,7 +4669,7 @@ POST /reset { "expectedVersion": 4, "dryRun": false }
 
 ### 32.4 Правила обліку
 
-**Інваріанти** (для кожної пари заклад×товар, після кожної транзакції): `levels.quantity = Σ batches.quantity = Σ movements.quantity`; у етапі 1 усі три ≥ 0. Сума ніг переміщення = 0.
+**Інваріанти** (для кожної пари заклад×товар, після кожної транзакції): `levels.quantity = Σ batches.quantity = Σ movements.quantity`; у етапі 1 усі три ≥ 0. Сума ніг переміщення = 0. *З v0.36 (дефіцит етапу 2a) інваріанти уточнено в §32.17: рухи без партії (`is_shortage`) рахуються окремо.*
 
 **Транзакція операції** (READ COMMITTED, одна транзакція на запит):
 1. `INSERT` заголовка `beauty_stock_operations` (з хешами ідемпотентності). Конфлікт унікального індексу → див. «Ідемпотентність».
@@ -4926,7 +4927,7 @@ DAG: 875 → 876 → {877 ∥ 878} → 879 → 880 → 881; 878 стартує �
 
 ### 32.13 Етапи 2–3 (орієнтовно; **не специфіковано в цій версії**)
 
-Точні таблиці, DTO, коди й тести з'являться окремою версією цього розділу перед стартом етапу. Нижче — лише рамка з ADR-025 §2.7–2.9.
+Точні таблиці, DTO, коди й тести з'являться окремою версією цього розділу перед стартом етапу. Нижче — лише рамка з ADR-025 §2.7–2.9. *Етап 2a специфіковано в §32.15–§32.25 (v0.36); при розбіжності з рамкою нижче діють §32.15+.*
 
 **Етап 2 — автосписання й сповіщення:**
 - `beauty_service_materials` (послуга, товар `salon_use|both`, кількість; мережа + override закладу на весь набір); API в межах `services.catalog = edit` ∧ `inventory.manage = all` (уточнити).
@@ -4944,3 +4945,505 @@ DAG: 875 → 876 → {877 ∥ 878} → 879 → 880 → 881; 878 стартує �
 ### 32.14 Відкриті питання
 
 Продуктові Q1–Q14 і юридичні L1–L4 — ADR-025 §7. У цьому контракті застосовано дефолти: Q1 (deputy `manage = all`), Q2 (specialist `view = own`), Q3 (`inventory.sales` в етапі 3), Q4 (цілі для `pcs|pack`), Q5 (миттєве переміщення), Q6 (виправлення через `correction`), Q7 (без прострочених у переміщенні), Q8 (рух під час інвентаризації не блокується), Q9 (`inventory.costs` вимагає `revenue.view = all`), Q10 (категорія — вільний текст). Зміна дефолту — правкою §32 до старту TASK-876/877.
+
+---
+
+### 32.15 Етап 2a: обсяг і рішення (v0.36, 2026-11-19, TASK-882)
+
+Артефакт `API-CONTRACT-INVENTORY-V2`. Джерело рішень — ADR-025 §11 «Уточнення етапу 2» (рішення власника 2026-11-19).
+
+- **2a** (цей контракт): норми матеріалів послуг (§32.16), дефіцит на рівні (§32.17), автосписання при завершенні візиту (§32.18), сповіщення персоналу в адмінці (§32.19), воркер `pollInventory` (§32.20).
+- **2b** (окремий gate і PR, §32.24): Telegram власнику — прив'язка чату, відправка. У 2a немає жодного коду Telegram для складу.
+- Модуль `beauty_inventory` лишається опційним (§32.1). Нових ключів прав немає: `catalogVersion = 2`, backfill не потрібен.
+- Фіксована собівартість ADR-014 не змінюється (Q11 = «ні»): `cost_snapshot` автосписання не чіпає.
+
+| Ключ конфігурації | За замовч. | Призначення |
+|---|---|---|
+| `Inventory:AutoConsumptionEnabled` (backend) | `true` | аварійний вимикач автосписання для всіх tenant (без деплою коду); `false` → крок §32.18 пропускається з логом `reason=disabled` |
+| `WORKER_INVENTORY_ENABLED` (worker) | `false` у `main.ts` | вмикає `pollInventory`; `false` → поллер нічого не робить |
+| `WORKER_INVENTORY_EXPIRY_DAYS` | `30,14,7` | пороги терміну: 1..5 різних цілих 1..365, сортуються за спаданням; невалідне значення → воркер не стартує |
+| `WORKER_INVENTORY_LOCAL_HOUR` | `8` (0..23) | добовий гейт: нові сповіщення в закладі створюються лише при локальній годині ≥ цього значення |
+
+### 32.16 Норми матеріалів послуги
+
+**Модель** (за зразком `beauty_service_costs`, §24): набір норм — **мережевий** (`location_id IS NULL`) і **override закладу**. Override замінює **весь** набір мережі для цього закладу (не зливається поштучно); порожній override = «у цьому закладі послуга матеріалів не списує». Ефективний набір для візиту: набір закладу візиту, інакше мережевий, інакше немає.
+
+**Схема** (міграція 2a, TASK-883; `Base`/`TenantFk`, RLS ENABLE+FORCE+`tenant_isolation`, `DO`-блок FORCE):
+- **`beauty_service_material_sets`** (заголовок набору): `service_id` (FK `beauty_services` RESTRICT), `location_id NULL` (FK `beauty_locations` CASCADE), `updated_at`, `updated_by_user_id NOT NULL` (FK `users` RESTRICT). UNIQUE `ux_beauty_service_material_sets_scope (tenant_id, service_id, location_id)` **NULLS NOT DISTINCT**.
+- **`beauty_service_materials`** (рядки): `set_id` (FK CASCADE), `product_id` (FK `beauty_products` RESTRICT), `quantity numeric(14,3) NOT NULL` CHECK `ck_beauty_service_materials_quantity`: `quantity > 0 AND quantity <= 100000`. UNIQUE `(tenant_id, set_id, product_id)`; індекс `(tenant_id, product_id)`.
+- `purpose`/активність товару — правила Application (крос-таблична перевірка), не CHECK.
+
+**Правила:**
+- Товар у нормі: існує, `is_active`, `purpose ∈ salon_use|both` (інакше `422 product_not_for_salon_use`); для override закладу — не вимкнений у цьому закладі (`422 product_disabled_for_location`). Кількість — в одиниці товару, ≤ 3 знаків, ціле для `pcs|pack` (*Q4*), `0 < q ≤ 100000` (`422 invalid_quantity`). ≤ 50 рядків у наборі (`too_many_lines`), товар не повторюється (`duplicate_line`). Порожній `lines` дозволено лише для override закладу (`invalid_lines` для мережі; видалення мережевого набору — `DELETE`).
+- `PUT` повністю замінює рядки набору (upsert заголовка `ON CONFLICT … DO UPDATE` = блокування рядка, далі `DELETE`+`INSERT` рядків в одній транзакції). Останній запис перемагає; версії немає.
+- **Розширення етапу 1:** `unit_locked` (§32.7) спрацьовує також, якщо товар входить у будь-яку норму; зміна `purpose` товару на `sale`, коли товар у нормах → `422 purpose_locked`. Деактивація товару з нормами дозволена (у списанні він пропускається, §32.18 п.4); UI попереджає.
+- Норми — дані мережі; змінення норм **не** змінює минулих списань (знімок — рухи візиту, §32.18).
+
+**API** (`/api/beauty/inventory`, клас-рівень §32.5: `Staff` + `[RequireModule("beauty_inventory")]` + `inventory.view ≥ own`, `no-store`):
+
+| Метод | Шлях | Права | Тіло / відповідь |
+|---|---|---|---|
+| GET | `/service-materials?includeInactive=false` | `inventory.view ≥ own` | `{items: ServiceMaterialsDto[]}` — лише послуги, що мають хоч один набір; сортування `lower(serviceName), serviceId` |
+| GET | `/services/{serviceId}/materials` | `inventory.view ≥ own` | `ServiceMaterialsDto` (наборів немає → `network: null, locations: []`); послуги немає → `404 service_not_found` |
+| PUT | `/services/{serviceId}/materials` | `[ReminderRoles(owner, admin)]` + `inventory.manage = all` | `{locationId: uuid\|null, lines: [{productId, quantity}]}` → `200 MaterialSetDto`; Лім. |
+| DELETE | `/services/{serviceId}/materials?locationId=` | `[ReminderRoles(owner, admin)]` + `inventory.manage = all` | `204`; без `locationId` — мережевий набір; набору немає → `404 materials_not_found`; Лім. |
+
+- Роль перевіряється фільтром до прив'язки тіла (як §24.6.1): deputy зі збереженим `inventory.manage = all` → `403 forbidden_role`.
+- Scope `own` для читання: `locations[]` — лише заклади scope; мережевий набір видно всім з `inventory.view ≥ own`.
+- Порядок перевірок `PUT`: фільтри → прив'язка тіла → форма (`422`, `line`) → послуга (`404 service_not_found`) → заклад (`404 location_not_found`) → товари (`404 product_not_found`, `line`) → активність/призначення/дозвіл (`422`, `line`) → транзакція.
+
+```
+MaterialLineDto      { product: ProductRef, quantity }
+MaterialSetDto       { serviceId, locationId: uuid|null, lines: MaterialLineDto[], updatedAt, updatedBy: {id, name}|null }
+ServiceMaterialsDto  { serviceId, serviceName, serviceIsActive, network: MaterialSetDto|null,
+                       locations: (MaterialSetDto & {locationName})[] }
+```
+Цін і вартості матеріалів у DTO норм немає (оцінка собівартості з матеріалів — поза 2a, Q11).
+
+### 32.17 Дефіцит (нестача) на рівні: схема й облік
+
+**Рішення (ADR-025 §11, D3):** партії й рівень **ніколи** не стають від'ємними; нестача зберігається окремо як `beauty_stock_levels.shortage_quantity`. Облікове **сальдо** пари `balance = quantity − shortage_quantity` може бути від'ємним — це і є «залишок у мінусі» для UI. Наступне надходження **спершу гасить дефіцит** (облік від'ємного залишку: сальдо −30, прихід 1000 → 970).
+
+**Зміни схеми** (та сама міграція 2a, TASK-883; **human gate схеми**: зміна CHECK append-only таблиці):
+- `beauty_stock_levels`: `shortage_quantity numeric(14,3) NOT NULL DEFAULT 0`, CHECK `ck_beauty_stock_levels_shortage`: `shortage_quantity >= 0`. `ck_beauty_stock_levels_quantity` (`quantity >= 0`) **лишається**. CHECK «`quantity = 0 OR shortage_quantity = 0`» **не** вводиться: прострочені партії (`quantity > 0`) не покривають автосписання, тож обидва значення можуть бути > 0 одночасно.
+- `beauty_stock_movements`: `is_shortage boolean NOT NULL DEFAULT false`. `ck_beauty_stock_movements_batch` замінюється на `(batch_id IS NULL) = is_shortage`; новий `ck_beauty_stock_movements_shortage`: `NOT is_shortage OR type = 'service_consumption' OR (type IN ('receipt','transfer_in','stocktake_adjust') AND quantity > 0)`. Наявні рядки задовольняють обидва (у етапі 1 `batch_id` завжди заповнено). `ADD COLUMN … DEFAULT` і зміна CHECK — DDL, тригери append-only (`beauty_stock_journal_block_mutation`) їх не блокують; рядків не оновлює.
+- `beauty_stock_operations`: `appointment_id uuid NULL` (композитний FK `(tenant_id, appointment_id)` → `beauty_appointments` **RESTRICT**), CHECK `ck_beauty_stock_operations_appointment`: `(kind = 'service_consumption') = (appointment_id IS NOT NULL)`, UNIQUE `ux_beauty_stock_operations_appointment (tenant_id, appointment_id) WHERE appointment_id IS NOT NULL`.
+- `beauty_stocktake_lines`: `expected_shortage numeric(14,3) NULL` CHECK `>= 0` (знімок дефіциту при проведенні).
+
+**Інваріанти** (замінюють рядок «Інваріанти» §32.4; для кожної пари, після кожної транзакції):
+1. `level.quantity = Σ batches.quantity = Σ movements.quantity WHERE NOT is_shortage` (≥ 0);
+2. `level.shortage_quantity = −Σ movements.quantity WHERE is_shortage` (≥ 0);
+3. отже `Σ movements.quantity = level.quantity − level.shortage_quantity` (сальдо, може бути < 0); сума ніг переміщення = 0.
+
+*(Формула «`level − shortage = Σ партій`» з постановки некоректна: `level = Σ партій`, а `level − shortage` дорівнює сумі **журналу**.)*
+
+**Хто змінює дефіцит** (лише під `FOR UPDATE` рівня, §32.4 п.2):
+
+| Подія | Рухи | Рівень |
+|---|---|---|
+| автосписання, непокрита частина `u` (§32.18) | `service_consumption`, `−u`, `batch_id NULL`, `is_shortage = true`, `unit_cost NULL` | `shortage += u` |
+| надходження рядка `q` при дефіциті `s > 0` | `c = min(q, s)`: рух `receipt` `+c`, `batch_id NULL`, `is_shortage = true`, `unit_cost` рядка; якщо `q − c > 0` — нова партія з `initial_quantity = quantity = q − c` і рух `receipt` `+(q − c)` з цією партією | `shortage −= c`, `quantity += q − c` |
+| переміщення: нога призначення `q` при дефіциті в закладі призначення | те саме з типом `transfer_in` (`unit_cost` і `expires_on` джерела; `source_batch_id` лише в партії, якщо вона створюється) | те саме; сума ніг `−q + (q − c) + c = 0` |
+| проведення інвентаризації, рядок з дефіцитом `s > 0` | спершу `stocktake_adjust` `+s`, `batch_id NULL`, `is_shortage = true`; далі `diff = counted − level.quantity` за правилами §32.4 | `shortage := 0`; `quantity := counted` |
+| ручне списання, переміщення-джерело, продаж (етап 3) | без змін: лише з партій, `insufficient_stock` за `quantity` | дефіцит не змінюють |
+
+- Погашення — **один** алгоритм «прихід у пару» (`ApplyIncoming`) для надходження й ноги призначення переміщення; FEFO і решта §32.4 без змін.
+- Інвентаризація фіксує фактичний залишок, тому дефіцит пари обнуляється (фізичний підрахунок — істина); `expected_shortage := s`, `expected_quantity := level.quantity` (як у етапі 1). У чернетку потрапляють також товари з `shortage_quantity > 0` (правило складу рядків §32.4). Рядок з `countedQuantity = null` дефіцит не чіпає.
+- `quantity_out_of_range` (§32.7) рахується від `quantity` після погашення.
+
+**Розширення DTO етапу 1** (адитивно; поля завжди присутні):
+- `StockRowDto` + `shortageQuantity`, `balance`; `isLow = effectiveMinStock > 0 AND balance < effectiveMinStock`; фільтр `state=low` — за цим правилом, `out_of_stock` — `quantity = 0`.
+- `StockSummaryRowDto` + `totalShortage`; `locations[]` + `shortageQuantity`, `balance`.
+- `MovementDto` + `isShortage: boolean` (UI: «нестача» для `service_consumption`, «погашення нестачі» для `receipt|transfer_in|stocktake_adjust`).
+- `OperationSummaryDto` + `appointmentId: uuid|null` (лише `service_consumption`; ідентифікатор без ПД, відкриття запису — за правами календаря). `GET /operations?kind=` і `GET /movements?type=` приймають `service_consumption`.
+- `StocktakeDto.lines[]` + `expectedShortage: number|null`; `difference = counted − (expected − expectedShortage)` (різниця до сальдо).
+- `totalCost†` операції враховує й рухи `is_shortage` з ціною; `value†` залишку — лише партії (без змін).
+
+### 32.18 Автосписання при завершенні візиту
+
+**Місце:** `EfBeautyStore.Booking.cs`, `CompleteWithCostSnapshotAsync` — у **тій самій транзакції**, після умовного `UPDATE` статусу і `ClosePlanAsync`, до `CommitAsync`. Інших шляхів у `completed` немає (перевірено: єдиний `SET status = 'completed'` у коді). Логіку списання реалізує окремий клас Infrastructure (`InventoryConsumption`, partial/сервіс поруч з `EfBeautyStore.InventoryOps.cs`), який перевикористовує FEFO і блокування етапу 1.
+
+**Алгоритм (детермінований):**
+0. Умовний `UPDATE` повернув 0 рядків (подвійне/паралельне `completed`) → нічого (як зараз, `AlreadyClosed`).
+1. `Inventory:AutoConsumptionEnabled = false` → пропуск (`reason=disabled`).
+2. Модуль `beauty_inventory` вимкнено для tenant (`InventoryModuleGate`, аналог `MarketingModuleGate`, читання в межах транзакції) → пропуск (`reason=module_off`). Дані не створюються; пізніше ввімкнення модуля **не** списує минулі візити.
+3. Ефективний набір норм (§32.16) для `service_id` і `location_id` запису; немає → пропуск (`reason=no_norms`).
+4. Відбір рядків: товар `is_active`, `purpose ∈ salon_use|both`, не вимкнений у закладі. Порожньо → пропуск (`reason=no_eligible_products`).
+5. `SAVEPOINT inventory_consumption`, **до будь-якого читання кроку** (норми, товари, налаштування, партії) — так помилка будь-якого запиту (транзакція Postgres стає aborted) відкочує лише складський крок (v0.36.1, I2). Одразу після SAVEPOINT — `SET LOCAL lock_timeout = '<N>ms'` (M1, v0.36.1): очікування блокування понад N мс дає `55P03` і відкочується SAVEPOINT-ом, а не `CommandTimeout` (30 с), що тримав би рядок візиту. Значення N — константа складового кроку (не налаштовується в 2a).
+6. `INSERT` операції `kind = service_consumption`, `location_id` = заклад запису, `appointment_id`, `created_by_user_id NULL` (система), без хешів ідемпотентності; `ON CONFLICT (tenant_id, appointment_id) WHERE appointment_id IS NOT NULL DO NOTHING`. Конфлікт → списання вже було (повторне завершення після повернення статусу) → пропуск (`reason=already_consumed`). **Ідемпотентність за `appointment_id`** тримає цей UNIQUE.
+7. Блокування (v0.36.1, I1 — порядок як в етапі 1, §2.4 п.3, без циклу): **(a) рівні `FOR UPDATE`** — для кожного `product_id` набору за зростанням: `INSERT … beauty_stock_levels ON CONFLICT DO NOTHING` + `SELECT … FOR UPDATE`; **(b) товари набору `FOR SHARE`**; **(c) налаштування закладу (`beauty_product_location_settings`) `FOR SHARE`**. Загальний порядок у всьому складі: рядок запису (умовний `UPDATE`) → рівні → товари → налаштування. Рядки запису складські операції не блокують, тож циклу немає. (Попередня редакція «товари FOR SHARE → рівні» скасована.)
+8. Для кожного товару, `need` = норма: FEFO лише **непрострочених** партій (`expires_on IS NULL OR expires_on >= localToday`, `localToday` — дата `TimeProvider.GetUtcNow()` у `timezone` закладу, тобто на момент завершення, а не початку візиту); з кожної партії `take = min(need, batch.quantity)` → рух `service_consumption −take` з `batch_id` і `unit_cost` партії; `quantity −= take`.
+9. Залишок `u = need − Σ take > 0` → рух `service_consumption −u`, `is_shortage = true`, `batch_id NULL`; `shortage_quantity += u`; сповіщення `shortage` (§32.19, ключ `shortage:{operationId}:{productId}`, `ON CONFLICT DO NOTHING`) у тій самій транзакції.
+10. `RELEASE SAVEPOINT`; далі `CommitAsync` разом зі статусом.
+
+**Візит завершується завжди:** нестача не дає помилки (п.9). Будь-який виняток у п.6–9 → `ROLLBACK TO SAVEPOINT`, лог `Error` `inventory_consumption_failed`, статус `completed` і знімок собівартості комітяться; списання для цього візиту не відбувається (повтор неможливий — статус уже `completed`; виправлення — інвентаризація). Збій самого `UPDATE`/`ClosePlan`/`Commit` поводиться як зараз.
+- **Знімок норм на візиті** = рухи операції `service_consumption` (`Σ |quantity|` за товаром = норма на момент завершення, разом з рядком нестачі). Окремої таблиці знімка немає; журнал append-only, тож пізніші зміни норм його не змінюють.
+- Зміна статусу після `completed` (якщо дозволена) матеріалів **не** повертає; повторне `completed` нічого не списує (п.6).
+- Відповідь `PATCH /appointments/{id}` не змінюється (нестача видима через сповіщення).
+
+### 32.19 Сповіщення персоналу (`beauty_staff_alerts`)
+
+**Схема** (міграція 2a, TASK-883; RLS ENABLE+FORCE):
+- `kind varchar(16) NOT NULL` CHECK ∈ `low_stock|expiring|shortage`;
+- `location_id NOT NULL` (FK RESTRICT), `product_id NOT NULL` (FK RESTRICT), `batch_id NULL` (FK `beauty_stock_batches` RESTRICT), `operation_id NULL` (FK `beauty_stock_operations` RESTRICT); CHECK `(kind = 'expiring') = (batch_id IS NOT NULL)`, `(kind = 'shortage') = (operation_id IS NOT NULL)`;
+- знімок значень: `quantity numeric(14,3) NOT NULL` (low_stock — сальдо; expiring — кількість партії; shortage — `u`), `threshold numeric(14,3) NULL` (ефективний мінімум, лише low_stock), `expires_on date NULL`, `days_bucket smallint NULL` CHECK `0..365` (лише expiring; `0` = прострочено);
+- `dedupe_key varchar(200) NOT NULL`, UNIQUE `ux_beauty_staff_alerts_dedupe (tenant_id, dedupe_key)`;
+- `status varchar(16) NOT NULL DEFAULT 'open'` CHECK ∈ `open|read|resolved`; `read_at`, `read_by_user_id` (FK `users` RESTRICT), `resolved_at`; CHECK `(status = 'resolved') = (resolved_at IS NOT NULL)`, `status <> 'read' OR read_at IS NOT NULL`;
+- `created_at`, `updated_at`; індекси `(tenant_id, status, created_at DESC, id DESC)`, `(tenant_id, location_id, status)`, `(tenant_id, batch_id) WHERE batch_id IS NOT NULL`.
+
+**Ключі дедуплікації:**
+
+| `kind` | Ключ | Хто створює |
+|---|---|---|
+| `low_stock` | `low_stock:{locationId}:{productId}:{localDate}` | воркер (§32.20), лише якщо для пари немає нерозв'язаного (`open|read`) `low_stock` |
+| `expiring` | `expiring:{batchId}:{bucket}` | воркер; `bucket ∈ пороги ∪ {0}` |
+| `shortage` | `shortage:{operationId}:{productId}` | backend у транзакції завершення візиту (§32.18 п.9) |
+
+**Статуси:** `open` → `read` (будь-який користувач з доступом; стан спільний для tenant, як непрочитане в inbox) → `resolved` (лише система, коли умова зникла, §32.20). `read`/`resolved` → `read` — no-op `200`. Видалення немає (зростання таблиці обмежене дедуплікацією; політика очищення — відкрите питання 2a-Q3).
+
+**Видимість:** `inventory.view ≥ own` і заклад сповіщення в scope (§32.2); поза scope — `404 alert_not_found`. Модуль вимкнено → `403 module_disabled` (бейдж ховається).
+
+**API** (`/api/beauty/inventory`, клас-рівень §32.5):
+
+| Метод | Шлях | Право | Тіло / відповідь |
+|---|---|---|---|
+| GET | `/alerts?status=active\|open\|read\|resolved\|all&kind&locationId&cursor&take` | `inventory.view ≥ own` + scope | `{items: StaffAlertDto[], hasMore, nextCursor?}`; `status` за замовч. `active` (= `open|read`); сортування `created_at DESC, id DESC` |
+| GET | `/alerts/unread-count` | `inventory.view ≥ own` | `{count}` — `open` у закладах scope, обмежено 1000 (UI «99+»); опитування 30 с як `InboxBadge` |
+| POST | `/alerts/{id}/read` | `inventory.view ≥ own` + scope | `200 StaffAlertDto`; Лім. |
+| POST | `/alerts/read-all?locationId` | `inventory.view ≥ own` (+ scope для `locationId`) | `200 {updated}` — усі `open` у scope (або в закладі); Лім. |
+
+```
+StaffAlertDto { id, kind, status, location: {id, name}, product: ProductRef,
+                batch: {id, expiresOn: date|null, lotNumber: string|null}|null, operationId: uuid|null,
+                quantity, threshold: number|null, expiresOn: date|null, daysBucket: integer|null,
+                createdAt, readAt|null, readBy: {id, name}|null, resolvedAt|null }
+```
+**Приватність:** у сповіщенні й DTO лише заклад, товар, партія, кількості, терміни й ідентифікатор операції; **жодних ПД клієнтів** (ім'я, телефон, `client_id`, `appointment_id`, ім'я майстра). Цін немає.
+
+### 32.20 Воркер `pollInventory`
+
+- `worker/src/scheduler/pollers.ts`: `pollInventory(ctx)` через `forEachTenant`; реєстрація в `main.ts` як `beauty.inventory-alerts`, **раз на годину**; `PollContext.inventoryEnabled` ← `WORKER_INVENTORY_ENABLED` (`.env.worker.example`); модульний гейт `isInventoryEnabled()` (аналог `isMarketingEnabled`, порт у `ports.ts`, фейк у `testing/fakes.ts`) → модуль вимкнено: тихо нічого.
+- Час — з `ctx.now()` (інжектований годинник), без реального годинника в тестах.
+- **На кожен tenant, на кожен активний заклад, одна транзакція на заклад:**
+  1. **Розв'язання** (кожну годину, без добового гейту): `open|read` → `resolved` (`resolved_at = now`), якщо: `low_stock` — пара більше не низька (правило `isLow` §32.17) або товар неактивний/вимкнений у закладі; `expiring` — `batch.quantity = 0`; `shortage` — `level.shortage_quantity = 0`.
+  2. **Добовий гейт:** локальна година закладу (`timezone`) < `WORKER_INVENTORY_LOCAL_HOUR` → нових сповіщень у закладі не створювати. `localDate` — локальна дата закладу.
+  3. **`low_stock`:** пари з наявним рядком `beauty_stock_levels`, товар активний і не вимкнений у закладі, `effectiveMinStock > 0`, `balance < effectiveMinStock`, і немає `open|read` `low_stock` для пари → `INSERT … ON CONFLICT (tenant_id, dedupe_key) DO NOTHING` з ключем за `localDate` (не частіше разу на добу на пару, *Q12*).
+  4. **`expiring`:** партії з `quantity > 0` і `expires_on` (товар будь-який, зокрема неактивний); `days = expires_on − localDate`; `bucket = 0`, якщо `days < 0`; інакше найменший поріг `t ≥ days`; немає → пропуск. Вставка ключа `expiring:{batchId}:{bucket}`; якщо вставлено — інші `open|read` `expiring` цієї партії → `resolved` (замінено ближчим порогом). Партія, що надійшла вже за 5 днів до терміну, отримує лише `bucket 7`.
+  5. Ліміт: ≤ 500 нових сповіщень на tenant за запуск, решта — наступної години (лог `capped=true`).
+- **GRANT ролі воркера** (синхронно `scripts/dev/setup-db.ps1` і `deploy/staging/db/grants.sql`, тест `staging-grants-sync`): `SELECT` на `beauty_stock_levels`, `beauty_stock_batches`, `beauty_products`, `beauty_product_location_settings` (і `beauty_locations`, якщо ще немає); `SELECT, INSERT, UPDATE` на `beauty_staff_alerts`. Без `DELETE`, без outbox (outbox — лише 2b). app-роль: DML на нові таблиці через наявний `GRANT … ON ALL TABLES`; append-only REVOKE етапу 1 без змін.
+- Лог: `inventory_alerts tenant={id} locations={n} created={n} resolved={n} capped={bool}` — без назв товарів і кількостей.
+
+### 32.21 Безпека, логи (2a)
+
+- RLS FORCE на 3 нових таблицях; композитні FK (зокрема `operation → appointment` і `alert → batch/operation`) не дають посилань між tenant.
+- Норми змінюють лише owner/admin з `inventory.manage = all`; читання — `inventory.view ≥ own` зі scope для override закладів.
+- Автосписання виконується від імені системи (`created_by_user_id NULL`) лише в межах tenant запису; модуль вимкнено → нічого не пишеться.
+- `beauty_stock_movements`/`beauty_stock_operations` лишаються append-only (REVOKE + тригери); погашення дефіциту — нові рухи, не `UPDATE`.
+- ПД клієнтів не потрапляють у сповіщення, логи складу й воркер. `appointmentId` є лише в `OperationSummaryDto` (не ПД).
+- Логи backend: `inventory_materials_changed service={id} location={id|-} lines={n} user={id}`, `inventory_consumption appointment={id} op={id} location={id} products={n} shortages={n}`, `inventory_consumption_skipped appointment={id} reason={disabled|module_off|no_norms|no_eligible_products|already_consumed}`, `inventory_consumption_failed appointment={id} sqlstate={code}` (Error), `inventory_alert_read id={id} user={id}`. Без цін.
+
+**Нові коди помилок** (додаються в §32.8 / `errors.ts`):
+
+| Статус | `code` | Додаткові поля | Текст для UI (uk) |
+|---|---|---|---|
+| 404 | `service_not_found` | — | Послугу не знайдено |
+| 404 | `materials_not_found` | — | Для цього закладу норм немає |
+| 404 | `alert_not_found` | — | Сповіщення не знайдено |
+| 422 | `product_not_for_salon_use` | `line` | Товар призначено лише для продажу — його не можна додати в норму |
+| 422 | `purpose_locked` | — | Товар використовується в нормах матеріалів — спершу приберіть його з норм |
+| 422 | `invalid_alert_status`, `invalid_alert_kind` | — | Технічна помилка запиту |
+| 422 | `unit_locked` (розширено) | — | Одиницю виміру не можна змінити: товар має рух або входить у норми |
+
+### 32.22 Тест-вимоги (етап 2a)
+
+1. **Міграція (883):** Up → Down → Up на копії; `Down` відмовляє, якщо є рух `is_shortage` або операція з `appointment_id`; FORCE на 3 нових таблицях; CHECK-и §32.16/§32.17/§32.19 (зокрема `(batch_id IS NULL) = is_shortage`, знак рядків нестачі, `kind ↔ appointment_id`, UNIQUE за записом, `NULLS NOT DISTINCT` наборів, `dedupe_key`); тригери append-only на місці; `schema-drift`, `staging-grants-sync` зелені; крос-tenant RLS на нових таблицях.
+2. **Норми (884):** мережа vs override (override замінює весь набір; порожній override); `product_not_for_salon_use`, `product_inactive`, `product_disabled_for_location`, `invalid_quantity` (ціле для `pcs|pack`), `too_many_lines`, `duplicate_line`; deputy → `403 forbidden_role`; specialist читає лише свої заклади; `unit_locked` і `purpose_locked` через норми; модуль вимкнено → `403 module_disabled`; рядки `AuthzBaselineMatrixTests`.
+3. **Автосписання (885, реальна БД):** FEFO без прострочених (межа локальної півночі `Europe/Kyiv` з `FakeTimeProvider`); часткова нестача (партії до 0 + рядок `is_shortage` + `shortage += u` + один `shortage`-алерт); повна нестача; немає норм / модуль вимкнено / `AutoConsumptionEnabled=false` / товар неактивний → без операції, візит `completed`; повторне завершення → `AlreadyClosed`, одна операція; повернення статусу й повторне `completed` → без другого списання; паралельне завершення двох візитів, що списують той самий товар, і паралельне ручне списання → без дедлоку, інваріанти; помилка в кроці списання (ін'єкція) → візит `completed`, рухів немає, лог `inventory_consumption_failed`; `cost_snapshot` не змінюється.
+4. **Погашення (885):** надходження `q < s`, `q = s` (партія не створюється), `q > s`; переміщення в заклад з дефіцитом (сума ніг 0); інвентаризація з дефіцитом (`shortage := 0`, `expected_shortage`, `difference` до сальдо); ручне списання/переміщення-джерело дефіциту не чіпають; повтор `Idempotency-Key` віддає ту саму операцію.
+5. **Інваріанти §32.17** після кожного сценарію 3–4 і в randomized-тесті етапу 1, розширеному автосписанням.
+6. **Сповіщення API (886):** scope `own`; `404 alert_not_found` поза scope; `read` ідемпотентний; `read-all` лише в scope; `unread-count` обмежено; відсутність ПД клієнтів у DTO (тест серіалізації); `no-store`.
+7. **Воркер (887, vitest з фейками + pg-тест):** добовий гейт (до/після локальної 08:00 у різних timezone); `low_stock` раз на добу й не поки є нерозв'язаний; пороги 30/14/7/0 і заміна попереднього bucket; розв'язання всіх трьох видів; модуль вимкнено / прапор вимкнено → нічого; ліміт 500; невалідний `WORKER_INVENTORY_EXPIRY_DAYS` → помилка старту.
+8. **Frontend (888):** vitest чистої логіки (сальдо, `isLow`, ярлики рухів нестачі, бейдж «99+», мапінг нових кодів); гейтинг норм і сповіщень за модулем, `inventory.view`, роллю.
+
+### 32.23 Задачі етапу 2a (TASK-882…888, 892…894)
+
+| Задача | Агент | Обсяг | Залежить / артефакти |
+|---|---|---|---|
+| TASK-882 | project-architect | ADR-025 §11 + §32.15–§32.25 | — → `API-CONTRACT-INVENTORY-V2`; **human gate схеми** |
+| TASK-883 | database-engineer (`beauty-schema`) | міграція 2a (§32.16, §32.17, §32.19), EF, RLS, GRANT воркера, `schema.sql`, тести §32.22 п.1 | 882 + gate → `ARTIFACT-INVENTORY-SCHEMA-V2` |
+| TASK-884 | backend-developer (`beauty-booking-api`) | API норм, `unit_locked`/`purpose_locked`, тести п.2 | 883 → `ARTIFACT-INVENTORY-MATERIALS-API` |
+| TASK-885 | backend-developer | автосписання §32.18, погашення дефіциту й інвентаризація §32.17, розширення DTO, тести п.3–5 | 883 (884 — лише для HTTP-сценаріїв) → `ARTIFACT-INVENTORY-CONSUMPTION`; **human gate** перед мерджем |
+| TASK-886 | backend-developer | API сповіщень §32.19, тести п.6 | 883 → `ARTIFACT-INVENTORY-ALERTS-API` |
+| TASK-887 | backend-developer (`beauty-worker-jobs`) | `pollInventory` §32.20, порт/адаптер, env, тести п.7 | 883 |
+| TASK-888 | frontend-developer (`beauty-admin-ui`) | норми в картці послуги, екран і бейдж сповіщень, дефіцит у залишках/русі/інвентаризації; mock → http | 882 (mock); 884, 885, 886 (http) |
+| TASK-892 | qa-engineer (`beauty-qa`) | таблиця відповідності §32.15–§32.22, наскрізні сценарії, ручний чекліст | 884–888 |
+| TASK-893 | security-reviewer (`beauty-security`) | рев'ю 2a: RLS/IDOR алертів і норм, append-only, GRANT воркера, ПД у алертах, транзакція завершення | 892 |
+| TASK-894 | documentation-writer (`beauty-docs`) | `database.md`, runbook (прапори, gate, відкат), known-issues, статус ADR-025 §10 | 893 |
+
+DAG: 882 → [gate] → 883 → {884 ∥ 885 ∥ 886 ∥ 887} → 892 → 893 → 894; 888 стартує на mock після 882, http — після 884/885/886. 885 і 884 змінюють різні файли store (`EfBeautyStore.Booking.cs`/`InventoryOps.cs` проти нового `EfBeautyStore.Materials.cs`).
+
+### 32.24 Етап 2b: Telegram-сповіщення власнику (v0.37, 2026-11-19, TASK-889, `API-CONTRACT-INVENTORY-V3`)
+
+Статус: **реалізовано в коді** (TASK-889…898; G1 пройдено). Виправлення за security/QA (M1, M2, L1–L3, QA-1, QA-2) — **в роботі**. G2 (перша прив'язка на staging) і G3 (прод після L3) **не закриті**. Статус реалізації — ADR-025 §10.6; рішення — ADR-025 §12; фактичні відхилення від цього розділу — §32.24.13. Будується за прапорами; поза dev вимкнено до закриття **L3** (ADR-025 §7.2). Заглушку v0.36 замінено; відхилення від неї: (1) окрема службова черга замість `beauty_messages` (§32.24.5, 2b-Q1); (2) замість колонок «надіслано» на `beauty_staff_alerts` — таблиця зв'язку `beauty_staff_notification_alerts` (кілька адресатів, дайджест). Колонки `beauty_staff_alerts` **не змінюються**.
+
+#### 32.24.1 Обсяг
+
+- **Адресати:** лише активні користувачі з роллю `owner` (`is_active`, `state = active`) tenant, модуль `beauty_inventory` увімкнено (2b-Q4). Admin/deputy — ні: інша правова підстава (трудові відносини, L3 п.5), а алерти вже є в адмінці. Фільтр закладів закладено загально (scope `inventory.view` адресата), для owner = усі заклади — розширення на інші ролі без зміни схеми.
+- **Бот:** клієнтський Telegram-бот салону (`beauty_channels`, `type = telegram`, `is_active`), §11 D4. Прив'язка належить до конкретного `channel_id`.
+- **Що йде:** нові `open`-алерти `low_stock | expiring | shortage` (§32.19), створені після активації прив'язки й не старші за 24 год; без налаштувань за видами в 2b (2b-Q7).
+- **Не змінюється:** клієнтський потік Telegram (§23, §25, §28), `beauty_messages`, inbox, ШІ — крім guard §32.24.4.
+
+#### 32.24.2 Схема (міграція 2b, TASK-895; адитивна; RLS ENABLE + FORCE + `tenant_isolation` на всіх 4 таблицях; FK композитні `(tenant_id, …)`)
+
+**(a) `beauty_staff_telegram_links`** — прив'язка й одноразовий токен (один рядок = одна спроба прив'язки).
+
+| Колонка | Тип | Примітка |
+|---|---|---|
+| `id` | uuid PK | |
+| `tenant_id` | uuid NOT NULL | |
+| `user_id` | uuid NOT NULL | FK `(tenant_id, user_id) → users` RESTRICT (якщо в `users` немає UNIQUE `(tenant_id, id)` — міграція додає) |
+| `channel_id` | uuid NOT NULL | FK `(tenant_id, channel_id) → beauty_channels` RESTRICT |
+| `status` | varchar(16) NOT NULL | CHECK ∈ `issued|claimed|active|revoked` |
+| `token_hash` | bytea NULL | SHA-256 від 32 байт токена; `octet_length = 32` |
+| `token_expires_at` | timestamptz NULL | `created_at + 15 хв` |
+| `chat_id_encrypted` | text NULL | AES-256-GCM, той самий формат і ключ, що `beauty_channels.credentials_encrypted` (`ISecretProtector` / worker `protect`/`unprotect`, `Channels__EncryptionKey`) |
+| `chat_id_hash` | bytea NULL | HMAC-SHA256(K, `"staff-tg-chat:v1:" + channelId:N + ":" + chatId`), K = HKDF-SHA256(`Channels__EncryptionKey`, info `beauty-staff-telegram-lookup-v1`); `octet_length = 32` (2b-Q2) |
+| `consent_version` | varchar(32) NOT NULL | CHECK `~ '^inv-tg-v[0-9]+$'` |
+| `consent_at` | timestamptz NOT NULL | згода в адмінці |
+| `claimed_at`, `bot_confirmed_at`, `activated_at`, `revoked_at`, `last_delivery_at` | timestamptz NULL | |
+| `revoke_reason` | varchar(24) NULL | CHECK ∈ `user_unlink|bot_stop|declined|replaced|expired|bot_blocked|chat_not_found|user_deactivated|role_changed|tenant_inactive` |
+| `created_at`, `updated_at` | timestamptz NOT NULL | |
+
+CHECK `ck_beauty_staff_telegram_links_shape` (форма стану):
+- `issued`: `token_hash`, `token_expires_at` NOT NULL; `chat_id_*`, `claimed_at`, `activated_at`, `revoked_at` NULL;
+- `claimed`: `token_hash`, `token_expires_at`, `chat_id_*`, `claimed_at` NOT NULL; `activated_at`, `revoked_at` NULL;
+- `active`: `token_hash` NULL; `chat_id_*`, `bot_confirmed_at`, `activated_at` NOT NULL; `revoked_at` NULL;
+- `revoked`: `token_hash`, `chat_id_*` NULL (дані чату стираються); `revoked_at` NOT NULL.
+
+Інші CHECK: `(revoke_reason IS NULL) = (status <> 'revoked')`; `(chat_id_encrypted IS NULL) = (chat_id_hash IS NULL)`.
+
+UNIQUE (часткові):
+- `ux_beauty_staff_telegram_links_user_open (tenant_id, user_id) WHERE status IN ('issued','claimed','active')` — один незакритий рядок (і отже один активний чат) на користувача;
+- `ux_beauty_staff_telegram_links_chat_open (tenant_id, channel_id, chat_id_hash) WHERE status IN ('claimed','active')` — один користувач на чат у боті tenant;
+- `ux_beauty_staff_telegram_links_token (tenant_id, token_hash) WHERE token_hash IS NOT NULL`.
+
+Індекс `(tenant_id, status, token_expires_at) WHERE status IN ('issued','claimed')` (прибирання прострочених). Рядки `revoked` не видаляються: вони не містять даних чату.
+
+**(b) `beauty_staff_telegram_link_events`** — append-only журнал (REVOKE `UPDATE, DELETE, TRUNCATE` у app- і worker-ролей + тригер, як `beauty_stock_movements`).
+`id`, `tenant_id`, `link_id` (FK RESTRICT), `user_id`, `event varchar(16)` CHECK ∈ `issued|claimed|activated|declined|revoked|rejected`, `reason varchar(24) NULL` (для `revoked` — `revoke_reason`; для `rejected` — `expired|used|channel_mismatch|chat_conflict|user_inactive|disabled`), `actor varchar(8)` CHECK ∈ `user|bot|system`, `actor_user_id uuid NULL` (FK `users`), `created_at`. **Без `chat_id`, хешу, токена, імені/username.** Відхилення без знайденого рядка (невідомий токен) у журнал не пишуться — лише лог.
+
+**(c) `beauty_staff_notifications`** — службова черга відправки (transactional outbox, патерн ADR-003).
+`id`, `tenant_id`, `link_id` (FK RESTRICT), `kind varchar(8)` CHECK ∈ `alert|digest`, `body text` CHECK `char_length 1..4096`, `status varchar(16)` CHECK ∈ `pending|sending|sent|failed|cancelled`, `attempts smallint` CHECK `0..10`, `next_attempt_at timestamptz NOT NULL`, `last_error varchar(32) NULL` (лише код), `external_message_id varchar(32) NULL`, `dedupe_key varchar(200) NOT NULL`, `created_at`, `sent_at`, `updated_at`; CHECK `(status = 'sent') = (sent_at IS NOT NULL)`; UNIQUE `(tenant_id, dedupe_key)`; індекс `(tenant_id, status, next_attempt_at) WHERE status IN ('pending','sending')`. Ключі: `alert:{linkId:N}:{alertId:N}`, `digest:{linkId:N}:{yyyyMMddHHmm UTC, кратно 5 хв}`. Без `chat_id` (адреса береться з прив'язки в момент відправки).
+
+**(d) `beauty_staff_notification_alerts`** — які алерти пішли якому адресату.
+`tenant_id`, `notification_id` (FK CASCADE), `alert_id` (FK `beauty_staff_alerts` RESTRICT), `link_id` (FK RESTRICT); PK `(tenant_id, notification_id, alert_id)`; UNIQUE `(tenant_id, link_id, alert_id)` — кожен алерт кожному адресату не більше одного разу (поштучно чи в дайджесті).
+
+**GRANT** (синхронно `scripts/dev/setup-db.ps1`, `deploy/staging/db/grants.sql`, тест `staging-grants-sync`): app-роль — DML на (a), (c), (d) через наявний `ON ALL TABLES`, на (b) лише `SELECT, INSERT`. Worker-роль: (a) `SELECT (id, tenant_id, user_id, channel_id, status, chat_id_encrypted, token_expires_at, activated_at)` + `UPDATE (status, token_hash, chat_id_encrypted, chat_id_hash, revoked_at, revoke_reason, last_delivery_at, updated_at)`; (b) `INSERT`; (c) `SELECT, INSERT, UPDATE, DELETE`; (d) `SELECT, INSERT`; `users` — колонковий `SELECT (id, tenant_id, role, is_active, state)`; розширити колонковий `SELECT` на `beauty_products` полями `name, unit` (без `purchase_price`); `beauty_stock_batches (lot_number)`, `beauty_locations (name, timezone)`, `beauty_staff_alerts` — `SELECT` уже є. `Down`: **відмовляє** (`RAISE 'inventory stage2b history exists'`), якщо є прив'язка не в `issued` або рядок журналу (§32.24.13, п.5).
+
+#### 32.24.3 Потік прив'язки
+
+1. **Адмінка (owner).** Картка показує текст згоди `inv-tg-v1` (§32.24.7) і чекбокс; `POST /telegram/link {consent: true, consentVersion, channelId?}`. Сервер у транзакції: прапор, модуль, роль, користувач активний; канал (§32.24.8); наявний `active` → `409`; наявні `issued|claimed` → `revoked (replaced)`; 32 випадкові байти (CSPRNG) → токен base64url (43 символи); зберігається лише SHA-256; `token_expires_at = now + 15 хв`; подія `issued`. Ім'я бота — `getMe` (тайм-аут 3 с, кеш у пам'яті 1 год на канал). Відповідь (`201`, `no-store`) містить `deepLink = https://t.me/{botUsername}?start=inv_{token}` — токен показується **один раз** і ніде не логується.
+2. **Бот: `/start inv_{token}`** (guard §32.24.4). Формат `^/start inv_[A-Za-z0-9_-]{43}$`, інакше — загальна відмова. Ліміти: ≤ 10 спроб `/start inv_` на чат за годину, ≤ 60 невдалих на канал за годину (у пам'яті процесу); понад ліміт — мовчки ігнорувати. Умовний `UPDATE … SET status='claimed', chat_id_*, claimed_at WHERE channel_id = {канал запиту} AND token_hash = $h AND status = 'issued' AND token_expires_at > now()` (tenant — із контексту каналу, RLS). Перед ним — перевірка, що чат не `active` для **іншого** користувача (інакше `rejected chat_conflict`) і користувач досі активний owner (`rejected user_inactive`). 0 рядків → якщо цей токен уже `claimed` **цим самим** чатом (хеш збігся) — повторно надіслати запит підтвердження (ідемпотентно); інакше загальна відмова «Посилання недійсне або прострочене…» (однакова для чужого tenant, іншого каналу, використаного, простроченого — без розкриття причини). Подія `claimed` / `rejected (reason)`.
+3. **Підтвердження в боті:** відповідь — текст згоди + кнопки «Підтверджую» `iy:{linkId base64url 22}` і «Скасувати» `in:{linkId22}` (нові дієслова в `TelegramAdapter.StateCallbackData`). `iy` приймається лише якщо рядок `claimed`, не прострочений і `chat_id_hash` збігається з чатом натискання (`chat.id == from.id`, приватний — уже перевіряє адаптер) → `active`, `token_hash = NULL`, `bot_confirmed_at = activated_at = now`, подія `activated`; відповідь «Готово…» + кількість відкритих алертів (без деталей). `in` → `revoked (declined)`, дані чату стерто.
+4. **Відв'язка:** `DELETE` в адмінці (будь-який незакритий стан → `revoked (user_unlink)`), `/stop` у боті (`bot_stop`), авто-відв'язка (§32.24.5, §32.24.7). Перед стиранням backend розшифровує `chat_id` і після коміту best-effort надсилає «Сповіщення вимкнено» (лише для `user_unlink`).
+5. **Прострочені** `issued|claimed` → `revoked (expired)` воркером (§32.24.5 п.6); перевірка `token_expires_at` у п.2–3 діє незалежно від прибирання.
+
+Конкуренція: два чати з одним токеном — умовний `UPDATE` пропускає одного; два токени користувача одночасно неможливі (UNIQUE `user_open` + `replaced`); два користувачі на один чат — UNIQUE `chat_open` (порушення → `rejected chat_conflict`, код 23505 обробляється без тексту помилки в лозі).
+
+#### 32.24.4 Вхідні: guard у `InboundIngestCore`
+
+- **Точка:** `InboundIngestCore.IngestAsync` (`backend/BeautyCrm.Infrastructure/Integrations/Channels/ChannelServices.cs`) — спільне ядро webhook (`InboundWebhookService.HandleAsync`) і polling (`TelegramPolling` → `IngestAsync`). Новий необов'язковий залежник `IStaffChatGate` (`Integrations/Channels/StaffChatGate.cs`). Крок 0 до побудови `toStore`: `var (staff, client) = await gate.PartitionAsync(parsed, ct)`; `staff` **ніколи** не передається в `repo.SaveInboundAsync` / `queue.EnqueueInboundAsync` (отже немає `beauty_conversations`, `beauty_messages`, клієнта, сигналу ConversationWorker, ШІ, відписки); `AcknowledgeAsync(parsed)` виконується для всіх, як зараз.
+- **Класифікація** (лише `channel = telegram`, tenant і `channelId` — із `ChannelRequestContext`, не з payload): (а) текст починається з `/start inv_` — службове, навіть якщо чат не прив'язаний; (б) `callback` з `CallbackData` `^i[yn]:` — службове; (в) `chat_id_hash(channel, ExternalConversationId)` має рядок `claimed|active` (один запит на пакет: `chat_id_hash = ANY(@hashes)`) — службове будь-якого `kind`; (г) решта — клієнтський потік без змін.
+- **Fail-closed:** помилка запиту guard кидає виняток на весь пакет (polling не зсуває offset, webhook → 5xx, Telegram повторить) — повідомлення службового чату не може «провалитися» в клієнтський потік. Guard діє **незалежно від прапора**.
+- **Обробник службових** (у пам'яті, вміст не зберігається): `/start inv_…` — §32.24.3 п.2; `iy|in` — п.3; `/stop` — відв'язка; `/status` — нейтральний текст без стану прапорів (M2, §32.24.13 п.9): «Сповіщення складу: підключено {dd.MM.yyyy}» або «Сповіщення складу не підключено»; (раніше: «увімкнено / вимкнено адміністратором платформи», що не відповідало фактичній відправці); будь-що інше (текст, `/start` без токена, контакт, геолокація) — підказка «Це службовий чат сповіщень складу. Команди: /status, /stop» не частіше 1 разу на 10 хв на прив'язку. Відповіді — **пряма best-effort відправка** через `TelegramAdapter.SendAsync` (тайм-аут 3 с, без повторів, адреса — chat id із вхідного повідомлення в пам'яті), не через чергу: інтерактивні відповіді, адресата в БД може ще/вже не бути. Помилка обробника логується (`staff_tg_command_failed reason={code}`) і не перекидається (без циклу повторної доставки).
+- **Наслідок:** прив'язаний чат стає службовим — власник не може бути клієнтом через цей самий бот з того ж акаунта; наявна розмова лишається в inbox як історія; нагадування/розсилки клієнту на цей чат ідуть, як раніше (2b-Q8).
+
+#### 32.24.5 Відправка (worker)
+
+1. **Poller** `pollInventoryTelegram` (`beauty.inventory-telegram`, кожні 5 хв, `forEachTenant`, `ctx.now()`): гейти — `isInventoryEnabled()` і `WORKER_INVENTORY_TELEGRAM_ENABLED`; вимкнено → лише п.6 (прибирання). Не залежить від `WORKER_INVENTORY_ENABLED` (алерти `shortage` пише backend).
+2. **Адресати:** `active` прив'язки ⨝ `users`; користувач неактивний / `state ≠ active` → `revoked (user_deactivated)`; роль ≠ owner → `revoked (role_changed)`; tenant неактивний → `revoked (tenant_inactive)`. Канал неактивний → пропуск без відв'язки (2b-Q9).
+3. **Відбір алертів** для прив'язки: `status = 'open'` ∧ `created_at ≥ link.activated_at` ∧ `created_at ≥ now − 24 год` ∧ заклад у scope адресата ∧ немає рядка `(link_id, alert_id)` у (d) ∧ **тихі години**: локальний час закладу алерту (`beauty_locations.timezone`) у `[WORKER_INVENTORY_TELEGRAM_QUIET_END, WORKER_INVENTORY_TELEGRAM_QUIET_START)`, дефолт `08:00–21:00` (2b-Q6). Алерт у тихі години чекає; якщо до ранку став `read|resolved` — не надсилається.
+4. **Поштучно чи дайджест:** `n ≤ 3` → `n` повідомлень `alert`; `n > 3` → один `digest` (до 30 рядків + «і ще N»), рядки (d) — для **всіх** охоплених алертів. Ліміт ≤ 6 повідомлень на прив'язку за ковзну годину; надлишок чекає наступного запуску (і потрапить у дайджест). Вставка повідомлення й рядків (d) — одна транзакція; конфлікт UNIQUE → відкат пакета прив'язки, перебудова наступного запуску.
+5. **Надсилання:** захоплення `UPDATE … SET status='sending' WHERE id=$1 AND status='pending' AND next_attempt_at <= now RETURNING`; `sending` довше 10 хв → `pending`. Перед відправкою: прив'язка не `active` → `cancelled`; `alert`, чий алерт уже не `open`, або будь-яке повідомлення старше 24 год → `cancelled`. Транспорт — спільна функція `sendTelegramText(token, chatId, text)`, винесена з `HttpChannelSender` (`worker/src/adapters/channel-sender.ts`) без зміни поведінки для клієнтських повідомлень; `chat_id` — `unprotect`, токен — `readCredentials`; без `parse_mode`, `disable_web_page_preview: true`, без кнопок. Темп: ≤ 1 повідомлення/с на чат, ≤ 20/с на бот, ≤ 100 відправлень на tenant за запуск.
+   - успіх → `sent`, `sent_at`, `external_message_id`, `link.last_delivery_at`;
+   - `429` → `next_attempt_at = now + parameters.retry_after` (тіло не логується), `attempts + 1`;
+   - мережа / `5xx` → backoff 1 хв, 5 хв, 30 хв, 2 год; після 5 спроб → `failed`;
+   - `403` (`bot_blocked`) / `400 chat not found` (`chat_not_found`) → `failed` + прив'язка `revoked (bot_blocked|chat_not_found)`, дані чату стерто, інші `pending` прив'язки → `cancelled`, подія `revoked` (`actor = system`); в адмінці — `lastRevoke` (§32.24.8);
+   - `token_missing` / `channel_inactive` / збій розшифрування → `failed`, прив'язка без змін (проблема каналу, не користувача).
+6. **Прибирання** (завжди, навіть за вимкненого прапора): `issued|claimed` з `token_expires_at < now` → `revoked (expired)`; `beauty_staff_notifications` у фінальному статусі старше 30 днів → `DELETE` (каскадом (d)).
+7. **Логи воркера** (фактичні імена, §32.24.13 п.7): `inventory_telegram tenant={id} built={n} sent={n} failed={n} revoked={n} capped={bool}`, `inventory_telegram_send_failed tenant={id} notification={id} errorCode={code}`, `inventory_telegram_link_revoked tenant={id} link={id} reason={code}`, `inventory_telegram_link_failed tenant={id} link={id} errorCode={code}`, `inventory_telegram_build_conflict tenant={id} link={id}`. **Ніколи:** `chat_id`, хеш, токен бота, тіло повідомлення, назви товарів.
+
+**Тексти (uk, без `parse_mode`; константи `worker/src/jobs/inventory-telegram-texts.ts`).** Лише заклад, товар, кількість з одиницею, партія (номер), термін, вид, посилання. **Жодних** ПД клієнтів, імен майстрів, `appointment_id`, `operation_id`, цін. Назви — без керівних символів, обрізання до 80 символів. Число — uk-формат (кома, без зайвих нулів). Посилання — `{WORKER_ADMIN_BASE_URL}/beauty/inventory/alerts?locationId={id}`; змінна не задана → без посилання.
+- `low_stock`: «Склад · {заклад}\nМало: {товар} — залишок {q} {од.} (мінімум {threshold}).\n{url}»
+- `expiring` (`bucket > 0`): «Склад · {заклад}\nЗакінчується термін: {товар}, партія {lot | «без номера»} — {q} {од.}, до {dd.MM.yyyy}.\n{url}»; `bucket 0`: «… Прострочено: …»
+- `shortage`: «Склад · {заклад}\nНестача при списанні на послугу: {товар} — бракує {q} {од.}. Поповніть залишок або проведіть інвентаризацію.\n{url}»
+- `digest`: «Склад: {n} нових сповіщень\n• {заклад}: мало — {a}, термін — {b}, нестача — {c}\n…\n{url}»
+
+#### 32.24.6 Прапори й вимикачі
+
+| Прапор | Де | Увімкнено лише якщо | Вимкнено → |
+|---|---|---|---|
+| `Inventory:TelegramOwnerAlertsEnabled` | backend | значення `true` (без регістру); відсутній / порожній / будь-що інше — **вимкнено** (дефолт — вимкнено, на відміну від `AutoConsumptionEnabled`) | `POST` → `403 telegram_alerts_disabled`; `GET` → `featureEnabled: false`; `DELETE`, `/stop`, `/status`, guard — **працюють**; `/start inv_` → «Функцію зараз вимкнено» (`rejected disabled`) |
+| `WORKER_INVENTORY_TELEGRAM_ENABLED` | worker | рядок `true` (без регістру) | немає побудови й відправки; прибирання п.6 працює; `pending` лишаються й скасовуються як старші за 24 год |
+| `Inventory:TelegramL3Approved` | backend | `true` | прод (поза `Development` і поза pre-L3 allowlist) при `TelegramOwnerAlertsEnabled=true` без цього ключа — помилка старту (технічний запобіжник «прод лише після L3», 2b-Q11) |
+| `Inventory:TelegramPreL3AllowedEnvironments` + `Inventory:TelegramPreL3TenantIds` | backend | список середовищ (staging) + tenant зі списку | (M1, **в роботі**) дозвіл на відправку без `L3Approved` лише для тестового tenant на staging; поза списком — правило прод |
+| `WORKER_INVENTORY_TELEGRAM_L3_APPROVED` | worker | `true` | (M1, **в роботі**) старт worker відмовляє, якщо прод-середовище + `WORKER_INVENTORY_TELEGRAM_ENABLED=true` без цього ключа (за образом `assertMarketingLegalGate`) |
+| `WORKER_INVENTORY_TELEGRAM_PRE_L3_TENANT_IDS` | worker | список tenant | (M1, **в роботі**) pre-L3 allowlist для staging; tenant поза списком при прод-правилах — відмова старту |
+
+**Аварійне вимкнення відправки = обидва прапори** `TelegramOwnerAlertsEnabled=false` **і** `WORKER_INVENTORY_TELEGRAM_ENABLED=false` (M2; runbook §2d). Прапор одного процесу не є вимикачем всієї відправки.
+
+Нові env worker (`.env.worker.example`): `WORKER_INVENTORY_TELEGRAM_ENABLED=false`, `WORKER_INVENTORY_TELEGRAM_QUIET_START=21`, `WORKER_INVENTORY_TELEGRAM_QUIET_END=8` (цілі 0–23, `START ≠ END`, інакше помилка старту), `WORKER_ADMIN_BASE_URL=` (лише `https://`, поза dev).
+
+#### 32.24.7 Приватність
+
+- **Зберігається:** `chat_id` (зашифровано + HMAC для пошуку), час згоди, версія тексту згоди, часи станів. **Не зберігається:** username, ім'я/прізвище Telegram, телефон, фото, окремий `from.id` (у приватному чаті = `chat_id`), вміст повідомлень службового чату (команди обробляються в пам'яті).
+- **Строки:** дані чату — до відв'язки з будь-якої причини (стирання в тому ж `UPDATE`); тіла службових повідомлень — 30 днів після фінального статусу; журнал подій (без даних чату) — весь строк tenant (2b-Q10).
+- **Видалення:** деактивація користувача (`UserAdminService`, у тій самій транзакції) і зміна ролі з owner → `revoked`; воркер п.2 — страховка. Tenant неактивний → воркер `revoked (tenant_inactive)`.
+- **Згода в потоці** (адмінка — чекбокс, бот — кнопка «Підтверджую»), чернетка `inv-tg-v1` (остаточний текст — юрист, L3):
+  > Ви вмикаєте службові сповіщення складу в Telegram від бота «{назва бота}». Ми збережемо ідентифікатор вашого чату Telegram у зашифрованому вигляді лише для надсилання цих сповіщень: заклад, товар, кількість, термін придатності. Дані клієнтів у сповіщеннях не надсилаються. Повідомлення передаються через сервіс Telegram. Вимкнути можна будь-коли в адмінці або командою /stop у боті — ідентифікатор чату буде видалено.
+- Відомий перетин: якщо власник раніше писав боту як клієнт, той самий `chat_id` уже є відкрито в `beauty_conversations.external_chat_id` (так зберігаються всі клієнтські чати). 2b його не видаляє.
+
+**Чекліст L3 для юриста / власника (архітектор не вирішує):**
+1. Правова підстава обробки `chat_id` власника (згода / виконання договору / законний інтерес) за ЗУ «Про захист персональних даних» (і GDPR, якщо застосовно); хто володілець (tenant) і розпорядник (платформа); чи покриває це чинний договір/оферта з tenant.
+2. Затвердити текст згоди `inv-tg-v1` (мова, посилання на політику конфіденційності, чи потрібна окрема згода на передачу через Telegram).
+3. Чи допустима передача комерційних даних tenant (назви товарів, залишки, нестачі) через Telegram (третя сторона, сервери поза Україною).
+4. Строки: дані чату до відв'язки; тексти 30 днів; журнал подій — строк tenant. Підтвердити або змінити.
+5. Чи можна в майбутньому поширити на не-owner співробітників (добровільність згоди в трудових відносинах).
+6. Чи потрібні зміни в політиці приватності / реєстрі операцій обробки / повідомлення Уповноваженого.
+7. Порядок виконання запиту суб'єкта на видалення (чи достатньо відв'язки + журналу без даних чату).
+8. **Строки й видалення (звіт TASK-898, п.4/п.7):** строки залежать від `WORKER_TENANT_IDS` (L2) і від вимкненого модуля (tenant поза списком не отримує прибирання); журнал подій append-only з FK RESTRICT — рядки не видаляються застосунком; процедура ручного видалення (DISABLE TRIGGER) — human gate. Підтвердити строк журналу (2b-Q10) з урахуванням права на видалення.
+9. **Текст згоди `inv-tg-v1` (звіт, п.2):** чернетка не згадує (а) що повідомлення може надійти протягом кількох хвилин після відключення (L5); (б) що клієнтська розмова власника лишається в inbox (I10). Потрібні формулювання юриста.
+10. **Ризик чужого акаунта (звіт, L1):** посилання прив'язки діє 15 хв і дає право прив'язати чат; якщо його прочитає інша особа, сповіщення підуть на чужий акаунт. Закрити підтвердженням/попередженням у адмінці або текстом згоди — рішення юриста/власника; у коді не вирішено.
+Результат — рішення власника, записане в ADR-025 §7.2 (L3 → закрито) і `Inventory:TelegramL3Approved=true` на gate G3.
+
+#### 32.24.8 API (`/api/beauty/inventory/telegram/link`; `{code, message, …extras}`; `Cache-Control: no-store`)
+
+Доступ: модуль `beauty_inventory` (вимкнено → `403 module_disabled`) для GET і POST; **DELETE — без `RequireModule`** (L2, §32.24.13 п.8, в роботі); **лише роль `owner`** — рольовий фільтр до прив'язки тіла (як L5, §32.26 D9), інакше `403 forbidden_role`; дія завжди над **своїм** `user_id` з JWT (жодного `userId` у запиті — IDOR неможливий).
+
+| Метод | Відповідь | Ліміт |
+|---|---|---|
+| GET | `200 TelegramLinkStatusDto` | загальний throttle |
+| POST | тіло `{consent: true, consentVersion: string, channelId?: uuid}` → `201 {linkId, deepLink, expiresAt}` | 5 / год на користувача → `429 rate_limited` + `Retry-After` |
+| DELETE | `204` (ідемпотентно; закриває `issued|claimed|active`) | загальний throttle |
+
+```
+TelegramLinkStatusDto { featureEnabled: bool,
+  state: "none" | "pending" | "awaitingConfirmation" | "active",   // issued | claimed | active
+  channel: {id, name} | null, expiresAt: datetime | null, claimedAt: datetime | null,   // claimedAt — L1, в роботі
+  activatedAt: datetime | null, lastDeliveryAt: datetime | null,
+  lastRevoke: {reason: RevokeReason, at: datetime} | null,         // останній revoked за 30 днів, лише при state = none
+  consentVersion: "inv-tg-v1" }                                    // поточна версія для UI
+```
+Без `chat_id`, username, токена. Прострочений `issued` (`token_expires_at < now`) у `GET` показується як `state: none` (відхилення, §32.24.13 п.4). Вибір каналу: `channelId` не задано і активний Telegram-канал один → він; немає → `422 telegram_channel_unavailable`; кілька → `422 telegram_channel_required` з `extras.channels: [{id, name}]` (2b-Q13).
+
+| Статус | `code` | extras | Текст для UI (uk) |
+|---|---|---|---|
+| 403 | `telegram_alerts_disabled` | — | Сповіщення в Telegram поки недоступні |
+| 403 | `forbidden_role` | — | Лише власник може підключити Telegram-сповіщення |
+| 409 | `telegram_already_linked` | — | Telegram уже підключено. Спершу відключіть його |
+| 422 | `consent_required` | — | Підтвердьте згоду на обробку ідентифікатора чату |
+| 422 | `consent_version_outdated` | `currentVersion` | Текст згоди оновився — перегляньте його ще раз |
+| 422 | `telegram_channel_unavailable` | — | У салоні немає активного Telegram-бота. Підключіть його в розділі «Канали» |
+| 422 | `telegram_channel_required` | `channels` | Оберіть бота для сповіщень |
+| 404 | `channel_not_found` | — | Бота не знайдено |
+| 503 | `telegram_bot_unavailable` | — | Не вдалося зв'язатися з Telegram. Спробуйте пізніше |
+| 429 | `rate_limited` | — | Забагато спроб. Спробуйте пізніше |
+
+Логи backend: `staff_tg_link_issued link={id} user={id}`, `staff_tg_link_claimed link={id}`, `staff_tg_link_activated link={id}`, `staff_tg_link_revoked link={id} reason={code}`, `staff_tg_token_rejected channel={id} reason={code}`, `staff_tg_command_failed reason={code}`. Без chat id, токена, хешів, тексту.
+
+#### 32.24.9 UI (TASK-891, `beauty-admin-ui`)
+
+- Картка «Сповіщення складу в Telegram» на `/beauty/settings/notifications` (новий підрозділ налаштувань; видно лише owner при увімкненому модулі; посилання також з екрана `/beauty/inventory/alerts`).
+- Стани: `featureEnabled = false` → пояснення «Поки недоступно», кнопки підключення немає, але «Відключити» є, якщо `state ≠ none`; `none` → текст згоди (повністю, не в підказці), чекбокс (не відмічений за замовчуванням), кнопка «Підключити» неактивна до відмітки (з поясненням поряд); `pending` → «Відкрити Telegram» (`deepLink`, `target="_blank" rel="noopener noreferrer"`), «Діє до HH:mm», «Створити нове посилання»; `awaitingConfirmation` → «Підтвердьте в Telegram»; `active` → «Підключено {дата}», остання доставка, «Відключити» (діалог підтвердження); `lastRevoke` → банер за причиною (`bot_blocked` — «Бот заблоковано у Telegram — підключіть знову»).
+- Опитування `GET` кожні 5 с лише в `pending|awaitingConfirmation`, не довше `expiresAt`; зупинка при прихованій вкладці.
+- `deepLink` тримається лише в стані компонента (не в URL, `localStorage`, логах, аналітиці).
+- a11y (WCAG 2.2 AA): `<label>` для чекбокса, `aria-describedby` на текст згоди; `aria-live="polite"` лише на зміну стану (не на зворотний відлік); після зміни стану фокус на заголовок статусу; діалог — фокус-пастка, `Esc`, повернення фокуса; кнопки ≥ 24×24 px; стан не лише кольором.
+- Коди §32.24.8 у `errors.ts`; mock-адаптер (сценарії всіх станів і `lastRevoke`); vitest чистої логіки (мапінг станів, причин, кодів).
+
+#### 32.24.10 Тест-вимоги (2b)
+
+1. **Міграція (895):** Up → Down → Up; FORCE на 4 таблицях; CHECK форми стану (кожна недозволена комбінація відхиляється); часткові UNIQUE; append-only (b) (UPDATE/DELETE відхилено для app і worker); крос-tenant RLS; `schema-drift`, `staging-grants-sync`.
+2. **Прив'язка (890):** токен 32 байти, у БД лише хеш; TTL (межа 15 хв, `FakeTimeProvider`); повтор `/start` тим самим чатом → ідемпотентно, іншим чатом → відмова; токен іншого tenant/каналу/прострочений/використаний → однакова відповідь; паралельні `/start` двох чатів → один `claimed`; новий `POST` → попередній `replaced`; `active` → `409`; `iy` з чужого чату → відмова; `in` → дані чату стерто; ліміти спроб; прапор вимкнено → `403`, а `DELETE`/`/stop` працюють; `forbidden_role` для admin/deputy/specialist до розбору тіла; `consent_required`/`consent_version_outdated`; рядки `AuthzBaselineMatrixTests`.
+3. **Guard (890, реальна БД):** повідомлення будь-якого `kind` з прив'язаного чату → 0 рядків у `beauty_conversations`/`beauty_messages`, немає сигналу; `/start inv_…` з неприв'язаного чату → те саме; клієнтський чат поруч у тому ж пакеті обробляється як раніше; помилка guard → виняток на пакет; ack callback виконується.
+4. **Деактивація (890):** деактивація користувача / зміна ролі → `revoked`, дані чату `NULL`.
+5. **Worker (896, vitest з фейками + pg):** відбір (лише `open`, після активації, ≤ 24 год, scope); тихі години в різних timezone; поріг дайджесту 3; ліміт 6/год; дедуплікація (повторний запуск не дублює); `403` → відв'язка й скасування; `429 retry_after`; backoff і `failed` після 5; `channel_inactive` не відв'язує; прапор вимкнено → лише прибирання; прибирання прострочених токенів і 30-денне видалення; тексти: немає ПД клієнтів, цін, `appointment_id` (snapshot-тест), назви з керівними символами обрізано; клієнтські тести `HttpChannelSender` зелені без змін.
+6. **Frontend (891):** §32.24.9.
+
+#### 32.24.11 Задачі етапу 2b
+
+| Задача | Агент | Обсяг | Залежить |
+|---|---|---|---|
+| TASK-889 | project-architect | ADR-025 §12 + цей розділ | — → `API-CONTRACT-INVENTORY-V3`; **gate G1** |
+| TASK-895 | database-engineer (`beauty-schema`) | міграція 2b §32.24.2, EF, GRANT, `schema.sql`, тести п.1 | 889 + G1 → `ARTIFACT-INVENTORY-SCHEMA-V3` |
+| TASK-890 | integrations-developer (`channels-integrations`) | `IStaffChatGate` у `InboundIngestCore`, обробник команд і `iy|in`, токени, API §32.24.8, `getMe`, прапори, хук деактивації, тести п.2–4 | 895 → `ARTIFACT-INVENTORY-TG-LINK-API` |
+| TASK-896 | backend-developer (`beauty-worker-jobs`) | `pollInventoryTelegram`, `sendTelegramText`, тексти, env, тести п.5 | 895 |
+| TASK-891 | frontend-developer (`beauty-admin-ui`) | §32.24.9, mock → http | 889 + G1 (mock); 890 (http) |
+| TASK-897 | qa-engineer (`beauty-qa`) | таблиця відповідності §32.24, наскрізний сценарій у dev-боті, ручний чекліст | 890, 891, 896 |
+| TASK-898 | security-reviewer (`beauty-security`) | токен/replay/brute-force, guard fail-closed, RLS, GRANT, шифрування `chat_id`, логи, тексти без ПД | 897 |
+| TASK-899 | documentation-writer (`beauty-docs`) | `database.md`, runbook (прапори, gate, відкат), known-issues, ADR-025 §10 | 898 |
+
+DAG: 889 → [G1] → 895 → {890 ∥ 896}; 891 — mock після G1, http після 890 → 897 → 898 → 899. **Human gates:** G1 — схема 2b і 2b-Q1…Q4 (до 895); G2 — перша прив'язка реального Telegram-акаунта поза локальним dev (staging, тестовий tenant) і `TelegramOwnerAlertsEnabled=true` там — після 898; G3 — прод-вмикання (обидва прапори + `TelegramL3Approved`) — **лише після закриття L3**; G4 — мердж `integrate/*`.
+
+#### 32.24.12 Відкриті питання 2b (дефолти діють до відповіді людини)
+
+**Блокують старт (G1):**
+
+| # | Питання | Дефолт |
+|---|---|---|
+| 2b-Q1 | Відправка через окрему службову чергу `beauty_staff_notifications` замість `beauty_messages` (ADR-025 §2.9 казав «наявний outbox») | Окрема черга: `beauty_messages.conversation_id` обов'язковий → довелось би створювати розмову, видиму в inbox, аналітиці, ліміті частоти розсилок і lease ШІ. Патерн ADR-003 і транспорт `HttpChannelSender` збережено |
+| 2b-Q2 | Шифрувати `chat_id` співробітника (клієнтські зберігаються відкрито) | Так: AES-GCM + HMAC для пошуку, ключ каналів (новий секрет не потрібен) |
+| 2b-Q3 | Текст згоди `inv-tg-v1` | Чернетка §32.24.7 для dev; прод — текст юриста (L3) |
+| 2b-Q4 | Адресати | Лише owner; admin з `inventory.manage = all` — окремим рішенням після L3 п.5 |
+
+**Не блокують:**
+
+| # | Питання | Дефолт |
+|---|---|---|
+| 2b-Q5 | Поріг дайджесту / ліміт частоти | > 3 алертів за запуск → дайджест; ≤ 6 повідомлень/год на адресата |
+| 2b-Q6 | Тихі години | 21:00–08:00 за timezone закладу алерту |
+| 2b-Q7 | Налаштування за видами алертів | Немає в 2b; усі три види |
+| 2b-Q8 | Власник як клієнт у тому ж боті | Прив'язаний чат — лише службовий |
+| 2b-Q9 | Канал вимкнено / видалено | Прив'язки лишаються, відправка `failed (channel_inactive)`; видалення каналу має спершу відкликати прив'язки (FK RESTRICT) |
+| 2b-Q10 | Строк журналу подій і тіл повідомлень | Журнал — строк tenant; тіла — 30 днів |
+| 2b-Q11 | Технічний запобіжник `Inventory:TelegramL3Approved` поза Development | Так |
+| 2b-Q12 | Посилання в повідомленні | `WORKER_ADMIN_BASE_URL`; не задано → без посилання |
+| 2b-Q13 | Кілька Telegram-ботів у tenant | `channelId` обов'язковий у `POST` (`422 telegram_channel_required`) |
+| 2b-Q14 | Відкриті алерти на момент активації | Не надсилаються; у відповіді «Готово» — лише їх кількість |
+| 2b-Q15 | QR-код deep-link для входу з десктопа | Ні в 2b |
+
+#### 32.24.13 Фактичні відхилення від §32.24 (стан на 2026-11-19, TASK-899)
+
+Звірено з кодом гілки `feature/inventory-stage2b`. «В роботі» — виправлення TASK-890/891/896/897 за звітом TASK-898; після їх злиття таблиця оновлюється.
+
+| № | Розділ контракту | Очікувано (текст) | Факт / план | Статус |
+|---|---|---|---|---|
+| 1 | §32.24.3 п.2, §32.24.8 POST | ліміт 5 / год на користувача | Ліміт рахується **після валідації тіла** (`consent`, `consentVersion`, `channelId`); невалідний запит ліміт не витрачає | Прийнято як факт; оновити контракт або узгодити |
+| 2 | §32.24.2 (b) | подія `declined` у журналі | Відмова в боті пишеться як `revoked` з `reason = declined` (`StaffChatGate`); CHECK `event` містить `declined` без використання | Узгодити: прибрати `declined` з CHECK (міграція) або писати його |
+| 3 | §32.24.5 п.3 | відбір з фільтром «заклад у scope адресата» | Воркер **не фільтрує за scope закладу**: адресат — лише owner (усі заклади), тож результат однаковий | Відхилення; фільтр додати до розширення на інші ролі (2b-Q4) |
+| 4 | §32.24.8 GET | `state` з чотирьох станів | Прострочений `issued` показується як `none` | Факт (пункт 1 таблиці §32.24.8 не описує `expired`) |
+| 5 | §32.24.2 `Down` | дозволений, видаляє 4 таблиці | `Down` **відмовляє** за історії (`inventory stage2b history exists`) | Захисний варіант; контракт виправлено |
+| 6 | §32.24.3 п.2 | пересланий `/start inv_` приймається як звичайний | (L1, в роботі) відхилення пересланого; причина `forwarded` **не входить** у CHECK `rejected` журналу — потрібна міграція (рішення database-engineer) | В роботі, потребує рішення |
+| 7 | §32.24.5 п.7 | логи `inventory_tg_*` | Фактичні імена `inventory_telegram_*` (контракт виправлено п.7 вище) | Вирівняно |
+| 8 | §32.24.8 DELETE | доступ з `module_disabled` | (L2, в роботі) DELETE без `RequireModule`, лише owner | В роботі |
+| 9 | §32.24.4 `/status` | текст зі станом прапора | (M2, в роботі) нейтральний текст без стану прапорів | В роботі |
+| 10 | §32.24.8 GET | без `claimedAt` | (L1, в роботі) `claimedAt` у DTO | В роботі |
+| 11 | §32.24.6 | запобіжник лише `Inventory:TelegramL3Approved` (backend) | (M1, в роботі) pre-L3 ключі staging і worker-запобіжник `WORKER_INVENTORY_TELEGRAM_L3_APPROVED` | В роботі |
+| 12 | §32.24.4 | відповіді бота без обмеження частоти | (L3, в роботі) `svc-reply:{channel}:{chat}` для відповідей на підроблені callback і неприв'язані чати | В роботі |
+| 13 | §32.24.4 | `/start inv_` одразу в клієнтський потік ні | (QA-1, QA-2, в роботі) нормалізація форми команди; повторна перевірка чату в пакеті | В роботі |
+| 14 | §32.24.4 | після активації — тиша | (L1, в роботі) попередження в чаті після активації, що розмова службова | В роботі |
+
+Перевірка назв ключів у коді (TASK-899, на момент запису): `Inventory:TelegramOwnerAlertsEnabled`, `Inventory:TelegramL3Approved`, `WORKER_INVENTORY_TELEGRAM_ENABLED` — є; pre-L3 ключі і `WORKER_INVENTORY_TELEGRAM_L3_APPROVED` — ще не в коді.
+
+### 32.25 Відкриті питання етапу 2a
+
+| # | Питання | Дефолт у цьому контракті |
+|---|---|---|
+| 2a-Q1 | Технічний збій кроку списання: візит завершується без списання (лише лог `Error`). Показувати це в адмінці окремим видом сповіщення? | Ні в 2a (лише лог); новий `kind` — зміною CHECK пізніше |
+| 2a-Q2 | Чи вважати пару «низькою», якщо рядка `beauty_stock_levels` немає (товар ще не надходив у заклад)? | Ні: лише пари з рівнем |
+| 2a-Q3 | Строк зберігання `resolved` сповіщень | Без очищення в 2a |
+| 2a-Q4 | Стан «прочитано» спільний для tenant чи персональний | Спільний (як inbox) |
+| 2a-Q5 | Сповіщення про прострочену партію (`bucket 0`) поза порогами 30/14/7 | Так, додано як `bucket 0` |
+
+### 32.26 Фактичні відхилення етапу 2a і виправлення за security-review (v0.36.1, 2026-11-19, TASK-894)
+
+Редакція v0.36.1 фіксує, що зроблено в коді (TASK-883…888, 892). Звірено з кодом; де код відрізняється від v0.36 — відхилення нижче є чинною поведінкою. Джерело — `docs/reviews/security-review-inventory-stage2a-2026-11.md`; ID знахідок — M1, L1, L2, L5 (виправлено в TASK-893), L3, L4 (у роботі).
+
+**Фактичні відхилення від тексту v0.36 (чинні):**
+
+| # | Тема | v0.36 | Фактично (код) |
+|---|---|---|---|
+| D1 | Неактивний товар у нормі (§32.16) | `product_inactive` | `422 product_not_for_salon_use` з `line` (неактивний і `sale` дають один код) |
+| D2 | `GET /service-materials` | повертає кожну послугу | послугу **без видимих наборів** для scope не повертає (набір поза scope або порожній для закладу не показується) |
+| D3 | `GET /alerts?locationId=` поза scope | scope → `404 alert_not_found` | `404` за правилом §32.2 для заклада в query (заклад поза scope не розкривається) |
+| D4 | Ключі дедуплікації (§32.19) | `low_stock:{loc}:{product}` з датою | `low_stock:{locationId}:{productId}:{localDate}`; `expiring:{batchId}:{bucket}`; `shortage:{operationId}:{productId}`. Ключ `low_stock` містить локальну дату закладу — повтор того самого дня не створює другого сповіщення |
+| D5 | Технічний збій складового кроку (§32.18) | `SAVEPOINT` на п.6 | `SAVEPOINT` до читань (п.5); крім того, складовий крок має `lock_timeout` (див. п.5 вище): очікування блокування понад ліміт — `55P03`, складовий крок відкочується, візит `completed` |
+| D6 | Вимикач `Inventory:AutoConsumptionEnabled` (§32.18 п.1) | `false` вимикає | **будь-яке значення, крім `true` (без урахування регістру), вимикає** (L1, виправлено в TASK-893). Відсутній ключ — увімкнено (за замовчуванням); присутнє порожнє значення теж вимикає. Попередня реалізація вважала нерозпізнане значення (`0`, `off`, `no`) увімкненим — це помилка |
+| D7 | Порядок блокувань (§32.18 п.7) | «товари FOR SHARE → рівні» | рівні `FOR UPDATE` → товари `FOR SHARE` → налаштування `FOR SHARE` (як в етапі 1; I1) |
+| D8 | Модульний гейт автосписання (§32.18 п.2) | RLS | явний фільтр `tenant_id` і порівняння `lower(module)` (L2, виправлено в TASK-893); винесено в `InventoryModuleGate` |
+| D9 | Перевірка ролі owner/admin на зміну норм (§32.16, §32.21) | сервісна перевірка після прив'язки тіла | рольовий фільтр на PUT/DELETE норм до прив'язки тіла: deputy отримує `403 forbidden_role`, а не `400/422` на некоректний JSON (L5, виправлено в TASK-893) |
+
+**Інші факти, що не змінюють контракт:** `shortage_quantity` без верхньої межі `MaxLevel` (переповнення практично недосяжне; I4); складовий крок не викликає `SaveChangesAsync` — лише raw SQL / `ExecuteUpdate`, `ChangeTracker.Clear()` у catch не відкидає незбережені зміни (I5, інваріант коментарем у коді); `LockLevelsAsync` створює рядки з `quantity = 0` до вставки заголовка (I6, 2a-Q2); `canEditInventoryNorms` у UI не перевіряє роль (I7, лише UX); `GET /service-materials` без пагінації (I8, обсяг обмежений); для `scope.All` чужий `locationId` у фільтрі сповіщень → 200 з порожнім списком (I9, без витоку); тести автосписання — `SkippableFact` (I10): CI має запускати з `BEAUTY_TEST_REQUIRE_DB=1`.
+
+**Вирівнювання з рішенням «тихе пропускання»:** технічний збій складового кроку не блокує візит (2a-Q1, прийнятий ризик, I3). Компенсація — лог `inventory_consumption_failed` (Error) і процедура в runbook (інвентаризація, §2b runbook).
+
+**Виправлено в TASK-893 (раніше відкладені):** L3 — воркер ковтав помилки закладу без логу; тепер лог `inventory_alerts_location_failed tenant={id} location={id} errorCode={code}` (без ПД) і `tenant=` у підсумковому логу. L4 — GRANT воркера звужено: `GRANT UPDATE (status, resolved_at, updated_at) ON beauty_staff_alerts` і колонковий `SELECT (id, tenant_id, is_active, min_stock)` на `beauty_products` (без `purchase_price`); обидва файли (`deploy/staging/db/grants.sql`, `scripts/dev/setup-db.ps1`) синхронно.

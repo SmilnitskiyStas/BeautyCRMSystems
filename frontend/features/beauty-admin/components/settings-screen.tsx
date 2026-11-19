@@ -9,6 +9,7 @@ import { useCancellationSettings, useUpdateCancellationSettings } from "../hooks
 import type { CancellationSettings } from "../types";
 import { AiSettingsSection } from "./ai-settings-section";
 import { ReminderSettingsSection } from "./reminder-settings-section";
+import { TelegramSettingsLink } from "./telegram-notifications-screen";
 import { Card, PageHeader, PrimaryButton, QueryState } from "./ui";
 
 const MAX_TERMS = 500;
@@ -380,6 +381,7 @@ export function SettingsScreen() {
         </QueryState>
         <ReminderSettingsSection />
         <AiSettingsSection />
+        <TelegramSettingsLink />
       </div>
     </>
   );

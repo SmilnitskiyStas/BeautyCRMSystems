@@ -125,6 +125,38 @@ Description: `GET /operations/{id}` повертає рухи, відсорто�
 
 Resolution: окрема задача: або зберігати порядок списання (наприклад, колонка порядку рядка), або явно задокументувати в §32.6 як не FEFO. Клієнти не повинні покладатися на порядок.
 
+### KI-019: Guard службових повідомлень пропускає неканонічну форму команди
+Severity: medium
+Status: open (виправлення в роботі)
+Discovered in: TASK-897 (QA-1), TASK-898
+Resolved in: —
+Area: backend, security
+
+Description: `IsServiceShape` порівнює сирий текст: `" /start inv_…"`, `"\n/start inv_…"`, `/START`, `/start@Bot` потрапляють у клієнтський потік, і живий токен прив'язки зберігається в `beauty_messages`.
+
+Root cause (з звіту): класифікація службового повідомлення без нормалізації форми команди.
+Правило (до виправлення): перед класифікацією нормалізувати текст (Trim, регістронезалежно, зняти `@botname`); тест на кожну форму; токен, що потрапив у клієнтський потік, — дефект критичності high.
+
+### KI-020: Запобіжник прод-вмикання не розрізняє staging і прод
+Severity: medium
+Status: open (M1, виправлення в роботі)
+Discovered in: TASK-898
+Resolved in: —
+Area: backend, worker, config, ops
+
+Description: `TelegramL3Approved` діє лише поза `Development`; staging не `Development`, тож тестова прив'язка вимагала б `L3Approved=true`, тобто ключ юридичного gate мав би двозначний сенс. Воркер запобіжника не має взагалі.
+Правило (до виправлення): юридичний запобіжник розрізняє staging і прод явно (окремий ключ + allowlist tenant), не за `ASPNETCORE_ENVIRONMENT`; worker перевіряє його на старті так само, як backend. Кожен запобіжник тестувати на обох середовищах.
+
+### KI-021: Два незалежні прапори — аварійне вимкнення вимикало лише backend
+Severity: medium
+Status: open (M2, виправлення в роботі)
+Discovered in: TASK-898
+Resolved in: —
+Area: ops, backend, worker
+
+Description: `/status` казав «вимкнено», а алерти воркера йшли: `TelegramOwnerAlertsEnabled=false` не зупиняв `WORKER_INVENTORY_TELEGRAM_ENABLED=true`.
+Правило: аварійне вимкнення відправки = обидва прапори (runbook §2d); прапор, що керує одним процесом, не є вимикачем; статус, що описує стан системи, має відповідати фактичній поведінці (нейтральний текст, якщо не можна гарантувати).
+
 ## Resolved Issues
 
 ### KI-011: Неявне перетворення null у Result<T> давало 201 з порожнім тілом
@@ -186,3 +218,63 @@ Root cause: генерація схеми записала BOM на початк
 Resolution: файл перегенеровано без BOM, LF; `schema-drift.test.ts` зелений.
 
 Prevention: після генерації схеми перевіряти, що файл починається з `CREATE`/`--`, а не з BOM; генерувати без BOM і LF (правило §32.3).
+
+### KI-015: SAVEPOINT узято після читань кроку; ChangeTracker.Clear у catch відкидав незбережене
+Severity: high
+Status: resolved
+Discovered in: TASK-885 (review), TASK-893 (security-review, I2/I5)
+Resolved in: TASK-885 (SAVEPOINT до читань), інваріант зафіксовано коментарем у `EfBeautyStore.InventoryConsumption.cs`
+Area: backend, database
+
+Description: якщо SAVEPOINT береться після першого читання кроку, помилка читання переводить транзакцію в aborted, і відкат лише кроку неможливий. Окремо: `ChangeTracker.Clear()` у catch відкинув би незбережені tracked-зміни, якщо складовий крок колись використає `SaveChangesAsync`.
+
+Root cause: SAVEPOINT сприймався як «обгортка запису», а не як межа відкату для всіх запитів кроку. Інваріант «крок пише лише raw SQL / `ExecuteUpdate`» не був записаний.
+
+Resolution: SAVEPOINT береться першою дією кроку (до будь-якого читання); крок не викликає `SaveChangesAsync`; коментар над кодом фіксує інваріант.
+
+Prevention: у будь-якому кроці з `SAVEPOINT` перший SQL після нього — або сам крок. Крок, що відкочується через SAVEPOINT, пише лише raw SQL / `ExecuteUpdate`; якщо з'являється `SaveChangesAsync` — `ChangeTracker.Clear()` у catch заборонено (замість нього `ROLLBACK TO SAVEPOINT` і `Entry.State` reset). Тест: ін'єкція помилки в першому читанні кроку → візит `completed`, рухів немає.
+
+### KI-016: Складовий крок списання без `lock_timeout` тримав рядок візиту до 30 с
+Severity: medium
+Status: resolved
+Discovered in: TASK-885 (security-review M1, TASK-893)
+Resolved in: TASK-893 (`SET LOCAL lock_timeout` після SAVEPOINT; перевірити тестом перед закриттям)
+Area: backend, database
+
+Description: якщо рівень складу заблоковано іншою транзакцією, завершення візиту чекало до `CommandTimeout` (30 с), тримаючи рядок візиту. При обриві HTTP-запиту `OperationCanceledException` не потрапляла в `catch` і відкочувала весь візит, включно зі статусом `completed`, що суперечить «візит завершується завжди».
+
+Root cause: `CommandTimeout` і `CancellationToken` були єдиним обмеженням очікування блокування; SAVEPOINT не обмежував очікування, а лише відкочував помилку.
+
+Resolution: `SET LOCAL lock_timeout` одразу після SAVEPOINT (`55P03` відкочує SAVEPOINT); рішення щодо `CancellationToken` для складового кроку й коміту — у TASK-893.
+
+Prevention: у кожній транзакції, що має «не блокувати основну дію» (складський крок, сповіщення), ставити `lock_timeout` короткий і в межах SAVEPOINT. Тест: блокування рівня іншою транзакцією → візит `completed` за обмежений час, лог `inventory_consumption_failed sqlstate=55P03`.
+
+### KI-017: Модульний гейт автосписання покладався лише на RLS
+Severity: low
+Status: resolved
+Discovered in: TASK-885 (security-review L2)
+Resolved in: TASK-893 (явний фільтр `tenant_id`, `lower(module)`, `InventoryModuleGate`)
+Area: backend, security
+
+Description: перевірка модуля в складовому кроці не фільтрувала `tenant_id` явно і порівнювала регістр по-різному з API (`OrdinalIgnoreCase`) і воркером (`lower(m)`). Коректно лише завдяки RLS.
+
+Root cause: гейт писався як «запит, що RLS і так обмежить», без уніфікації з іншими шляхами.
+
+Resolution: окремий `InventoryModuleGate` з явним `tenant_id` і регістронезалежним порівнянням; API, воркер і склад використовують його.
+
+Prevention: кожен гейт (модуль, прапор, право) має явний фільтр tenant і одну реалізацію порівняння. Не покладатися на RLS як єдиний захист у коді; RLS — другий шар (ADR-002). Тест: модуль увімкнено в іншому tenant → автосписання не відбувається.
+
+### KI-018: Нерозпізнане значення вимикача `Inventory:AutoConsumptionEnabled` лишало автосписання увімкненим
+Severity: low
+Status: resolved
+Discovered in: TASK-885 (security-review L1)
+Resolved in: TASK-893 (будь-яке присутнє значення, крім `true`, вимикає)
+Area: backend, config, ops
+
+Description: значення `0`, `off`, `no` при аварійному вимкненні не вимикали автосписання, бо парсинг `bool.TryParse` при невдачі повертав «увімкнено».
+
+Root cause: для аварійного вимикача використано правило «невалідне = за замовчуванням», а не «невалідне = безпечний стан». Для вимикача безпечний стан — вимкнено.
+
+Resolution: вимкнено, якщо ключ присутній і його значення не `true` (без урахування регістру); відсутній ключ — увімкнено за замовчуванням.
+
+Prevention: аварійний вимикач (аварійне вимкнення) вважає вимкненим будь-яке присутнє значення, крім явного `true`; відсутній ключ дає дефолт коду. Документувати в runbook (§2c). Тест: `0`, `off`, `no`, порожнє → вимкнено.

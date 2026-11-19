@@ -19,7 +19,7 @@ public sealed record WebhookResult(WebhookOutcome Outcome, int NewMessages = 0);
 /// </summary>
 public sealed class InboundIngestCore(
     IChannelMessageRepository repo, IChannelQueue queue,
-    ChannelRegistry? registry = null, ChannelRequestContext? context = null, ILogger<InboundIngestCore>? log = null)
+    ChannelRegistry? registry = null, ChannelRequestContext? context = null, ILogger<InboundIngestCore>? log = null, IStaffChatGate? staffGate = null)
 {
     /// <summary>Тайм-аут одного answerCallbackQuery (§23.4): best-effort, без повторів.</summary>
     public static readonly TimeSpan AckTimeout = TimeSpan.FromSeconds(3);
@@ -29,12 +29,22 @@ public sealed class InboundIngestCore(
     {
         if (parsed.Count == 0) return parsed;
         IReadOnlyList<InboundMessage> fresh = [];
-        var toStore = parsed.Where(m => !m.AckOnly).ToList();
+        // Крок 0 (§32.24.4, ADR-025 §12): службові чати власників ніколи не потрапляють у збереження/чергу/ШІ. Fail-closed: виняток валить пакет.
+        IReadOnlyList<InboundMessage> staff = [];
+        var client = parsed;
+        if (staffGate is not null)
+        {
+            var part = await staffGate.PartitionAsync(parsed, ct);
+            staff = part.Staff;
+            client = part.Client;
+        }
+        var toStore = client.Where(m => !m.AckOnly).ToList();
         if (toStore.Count > 0)
         {
             fresh = await repo.SaveInboundAsync(toStore, ct);
             if (fresh.Count > 0) await queue.EnqueueInboundAsync(fresh, ct);
         }
+        if (staff.Count > 0) await staffGate!.HandleAsync(staff, ct); // best-effort, вміст не зберігається
         // Ack одразу після збереження пакета: для нових, дублів і ack-only (дубль теж мусить прибрати «годинник»).
         await AcknowledgeAsync(parsed, ct);
         return fresh;
@@ -70,9 +80,9 @@ public sealed class InboundIngestCore(
 /// <summary>Controller-facing: verify signature (always) -> normalize -> InboundIngestCore (persist -> enqueue).</summary>
 public sealed class InboundWebhookService(
     ChannelRegistry registry, IChannelMessageRepository repo, IChannelQueue queue,
-    ChannelRequestContext? context = null, ILogger<InboundIngestCore>? log = null)
+    ChannelRequestContext? context = null, ILogger<InboundIngestCore>? log = null, IStaffChatGate? staffGate = null)
 {
-    private readonly InboundIngestCore _core = new(repo, queue, registry, context, log);
+    private readonly InboundIngestCore _core = new(repo, queue, registry, context, log, staffGate);
 
     public async Task<WebhookResult> HandleAsync(string channel, WebhookRequest req, string body, CancellationToken ct)
     {

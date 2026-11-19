@@ -20,6 +20,7 @@ const SECTIONS = [
   { href: "/beauty/inventory/batches", label: "Партії й терміни" },
   { href: "/beauty/inventory/movements", label: "Журнал рухів" },
   { href: "/beauty/inventory/stocktakes", label: "Інвентаризації" },
+  { href: "/beauty/inventory/alerts", label: "Сповіщення" },
 ] as const;
 
 function SectionNav() {

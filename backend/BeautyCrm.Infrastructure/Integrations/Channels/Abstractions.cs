@@ -55,6 +55,9 @@ public sealed record InboundMessage(
     public double? TransientLatitude { get; init; }
     public double? TransientLongitude { get; init; }
 
+    /// <summary>Повідомлення з ознаками пересилання (forward_origin/forward_*/via_bot). Використовується guard-ом службових чатів (L1).</summary>
+    public bool Forwarded { get; init; }
+
     /// <summary>Callback, який не зберігається (група, бот, inline_message_id, chat.id != from.id, без data): лише ack.</summary>
     public bool AckOnly { get; init; }
 

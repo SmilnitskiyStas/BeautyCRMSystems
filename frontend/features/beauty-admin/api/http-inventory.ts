@@ -1,6 +1,12 @@
 import { apiJson } from "@/features/beauty-auth/session";
 import type { BeautyAdminApi } from "./client";
 import type {
+  AlertKind,
+  AlertStatus,
+  LocationMaterialSet,
+  MaterialSet,
+  ServiceMaterials,
+  StaffAlert,
   Batch,
   BatchStatus,
   CostsAccess,
@@ -26,6 +32,7 @@ import type {
   Supplier,
   WriteOffReason,
 } from "../inventory/types";
+import type { RevokeReason, TelegramLinkIssued, TelegramLinkState, TelegramLinkStatus } from "../inventory/telegram-link";
 
 /**
  * HTTP-клієнт §32 (ADR-025). Явна вибірка полів; ціни (†) копіюються лише коли сервер їх віддав (без `inventory.costs`
@@ -52,6 +59,10 @@ const MOVEMENT_TYPES = ["receipt", "write_off", "transfer_out", "transfer_in", "
 const KINDS = ["receipt", "write_off", "transfer", "stocktake", "service_consumption", "sale"] as const satisfies readonly OperationKind[];
 const REASONS = ["expired", "damaged", "lost", "internal_use", "correction", "other"] as const satisfies readonly WriteOffReason[];
 const STOCKTAKE_STATUSES = ["draft", "posted", "cancelled"] as const satisfies readonly StocktakeStatus[];
+const ALERT_KINDS = ["low_stock", "expiring", "shortage"] as const satisfies readonly AlertKind[];
+const ALERT_STATUSES = ["open", "read", "resolved"] as const satisfies readonly AlertStatus[];
+const TG_STATES = ["none", "pending", "awaitingConfirmation", "active"] as const satisfies readonly TelegramLinkState[];
+const TG_REVOKES = ["user_unlink", "bot_stop", "declined", "replaced", "expired", "bot_blocked", "chat_not_found", "user_deactivated", "role_changed", "tenant_inactive"] as const satisfies readonly RevokeReason[];
 const COSTS = ["none", "view", "edit"] as const satisfies readonly CostsAccess[];
 
 function ref(v: unknown): NamedRef | null {
@@ -125,6 +136,9 @@ function toStockRow(v: unknown): StockRow {
     nearestExpiresOn: str(o.nearestExpiresOn),
     expiredQuantity: num0(o.expiredQuantity),
     expiringQuantity: num0(o.expiringQuantity),
+    shortageQuantity: num0(o.shortageQuantity),
+    // Старий сервер без поля: сальдо = залишок.
+    balance: num(o.balance) ?? num0(o.quantity) - num0(o.shortageQuantity),
     ...("value" in o ? { value: num0(o.value), valueIncomplete: o.valueIncomplete === true } : {}),
   };
 }
@@ -134,10 +148,17 @@ function toSummaryRow(v: unknown): StockSummaryRow {
   return {
     product: toProductRef(o.product),
     totalQuantity: num0(o.totalQuantity),
+    totalShortage: num0(o.totalShortage),
     isLowAnywhere: o.isLowAnywhere === true,
     locations: list(o.locations).map((l) => {
       const x = obj(l);
-      return { locationId: str(x.locationId) ?? "", quantity: num0(x.quantity), isLow: x.isLow === true };
+      return {
+        locationId: str(x.locationId) ?? "",
+        quantity: num0(x.quantity),
+        shortageQuantity: num0(x.shortageQuantity),
+        balance: num(x.balance) ?? num0(x.quantity) - num0(x.shortageQuantity),
+        isLow: x.isLow === true,
+      };
     }),
     ...("value" in o ? { value: num0(o.value), valueIncomplete: o.valueIncomplete === true } : {}),
   };
@@ -175,6 +196,7 @@ function toMovement(v: unknown): Movement {
     product: toProductRef(o.product),
     batchId: str(o.batchId),
     quantity: num0(o.quantity),
+    isShortage: o.isShortage === true,
     ...optNum(o, "unitCost"),
     reason: typeof o.reason === "string" && (REASONS as readonly string[]).includes(o.reason) ? (o.reason as WriteOffReason) : null,
     note: str(o.note),
@@ -196,6 +218,7 @@ function toOperationSummary(v: unknown): OperationSummary {
     createdAt: str(o.createdAt) ?? "",
     createdBy: ref(o.createdBy),
     productCount: num0(o.productCount),
+    appointmentId: str(o.appointmentId),
     ...optNum(o, "totalCost"),
   };
 }
@@ -239,6 +262,7 @@ export function toStocktake(v: unknown): Stocktake {
       return {
         product: toProductRef(x.product),
         expectedQuantity: num(x.expectedQuantity),
+        expectedShortage: num(x.expectedShortage),
         countedQuantity: num(x.countedQuantity),
         difference: num(x.difference),
         surplusExpiresOn: str(x.surplusExpiresOn),
@@ -257,6 +281,54 @@ function toScope(v: unknown): InventoryScope {
     costs: oneOf<CostsAccess>(o.costs, COSTS, "none"),
     canEditCatalog: o.canEditCatalog === true,
     expiringSoonDays: num(o.expiringSoonDays) ?? 30,
+  };
+}
+
+function toMaterialSet(v: unknown): MaterialSet {
+  const o = obj(v);
+  return {
+    serviceId: str(o.serviceId) ?? "",
+    locationId: str(o.locationId),
+    lines: list(o.lines).map((l) => {
+      const x = obj(l);
+      return { product: toProductRef(x.product), quantity: num0(x.quantity) };
+    }),
+    updatedAt: str(o.updatedAt) ?? "",
+    updatedBy: ref(o.updatedBy),
+  };
+}
+
+export function toServiceMaterials(v: unknown): ServiceMaterials {
+  const o = obj(v);
+  return {
+    serviceId: str(o.serviceId) ?? "",
+    serviceName: str(o.serviceName) ?? "",
+    serviceIsActive: o.serviceIsActive !== false,
+    network: o.network ? toMaterialSet(o.network) : null,
+    locations: list(o.locations).map((l): LocationMaterialSet => ({ ...toMaterialSet(l), locationName: str(obj(l).locationName) ?? "" })),
+  };
+}
+
+/** Лише поля контракту §32.19: ПД клієнтів сюди не потрапляють навіть якщо сервер їх помилково віддасть. */
+export function toStaffAlert(v: unknown): StaffAlert {
+  const o = obj(v);
+  const b = obj(o.batch);
+  return {
+    id: str(o.id) ?? "",
+    kind: oneOf<AlertKind>(o.kind, ALERT_KINDS, "low_stock"),
+    status: oneOf<AlertStatus>(o.status, ALERT_STATUSES, "open"),
+    location: ref(o.location) ?? { id: "", name: "" },
+    product: toProductRef(o.product),
+    batch: str(b.id) ? { id: str(b.id)!, expiresOn: str(b.expiresOn), lotNumber: str(b.lotNumber) } : null,
+    operationId: str(o.operationId),
+    quantity: num0(o.quantity),
+    threshold: num(o.threshold),
+    expiresOn: str(o.expiresOn),
+    daysBucket: num(o.daysBucket),
+    createdAt: str(o.createdAt) ?? "",
+    readAt: str(o.readAt),
+    readBy: ref(o.readBy),
+    resolvedAt: str(o.resolvedAt),
   };
 }
 
@@ -308,7 +380,36 @@ type InventoryApi = Pick<
   | "saveStocktakeLines"
   | "postStocktake"
   | "cancelStocktake"
+  | "getServiceMaterialsList"
+  | "getServiceMaterials"
+  | "setServiceMaterials"
+  | "deleteServiceMaterials"
+  | "getInventoryAlerts"
+  | "getInventoryAlertsUnreadCount"
+  | "markInventoryAlertRead"
+  | "markAllInventoryAlertsRead"
+  | "getTelegramLink"
+  | "createTelegramLink"
+  | "deleteTelegramLink"
 >;
+
+export function toTelegramLinkStatus(v: unknown): TelegramLinkStatus {
+  const o = obj(v);
+  const rev = obj(o.lastRevoke);
+  const reason = str(rev.reason);
+  const at = str(rev.at);
+  return {
+    featureEnabled: o.featureEnabled === true,
+    state: oneOf<TelegramLinkState>(o.state, TG_STATES, "none"),
+    channel: ref(o.channel),
+    expiresAt: str(o.expiresAt),
+    activatedAt: str(o.activatedAt),
+    claimedAt: str(o.claimedAt),
+    lastDeliveryAt: str(o.lastDeliveryAt),
+    lastRevoke: reason && at && (TG_REVOKES as readonly string[]).includes(reason) ? { reason: reason as RevokeReason, at } : null,
+    consentVersion: str(o.consentVersion) ?? "inv-tg-v1",
+  };
+}
 
 export const httpInventoryApi: InventoryApi = {
   getInventoryScope: async () => toScope(await get("/scope")),
@@ -361,4 +462,24 @@ export const httpInventoryApi: InventoryApi = {
     return { stocktake: toStocktake(o.stocktake), operation: o.operation ? toOperation(o.operation) : null };
   },
   cancelStocktake: async (id, expectedVersion) => toStocktake(await send("POST", `/stocktakes/${enc(id)}/cancel`, { expectedVersion })),
+
+  getServiceMaterialsList: async (includeInactive = false) => list(obj(await get("/service-materials", { includeInactive })).items).map(toServiceMaterials),
+  getServiceMaterials: async (serviceId) => toServiceMaterials(await get(`/services/${enc(serviceId)}/materials`)),
+  setServiceMaterials: async (serviceId, r) => toMaterialSet(await send("PUT", `/services/${enc(serviceId)}/materials`, r)),
+  deleteServiceMaterials: async (serviceId, locationId) => {
+    await apiJson<void>(`${B}/services/${enc(serviceId)}/materials${qs({ locationId: locationId ?? undefined })}`, { method: "DELETE", cache: "no-store" });
+  },
+  getInventoryAlerts: async (q = {}) => toPage(await get("/alerts", { ...q, take: take(q.take) }), toStaffAlert),
+  getInventoryAlertsUnreadCount: async () => Math.max(0, num0(obj(await get("/alerts/unread-count")).count)),
+  markInventoryAlertRead: async (id) => toStaffAlert(await send("POST", `/alerts/${enc(id)}/read`)),
+  markAllInventoryAlertsRead: async (locationId) => num0(obj(await send("POST", `/alerts/read-all${qs({ locationId })}`)).updated),
+
+  getTelegramLink: async () => toTelegramLinkStatus(await get("/telegram/link")),
+  createTelegramLink: async (r) => {
+    const o = obj(await send("POST", "/telegram/link", r));
+    return { linkId: str(o.linkId) ?? "", deepLink: str(o.deepLink) ?? "", expiresAt: str(o.expiresAt) ?? "" } satisfies TelegramLinkIssued;
+  },
+  deleteTelegramLink: async () => {
+    await apiJson<void>(`${B}/telegram/link`, { method: "DELETE", cache: "no-store" });
+  },
 };

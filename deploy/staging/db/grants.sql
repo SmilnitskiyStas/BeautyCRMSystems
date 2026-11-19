@@ -15,6 +15,8 @@ REVOKE UPDATE, DELETE ON user_access_audit FROM beautycrm_app;
 -- Склад (ADR-025, TASK-876): журнал рухів і заголовки операцій append-only для app-ролі: лише SELECT/INSERT
 REVOKE UPDATE, DELETE ON beauty_stock_movements FROM beautycrm_app;
 REVOKE UPDATE, DELETE ON beauty_stock_operations FROM beautycrm_app;
+-- Склад, етап 2b (ADR-025 §12, контракт §32.24.2, TASK-895): журнал подій прив'язки Telegram append-only для app-ролі: лише SELECT/INSERT (+ тригер у БД)
+REVOKE UPDATE, DELETE, TRUNCATE ON beauty_staff_telegram_link_events FROM beautycrm_app;
 
 -- Роль воркера: мінімальні права (runbook §6/§11; контракти §22.3, §22.5, §23)
 GRANT USAGE ON SCHEMA public TO beautycrm_worker;
@@ -40,6 +42,23 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON beauty_specialist_reviews TO beautycrm_a
 -- Воркер: підтвердження запису читає ім'я майстра; email-нагадування створює розмову на каналі email (INSERT beauty_conversations)
 GRANT SELECT ON beauty_specialists TO beautycrm_worker;
 GRANT INSERT ON beauty_conversations TO beautycrm_worker;
+-- Склад, етап 2a (ADR-025 §11, контракт §32.20, TASK-883): воркер pollInventory читає залишки, партії, товари й налаштування закладів
+-- і веде сповіщення персоналу (INSERT/UPDATE; без DELETE). Норми матеріалів і журнал рухів воркеру не потрібні. app-роль: нові таблиці - через ALL TABLES
+GRANT SELECT ON beauty_stock_levels, beauty_stock_batches, beauty_product_location_settings TO beautycrm_worker;
+GRANT SELECT (id, tenant_id, is_active, min_stock) ON beauty_products TO beautycrm_worker;
+GRANT SELECT, INSERT ON beauty_staff_alerts TO beautycrm_worker;
+GRANT UPDATE (status, resolved_at, updated_at) ON beauty_staff_alerts TO beautycrm_worker;
+-- Склад, етап 2b (TASK-895): воркер pollInventoryTelegram. Прив'язки: колонковий SELECT (шифрований chat_id потрібен лише для відправки; без token_hash, chat_id_hash, згоди) і
+-- колонковий UPDATE (відв'язка стирає дані чату, прибирання прострочених); без INSERT/DELETE. Журнал подій - лише INSERT (append-only). Черга - SELECT/INSERT/UPDATE/DELETE
+-- (30-денне прибирання; рядки beauty_staff_notification_alerts видаляються каскадом). Зв'язок алертів - SELECT/INSERT. Нові колонкові SELECT: users (is_active, state - перевірка адресата),
+-- beauty_products (name, unit - тексти; без purchase_price). beauty_locations, beauty_stock_batches (lot_number), beauty_staff_alerts, beauty_channels - вже є
+GRANT SELECT (id, tenant_id, user_id, channel_id, status, chat_id_encrypted, token_expires_at, activated_at) ON beauty_staff_telegram_links TO beautycrm_worker;
+GRANT UPDATE (status, token_hash, chat_id_encrypted, chat_id_hash, revoked_at, revoke_reason, last_delivery_at, updated_at) ON beauty_staff_telegram_links TO beautycrm_worker;
+GRANT INSERT ON beauty_staff_telegram_link_events TO beautycrm_worker;
+GRANT SELECT, INSERT, UPDATE, DELETE ON beauty_staff_notifications TO beautycrm_worker;
+GRANT SELECT, INSERT ON beauty_staff_notification_alerts TO beautycrm_worker;
+GRANT SELECT (is_active, state) ON users TO beautycrm_worker;
+GRANT SELECT (name, unit) ON beauty_products TO beautycrm_worker;
 -- Публічний каталог закладів (ADR-022): функції належать beautycrm_catalog, EXECUTE лише для app-ролі, НЕ для PUBLIC і НЕ для воркера
 REVOKE ALL ON FUNCTION public.beauty_public_resolve_location(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.beauty_public_nearby_locations(double precision, double precision, double precision, integer) FROM PUBLIC;

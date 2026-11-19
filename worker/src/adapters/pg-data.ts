@@ -6,6 +6,7 @@ import type {
 import { currentTenantId, type TenantDb } from "../db/tenant-db";
 import { CALL_TASK_CODES, DEFAULT_CLIENT_INTERVAL_DAYS, isChannelErrorCode } from "../jobs/beauty-common";
 import { PgCampaigns } from "./pg-campaign";
+import { inventoryModuleOn } from "../inventory/alerts";
 
 /** beauty_channels.type -> adapter id (mirrors ChannelTypeMap in the backend). */
 export const toAdapterId = (type: string): string => (type.toLowerCase() === "facebook" ? "messenger" : type.toLowerCase());
@@ -118,6 +119,7 @@ export class PgBeautyData implements BeautyDataPort {
   enqueueCampaignMessage(recipientId: string, now: Date, opts: CampaignEnqueueOptions): Promise<CampaignEnqueueResult> { return this.campaigns.enqueueCampaignMessage(recipientId, now, opts); }
   campaignSendGuard(messageId: string) { return this.campaigns.campaignSendGuard(messageId); }
   isMarketingEnabled(): Promise<boolean> { return this.campaigns.isMarketingEnabled(); }
+  isInventoryEnabled(): Promise<boolean> { return this.db.tx((c) => inventoryModuleOn(c)); }
   enqueueWinbackMessage(msg: OutboundMessage, now: Date, opts: CampaignEnqueueOptions): Promise<WinbackEnqueueResult> { return this.campaigns.enqueueWinbackMessage(msg, now, opts); }
   claimMarketingForSend(id: string, limit: number, since: Date) { return this.campaigns.claimMarketingForSend(id, limit, since, this.now()); }
 

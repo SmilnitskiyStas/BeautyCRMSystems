@@ -227,6 +227,19 @@ public sealed class AuthzBaselineMatrixTests(AuthApiFixture fx) : IClassFixture<
         MgmtFilter("PUT", "api/beauty/inventory/stocktakes/{id:guid}/lines", "422"),
         MgmtFilter("POST", "api/beauty/inventory/stocktakes/{id:guid}/post", "422"),
         MgmtFilter("POST", "api/beauty/inventory/stocktakes/{id:guid}/cancel", "422"),
+        // ---- склад, етап 2a (TASK-884/886): норми матеріалів (читання - view>=own, зміна - owner/admin + manage=all) і сповіщення персоналу
+        Open("GET", "api/beauty/inventory/service-materials", "200"),
+        Open("GET", "api/beauty/inventory/services/{serviceId:guid}/materials", "404"),
+        MgmtFilter("PUT", "api/beauty/inventory/services/{serviceId:guid}/materials", "422"),
+        MgmtFilter("DELETE", "api/beauty/inventory/services/{serviceId:guid}/materials", "404"),
+        Open("GET", "api/beauty/inventory/alerts", "200"),
+        Open("GET", "api/beauty/inventory/alerts/unread-count", "200"),
+        Open("POST", "api/beauty/inventory/alerts/{id:guid}/read", "404"),
+        Open("POST", "api/beauty/inventory/alerts/read-all", "200"),
+        // ---- склад, етап 2b (TASK-890, §32.24.8): прив'язка Telegram власника - лише owner (фільтр до прив'язки тіла); прапор у тестовому хості вимкнено
+        new("GET", "api/beauty/inventory/telegram/link", "200", RoleDeny, RoleDeny),
+        new("POST", "api/beauty/inventory/telegram/link", "403:telegram_alerts_disabled", RoleDeny, RoleDeny),
+        new("DELETE", "api/beauty/inventory/telegram/link", "204", RoleDeny, RoleDeny),
 
         // ---- спеціалісти (читання - всі, зміни - Management)
         Open("GET", "api/beauty/specialists", "200"),

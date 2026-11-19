@@ -153,7 +153,7 @@ function Detail({ id, scope }: { id: string; scope: InventoryScope }) {
   const diffs = st.lines.filter((l) => {
     const d = draftOf(l.product.id).counted.trim();
     const parsed = d === "" ? null : parseQuantity(d, l.product.unit, { allowZero: true });
-    return parsed && parsed.error === undefined && stocktakeDifference(l.expectedQuantity, parsed.value) !== 0;
+    return parsed && parsed.error === undefined && stocktakeDifference(l.expectedQuantity, parsed.value, l.expectedShortage) !== 0;
   }).length;
 
   return (
@@ -182,14 +182,19 @@ function Detail({ id, scope }: { id: string; scope: InventoryScope }) {
             const pid = l.product.id;
             const d = draftOf(pid);
             const parsed = d.counted.trim() === "" ? null : parseQuantity(d.counted, l.product.unit, { allowZero: true });
-            const liveDiff = editable ? (parsed && parsed.error === undefined ? stocktakeDifference(l.expectedQuantity, parsed.value) : null) : l.difference;
+            const liveDiff = editable ? (parsed && parsed.error === undefined ? stocktakeDifference(l.expectedQuantity, parsed.value, l.expectedShortage) : null) : l.difference;
             const e = errors[pid];
             return (
               <tr key={pid} className="border-t border-(--line) align-top">
                 <th scope="row" className={`${TD} text-left font-semibold`}>
                   {l.product.name}
                 </th>
-                <td className={TD}>{l.expectedQuantity === null ? "—" : formatQuantity(l.expectedQuantity, l.product.unit)}</td>
+                <td className={TD}>
+                  {l.expectedQuantity === null ? "—" : formatQuantity(l.expectedQuantity, l.product.unit)}
+                  {l.expectedShortage !== null && l.expectedShortage > 0 ? (
+                    <span className="block text-[13px] font-semibold text-[#7A4B00]">Нестача: {formatQuantity(l.expectedShortage, l.product.unit)}. Після підрахунку нестача обнулиться.</span>
+                  ) : null}
+                </td>
                 <td className={TD}>
                   {editable ? (
                     <InputField

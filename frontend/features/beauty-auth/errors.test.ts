@@ -35,3 +35,17 @@ describe("readApiError: conflicts[]", () => {
     expect(e.conflicts).toBeUndefined();
   });
 });
+
+describe("помилки складу етапу 2a (§32.21)", () => {
+  it.each([
+    ["purpose_locked", 422, /нормах матеріалів/],
+    ["unit_locked", 422, /норми матеріалів/],
+    ["product_not_for_salon_use", 422, /лише для продажу/],
+    ["materials_not_found", 404, /норм немає/],
+    ["alert_not_found", 404, /Сповіщення не знайдено/],
+    ["invalid_alert_status", 422, /Технічна помилка/],
+    ["invalid_alert_kind", 422, /Технічна помилка/],
+  ])("%s -> українською, без англійського message", (code, status, re) => {
+    expect(humanizeError(new BeautyApiError(status, code, "english message"))).toMatch(re);
+  });
+});

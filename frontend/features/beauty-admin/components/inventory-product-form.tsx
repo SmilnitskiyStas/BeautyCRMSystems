@@ -9,6 +9,7 @@ import {
   useSetLocationSetting,
   useSuppliers,
 } from "../hooks/use-inventory";
+import { useServiceMaterialsList } from "../hooks/use-inventory-norms";
 import {
   PURPOSE_LABEL,
   UNITS,
@@ -154,6 +155,9 @@ export function ProductForm({ product, scope, onClose }: { product: Product | nu
   const categories = useInventoryCategories();
   const suppliers = useSuppliers({ active: "all", take: 200 });
   const listId = useId();
+  // Норми матеріалів (§32.16): деактивація товару з нормами дозволена, але у списанні він пропускається - попереджаємо.
+  const norms = useServiceMaterialsList(isEdit);
+  const usedIn = isEdit ? (norms.data ?? []).filter((m) => [m.network, ...m.locations].some((set) => set?.lines.some((l) => l.product.id === product.id))).map((m) => m.serviceName) : [];
   const [values, setValues] = useState<ProductFormValues>(valuesOf(product));
   const [errors, setErrors] = useState<ProductErrors>({});
   const [serverError, setServerError] = useState<string | null>(null);
@@ -226,7 +230,7 @@ export function ProductForm({ product, scope, onClose }: { product: Product | nu
           onChange={(v) => set("unit", v as StockUnit)}
           options={UNITS.map((u) => ({ value: u.id, label: `${u.label} (${u.short})` }))}
           disabled={readOnly || (isEdit && product.hasMovements)}
-          hint={isEdit && product.hasMovements ? "Товар уже має рух: одиницю змінити не можна." : "Для штук і упаковок кількості цілі."}
+          hint={isEdit && product.hasMovements ? "Товар має рух або входить у норми матеріалів: одиницю змінити не можна." : "Для штук і упаковок кількості цілі."}
         />
         <InputField label="Штрихкод" maxLength={64} value={values.barcode} onChange={(v) => set("barcode", v)} error={errors.barcode} disabled={readOnly} hint="Літери, цифри та . _ -" />
         <SelectField
@@ -271,6 +275,11 @@ export function ProductForm({ product, scope, onClose }: { product: Product | nu
             Деактивувати товар?
           </p>
           <p id="confirm-off-d" className="text-sm">Товар перестане прийматися в надходженнях. Залишки, партії й журнал збережуться; списання й переміщення лишаються доступними.</p>
+          {usedIn.length > 0 ? (
+            <p role="note" className="text-sm font-semibold">
+              Товар входить у норми матеріалів: {usedIn.join(", ")}. Після деактивації він не списуватиметься автоматично після візитів.
+            </p>
+          ) : null}
           <div className="flex flex-wrap gap-2">
             <PrimaryButton disabled={save.isPending} onClick={() => void doSave()}>
               Так, деактивувати

@@ -45,7 +45,10 @@ public class MockChannelAdapter(string channel, IChannelCredentialsProvider? cre
     }
 }
 
-public sealed class MockTelegramAdapter(IChannelCredentialsProvider? c = null) : MockChannelAdapter(ChannelIds.Telegram, c);
+public sealed class MockTelegramAdapter(IChannelCredentialsProvider? c = null) : MockChannelAdapter(ChannelIds.Telegram, c), IChannelBotInfo
+{
+    public Task<string?> GetBotUsernameAsync(CancellationToken ct) => Task.FromResult<string?>("mock_bot");
+}
 public sealed class MockInstagramAdapter(IChannelCredentialsProvider? c = null) : MockChannelAdapter(ChannelIds.Instagram, c);
 
 /// <summary>Placeholder for channels not implemented in release 1 (Viber, WhatsApp, Messenger, widget).</summary>

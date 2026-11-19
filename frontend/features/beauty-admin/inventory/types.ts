@@ -113,14 +113,20 @@ export interface StockRow {
   nearestExpiresOn: string | null;
   expiredQuantity: number;
   expiringQuantity: number;
+  /** §32.17: нестача (непокрита автосписанням частина). Завжди присутня; `0`, якщо нестачі немає. */
+  shortageQuantity: number;
+  /** Облікове сальдо `quantity − shortageQuantity`; може бути від'ємним («у мінусі»). */
+  balance: number;
   value?: number;
   valueIncomplete?: boolean;
 }
 export interface StockSummaryRow {
   product: ProductRef;
   totalQuantity: number;
+  /** §32.17: сума нестач по закладах scope. */
+  totalShortage: number;
   isLowAnywhere: boolean;
-  locations: { locationId: string; quantity: number; isLow: boolean }[];
+  locations: { locationId: string; quantity: number; shortageQuantity: number; balance: number; isLow: boolean }[];
   value?: number;
   valueIncomplete?: boolean;
 }
@@ -150,6 +156,8 @@ export interface Movement {
   product: ProductRef;
   batchId: string | null;
   quantity: number;
+  /** §32.17: рух нестачі (`service_consumption` без партії) або погашення нестачі (`receipt|transfer_in|stocktake_adjust`). */
+  isShortage: boolean;
   unitCost?: number | null;
   reason: WriteOffReason | null;
   note: string | null;
@@ -167,6 +175,8 @@ export interface OperationSummary {
   createdAt: string;
   createdBy: NamedRef | null;
   productCount: number;
+  /** §32.17: лише для `service_consumption` (id запису без ПД). */
+  appointmentId: string | null;
   totalCost?: number | null;
 }
 export interface Operation extends OperationSummary {
@@ -224,6 +234,8 @@ export interface StocktakeSummary {
 export interface StocktakeLine {
   product: ProductRef;
   expectedQuantity: number | null;
+  /** §32.17: знімок нестачі на момент проведення; різниця рахується до сальдо. */
+  expectedShortage: number | null;
   countedQuantity: number | null;
   difference: number | null;
   surplusExpiresOn: string | null;
@@ -319,6 +331,67 @@ export interface StocktakeQuery {
 export interface SupplierQuery {
   search?: string;
   active?: "true" | "false" | "all";
+  cursor?: string;
+  take?: number;
+}
+
+// ---------- етап 2a: норми матеріалів (§32.16) ----------
+
+export interface MaterialLine {
+  product: ProductRef;
+  quantity: number;
+}
+export interface MaterialSet {
+  serviceId: string;
+  /** `null` - мережевий набір. */
+  locationId: string | null;
+  lines: MaterialLine[];
+  updatedAt: string;
+  updatedBy: NamedRef | null;
+}
+export interface LocationMaterialSet extends MaterialSet {
+  locationName: string;
+}
+export interface ServiceMaterials {
+  serviceId: string;
+  serviceName: string;
+  serviceIsActive: boolean;
+  network: MaterialSet | null;
+  locations: LocationMaterialSet[];
+}
+export interface MaterialSetRequest {
+  locationId: string | null;
+  lines: { productId: string; quantity: number }[];
+}
+
+// ---------- етап 2a: сповіщення персоналу (§32.19) ----------
+
+export type AlertKind = "low_stock" | "expiring" | "shortage";
+export type AlertStatus = "open" | "read" | "resolved";
+export type AlertStatusFilter = "active" | AlertStatus | "all";
+
+export interface StaffAlert {
+  id: string;
+  kind: AlertKind;
+  status: AlertStatus;
+  location: NamedRef;
+  product: ProductRef;
+  batch: { id: string; expiresOn: string | null; lotNumber: string | null } | null;
+  operationId: string | null;
+  quantity: number;
+  threshold: number | null;
+  expiresOn: string | null;
+  /** `0` - прострочено. */
+  daysBucket: number | null;
+  createdAt: string;
+  readAt: string | null;
+  readBy: NamedRef | null;
+  resolvedAt: string | null;
+}
+export interface AlertQuery {
+  status?: AlertStatusFilter;
+  kind?: AlertKind;
+  locationId?: string;
   cursor?: string;
   take?: number;
 }

@@ -18,7 +18,8 @@ namespace BeautyCrm.Infrastructure.Data.Beauty;
 /// EF Core реалізація портів даних Application. Tenant ізоляція — RLS (app.tenant_id), тож запити
 /// не фільтрують за tenant_id вручну. Один scoped екземпляр на запит.
 /// </summary>
-public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector secrets, TimeProvider? clock = null)
+public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector secrets, TimeProvider? clock = null,
+    Microsoft.Extensions.Configuration.IConfiguration? config = null, Microsoft.Extensions.Logging.ILogger<EfBeautyStore>? log = null)
     : IBookingStore, ICancellationSettingsStore, ICatalogStore, IClientStore, IAnalyticsStore, IChannelSettingsStore, ILocationStore
 {
     private const string ExclusionViolation = "23P01";
@@ -334,7 +335,10 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
         }
         // §22.4: completed закриває scheduled-нагадування й відкриті задачі дзвінка в тій самій транзакції.
         await ClosePlanAsync(id, ReminderSkipReasons.AppointmentInactive, includePlannerSkipped: false, ct);
-        await tx.CommitAsync(ct);
+        // §32.18: автосписання матеріалів у тій самій транзакції; нестача й технічні збої складу візит не блокують (SAVEPOINT всередині)
+        await ConsumeMaterialsAsync(tx, id);
+        // M1: коміт без ct - після умовного UPDATE скасування запиту не має відкотити completed + знімок (ADR-014); коміт не блокується на локах
+        await tx.CommitAsync(CancellationToken.None);
         db.ChangeTracker.Clear();
         return StoreResult<AppointmentDto>.Ok((await GetAppointmentAsync(id, ct))!);
     }

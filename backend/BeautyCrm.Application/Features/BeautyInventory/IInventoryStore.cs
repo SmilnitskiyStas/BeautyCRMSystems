@@ -8,7 +8,7 @@ public sealed record ProductData(string Name, string? Category, string Unit, str
 
 public sealed record SupplierData(string Name, string? ContactName, string? Phone, string? Email, string? Note, bool IsActive);
 
-public enum CatalogWriteOutcome { Ok, NotFound, BarcodeTaken, NameTaken, UnitLocked }
+public enum CatalogWriteOutcome { Ok, NotFound, BarcodeTaken, NameTaken, UnitLocked, PurposeLocked }
 
 public sealed record ProductWriteResult(CatalogWriteOutcome Outcome, ProductDetailDto? Product = null);
 public sealed record SupplierWriteResult(CatalogWriteOutcome Outcome, SupplierDto? Supplier = null);
@@ -21,11 +21,11 @@ public sealed record SummaryFilter(IReadOnlyList<Guid> LocationIds, string? Sear
 
 /// <summary>Сирий рядок залишків закладу: ефективний мінімум і ознаки рахує сервіс.</summary>
 public sealed record StockRaw(ProductRef Product, decimal Quantity, decimal? ProductMinStock, decimal? SettingMinStock, bool IsEnabled,
-    DateOnly? NearestExpiresOn, decimal ExpiredQuantity, decimal ExpiringQuantity, decimal Value, bool ValueIncomplete);
+    DateOnly? NearestExpiresOn, decimal ExpiredQuantity, decimal ExpiringQuantity, decimal Value, bool ValueIncomplete, decimal Shortage = 0);
 
 /// <summary>Сирий рядок зведення: пара (товар, заклад).</summary>
 public sealed record SummaryRaw(ProductRef Product, Guid LocationId, decimal Quantity, decimal? ProductMinStock, decimal? SettingMinStock,
-    bool IsEnabled, decimal Value, bool ValueIncomplete);
+    bool IsEnabled, decimal Value, bool ValueIncomplete, decimal Shortage = 0);
 
 public sealed record BatchRef(Guid Id, Guid LocationId, Guid ProductId, DateOnly? ExpiresOn);
 

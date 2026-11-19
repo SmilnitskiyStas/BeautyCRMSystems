@@ -9,10 +9,50 @@ const META_WINDOW_MS = 24 * 3_600_000;
 
 /** `permanent` => retrying cannot help (bad token, closed Meta window): outbox marks the message failed at once. */
 export class ChannelSendError extends Error {
-  constructor(message: string, readonly permanent: boolean, readonly code?: ChannelErrorCode) { super(message); this.name = "ChannelSendError"; }
+  constructor(message: string, readonly permanent: boolean, readonly code?: ChannelErrorCode, readonly extra: { httpStatus?: number; retryAfterSec?: number } = {}) {
+    super(message); this.name = "ChannelSendError";
+  }
 }
 
 type Fetch = typeof fetch;
+
+/**
+ * Shared Telegram `sendMessage` transport (client messages and the owner's inventory alerts). Errors never contain URL, token or body.
+ * `disablePreview` adds `disable_web_page_preview: true` (staff alerts only; client messages are sent exactly as before).
+ */
+export async function sendTelegramText(
+  http: Fetch, baseUrl: string, token: string, chatId: string, text: string,
+  opts: { replyMarkup?: ReturnType<typeof toReplyMarkup>; disablePreview?: boolean } = {},
+): Promise<{ externalMessageId: string | null }> {
+  const body = { chat_id: chatId, text, ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}), ...(opts.disablePreview ? { disable_web_page_preview: true } : {}) };
+  const res = await postJson(http, "Telegram sendMessage", `${baseUrl}/bot${token}/sendMessage`, body, {}, true);
+  // Telegram message_id -> beauty_messages.external_message_id (binds a button press to this very message).
+  const json = await res.json().catch(() => null) as { result?: { message_id?: unknown } } | null;
+  const id = json?.result?.message_id;
+  return { externalMessageId: typeof id === "number" || typeof id === "string" ? String(id) : null };
+}
+
+async function postJson(http: Fetch, what: string, url: string, body: unknown, headers: Record<string, string>, telegram = false): Promise<Response> {
+  let res: Response;
+  try {
+    res = await http(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+  } catch {
+    throw new ChannelSendError(`${what} network error`, false);
+  }
+  if (res.ok) return res;
+  const httpStatus = res.status;
+  if (telegram && res.status === 403) throw new ChannelSendError(`${what} failed with HTTP 403`, true, "bot_blocked", { httpStatus });
+  if (telegram && res.status === 400 && /chat not found/i.test(await res.text().catch(() => ""))) {
+    throw new ChannelSendError(`${what} failed with HTTP 400`, true, "chat_not_found", { httpStatus }); // body is never kept in the error
+  }
+  let retryAfterSec: number | undefined;
+  if (telegram && res.status === 429) {
+    const j = await res.json().catch(() => null) as { parameters?: { retry_after?: unknown } } | null;
+    const ra = Number(j?.parameters?.retry_after);
+    if (Number.isFinite(ra) && ra > 0) retryAfterSec = ra;
+  }
+  throw new ChannelSendError(`${what} failed with HTTP ${res.status}`, !(res.status === 429 || res.status >= 500), undefined, { httpStatus, retryAfterSec });
+}
 
 /** Telegram limits: callback_data 1..64 bytes (UTF-8). */
 const MAX_CALLBACK_BYTES = 64;
@@ -66,12 +106,7 @@ export class HttpChannelSender implements ChannelSenderPort {
 
     if (type === "telegram") {
       const markup = toReplyMarkup(msg.actions);
-      const res = await this.post(`Telegram sendMessage`, `${this.urls.telegram}/bot${token}/sendMessage`,
-        { chat_id: info.external_chat_id, text: msg.text, ...(markup ? { reply_markup: markup } : {}) }, {}, true);
-      // Telegram message_id -> beauty_messages.external_message_id (binds a button press to this very message).
-      const body = await res.json().catch(() => null) as { result?: { message_id?: unknown } } | null;
-      const id = body?.result?.message_id;
-      return { externalMessageId: typeof id === "number" || typeof id === "string" ? String(id) : null };
+      return sendTelegramText(this.http, this.urls.telegram, token, info.external_chat_id, msg.text, { replyMarkup: markup });
     } else if (type === "instagram") {
       const last = info.last_inbound ? new Date(info.last_inbound).getTime() : null;
       if (last === null || this.now().getTime() - last > META_WINDOW_MS) {
@@ -85,18 +120,7 @@ export class HttpChannelSender implements ChannelSenderPort {
     }
   }
 
-  private async post(what: string, url: string, body: unknown, headers: Record<string, string>, telegram = false): Promise<Response> {
-    let res: Response;
-    try {
-      res = await this.http(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
-    } catch {
-      throw new ChannelSendError(`${what} network error`, false);
-    }
-    if (res.ok) return res;
-    if (telegram && res.status === 403) throw new ChannelSendError(`${what} failed with HTTP 403`, true, "bot_blocked");
-    if (telegram && res.status === 400 && /chat not found/i.test(await res.text().catch(() => ""))) {
-      throw new ChannelSendError(`${what} failed with HTTP 400`, true, "chat_not_found"); // body is never kept in the error
-    }
-    throw new ChannelSendError(`${what} failed with HTTP ${res.status}`, !(res.status === 429 || res.status >= 500));
+  private post(what: string, url: string, body: unknown, headers: Record<string, string>): Promise<Response> {
+    return postJson(this.http, what, url, body, headers);
   }
 }

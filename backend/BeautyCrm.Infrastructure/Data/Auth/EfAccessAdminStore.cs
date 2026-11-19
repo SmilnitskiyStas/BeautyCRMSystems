@@ -131,6 +131,9 @@ public sealed class EfAccessAdminStore(BeautyDbContext db, TenantContext tenant)
                 UPDATE users SET access_version = access_version + 1, updated_at = {at}, role = COALESCE({newRole}, role)
                 WHERE id = {targetId}
                 """, ct);
+            // 2b (§32.24.7): зміна ролі з owner -> відкликання прив'язки Telegram у цій самій транзакції (дані чату стираються)
+            if (newRole is not null && newRole != Roles.Owner)
+                await Integrations.Channels.StaffTelegramRevocation.RevokeForUserAsync(db, targetId, "role_changed", "user", actorId, at, ct);
             return await db.Users.AsNoTracking().Where(u => u.Id == targetId).Select(u => u.AccessVersion).SingleAsync(ct);
         }
 
@@ -142,6 +145,8 @@ public sealed class EfAccessAdminStore(BeautyDbContext db, TenantContext tenant)
                 WHERE id = {targetId}
                 """, ct);
             var version = await db.Users.AsNoTracking().Where(u => u.Id == targetId).Select(u => u.AccessVersion).SingleAsync(ct);
+            if (!active)
+                await Integrations.Channels.StaffTelegramRevocation.RevokeForUserAsync(db, targetId, "user_deactivated", "system", null, at, ct);
             if (!active)
                 await db.RefreshTokens.Where(t => t.UserId == targetId && t.RevokedAt == null)
                     .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, at), ct);

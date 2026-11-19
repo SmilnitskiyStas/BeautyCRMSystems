@@ -1,8 +1,11 @@
 import { BeautyApiError, humanizeError } from "@/features/beauty-auth/errors";
 import type {
+  AlertKind,
   Batch,
   BatchStatus,
   MovementType,
+  ProductRef,
+  StaffAlert,
   OperationKind,
   ProductPurpose,
   ProductRequest,
@@ -388,9 +391,10 @@ export function validateWriteOffHeader(v: { reason: string; note: string }): Fie
 // ---------- інвентаризація ----------
 
 /** Різниця «підраховано - очікувано» (у тисячних, без похибки); `null`, якщо не рахували. */
-export function stocktakeDifference(expected: number | null, counted: number | null): number | null {
+export function stocktakeDifference(expected: number | null, counted: number | null, expectedShortage: number | null = null): number | null {
   if (counted === null) return null;
-  return fromMilli(toMilli(counted) - toMilli(expected ?? 0));
+  // §32.17: різниця - до сальдо (`expected − expectedShortage`).
+  return fromMilli(toMilli(counted) - (toMilli(expected ?? 0) - toMilli(expectedShortage ?? 0)));
 }
 
 // ---------- сумарні значення ----------
@@ -445,7 +449,15 @@ const INVENTORY_BY_CODE: Record<string, string> = {
   supplier_inactive: "Постачальник неактивний.",
   same_location: "Оберіть інший заклад призначення.",
   batch_expired: "Партія прострочена, її не можна переміщувати.",
-  unit_locked: "Одиницю виміру не можна змінити: товар уже має рух.",
+  unit_locked: "Одиницю виміру не можна змінити: товар має рух або входить у норми матеріалів.",
+  // Етап 2a (§32.21)
+  service_not_found: "Послугу не знайдено.",
+  materials_not_found: "Для цього закладу норм немає.",
+  alert_not_found: "Сповіщення не знайдено.",
+  product_not_for_salon_use: "Товар призначено лише для продажу — його не можна додати в норму.",
+  purpose_locked: "Товар використовується в нормах матеріалів — спершу приберіть його з норм.",
+  invalid_alert_status: "Технічна помилка запиту. Спробуйте ще раз.",
+  invalid_alert_kind: "Технічна помилка запиту. Спробуйте ще раз.",
   expiry_required: "Вкажіть термін придатності.",
   invalid_expiry: "Термін придатності вже минув.",
   note_required: "Додайте коментар до списання.",
@@ -519,4 +531,121 @@ export function shortageLines(e: unknown): ShortageLine[] {
       },
     ];
   });
+}
+
+// ---------- етап 2a: нестача й сальдо (§32.17) ----------
+
+/** Облікове сальдо `quantity − shortage` (у тисячних, без похибки); може бути від'ємним. */
+export const balanceOf = (quantity: number, shortage: number) => fromMilli(toMilli(quantity) - toMilli(shortage));
+/** `isLow` за сальдо (§32.17): `effectiveMinStock > 0 AND balance < effectiveMinStock`. */
+export const isLowBalance = (balance: number, effectiveMin: number | null) => isLow(balance, effectiveMin);
+
+/** Залишок із сальдо: мінус завжди позначений текстом, не лише знаком чи кольором. */
+export function balanceLabel(balance: number, unit: StockUnit): string {
+  return balance < 0 ? `${formatQuantity(balance, unit)} (у мінусі)` : formatQuantity(balance, unit);
+}
+
+/** Підпис руху з урахуванням `isShortage` (§32.17). */
+export function movementLabel(type: MovementType, isShortage: boolean): string {
+  if (!isShortage) return MOVEMENT_LABEL[type];
+  if (type === "service_consumption") return "Нестача (витрата без залишку)";
+  if (type === "receipt" || type === "transfer_in" || type === "stocktake_adjust") return "Погашення нестачі";
+  return MOVEMENT_LABEL[type];
+}
+
+// ---------- етап 2a: сповіщення (§32.19) ----------
+
+export const ALERT_KIND_LABEL: Record<AlertKind, string> = { low_stock: "Низький залишок", expiring: "Спливає термін", shortage: "Нестача" };
+export const ALERT_STATUS_LABEL = { open: "Нове", read: "Прочитане", resolved: "Розв’язане" } as const;
+
+/** Число для бейджа: контракт обмежує лічильник 1000, UI показує «99+» вище 99. */
+export const alertBadgeText = (count: number) => (count > 99 ? "99+" : String(count));
+
+/** Поріг сповіщення про термін (§32.20 п.4): `0` - прострочено; інакше найменший поріг ≥ днів до терміну; `null` - ще рано. */
+export function daysBucketFor(days: number, thresholds: readonly number[]): number | null {
+  if (days < 0) return 0;
+  const fit = thresholds.filter((t) => t >= days).sort((a, b) => a - b);
+  return fit[0] ?? null;
+}
+
+/** Короткий опис порогу терміну: `0` = прострочено. */
+export function daysBucketLabel(bucket: number | null): string {
+  if (bucket === null) return "";
+  if (bucket === 0) return "прострочено";
+  return `до ${bucket} діб`;
+}
+
+/** Опис сповіщення одним рядком (без ПД; лише товар, кількості, терміни). */
+export function alertSummary(a: StaffAlert): string {
+  const u = a.product.unit;
+  switch (a.kind) {
+    case "low_stock":
+      return a.threshold !== null ? `Сальдо ${balanceLabel(a.quantity, u)}, мінімум ${formatQuantity(a.threshold, u)}` : `Сальдо ${balanceLabel(a.quantity, u)}`;
+    case "expiring": {
+      const when = a.daysBucket === 0 ? "Термін минув" : `Термін спливає (${daysBucketLabel(a.daysBucket)})`;
+      return `${when}: ${formatYmd(a.expiresOn)}, у партії ${formatQuantity(a.quantity, u)}${a.batch?.lotNumber ? `, партія ${a.batch.lotNumber}` : ""}`;
+    }
+    case "shortage":
+      return `Не вистачило ${formatQuantity(a.quantity, u)} для витрати на послугу`;
+  }
+}
+
+// ---------- етап 2a: норми матеріалів (§32.16) ----------
+
+export const MAX_MATERIAL_LINES = 50;
+/** Товар може бути в нормі: активний і `purpose ∈ salon_use|both`. */
+export const canBeNorm = (p: Pick<ProductRef, "purpose" | "isActive">) => p.isActive && p.purpose !== "sale";
+
+export interface MaterialDraftLine {
+  productId: string;
+  quantity: string;
+}
+export interface MaterialDraftErrors {
+  /** Помилка рядка за індексом. */
+  lines: Record<number, string>;
+  form?: string;
+}
+export interface MaterialDraftResult {
+  lines?: { productId: string; quantity: number }[];
+  errors: MaterialDraftErrors;
+}
+
+/**
+ * Валідація чернетки норми (дзеркало §32.16): ≤ 50 рядків, товар обраний і не повторюється, кількість у одиниці товару.
+ * Порожній набір дозволено лише для override закладу (`allowEmpty`): «у цьому закладі матеріали не списуються».
+ */
+export function validateMaterialDraft(draft: MaterialDraftLine[], products: Map<string, ProductRef>, allowEmpty: boolean): MaterialDraftResult {
+  const errors: MaterialDraftErrors = { lines: {} };
+  if (draft.length === 0 && !allowEmpty) return { errors: { lines: {}, form: "Додайте хоча б один матеріал." } };
+  if (draft.length > MAX_MATERIAL_LINES) return { errors: { lines: {}, form: `Не більше ${MAX_MATERIAL_LINES} матеріалів у наборі.` } };
+  const seen = new Set<string>();
+  const out: { productId: string; quantity: number }[] = [];
+  draft.forEach((l, i) => {
+    const p = products.get(l.productId);
+    if (!l.productId || !p) {
+      errors.lines[i] = "Оберіть товар.";
+      return;
+    }
+    if (seen.has(l.productId)) {
+      errors.lines[i] = "Цей товар уже є в наборі.";
+      return;
+    }
+    seen.add(l.productId);
+    if (p.purpose === "sale") {
+      errors.lines[i] = "Товар призначено лише для продажу.";
+      return;
+    }
+    const q = parseQuantity(l.quantity, p.unit);
+    if (q.error !== undefined) {
+      errors.lines[i] = q.error;
+      return;
+    }
+    if (q.value > 100_000) {
+      errors.lines[i] = "Не більше 100 000.";
+      return;
+    }
+    out.push({ productId: l.productId, quantity: q.value });
+  });
+  if (Object.keys(errors.lines).length > 0) return { errors };
+  return { lines: out, errors };
 }
