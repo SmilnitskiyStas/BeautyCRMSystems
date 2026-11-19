@@ -128,3 +128,16 @@ describe("групи меню (TASK-796)", () => {
     expect(navFor("deputy").length).toBeGreaterThan(0);
   });
 });
+
+describe("норми матеріалів (§32.16)", () => {
+  const u = (role: string, permissions: Record<string, string>, modules?: string[]) => ({ id: "u", email: "e", fullName: "n", role, specialistId: null, permissions, modules }) as never;
+  it("редагування: модуль + inventory.manage = all; перегляд не дає редагування", async () => {
+    const { canEditInventoryNorms, canViewInventory } = await import("./permissions");
+    const { ROLE_PRESETS } = await import("./access");
+    expect(canEditInventoryNorms(u("owner", { ...ROLE_PRESETS.owner }))).toBe(true);
+    expect(canEditInventoryNorms(u("owner", { ...ROLE_PRESETS.owner }, ["beauty_booking"]))).toBe(false);
+    expect(canEditInventoryNorms(u("admin", { ...ROLE_PRESETS.admin, "inventory.manage": "own" }))).toBe(false);
+    expect(canEditInventoryNorms(u("specialist", { ...ROLE_PRESETS.specialist }))).toBe(false);
+    expect(canViewInventory(u("specialist", { ...ROLE_PRESETS.specialist }))).toBe(true);
+  });
+});

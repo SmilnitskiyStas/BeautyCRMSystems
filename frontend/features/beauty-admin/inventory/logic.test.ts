@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { BeautyApiError } from "@/features/beauty-auth/errors";
 import {
+  ALERT_KIND_LABEL,
+  alertBadgeText,
+  alertSummary,
+  balanceLabel,
+  balanceOf,
+  canBeNorm,
+  daysBucketFor,
+  isLowBalance,
+  movementLabel,
+  validateMaterialDraft,
   batchStatus,
   daysToExpiry,
   emptyLine,
@@ -253,5 +263,122 @@ describe("коди помилок §32.8", () => {
     const err = e(422, "insufficient_stock", { lines: [{ line: 0, productId: "p", requested: 5, available: 2 }, { nope: 1 }] });
     expect(shortageLines(err)).toEqual([{ line: 0, productId: "p", requested: 5, available: 2 }]);
     expect(shortageLines(e(422, "other"))).toEqual([]);
+  });
+});
+
+describe("етап 2a: сальдо й нестача (§32.17)", () => {
+  it("сальдо = залишок − нестача без похибки; може бути від'ємним", () => {
+    expect(balanceOf(0, 0.3)).toBe(-0.3);
+    expect(balanceOf(1000, 30)).toBe(970);
+    expect(balanceOf(0.3, 0.1)).toBe(0.2);
+  });
+  it("isLow за сальдо, а не за залишком", () => {
+    expect(isLowBalance(-0.3, 2.5)).toBe(true);
+    expect(isLowBalance(5, 2.5)).toBe(false);
+    expect(isLowBalance(-1, null)).toBe(false);
+    expect(isLowBalance(-1, 0)).toBe(false);
+  });
+  it("мінус позначено текстом, не лише знаком", () => {
+    expect(balanceLabel(-0.3, "l")).toBe("−0,3 л (у мінусі)");
+    expect(balanceLabel(4, "l")).toBe("4 л");
+  });
+  it("ярлики рухів нестачі й погашення", () => {
+    expect(movementLabel("service_consumption", true)).toMatch(/Нестача/);
+    expect(movementLabel("service_consumption", false)).toBe("Витрата на послугу");
+    for (const t of ["receipt", "transfer_in", "stocktake_adjust"] as const) expect(movementLabel(t, true)).toBe("Погашення нестачі");
+    expect(movementLabel("receipt", false)).toBe("Надходження");
+  });
+  it("інвентаризація: різниця до сальдо (expected − expectedShortage)", () => {
+    expect(stocktakeDifference(0, 5, 0.3)).toBe(5.3);
+    expect(stocktakeDifference(10, 10, null)).toBe(0);
+    expect(stocktakeDifference(10, null, 2)).toBeNull();
+  });
+});
+
+describe("етап 2a: бейдж і сповіщення (§32.19)", () => {
+  it("«99+» вище 99", () => {
+    expect(alertBadgeText(5)).toBe("5");
+    expect(alertBadgeText(99)).toBe("99");
+    expect(alertBadgeText(100)).toBe("99+");
+    expect(alertBadgeText(1000)).toBe("99+");
+  });
+  it("поріг терміну: 0 = прострочено, найменший поріг ≥ днів, інакше немає", () => {
+    const t = [30, 14, 7];
+    expect(daysBucketFor(-1, t)).toBe(0);
+    expect(daysBucketFor(0, t)).toBe(7);
+    expect(daysBucketFor(5, t)).toBe(7);
+    expect(daysBucketFor(8, t)).toBe(14);
+    expect(daysBucketFor(30, t)).toBe(30);
+    expect(daysBucketFor(31, t)).toBeNull();
+  });
+  const base = {
+    id: "a",
+    status: "open" as const,
+    location: { id: "c", name: "Центр" },
+    product: { id: "p", name: "Гель", unit: "l" as const, purpose: "both" as const, category: null, barcode: null, isActive: true },
+    batch: null,
+    operationId: null,
+    threshold: null,
+    expiresOn: null,
+    daysBucket: null,
+    createdAt: "2026-10-14T09:00:00Z",
+    readAt: null,
+    readBy: null,
+    resolvedAt: null,
+  };
+  it("опис без ПД: низький залишок у мінусі, термін, нестача", () => {
+    expect(alertSummary({ ...base, kind: "low_stock", quantity: -0.3, threshold: 2.5 })).toContain("(у мінусі)");
+    expect(alertSummary({ ...base, kind: "expiring", quantity: 6, daysBucket: 0, expiresOn: "2026-10-01", batch: { id: "b", expiresOn: "2026-10-01", lotNumber: "L1" } })).toMatch(/Термін минув.*партія L1/);
+    expect(alertSummary({ ...base, kind: "shortage", quantity: 0.3 })).toContain("Не вистачило");
+    expect(ALERT_KIND_LABEL.shortage).toBe("Нестача");
+  });
+});
+
+describe("етап 2a: норми матеріалів (§32.16)", () => {
+  const mk = (id: string, unit: "pcs" | "ml", purpose: "sale" | "salon_use" | "both", isActive = true) => [id, { id, name: id, unit, purpose, category: null, barcode: null, isActive }] as const;
+  const products = new Map([mk("gel", "pcs", "both"), mk("dye", "ml", "salon_use"), mk("mask", "ml", "sale"), mk("old", "ml", "both", false)]);
+  it("лише salon_use|both і активні", () => {
+    expect(canBeNorm(products.get("gel")!)).toBe(true);
+    expect(canBeNorm(products.get("mask")!)).toBe(false);
+    expect(canBeNorm(products.get("old")!)).toBe(false);
+  });
+  it("порожній набір: дозволено лише для override закладу", () => {
+    expect(validateMaterialDraft([], products, false).errors.form).toBeTruthy();
+    expect(validateMaterialDraft([], products, true)).toMatchObject({ lines: [], errors: { lines: {} } });
+  });
+  it("валідний набір; цілі для pcs, дробові для ml", () => {
+    expect(validateMaterialDraft([{ productId: "gel", quantity: "2" }, { productId: "dye", quantity: "12,5" }], products, false).lines).toEqual([
+      { productId: "gel", quantity: 2 },
+      { productId: "dye", quantity: 12.5 },
+    ]);
+    const bad = validateMaterialDraft([{ productId: "gel", quantity: "1,5" }], products, false);
+    expect(bad.lines).toBeUndefined();
+    expect(bad.errors.lines[0]).toMatch(/цілою/);
+  });
+  it("помилки за рядками: не обрано, дубль, для продажу, нуль, понад 100 000", () => {
+    const r = validateMaterialDraft(
+      [
+        { productId: "", quantity: "1" },
+        { productId: "dye", quantity: "1" },
+        { productId: "dye", quantity: "1" },
+        { productId: "mask", quantity: "1" },
+        { productId: "gel", quantity: "0" },
+      ],
+      products,
+      false,
+    );
+    expect(Object.keys(r.errors.lines).sort()).toEqual(["0", "2", "3", "4"]);
+    expect(validateMaterialDraft([{ productId: "dye", quantity: "100001" }], products, false).errors.lines[0]).toBeTruthy();
+  });
+  it("не більше 50 рядків", () => {
+    const many = Array.from({ length: 51 }, () => ({ productId: "dye", quantity: "1" }));
+    expect(validateMaterialDraft(many, products, true).errors.form).toMatch(/50/);
+  });
+  it("коди 2a мапляться в тексти (purpose_locked, unit_locked, product_not_for_salon_use)", () => {
+    expect(humanizeInventoryError(new BeautyApiError(422, "purpose_locked", "x"))).toMatch(/нормах матеріалів/);
+    expect(humanizeInventoryError(new BeautyApiError(422, "unit_locked", "x"))).toMatch(/норми/);
+    expect(humanizeInventoryError(new BeautyApiError(422, "product_not_for_salon_use", "x", undefined, undefined, undefined, undefined, undefined, { line: 1 }))).toMatch(/^Рядок 2:.*лише для продажу/);
+    expect(humanizeInventoryError(new BeautyApiError(404, "alert_not_found", "x"))).toBe("Сповіщення не знайдено.");
+    expect(humanizeInventoryError(new BeautyApiError(404, "materials_not_found", "x"))).toBe("Для цього закладу норм немає.");
   });
 });

@@ -29,6 +29,11 @@ import type {
   SupplierRequest,
   TransferRequest,
   WriteOffRequest,
+  AlertQuery,
+  MaterialSet,
+  MaterialSetRequest,
+  ServiceMaterials,
+  StaffAlert,
 } from "../inventory/types";
 import type {
   AccessSaveInput,
@@ -477,4 +482,26 @@ export interface BeautyAdminApi {
   postStocktake(id: string, expectedVersion: number): Promise<StocktakePostResult>;
   /** POST /inventory/stocktakes/{id}/cancel. */
   cancelStocktake(id: string, expectedVersion: number): Promise<Stocktake>;
+
+  // ---------- етап 2a (ADR-025 §11, §32.15–§32.25): норми матеріалів і сповіщення ----------
+  /** GET /inventory/service-materials?includeInactive: лише послуги, що мають хоч один набір (`inventory.view >= own`). */
+  getServiceMaterialsList(includeInactive?: boolean): Promise<ServiceMaterials[]>;
+  /** GET /inventory/services/{serviceId}/materials: наборів немає -> `network: null, locations: []`; 404 service_not_found. */
+  getServiceMaterials(serviceId: string): Promise<ServiceMaterials>;
+  /**
+   * PUT /inventory/services/{serviceId}/materials (`inventory.manage = all`, owner/admin; deputy -> 403 forbidden_role): повна заміна набору.
+   * 422 product_not_for_salon_use|product_inactive|product_disabled_for_location|invalid_quantity|too_many_lines|duplicate_line|invalid_lines (з `line`),
+   * 404 service_not_found|location_not_found|product_not_found. Порожній `lines` - лише для override закладу.
+   */
+  setServiceMaterials(serviceId: string, r: MaterialSetRequest): Promise<MaterialSet>;
+  /** DELETE /inventory/services/{serviceId}/materials?locationId=: без `locationId` - мережевий набір; 404 materials_not_found. */
+  deleteServiceMaterials(serviceId: string, locationId: string | null): Promise<void>;
+  /** GET /inventory/alerts: `status` за замовчуванням `active` (open|read); сортування за `createdAt DESC`. */
+  getInventoryAlerts(q?: AlertQuery): Promise<Page<StaffAlert>>;
+  /** GET /inventory/alerts/unread-count: `{count}` (open у scope, ≤ 1000); `module_disabled` -> бейдж ховається. */
+  getInventoryAlertsUnreadCount(): Promise<number>;
+  /** POST /inventory/alerts/{id}/read: ідемпотентно; 404 alert_not_found. */
+  markInventoryAlertRead(id: string): Promise<StaffAlert>;
+  /** POST /inventory/alerts/read-all?locationId: `{updated}`. */
+  markAllInventoryAlertsRead(locationId?: string): Promise<number>;
 }

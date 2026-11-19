@@ -72,6 +72,12 @@ export const beautyKeys = {
     operations: (q: object) => ["beauty", "inventory", "operations", q] as const,
     stocktakes: (q: object) => ["beauty", "inventory", "stocktakes", q] as const,
     stocktake: (id: string) => ["beauty", "inventory", "stocktake", id] as const,
+    // етап 2a: норми послуги - під префіксом складу; перелік норм і сповіщення - ПОЗА ним (операції складу
+    // `await`-ять інвалідацію K.all, тож збій фонового запиту сповіщень/переліку не повинен затримувати мутацію).
+    materials: (serviceId: string) => ["beauty", "inventory", "materials", serviceId] as const,
+    materialsList: ["beauty", "inventory-materials", "list"] as const,
+    alerts: (q: object) => ["beauty", "inventory-alerts", "list", q] as const,
+    alertsUnread: ["beauty", "inventory-alerts", "unread"] as const,
   },
 };
 

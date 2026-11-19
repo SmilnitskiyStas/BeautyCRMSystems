@@ -271,7 +271,7 @@ describe("інваріанти й журнал", () => {
       for (const row of await stock(inv, loc)) {
         const batches = (await inv.getBatches({ locationId: loc, productId: row.product.id, status: "all" })).items;
         const sumBatches = Math.round(batches.reduce((s, b) => s + b.quantity, 0) * 1000) / 1000;
-        const sumMoves = Math.round(moves.filter((m) => m.locationId === loc && m.product.id === row.product.id).reduce((s, m) => s + m.quantity, 0) * 1000) / 1000;
+        const sumMoves = Math.round(moves.filter((m) => m.locationId === loc && m.product.id === row.product.id && !m.isShortage).reduce((s, m) => s + m.quantity, 0) * 1000) / 1000;
         expect(row.quantity).toBe(sumBatches);
         expect(row.quantity).toBe(sumMoves);
         expect(row.quantity).toBeGreaterThanOrEqual(0);

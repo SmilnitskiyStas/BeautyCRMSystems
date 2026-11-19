@@ -20,6 +20,7 @@ import { createMockAnalytics } from "./mock-analytics";
 import { createMockCosts } from "./mock-costs";
 import { createMockInbox } from "./mock-inbox";
 import { createMockInventory } from "./mock-inventory";
+import { createMockInventoryV2 } from "./mock-inventory-v2";
 import { createMockMarketing } from "./mock-marketing";
 import { createMockTeam } from "./mock-team";
 import { createMockPhones } from "./mock-phone";
@@ -318,6 +319,15 @@ const mockInventory = createMockInventory({
   specialistLocationIds: () => staff.find((m) => m.id === "m")?.locations.map((l) => l.locationId) ?? [],
 });
 
+/** §32.16, §32.19 (етап 2a): норми матеріалів і сповіщення складу. */
+const mockInventoryV2 = createMockInventoryV2({
+  role: mockRole,
+  services: () => SERVICES,
+  locations: () => locations,
+  specialistLocationIds: () => staff.find((m) => m.id === "m")?.locations.map((l) => l.locationId) ?? [],
+  inventory: mockInventory,
+});
+
 const mockAi = createMockAi({ role: mockRole });
 /** §25: телефони клієнтів; один екземпляр для картки клієнта, «Дзвінків» і inbox. */
 const mockPhones = createMockPhones({ role: mockRole });
@@ -357,6 +367,7 @@ export const mockBeautyApi: BeautyAdminApi = {
   getAiUsage: mockAi.getAiUsage,
 
   ...mockInventory,
+  ...mockInventoryV2,
   getServiceCosts: mockCosts.getServiceCosts,
   getServiceCostDetail: mockCosts.getServiceCostDetail,
   setServiceCost: mockCosts.setServiceCost,

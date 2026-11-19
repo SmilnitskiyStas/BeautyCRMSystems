@@ -2,19 +2,22 @@
 
 import { useRef, useState } from "react";
 import { useAuth } from "@/features/beauty-auth/components/auth-provider";
-import { canManageCatalog, canSeeCosts } from "@/features/beauty-auth/permissions";
+import { canManageCatalog, canSeeCosts, canViewInventory } from "@/features/beauty-auth/permissions";
 import { durationLabel, moneyExact } from "../format";
 import { usePriceList } from "../hooks/use-beauty-admin";
 import { useServiceCosts } from "../hooks/use-finance";
 import { costSummary } from "../service-costs";
 import { Badge, Card, PageHeader, PrimaryButton, QueryState, SecondaryButton, Table, TD } from "./ui";
 import { ServiceCostEditor } from "./service-cost-editor";
+import { ServiceMaterialsEditor } from "./service-materials-editor";
 import { ServiceForm } from "./service-form";
 
 function ServicesView() {
   const costs = useServiceCosts();
   const prices = usePriceList();
   const [selected, setSelected] = useState<string | null>(null);
+  const [materialsFor, setMaterialsFor] = useState<string | null>(null);
+  const materialOpeners = useRef(new Map<string, HTMLButtonElement>());
   const openers = useRef(new Map<string, HTMLButtonElement>());
   const { user } = useAuth();
   const [adding, setAdding] = useState(false);
@@ -23,12 +26,20 @@ function ServicesView() {
   const rows = costs.data ?? [];
   const priceOf = (id: string) => prices.data?.find((p) => p.serviceId === id);
   const current = rows.find((r) => r.serviceId === selected);
+  const materialsCurrent = rows.find((r) => r.serviceId === materialsFor);
+  const showMaterials = canViewInventory(user);
 
   function close() {
     const id = selected;
     setSelected(null);
     // Фокус повертається на кнопку рядка після закриття редактора.
     if (id) setTimeout(() => openers.current.get(id)?.focus(), 0);
+  }
+
+  function closeMaterials() {
+    const id = materialsFor;
+    setMaterialsFor(null);
+    if (id) setTimeout(() => materialOpeners.current.get(id)?.focus(), 0);
   }
 
   function closeForm() {
@@ -84,6 +95,19 @@ function ServicesView() {
                     >
                       Змінити
                     </SecondaryButton>
+                    {showMaterials ? (
+                      <SecondaryButton
+                        ref={(el) => {
+                          if (el) materialOpeners.current.set(r.serviceId, el);
+                        }}
+                        className="ml-2"
+                        aria-label={`Норми матеріалів: ${r.serviceName}`}
+                        aria-expanded={materialsFor === r.serviceId}
+                        onClick={() => setMaterialsFor(r.serviceId)}
+                      >
+                        Норми матеріалів
+                      </SecondaryButton>
+                    ) : null}
                   </td>
                 </tr>
               );
@@ -93,6 +117,7 @@ function ServicesView() {
         </Card>
       </QueryState>
       {current ? <ServiceCostEditor key={current.serviceId} serviceId={current.serviceId} serviceName={current.serviceName} price={priceOf(current.serviceId)?.price} onClose={close} /> : null}
+      {materialsCurrent ? <ServiceMaterialsEditor key={materialsCurrent.serviceId} serviceId={materialsCurrent.serviceId} serviceName={materialsCurrent.serviceName} onClose={closeMaterials} /> : null}
     </>
   );
 }
