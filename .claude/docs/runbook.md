@@ -106,6 +106,50 @@ docker exec beautycrm psql -U postgres -d beautycrm \
 
 **Відкат:** `Down` складу на staging/prod не виконувати без бекапу і рішення людини (див. §2b вище). Після `Down` GRANT-и `beauty_stock_*` з `grants.sql` стають неактуальними для видалених таблиць.
 
+### 2c. Склад етап 2a: норми, автосписання, сповіщення, воркер (ADR-025 §11, контракт §32.15–§32.26)
+
+**Прапори (за замовчуванням вимкнено):**
+
+| Змінна | Де | За замовч. | Призначення |
+|---|---|---|---|
+| `Inventory:AutoConsumptionEnabled` | backend (appsettings / env `Inventory__AutoConsumptionEnabled`) | увімкнено, якщо ключ відсутній | Аварійний вимикач автосписання при завершенні візиту. **Вимикає будь-яке присутнє значення, крім `true` (без урахування регістру)**, включно з `0`, `off`, `no` і порожнім рядком. Вимкнення не створює помилок: візити завершуються, лог `inventory_consumption_skipped reason=disabled` |
+| `WORKER_INVENTORY_ENABLED` | worker `.env` | `false` | Воркер `pollInventory` (сповіщення low_stock/expiring, розв'язання). `true` — лише `true` (без урахування регістру); інакше воркер нічого не робить |
+| `WORKER_INVENTORY_EXPIRY_DAYS` | worker | `30,14,7` | Пороги терміну (1..5 різних цілих 1..365, через кому). Невалідне значення → воркер не стартує (`Invalid WORKER_INVENTORY_EXPIRY_DAYS`). Прострочення (`bucket 0`) додається завжди |
+| `WORKER_INVENTORY_LOCAL_HOUR` | worker | `8` | Локальна година закладу (0..23), з якої створюються нові сповіщення за добу (`low_stock`/`expiring`). Розв'язання йде щогодини без гейту. Невалідне → воркер не стартує |
+
+Модуль `beauty_inventory` для tenant — окремо (`PATCH` tenant `{modules}`, §2b). Обидва прапори (backend, worker) і модуль діють незалежно; вимкнений модуль = жодних записів.
+
+**Порядок увімкнення на staging** (кожен крок — human gate; дії на сервері тільки за рішенням людини):
+1. Бекап БД (`deploy/staging/README.md`).
+2. Міграція `beauty_inventory_stage2a` від `beautycrm_owner` (Up). Після `Up` перевірити наявність `beauty_staff_alerts` і `shortage_quantity`.
+3. GRANT: `deploy/staging/db/grants.sql` (той самий набір, що в `setup-db.ps1`, тест `staging-grants-sync`). Перевірка: `SELECT has_table_privilege('beautycrm_app','beauty_stock_movements','UPDATE')` → `f`; для `beautycrm_worker` — `UPDATE` лише на `beauty_staff_alerts`, без `DELETE`.
+4. Деплой API з `Inventory__AutoConsumptionEnabled` **не заданим** (автосписання увімкнено за замовчуванням коду). Якщо потрібно спершу вимкнути — задати значення `false`, а не порожнє.
+5. Модуль `beauty_inventory` увімкнути **лише для тестового бізнесу** (`PATCH` tenant `{modules}`); перевірити `GET /api/beauty/inventory/scope` → `200`, для інших tenant → `403 module_disabled`.
+6. Внести норми в тестовому тенанті, провести тестовий візит → перевірити операцію `service_consumption` і рухи.
+7. Увімкнути `WORKER_INVENTORY_ENABLED=true` на worker; перевірити лог `inventory_alerts tenant=… locations=… created=… resolved=… capped=…`.
+8. Тільки після цього — інші tenant (окреме рішення людини). Перед увімкненням на prod: закрити M1 і L1 звіту security (виправлено в TASK-893) і L3/L4 (у роботі).
+
+**Моніторинг:**
+- `inventory_consumption_failed appointment={id} sqlstate={code}` — рівень **Error**. Кожен такий запис = візит `completed` без списання (I3). Алерт на будь-який такий запис у проді; `sqlstate=55P03` означає блокування (`lock_timeout`), інші коди — помилка даних/БД.
+- `inventory_alerts_location_failed tenant={id} location={id} errorCode={code}` — помилка воркера за закладом (очікується після L3; до того — тиша від `catch`, слідкувати за `inventory_alerts` `locations` без `created`/`resolved`).
+- `inventory_consumption appointment=… op=… products=… shortages=…` — успішні списання; `inventory_consumption_skipped … reason=…` — пропуски (`disabled|module_off|no_norms|no_eligible_products|already_consumed`).
+- Логи без назв товарів, цін і кількостей; ПД клієнтів немає.
+
+**Процедура: пропущене списання через технічний збій** (запис `inventory_consumption_failed` для візиту):
+1. Знайти візит за `appointment=` у логах; переконатися, що операції `service_consumption` для `appointment_id` немає (`beauty_stock_operations`).
+2. Не повторювати `completed` (статус уже `completed`, повтор нічого не спише).
+3. Зняти фактичні залишки через інвентаризацію закладу (`POST /stocktakes` → рядки → `post`). Інвентаризація фіксує фізичний залишок і обнуляє дефіцит; розбіжність обробляється штатно.
+4. Для справжнього списання використати списання `write_off` з причиною `internal_use` або `correction` з `note` (з посиланням на візит).
+5. Зафіксувати випадок у task log або інциденті.
+
+**Відкат:**
+- `Down` міграції `beauty_inventory_stage2a` відмовляє (`inventory history exists`), якщо є рух `is_shortage` або операція з `appointment_id`. Це захист від втрати історії.
+- Видалення історії 2a — лише після бекапу і окремого рішення людини (human gate).
+- Повернення до стану етапу 1 **не є простим**: `Down` 2a відмовляє, доки є рухи `is_shortage` або операції `service_consumption` з `appointment_id`. Їх видалення — ручна робота власника БД (`beautycrm_owner`; app-роль не має `DELETE` на журналах), і воно має відновлювати `quantity` партій і рівнів, інакше інваріанти §32.17 зламаються. Окремого скрипта очищення немає.
+- Порядок (лише з бекапом і рішенням людини): (1) вимкнути `WORKER_INVENTORY_ENABLED` і `Inventory:AutoConsumptionEnabled=false`; (2) зняти з журналу або компенсувати рухи 2a (`is_shortage` і `service_consumption`) разом із відновленням партій і рівнів; (3) видалити `beauty_staff_alerts`-рядки 2a; (4) `Down` міграції 2a; (5) прибрати GRANT-и 2a з `grants.sql`/`setup-db.ps1`.
+- Повторний `Up` 2a після відкату до етапу 1 — лише після кроку (2), інакше CHECK `(batch_id IS NULL) = is_shortage` і сальдо не зійдуться з історією.
+- Відкат спершу відпрацювати на копії БД (Up → Down → Up). Доки скрипт компенсації не написано й не перевірено, відкат на staging/prod — лише через відновлення з бекапу.
+
 ## 3. Секрети й змінні середовища
 Згенеруйте (`openssl rand`): `Auth__JwtSigningKey` (`-base64 48`), `Auth__PlatformKey` (`-base64 36`), `Channels__EncryptionKey` (`-base64 32`, base64 від 32 байт; при заміні ключа вже збережені секрети каналів перестануть розшифровуватись). Файл `.env` у `.gitignore`, комітити заборонено. Повний перелік змінних і коментарі: `.env.example`.
 

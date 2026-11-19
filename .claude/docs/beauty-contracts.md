@@ -5049,9 +5049,9 @@ ServiceMaterialsDto  { serviceId, serviceName, serviceIsActive, network: Materia
 2. Модуль `beauty_inventory` вимкнено для tenant (`InventoryModuleGate`, аналог `MarketingModuleGate`, читання в межах транзакції) → пропуск (`reason=module_off`). Дані не створюються; пізніше ввімкнення модуля **не** списує минулі візити.
 3. Ефективний набір норм (§32.16) для `service_id` і `location_id` запису; немає → пропуск (`reason=no_norms`).
 4. Відбір рядків: товар `is_active`, `purpose ∈ salon_use|both`, не вимкнений у закладі. Порожньо → пропуск (`reason=no_eligible_products`).
-5. `SAVEPOINT inventory_consumption`.
+5. `SAVEPOINT inventory_consumption`, **до будь-якого читання кроку** (норми, товари, налаштування, партії) — так помилка будь-якого запиту (транзакція Postgres стає aborted) відкочує лише складський крок (v0.36.1, I2). Одразу після SAVEPOINT — `SET LOCAL lock_timeout = '<N>ms'` (M1, v0.36.1): очікування блокування понад N мс дає `55P03` і відкочується SAVEPOINT-ом, а не `CommandTimeout` (30 с), що тримав би рядок візиту. Значення N — константа складового кроку (не налаштовується в 2a).
 6. `INSERT` операції `kind = service_consumption`, `location_id` = заклад запису, `appointment_id`, `created_by_user_id NULL` (система), без хешів ідемпотентності; `ON CONFLICT (tenant_id, appointment_id) WHERE appointment_id IS NOT NULL DO NOTHING`. Конфлікт → списання вже було (повторне завершення після повернення статусу) → пропуск (`reason=already_consumed`). **Ідемпотентність за `appointment_id`** тримає цей UNIQUE.
-7. Блокування в порядку §32.4: `FOR SHARE` товарів набору за зростанням `id` (як в операціях етапу 1), потім для кожного `product_id` за зростанням: `INSERT … beauty_stock_levels ON CONFLICT DO NOTHING` + `SELECT … FOR UPDATE`. Порядок блокувань: рядок запису (умовний `UPDATE`) → рівні; операції складу рядків запису не блокують, тож циклу немає.
+7. Блокування (v0.36.1, I1 — порядок як в етапі 1, §2.4 п.3, без циклу): **(a) рівні `FOR UPDATE`** — для кожного `product_id` набору за зростанням: `INSERT … beauty_stock_levels ON CONFLICT DO NOTHING` + `SELECT … FOR UPDATE`; **(b) товари набору `FOR SHARE`**; **(c) налаштування закладу (`beauty_product_location_settings`) `FOR SHARE`**. Загальний порядок у всьому складі: рядок запису (умовний `UPDATE`) → рівні → товари → налаштування. Рядки запису складські операції не блокують, тож циклу немає. (Попередня редакція «товари FOR SHARE → рівні» скасована.)
 8. Для кожного товару, `need` = норма: FEFO лише **непрострочених** партій (`expires_on IS NULL OR expires_on >= localToday`, `localToday` — дата `TimeProvider.GetUtcNow()` у `timezone` закладу, тобто на момент завершення, а не початку візиту); з кожної партії `take = min(need, batch.quantity)` → рух `service_consumption −take` з `batch_id` і `unit_cost` партії; `quantity −= take`.
 9. Залишок `u = need − Σ take > 0` → рух `service_consumption −u`, `is_shortage = true`, `batch_id NULL`; `shortage_quantity += u`; сповіщення `shortage` (§32.19, ключ `shortage:{operationId}:{productId}`, `ON CONFLICT DO NOTHING`) у тій самій транзакції.
 10. `RELEASE SAVEPOINT`; далі `CommitAsync` разом зі статусом.
@@ -5175,3 +5175,27 @@ DAG: 882 → [gate] → 883 → {884 ∥ 885 ∥ 886 ∥ 887} → 892 → 893 �
 | 2a-Q3 | Строк зберігання `resolved` сповіщень | Без очищення в 2a |
 | 2a-Q4 | Стан «прочитано» спільний для tenant чи персональний | Спільний (як inbox) |
 | 2a-Q5 | Сповіщення про прострочену партію (`bucket 0`) поза порогами 30/14/7 | Так, додано як `bucket 0` |
+
+### 32.26 Фактичні відхилення етапу 2a і виправлення за security-review (v0.36.1, 2026-11-19, TASK-894)
+
+Редакція v0.36.1 фіксує, що зроблено в коді (TASK-883…888, 892). Звірено з кодом; де код відрізняється від v0.36 — відхилення нижче є чинною поведінкою. Джерело — `docs/reviews/security-review-inventory-stage2a-2026-11.md`; ID знахідок — M1, L1, L2, L5 (виправлено в TASK-893), L3, L4 (у роботі).
+
+**Фактичні відхилення від тексту v0.36 (чинні):**
+
+| # | Тема | v0.36 | Фактично (код) |
+|---|---|---|---|
+| D1 | Неактивний товар у нормі (§32.16) | `product_inactive` | `422 product_not_for_salon_use` з `line` (неактивний і `sale` дають один код) |
+| D2 | `GET /service-materials` | повертає кожну послугу | послугу **без видимих наборів** для scope не повертає (набір поза scope або порожній для закладу не показується) |
+| D3 | `GET /alerts?locationId=` поза scope | scope → `404 alert_not_found` | `404` за правилом §32.2 для заклада в query (заклад поза scope не розкривається) |
+| D4 | Ключі дедуплікації (§32.19) | `low_stock:{loc}:{product}` з датою | `low_stock:{locationId}:{productId}:{localDate}`; `expiring:{batchId}:{bucket}`; `shortage:{operationId}:{productId}`. Ключ `low_stock` містить локальну дату закладу — повтор того самого дня не створює другого сповіщення |
+| D5 | Технічний збій складового кроку (§32.18) | `SAVEPOINT` на п.6 | `SAVEPOINT` до читань (п.5); крім того, складовий крок має `lock_timeout` (див. п.5 вище): очікування блокування понад ліміт — `55P03`, складовий крок відкочується, візит `completed` |
+| D6 | Вимикач `Inventory:AutoConsumptionEnabled` (§32.18 п.1) | `false` вимикає | **будь-яке значення, крім `true` (без урахування регістру), вимикає** (L1, виправлено в TASK-893). Відсутній ключ — увімкнено (за замовчуванням); присутнє порожнє значення теж вимикає. Попередня реалізація вважала нерозпізнане значення (`0`, `off`, `no`) увімкненим — це помилка |
+| D7 | Порядок блокувань (§32.18 п.7) | «товари FOR SHARE → рівні» | рівні `FOR UPDATE` → товари `FOR SHARE` → налаштування `FOR SHARE` (як в етапі 1; I1) |
+| D8 | Модульний гейт автосписання (§32.18 п.2) | RLS | явний фільтр `tenant_id` і порівняння `lower(module)` (L2, виправлено в TASK-893); винесено в `InventoryModuleGate` |
+| D9 | Перевірка ролі owner/admin на зміну норм (§32.16, §32.21) | сервісна перевірка після прив'язки тіла | рольовий фільтр на PUT/DELETE норм до прив'язки тіла: deputy отримує `403 forbidden_role`, а не `400/422` на некоректний JSON (L5, виправлено в TASK-893) |
+
+**Інші факти, що не змінюють контракт:** `shortage_quantity` без верхньої межі `MaxLevel` (переповнення практично недосяжне; I4); складовий крок не викликає `SaveChangesAsync` — лише raw SQL / `ExecuteUpdate`, `ChangeTracker.Clear()` у catch не відкидає незбережені зміни (I5, інваріант коментарем у коді); `LockLevelsAsync` створює рядки з `quantity = 0` до вставки заголовка (I6, 2a-Q2); `canEditInventoryNorms` у UI не перевіряє роль (I7, лише UX); `GET /service-materials` без пагінації (I8, обсяг обмежений); для `scope.All` чужий `locationId` у фільтрі сповіщень → 200 з порожнім списком (I9, без витоку); тести автосписання — `SkippableFact` (I10): CI має запускати з `BEAUTY_TEST_REQUIRE_DB=1`.
+
+**Вирівнювання з рішенням «тихе пропускання»:** технічний збій складового кроку не блокує візит (2a-Q1, прийнятий ризик, I3). Компенсація — лог `inventory_consumption_failed` (Error) і процедура в runbook (інвентаризація, §2b runbook).
+
+**Виправлено в TASK-893 (раніше відкладені):** L3 — воркер ковтав помилки закладу без логу; тепер лог `inventory_alerts_location_failed tenant={id} location={id} errorCode={code}` (без ПД) і `tenant=` у підсумковому логу. L4 — GRANT воркера звужено: `GRANT UPDATE (status, resolved_at, updated_at) ON beauty_staff_alerts` і колонковий `SELECT (id, tenant_id, is_active, min_stock)` на `beauty_products` (без `purchase_price`); обидва файли (`deploy/staging/db/grants.sql`, `scripts/dev/setup-db.ps1`) синхронно.

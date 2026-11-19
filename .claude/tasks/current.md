@@ -138,16 +138,16 @@
 | TASK-882 | project-architect | review (gate схеми D3) | Склад етап 2a: ADR-025 §11 (D1–D4) + контракт §32.15–§32.25 v0.36 (норми, дефіцит, автосписання, сповіщення, воркер), розбиття 883…894 | .claude/logs/tasks/TASK-882.md |
 | TASK-883 | database-engineer | review | Склад 2a: міграція — набори/рядки норм, shortage_quantity, is_shortage + CHECK, appointment_id + UNIQUE, expected_shortage, beauty_staff_alerts, RLS, GRANT воркера, schema.sql, тести | .claude/logs/tasks/TASK-883.md |
 | TASK-884 | backend-developer | review | Склад 2a: API норм матеріалів (§32.16), unit_locked/purpose_locked, тести | .claude/logs/tasks/TASK-884.md |
-| TASK-885 | backend-developer | review | Склад 2a: автосписання в CompleteWithCostSnapshotAsync (SAVEPOINT, ідемпотентність за appointment_id), погашення дефіциту (надходження/переміщення/інвентаризація), розширення DTO, тести | .claude/logs/tasks/TASK-885.md |
+| TASK-885 | backend-developer | review (merge — human gate) | Склад 2a: автосписання в CompleteWithCostSnapshotAsync (SAVEPOINT, ідемпотентність за appointment_id), погашення дефіциту (надходження/переміщення/інвентаризація), розширення DTO, тести | .claude/logs/tasks/TASK-885.md |
 | TASK-886 | backend-developer | review | Склад 2a: API сповіщень /alerts (список, read, read-all, unread-count), scope, тести | .claude/logs/tasks/TASK-886.md |
 | TASK-887 | backend-developer | review | Склад 2a: воркер pollInventory (beauty.inventory-alerts щогодини, добовий гейт, 30/14/7/0, розв'язання, WORKER_INVENTORY_ENABLED), тести | .claude/logs/tasks/TASK-887.md |
 | TASK-888 | frontend-developer | review | Склад 2a: норми в картці послуги, екран і бейдж сповіщень, дефіцит/сальдо в залишках, рух і інвентаризація; mock → http | .claude/logs/tasks/TASK-888.md |
 | TASK-889 | project-architect | blocked (gate L3) | Склад 2b: контракт Telegram власнику (прив'язка чату, відправка ботом салону за прапором) | .claude/logs/tasks/TASK-889.md |
 | TASK-890 | integrations-developer | blocked (889) | Склад 2b: прив'язка чату owner (deep-link токен), відправка алертів через outbox, міграція 2b | .claude/logs/tasks/TASK-890.md |
 | TASK-891 | frontend-developer | blocked (889) | Склад 2b: UI прив'язки/відв'язки Telegram у профілі власника | .claude/logs/tasks/TASK-891.md |
-| TASK-892 | qa-engineer | planned | QA складу 2a: таблиця відповідності §32.15–§32.22, наскрізні сценарії, ручний чекліст | .claude/logs/tasks/TASK-892.md |
-| TASK-893 | security-reviewer | planned | Рев'ю безпеки складу 2a: RLS/IDOR норм і алертів, append-only, GRANT воркера, ПД у алертах, транзакція завершення візиту | .claude/logs/tasks/TASK-893.md |
-| TASK-894 | documentation-writer | planned | Документація складу 2a: database.md, runbook (прапори, gate, відкат), known-issues, ADR-025 §10 | .claude/logs/tasks/TASK-894.md |
+| TASK-892 | qa-engineer | review | QA складу 2a: таблиця відповідності §32.15–§32.22, наскрізні сценарії, ручний чекліст | .claude/logs/tasks/TASK-892.md |
+| TASK-893 | security-reviewer | review | Рев'ю безпеки складу 2a: RLS/IDOR норм і алертів, append-only, GRANT воркера, ПД у алертах, транзакція завершення візиту | .claude/logs/tasks/TASK-893.md |
+| TASK-894 | documentation-writer | review | Документація складу 2a: ADR-025 §10.5, контракт §32.18 (v0.36.1) + §32.26, database.md, runbook §2c, known-issues KI-015…018 | .claude/logs/tasks/TASK-894.md |
 
 ## ADR-017: індивідуальна ціна й тривалість майстра (TASK-804…814)
 

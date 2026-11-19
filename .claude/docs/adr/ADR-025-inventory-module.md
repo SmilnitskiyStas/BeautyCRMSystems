@@ -320,7 +320,7 @@ Frontend дзеркалить ключі (`access.ts`, `permissions.ts`: пун�
 
 ### 10.3 Не реалізовано
 
-- **Етап 2** (норми матеріалів, автосписання в `CompleteWithCostSnapshotAsync`, `beauty_staff_alerts`, воркер `pollInventory`, Telegram власнику) — код не почато. **2a спроєктовано** 2026-11-19 (TASK-882): §11, контракт §32.15–§32.25 v0.36, задачі TASK-883…888, 892…894; чекає gate схеми. **2b** (TASK-889…891) — заглушка §32.24, чекає L3.
+- **Етап 2b** (Telegram власнику: прив'язка чату, відправка через outbox) — не розпочато, заглушка §32.24; окремий gate L3, задачі TASK-889…891 (blocked). Етап 2a реалізовано частково, див. §10.5.
 - **Етап 3** (продаж, виручка з товарів, `IFiscalService`, ключ `inventory.sales`) — не почато; ключа `inventory.sales` у каталозі немає.
 - **Опції модуля** в `create-salon.ps1`, `seed.ps1`, `deploy/staging/create-tenant.sh` (ADR-025 §2.1) — ще не додано; є лише `scripts/dev/enable-inventory.ps1`.
 - **Парна правка ShelfGuard** (`setModules`) — окрема задача в репозиторії ShelfGuard (`C:\Users\stass\source\CRMProductSystems`, TASK-832 у `.claude/tasks/current.md`).
@@ -330,6 +330,30 @@ Frontend дзеркалить ключі (`access.ts`, `permissions.ts`: пун�
 - Сторінка залишків (`/stock`) читає легкі ключі (id, назва) усіх відфільтрованих товарів; для каталогів у десятки тисяч потрібен keyset у SQL з `collate "C"`.
 - Порядок рухів у відповіді `GET /operations/{id}` — `occurred_at, id` (рухи однієї операції мають однаковий час). Це не порядок FEFO і не порядок списання з партій; клієнт не повинен на нього покладатися.
 - Пошук `ILIKE` залежить від локалі БД (див. §10.2).
+
+### 10.5 Етап 2a «норми, автосписання, сповіщення, воркер» — статус реалізації (станом на 2026-11-19)
+
+Гілка `feature/inventory-stage2a`, коміти `db92c54…17db42b` (+ правки TASK-893). Контракт: §32.15–§32.25 (v0.36, з редакцією v0.36.1 — §32.26).
+
+| Задача | Агент | Стан | Що зроблено |
+|---|---|---|---|
+| TASK-882 | project-architect | review | ADR §11 + контракт §32.15–§32.25; gate схеми D3 |
+| TASK-883 | database-engineer | review | міграція 2a: норми, `shortage_quantity`, `is_shortage` + CHECK, `appointment_id` + UNIQUE, `expected_shortage`, `beauty_staff_alerts`, RLS FORCE, GRANT воркера, `schema.sql` |
+| TASK-884 | backend-developer | review | API норм матеріалів (§32.16), `unit_locked` / `purpose_locked` |
+| TASK-885 | backend-developer | review, **human gate на merge** | автосписання в `CompleteWithCostSnapshotAsync` (SAVEPOINT, ідемпотентність за `appointment_id`), погашення дефіциту, інвентаризація з дефіцитом, розширення DTO |
+| TASK-886 | backend-developer | review | API сповіщень `/alerts` (список, read, read-all, unread-count) |
+| TASK-887 | backend-developer | review | воркер `pollInventory` (щогодини, добовий гейт, пороги, розв'язання, `WORKER_INVENTORY_ENABLED`) |
+| TASK-888 | frontend-developer | review | норми в картці послуги, екран і бейдж сповіщень, сальдо/нестача в залишках, рух і інвентаризація (mock → http) |
+| TASK-892 | qa-engineer | review | QA 2a: таблиця відповідності §32.15–§32.22, наскрізні сценарії, ручний чекліст |
+| TASK-893 | security-reviewer | review | рев'ю безпеки 2a. Звіт `docs/reviews/security-review-inventory-stage2a-2026-11.md`: 0 critical/high; M1, L1 — перед увімкненням модуля на staging/prod |
+| TASK-894 | documentation-writer | review | ця документація: ADR §10.5, §32.26, `database.md`, runbook «Склад етап 2a», `known-issues.md` |
+| TASK-889…891 | project-architect / integrations / frontend | blocked | **Етап 2b** (Telegram власнику) — gate L3 не закрито; не розпочато |
+
+**Відхилення від контракту 2a (фактичний стан коду):** див. §32.26 контракту (неактивний товар у нормі, `GET /service-materials` без послуги без видимих наборів, `GET /alerts?locationId=` поза scope → 404, ключі dedupe, `lock_timeout` у складському кроці, значення вимикача).
+
+**Виправлення за звітом security (TASK-893, виправлено в TASK-893):** M1 (`lock_timeout` у складському кроці, рішення щодо `CancellationToken` для кроку й коміту), L1 (будь-яке значення вимикача, крім `true`, вимикає), L2 (явний фільтр tenant і регістронезалежне порівняння в `InventoryModuleGate`), L5 (рольовий фільтр owner/admin на PUT/DELETE норм). Також виправлено L3 (лог помилок воркера за закладом `inventory_alerts_location_failed`, `tenant=` у підсумковому логу) і L4 (GRANT воркера: `UPDATE (status, resolved_at, updated_at)` на алертах, колонковий `SELECT` на `beauty_products` без `purchase_price`). Усі виправлення покрито тестами; staging-готовність — після повторного повного прогону й human gate TASK-885.
+
+**Відкриті ризики етапу 2a:** I3 (тихе пропускання списання при технічному збої: лог `inventory_consumption_failed` + виправлення через інвентаризацію, див. runbook); I4 (`shortage_quantity` без `MaxLevel`, практично недосяжно); I5 (інваріант `SaveChangesAsync` / `ChangeTracker.Clear()` у складському кроці — лише raw SQL, зафіксовано коментарем); I6 (рядки рівня з `quantity = 0` до вставки заголовка); 2a-Q1…Q5 (контракт §32.25).
 
 ---
 
