@@ -127,9 +127,38 @@ describe("гейтинг меню й маршрутів за правами (§3
     expect(canSeeFullPhone(d)).toBe(true);
   });
 
+  it("Склад: модуль beauty_inventory і inventory.view >= own; без модуля чи права пункту немає", () => {
+    const admin = user("admin", { ...ROLE_PRESETS.admin });
+    expect(labels(admin)).toContain("Склад");
+    expect(canOpen(admin, "/beauty/inventory/batches")).toBe(true);
+    // модуль не увімкнено (перелік відомий, без beauty_inventory) - вимкнено за замовчуванням
+    const noModule = user("admin", { ...ROLE_PRESETS.admin }, { modules: ["beauty_booking", "beauty_catalog"] });
+    expect(labels(noModule)).not.toContain("Склад");
+    expect(canOpen(noModule, "/beauty/inventory")).toBe(false);
+    expect(canOpen(user("admin", { ...ROLE_PRESETS.admin }, { modules: ["beauty_inventory"] }), "/beauty/inventory")).toBe(true);
+    // немає права
+    expect(canOpen(user("admin", { ...ROLE_PRESETS.admin, "inventory.view": "none" }), "/beauty/inventory")).toBe(false);
+    // ключів склад у permissions з me немає (старий backend) - fail-closed
+    expect(canOpen(user("owner", { "calendar.view": "all" }), "/beauty/inventory")).toBe(false);
+  });
+
+  it("Склад: пресети (§32.2): specialist own/none/none, deputy без цін, owner/admin з цінами", () => {
+    expect(ROLE_PRESETS.specialist["inventory.view"]).toBe("own");
+    expect(ROLE_PRESETS.specialist["inventory.manage"]).toBe("none");
+    expect(ROLE_PRESETS.deputy["inventory.manage"]).toBe("all");
+    expect(ROLE_PRESETS.deputy["inventory.costs"]).toBe("none");
+    expect(ROLE_PRESETS.admin["inventory.costs"]).toBe("edit");
+    expect(ROLE_PRESETS.owner["inventory.costs"]).toBe("edit");
+    expect(PERMISSION_LEVELS["inventory.costs"]).toEqual(["none", "view", "edit"]);
+    const cat = mockAccessCatalog();
+    expect(cat.catalogVersion).toBe(2);
+    expect(cat.constraints).toContainEqual({ type: "requires", key: "inventory.costs", other: "revenue.view", level: "all" });
+    expect(cat.constraints).toContainEqual({ type: "lte", key: "inventory.manage", other: "inventory.view" });
+  });
+
   it("specialist-пресет: Записи, Мій профіль, Ціни та акції; сторінка закладу так, список ні", () => {
     const s = user("specialist", { ...ROLE_PRESETS.specialist });
-    expect(labels(s)).toEqual(["Записи", "Мій профіль", "Ціни та акції"]);
+    expect(labels(s)).toEqual(["Записи", "Мій профіль", "Ціни та акції", "Склад"]);
     expect(canOpen(s, "/beauty")).toBe(false);
     expect(canOpen(s, "/beauty/staff/abc")).toBe(true);
     expect(canOpen(s, "/beauty/locations")).toBe(false);

@@ -23,6 +23,9 @@ public static class PermissionKeys
     public const string LocationsAccess = "locations.access";
     public const string SettingsGeneral = "settings.general";
     public const string TeamManage = "team.manage";
+    public const string InventoryView = "inventory.view";
+    public const string InventoryManage = "inventory.manage";
+    public const string InventoryCosts = "inventory.costs";
 }
 
 /// <summary>Рівні каталогу (порівнюються точно, ordinal; §30.2).</summary>
@@ -90,12 +93,12 @@ public sealed record AccessCatalogDto(
     IReadOnlyList<string> ReservedToOwner);
 
 /// <summary>
-/// Каталог прав (ADR-023, контракт §30.2): 18 ключів, рівні, модулі, обмеження. Живе в коді; новий ключ — лише разом з міграцією
+/// Каталог прав (ADR-023, контракт §30.2): 21 ключ, рівні, модулі, обмеження. Живе в коді; новий ключ — лише разом з міграцією
 /// backfill за пресетами й збільшенням <see cref="Version"/>.
 /// </summary>
 public static class PermissionCatalog
 {
-    public const int Version = 1;
+    public const int Version = 2;
 
     private static readonly string[] None_Own_All = [PermissionLevels.None, PermissionLevels.Own, PermissionLevels.All];
     private static readonly string[] Own_All_Edit = [PermissionLevels.Own, PermissionLevels.All, PermissionLevels.Edit];
@@ -159,6 +162,13 @@ public static class PermissionCatalog
         new("locations", ["/beauty/locations"],
         [
             new(PermissionKeys.LocationsAccess, "locations", Own_All_Edit, [Booking], MenuLevels: MenuOwnAll),
+        ]),
+        new("inventory", ["/beauty/inventory"],
+        [
+            new(PermissionKeys.InventoryView, "inventory", None_Own_All, [BeautyModules.Inventory]),
+            new(PermissionKeys.InventoryManage, "inventory", None_Own_All, [BeautyModules.Inventory], LteKey: PermissionKeys.InventoryView),
+            new(PermissionKeys.InventoryCosts, "inventory", None_View_Edit, [BeautyModules.Inventory],
+                Requires: new(PermissionKeys.RevenueView, PermissionLevels.All)),
         ]),
         new("settings", ["/beauty/settings"],
         [
@@ -251,6 +261,9 @@ public static class PermissionPresets
         (PermissionKeys.LocationsAccess, "edit", "all", "own"),
         (PermissionKeys.SettingsGeneral, "view", "none", "none"),
         (PermissionKeys.TeamManage, "manage", "none", "none"),
+        (PermissionKeys.InventoryView, "all", "all", "own"),
+        (PermissionKeys.InventoryManage, "all", "all", "none"),
+        (PermissionKeys.InventoryCosts, "edit", "none", "none"),
     ];
 
     private static readonly IReadOnlyDictionary<string, string> AdminPreset = Make(t => t.Admin);

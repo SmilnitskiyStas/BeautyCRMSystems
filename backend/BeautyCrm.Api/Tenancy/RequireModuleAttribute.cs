@@ -48,6 +48,8 @@ public sealed class RequireModuleAttribute(string module) : Attribute, IAsyncAut
         var modules = services.GetRequiredService<ITenantModuleProvider>();
         if (!await modules.IsEnabledAsync(tenantId.Value, Module, context.HttpContext.RequestAborted))
         {
+            if (context.ActionDescriptor.EndpointMetadata.OfType<BeautyCrm.Api.Controllers.InboxNoStoreAttribute>().Any())
+                context.HttpContext.Response.Headers.CacheControl = "no-store";
             context.Result = new ObjectResult(new { code = "module_disabled", message = $"Module '{Module}' is not enabled." }) { StatusCode = 403 };
         }
     }

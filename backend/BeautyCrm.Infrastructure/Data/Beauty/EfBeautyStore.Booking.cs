@@ -18,7 +18,7 @@ namespace BeautyCrm.Infrastructure.Data.Beauty;
 /// EF Core реалізація портів даних Application. Tenant ізоляція — RLS (app.tenant_id), тож запити
 /// не фільтрують за tenant_id вручну. Один scoped екземпляр на запит.
 /// </summary>
-public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector secrets)
+public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector secrets, TimeProvider? clock = null)
     : IBookingStore, ICancellationSettingsStore, ICatalogStore, IClientStore, IAnalyticsStore, IChannelSettingsStore, ILocationStore
 {
     private const string ExclusionViolation = "23P01";

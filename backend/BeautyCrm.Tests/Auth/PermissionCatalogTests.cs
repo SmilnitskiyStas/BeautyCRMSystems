@@ -24,11 +24,11 @@ public sealed class PermissionCatalogTests
     // ---------- каталог ----------
 
     [Fact]
-    public void Catalog_has_18_unique_keys_with_ordered_levels_and_version_1()
+    public void Catalog_has_21_unique_keys_with_ordered_levels_and_version_2()
     {
-        Assert.Equal(1, PermissionCatalog.Version);
-        Assert.Equal(18, PermissionCatalog.All.Count);
-        Assert.Equal(18, PermissionCatalog.All.Select(d => d.Key).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(2, PermissionCatalog.Version);
+        Assert.Equal(21, PermissionCatalog.All.Count);
+        Assert.Equal(21, PermissionCatalog.All.Select(d => d.Key).Distinct(StringComparer.Ordinal).Count());
         Assert.Equal(["none", "own", "all"], PermissionCatalog.Require("calendar.view").Levels);
         Assert.Equal(["masked", "full"], PermissionCatalog.Require("clients.contacts").Levels);
         Assert.Equal(["view", "edit"], PermissionCatalog.Require("services.catalog").Levels);
@@ -54,20 +54,20 @@ public sealed class PermissionCatalogTests
     public void Catalog_dto_matches_contract_shape()
     {
         var dto = PermissionCatalog.ToDto();
-        Assert.Equal(1, dto.CatalogVersion);
+        Assert.Equal(2, dto.CatalogVersion);
         Assert.Equal(["owner", "admin", "deputy", "specialist"], dto.Roles.Select(r => r.Code));
         Assert.Equal([4, 3, 2, 1], dto.Roles.Select(r => r.Rank));
         Assert.Equal([false, true, true, true], dto.Roles.Select(r => r.TenantAssignable));
-        Assert.Equal(18, dto.Blocks.SelectMany(b => b.Permissions).Count());
+        Assert.Equal(21, dto.Blocks.SelectMany(b => b.Permissions).Count());
         Assert.Equal(["/beauty", "/beauty/calendar"], dto.Blocks.First(b => b.Block == "calendar").Routes);
         var staff = dto.Blocks.SelectMany(b => b.Permissions).Single(p => p.Key == "staff.access");
         Assert.Equal("menu", staff.Scope);
         Assert.Equal(["own", "all"], staff.MenuLevels);
         Assert.Null(dto.Blocks.SelectMany(b => b.Permissions).Single(p => p.Key == "calendar.view").Scope);
-        Assert.Equal(["lte:calendar.manage", "lte:clients.edit", "requires:clients.calls", "requires:revenue.costs", "requires:marketing.campaigns", "roleCeiling:team.manage"],
+        Assert.Equal(["lte:calendar.manage", "lte:clients.edit", "requires:clients.calls", "requires:revenue.costs", "requires:marketing.campaigns", "lte:inventory.manage", "requires:inventory.costs", "roleCeiling:team.manage"],
             dto.Constraints.Select(c => $"{c.Type}:{c.Key}"));
         Assert.Equal(["admin", "deputy", "specialist"], dto.Presets.Keys.Order(StringComparer.Ordinal));
-        Assert.Equal(18, dto.Presets["deputy"].Count);
+        Assert.Equal(21, dto.Presets["deputy"].Count);
         Assert.Contains("ai.provider_keys", dto.ReservedToOwner);
     }
 
@@ -88,8 +88,9 @@ public sealed class PermissionCatalogTests
             ["services.catalog"] = ["edit", "view", "view"], ["marketing.campaigns"] = ["edit", "none", "none"],
             ["staff.access"] = ["edit", "all", "own"], ["locations.access"] = ["edit", "all", "own"],
             ["settings.general"] = ["view", "none", "none"], ["team.manage"] = ["manage", "none", "none"],
+            ["inventory.view"] = ["all", "all", "own"], ["inventory.manage"] = ["all", "all", "none"], ["inventory.costs"] = ["edit", "none", "none"],
         };
-        Assert.Equal(18, table.Count);
+        Assert.Equal(21, table.Count);
         foreach (var (key, v) in table)
         {
             Assert.Equal(v[0], PermissionPresets.For(Roles.Admin)[key]);
@@ -143,7 +144,7 @@ public sealed class PermissionCatalogTests
         Assert.Equal("", set.Level("bogus.key"));
         Assert.False(set.AtLeast("bogus.key", "all"));
         Assert.False(set.AtLeast("revenue.view", "ALL"));
-        Assert.Equal(18, set.Effective.Count);
+        Assert.Equal(21, set.Effective.Count);
     }
 
     [Theory]

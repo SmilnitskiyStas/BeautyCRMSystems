@@ -26,8 +26,11 @@ public static class BeautyModules
     /// <summary>TASK-777 (§26.11.1, ADR-015): кампанії й купони. Не входить у <see cref="All"/> (нікому не вмикається за замовчуванням, без backfill).</summary>
     public const string Marketing = "beauty_marketing";
 
+    /// <summary>ADR-025 (§32.1): склад (товари, партії, рух, інвентаризація). Не входить у <see cref="All"/>, без backfill.</summary>
+    public const string Inventory = "beauty_inventory";
+
     /// <summary>Усі допустимі імена модулів (для валідації списку модулів tenant): <see cref="All"/> + опційні.</summary>
-    public static readonly IReadOnlyList<string> Known = [.. All, Marketing];
+    public static readonly IReadOnlyList<string> Known = [.. All, Marketing, Inventory];
 }
 
 public static class UserStates

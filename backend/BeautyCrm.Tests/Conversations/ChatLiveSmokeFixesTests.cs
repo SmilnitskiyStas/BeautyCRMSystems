@@ -45,6 +45,7 @@ public sealed class ChatLiveSmokeFixesTests : IClassFixture<PostgresRlsFixture>
     public async Task five_messages_with_four_model_calls_each_are_not_rate_limited_but_the_ninth_turn_is()
     {
         var h = H(); var s = await h.SeedAsync();
+        h.Clock.Freeze(); // ковзне вікно 1 хв: без заморозки тест залежить від швидкості середовища (CI падав на 1 хв 16 с)
         for (var i = 0; i < 5; i++)
         {
             h.Ai.Enqueue(Tool("list_locations", new { }, "a"), Tool("list_locations", new { }, "b"), Tool("list_locations", new { }, "c"), Text($"Відповідь {i}."));

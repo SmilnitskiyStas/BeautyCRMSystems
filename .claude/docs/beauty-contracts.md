@@ -4554,3 +4554,393 @@ POST /reset { "expectedVersion": 4, "dryRun": false }
 13. **Запис доступу.** Пріоритет `locked` над `module_disabled`. Ключі з точним регістром (`Calendar.View` дає `422 invalid_permission`). Гонка двох керівників: один успіх і один `409`. Паралельне зниження актора під час запису серіалізується через `FOR SHARE`, і застосовується стан після блокування.
 14. **ШІ.** Для staff-scope без актора executor відмовляє. Право перевіряється під час `approve` за правами того, хто підтверджує (відкликане право дає 403, дія лишається pending). `GET /ai/actions` не показує дій tools без права. `mode = auto` встановлює лише owner.
 15. **Аудит і `no-store`.** Роль застосунку не може `UPDATE/DELETE` в `user_access_audit`. Видалення користувача з рядками аудиту блокує `RESTRICT`. `purge_user_access_audit` відмовляє для `p_before` молодших за 3 роки. `GET /api/auth/me` і відповіді доступів мають `Cache-Control: no-store`. Аудит не містить ПІІ клієнтів.
+
+## §32. Склад (`beauty_inventory`): товари, партії й терміни, рух, інвентаризація (ADR-025, v0.35, 2026-11-18)
+
+Артефакт `API-CONTRACT-INVENTORY-V1` (TASK-875). Джерело рішень: **ADR-025** (статус `accepted` 2026-11-18; етап 1 реалізовано, див. ADR-025 §10). При розбіжності діє ADR, а зміна семантики потребує нового ADR. Позначка *(дефолт Qn)* — рекомендований дефолт відкритого питання ADR-025 §7; його змінюють правкою цього розділу.
+- **Нумерація:** §31 і версія v0.34 зайняті гілкою mobile (ADR-024, global identity, не злито в цю гілку), тому цей розділ — §32, v0.35. §29–§31 цей розділ не змінює.
+- **Обсяг цієї версії:** **етап 1** (каталог товарів, постачальники, залишки по закладах і зведено, партії й терміни, надходження, списання, переміщення, інвентаризація) — детально. **Етапи 2–3** — лише орієнтовно в §32.13, позначено «не специфіковано в цій версії».
+- **Розширює** §30.2/§30.3 (блок `inventory` у каталозі прав, `catalogVersion = 2`; §32.2) і §30.6 (карта «ендпоінт → право» для `/api/beauty/inventory/*` — у §32.5). Інші розділи не змінюються.
+
+Споживачі: TASK-876 (БД), TASK-877 (backend), TASK-878 (frontend: mock одразу, http після 877), TASK-879 (QA), TASK-880 (security), TASK-881 (docs).
+
+### 32.1 Модуль і конфігурація
+
+- `BeautyModules.Inventory = "beauty_inventory"` — у `BeautyModules.Known`, **не** в `All` (як `beauty_marketing`, §26): за замовчуванням вимкнено, backfill модулів немає. Вмикається через control plane / platform (`PATCH` tenant `{modules}`, §27; невідомий модуль → `422 unknown_module`, як зараз). Dev: новий `scripts/dev/enable-inventory.ps1` (аналог `enable-marketing.ps1`), опція модуля в `create-salon.ps1`, `seed.ps1`, `deploy/staging/create-tenant.sh`. Парна правка ShelfGuard (`setModules`) — поза репо.
+- Усі ендпоінти §32.5: `[Authorize(Policy = Staff)]` + `[RequireModule("beauty_inventory")]` + `[RequirePermission(...)]` за §32.5. Порядок фільтрів §30.5: `tenant_suspended` → `module_disabled` → `forbidden_role` → `422` прив'язки → `specialist_inactive`.
+- Усі відповіді `/api/beauty/inventory/*`: `Cache-Control: no-store`.
+
+| Ключ конфігурації | За замовч. | Призначення |
+|---|---|---|
+| `Inventory:WritePerUserPerMinute` | `60` (10..600) | ліміт усіх `POST/PUT/DELETE` складу на користувача (in-memory, патерн `ServiceCostThrottle`) → `429 rate_limited` + `Retry-After` |
+| `Inventory:ExpiringSoonDays` | `30` (1..365) | дефолт `expiringWithinDays` і межа статусу партії `expiring` |
+
+Константи (не налаштовуються): ≤ 100 рядків в операції; ≤ 500 рядків в одному `PUT` інвентаризації і ≤ 2000 рядків в інвентаризації; `take` 1..200 (за замовч. 50); `[RequestSizeLimit]` — 64 КБ для операцій та інвентаризацій, 8 КБ для решти; діапазон `from..to` журналу ≤ 366 днів.
+
+### 32.2 Права (блок `inventory`, ADR-025 §2.2; розширює §30.2–§30.3)
+
+| Блок | Ключ | Рівні (зростання) | Модулі | Обмеження |
+|---|---|---|---|---|
+| `inventory` (маршрути `/beauty/inventory`) | `inventory.view` | `none` · `own` · `all` | `beauty_inventory` | — |
+| | `inventory.manage` | `none` · `own` · `all` | `beauty_inventory` | `lte inventory.view` |
+| | `inventory.costs` | `none` · `view` · `edit` | `beauty_inventory` | `requires revenue.view = all` |
+
+`inventory.sales` (`none · own · all`, `lte inventory.view`) **не** входить у `catalogVersion 2`, з'являється в етапі 3 (*дефолт Q3*).
+
+**Пресети** (рядки додаються до таблиці §30.3):
+
+| Ключ | owner (неявно) | admin | deputy (*Q1*) | specialist (*Q2*) |
+|---|---|---|---|---|
+| `inventory.view` | all | all | all | own |
+| `inventory.manage` | all | all | all | none |
+| `inventory.costs` | edit | edit | none | none |
+
+**Семантика `own`** (через `users.specialist_id`, правила §30.2):
+- **Заклади scope** = `location_id` з `beauty_specialist_locations` для `specialist_id` актора; профіль неактивний або прив'язки немає → порожня множина (M7, §30.5). `all` → усі заклади tenant (зокрема неактивні).
+- `inventory.view = own`: каталог товарів (`/products*`, `/categories`) видно повністю; залишки, партії, рух, операції й інвентаризації — лише закладів scope. Операція переміщення видна, якщо будь-яка її нога в закладі scope.
+- `inventory.manage = own`: операції й налаштування товару лише в закладах scope; для переміщення **обидва** заклади мають бути в scope.
+- Заклад поза scope (у query, тілі або шляху) → `404 location_not_found` без розкриття існування; так само партія/операція/інвентаризація поза scope → `404 batch_not_found` / `operation_not_found` / `stocktake_not_found`.
+- Каталог товарів і постачальники (створення, зміна): `inventory.manage = all`. Перегляд постачальників (контакти): `inventory.manage ≥ own`.
+
+**Поля за `inventory.costs`** (сервер формує відповідь; без права поле **відсутнє** в JSON, `JsonIgnore(WhenWritingNull)`, ніколи не `0`):
+- `≥ view`: `ProductDto.purchasePrice`, `BatchDto.unitCost`, `MovementDto.unitCost`, `OperationDto.totalCost`, `StockRowDto.value`/`valueIncomplete`, `StockSummaryRowDto.value`.
+- `= edit`: передавати `purchasePrice` у `POST/PUT /products` і `unitCost` у рядках надходження. Без права наявність поля (не `null`) → `403 forbidden_role {permission: "inventory.costs", required: "edit"}` (Application, `Error.ForbiddenPermission`), до решти валідації тіла.
+- Без `unitCost` у рядку надходження партія отримує `unit_cost` = поточна `purchase_price` товару (може бути `NULL`) — для всіх, незалежно від права.
+
+**Backfill** (окрема міграція `inventory_permissions_backfill`, TASK-877; `PermissionCatalog.Version = 2`):
+1. для кожного `admin`, `deputy`, `specialist`: вставити 3 рядки пресету (`ON CONFLICT (tenant_id, user_id, permission) DO NOTHING`); `owner` — нічого;
+2. `inventory.costs` = значення пресету лише якщо поточний `revenue.view` користувача = `all`, інакше `none`;
+3. `invites.permissions`: для кожного запрошення додати відсутні ключі `inventory.*` за пресетом ролі з тим самим правилом п.2 (`jsonb ||` лише для відсутніх ключів);
+4. `users.access_version = access_version + 1` для користувачів, яким вставлено ≥ 1 рядок; запис `user_access_audit` з `action = 'migrated'`, `actor_user_id = NULL`, `changes` = вставлені ключі;
+5. ідемпотентність: повторний запуск нічого не змінює (ані версії, ані аудиту);
+6. `Down`: видаляє рядки `inventory.*`, що збігаються з backfill; якщо будь-який рядок `inventory.*` змінено вручну (`updated_by_user_id IS NOT NULL`) — `RAISE EXCEPTION` (human gate).
+
+**Тест базової матриці** `AuthzBaselineMatrixTests` перелічує маршрути через `EndpointDataSource`: кожен новий ендпоінт §32.5 отримує рядок (owner/admin/deputy/specialist × статус) за пресетами вище, з модулем увімкненим і вимкненим.
+
+### 32.3 Схема (міграція `beauty_inventory`, адитивна, без backfill даних; TASK-876)
+
+Усі таблиці — через `Base`/`TenantFk` (`id uuid DEFAULT gen_random_uuid()`, `tenant_id`, AK `(tenant_id, id)`), FK композитні `(tenant_id, x_id)`. Імена CHECK/індексів — за конвенцією `ck_<table>_<what>` / `ix_` / `ux_`. Enum-и — текст + CHECK. Кількості `numeric(14,3)`, гроші `numeric(12,2)`.
+
+- **`beauty_suppliers`:** `name varchar(200) NOT NULL` (CHECK `char_length(btrim(name)) BETWEEN 1 AND 200`), `contact_name varchar(200) NULL`, `phone varchar(32) NULL`, `email varchar(320) NULL`, `note varchar(500) NULL`, `is_active boolean NOT NULL DEFAULT true`, `created_at`, `updated_at`. UNIQUE `ux_beauty_suppliers_name (tenant_id, lower(name))`.
+- **`beauty_products`:**
+  - `name varchar(200) NOT NULL`; `category varchar(100) NULL` (*дефолт Q10*: вільний текст); `unit varchar(8) NOT NULL` CHECK ∈ `pcs|ml|g|l|kg|pack`; `barcode varchar(64) NULL` CHECK `barcode ~ '^[0-9A-Za-z._-]{1,64}$'`; `purpose varchar(16) NOT NULL` CHECK ∈ `sale|salon_use|both`;
+  - `supplier_id uuid NULL` (FK `beauty_suppliers` RESTRICT); `purchase_price numeric(12,2) NULL` CHECK `0..1000000`; `min_stock numeric(14,3) NULL` CHECK `>= 0`; `track_expiry boolean NOT NULL DEFAULT false`; `is_active boolean NOT NULL DEFAULT true`; `note varchar(500) NULL`;
+  - `created_at`, `updated_at`, `updated_by_user_id uuid NOT NULL` (FK `users` RESTRICT);
+  - UNIQUE `ux_beauty_products_barcode (tenant_id, barcode) WHERE barcode IS NOT NULL` (унікальний серед активних і неактивних); індекси `(tenant_id, is_active, name)`, `(tenant_id, supplier_id)`.
+- **`beauty_product_location_settings`:** `product_id` (FK CASCADE), `location_id` (FK `beauty_locations` CASCADE; заклади не видаляються), `min_stock numeric(14,3) NULL` CHECK `>= 0` (`NULL` = успадкувати мережевий; `0` = без порогу), `is_enabled boolean NOT NULL DEFAULT true`, `updated_at`, `updated_by_user_id NOT NULL` (FK `users` RESTRICT). UNIQUE `(tenant_id, product_id, location_id)`.
+- **`beauty_stock_levels`** (агрегований рівень, точка серіалізації): `location_id`, `product_id` (FK RESTRICT), `quantity numeric(14,3) NOT NULL DEFAULT 0` CHECK `quantity >= 0` (етап 1), `updated_at`. UNIQUE `ux_beauty_stock_levels_pair (tenant_id, location_id, product_id)`.
+- **`beauty_stock_operations`** (заголовок операції, **append-only**):
+  - `kind varchar(24) NOT NULL` CHECK ∈ `receipt|write_off|transfer|stocktake|service_consumption|sale` (останні два — етапи 2–3, CHECK одразу надмножиною);
+  - `location_id NOT NULL` (FK RESTRICT; заклад операції / джерело переміщення); `to_location_id NULL` (FK RESTRICT); CHECK `(kind = 'transfer') = (to_location_id IS NOT NULL)` і `to_location_id IS NULL OR to_location_id <> location_id`;
+  - `supplier_id NULL` (FK RESTRICT), `document_number varchar(64) NULL`, `received_on date NULL` — CHECK усі три `NULL` або `kind = 'receipt'`;
+  - `reason varchar(16) NULL` CHECK ∈ `expired|damaged|lost|internal_use|correction|other` і `(kind = 'write_off') = (reason IS NOT NULL)`;
+  - `stocktake_id NULL` (FK `beauty_stocktakes` RESTRICT), CHECK `(kind = 'stocktake') = (stocktake_id IS NOT NULL)`; UNIQUE `(tenant_id, stocktake_id) WHERE stocktake_id IS NOT NULL`;
+  - `note varchar(500) NULL`; `created_by_user_id uuid NULL` (FK `users` RESTRICT; `NULL` = система, з етапу 2; в етапі 1 завжди заповнено); `created_at timestamptz NOT NULL DEFAULT now()`;
+  - `idempotency_key_hash varchar(64) NULL`, `idempotency_request_hash varchar(64) NULL`, CHECK обидва `NULL` або обидва ні; UNIQUE `ux_beauty_stock_operations_idempotency (tenant_id, idempotency_key_hash) WHERE idempotency_key_hash IS NOT NULL`;
+  - індекси `(tenant_id, location_id, created_at DESC, id DESC)`, `(tenant_id, to_location_id, created_at DESC) WHERE to_location_id IS NOT NULL`.
+- **`beauty_stock_batches`** (партії):
+  - `location_id`, `product_id` (FK RESTRICT); `operation_id NOT NULL` (FK `beauty_stock_operations` RESTRICT; операція, що створила партію: `receipt|transfer|stocktake`); `source_batch_id NULL` (FK на `beauty_stock_batches` RESTRICT; лише партії призначення переміщення); `supplier_id NULL` (FK RESTRICT);
+  - `received_at timestamptz NOT NULL` (момент надходження; партія переміщення успадковує його від джерела); `expires_on date NULL` CHECK рік `2000..2100`; `lot_number varchar(64) NULL`;
+  - `initial_quantity numeric(14,3) NOT NULL` CHECK `> 0`; `quantity numeric(14,3) NOT NULL` CHECK `quantity >= 0 AND quantity <= initial_quantity`; `unit_cost numeric(12,2) NULL` CHECK `0..1000000`;
+  - `created_at`, `updated_at`;
+  - індекси: FEFO `ix_beauty_stock_batches_fefo (tenant_id, location_id, product_id, expires_on NULLS LAST, received_at, id) WHERE quantity > 0`; терміни `(tenant_id, location_id, expires_on) WHERE quantity > 0 AND expires_on IS NOT NULL`.
+- **`beauty_stock_movements`** (журнал, **append-only**):
+  - `operation_id NOT NULL` (FK RESTRICT); `location_id`, `product_id` (FK RESTRICT); `batch_id NULL` (FK RESTRICT), CHECK `batch_id IS NOT NULL OR type = 'service_consumption'` (непокрита нестача, етап 2);
+  - `type varchar(24) NOT NULL` CHECK ∈ `receipt|write_off|transfer_out|transfer_in|stocktake_adjust|service_consumption|sale`;
+  - `quantity numeric(14,3) NOT NULL`, CHECK знака: `receipt|transfer_in` → `> 0`; `write_off|transfer_out|service_consumption|sale` → `< 0`; `stocktake_adjust` → `<> 0`;
+  - `unit_cost numeric(12,2) NULL` (знімок ціни партії); `created_by_user_id uuid NULL` (FK `users` RESTRICT); `occurred_at timestamptz NOT NULL DEFAULT now()` (час сервера, не клієнта);
+  - колонки етапів 2–3 (`appointment_id`, `sale_id`, ознака нестачі) додаються адитивно своїми міграціями;
+  - індекси `(tenant_id, location_id, occurred_at DESC, id DESC)`, `(tenant_id, product_id, occurred_at DESC)`, `(tenant_id, operation_id)`, `(tenant_id, batch_id)`.
+- **`beauty_stocktakes`:** `location_id` (FK RESTRICT); `status varchar(16) NOT NULL DEFAULT 'draft'` CHECK ∈ `draft|posted|cancelled`; `note varchar(500) NULL`; `version integer NOT NULL DEFAULT 1`; `created_by_user_id NOT NULL`, `created_at`; `posted_at`, `posted_by_user_id`, `cancelled_at`, `cancelled_by_user_id` (`NULL`; FK `users` RESTRICT); CHECK `(status = 'posted') = (posted_at IS NOT NULL AND posted_by_user_id IS NOT NULL)`, `(status = 'cancelled') = (cancelled_at IS NOT NULL)`. UNIQUE `ux_beauty_stocktakes_open (tenant_id, location_id) WHERE status = 'draft'`.
+- **`beauty_stocktake_lines`:** `stocktake_id` (FK CASCADE), `product_id` (FK RESTRICT), `counted_quantity numeric(14,3) NULL` CHECK `>= 0`, `expected_quantity numeric(14,3) NULL` (пишеться при проведенні), `surplus_expires_on date NULL` (рік `2000..2100`), `updated_at`, `updated_by_user_id NULL` (FK `users` RESTRICT). UNIQUE `(tenant_id, stocktake_id, product_id)`.
+- **RLS:** ENABLE + FORCE, політика `tenant_isolation` (USING + WITH CHECK за `app.tenant_id`, ADR-002) на всіх 9 таблицях. `DO`-блок міграції падає, якщо FORCE немає на будь-якій з них.
+- **GRANT** (у міграції не виконується; синхронно в `scripts/dev/setup-db.ps1` і `deploy/staging/db/grants.sql`, тест `staging-grants-sync`):
+  - app-роль: SELECT/INSERT/UPDATE/DELETE через наявний `GRANT … ON ALL TABLES`, плюс
+    ```sql
+    -- Склад (ADR-025, TASK-876): журнал рухів і заголовки операцій append-only для app-ролі: лише SELECT/INSERT
+    REVOKE UPDATE, DELETE ON beauty_stock_movements FROM beautycrm_app;
+    REVOKE UPDATE, DELETE ON beauty_stock_operations FROM beautycrm_app;
+    ```
+  - роль воркера: **нічого** в етапі 1.
+- `worker/src/testing/schema.sql` перегенерувати (`dotnet ef migrations script --idempotent`, **без BOM**, LF) — інакше падає `schema-drift.test.ts`.
+- **Down:** якщо `beauty_stock_movements` непорожня → `RAISE EXCEPTION 'inventory history exists'` (втрата журналу лише свідомо, human gate); інакше видаляє таблиці у зворотному порядку. Up → Down → Up перевіряється на копії.
+- Незмінність проведених/скасованих інвентаризацій — Application (кожен `UPDATE` рядків і заголовка має умову `status = 'draft'`); тригера немає.
+
+### 32.4 Правила обліку
+
+**Інваріанти** (для кожної пари заклад×товар, після кожної транзакції): `levels.quantity = Σ batches.quantity = Σ movements.quantity`; у етапі 1 усі три ≥ 0. Сума ніг переміщення = 0.
+
+**Транзакція операції** (READ COMMITTED, одна транзакція на запит):
+1. `INSERT` заголовка `beauty_stock_operations` (з хешами ідемпотентності). Конфлікт унікального індексу → див. «Ідемпотентність».
+2. Для всіх пар `(location_id, product_id)` операції, у порядку зростання `(location_id, product_id)`: `INSERT INTO beauty_stock_levels … ON CONFLICT DO NOTHING`, потім `SELECT … FOR UPDATE`.
+3. Підбір партій (FEFO) і перевірка достатності **під блокуванням**; нестача → відкат усієї транзакції, `422 insufficient_stock`.
+4. `UPDATE` партій / `INSERT` нових партій, `INSERT` рухів, `UPDATE` рівнів.
+5. Commit. Партія змінюється **лише** під блокуванням рівня своєї пари.
+
+**FEFO:** порядок `expires_on ASC NULLS LAST, received_at ASC, id ASC`, партії з `quantity > 0`. **Прострочена** партія: `expires_on < localToday(location)`, де `localToday` = дата `TimeProvider.GetUtcNow()` у `beauty_locations.timezone`. **Закінчується:** не прострочена і `expires_on ≤ localToday + expiringWithinDays`.
+
+| Операція | Які партії бере FEFO | Явна `batchId` |
+|---|---|---|
+| списання (`write_off`) | усі, прострочені першими | дозволена будь-яка партія цього товару в закладі |
+| переміщення (`transfer_out`) | лише непрострочені (*дефолт Q7*) | прострочена → `422 batch_expired` |
+| інвентаризація, нестача (`stocktake_adjust < 0`) | усі, прострочені першими | — |
+| автосписання / продаж (етапи 2–3) | лише непрострочені | — |
+
+Один рядок операції може розійтися на кілька партій → кілька рухів.
+
+**Надходження (`receipt`):** кожен рядок створює **нову** партію (`initial_quantity = quantity`, `received_at = now()`, `expires_on`, `lot_number`, `unit_cost = line.unitCost ?? product.purchase_price`, `supplier_id = request.supplierId ?? product.supplier_id`) і рух `receipt` (+). `received_on` (дата документа) зберігається на операції.
+
+**Списання (`write_off`):** рухи `write_off` (−) з партій. Причини: `expired | damaged | lost | internal_use | correction | other`; для `correction` і `other` потрібен `note`. Помилкове надходження виправляється списанням `correction` (*дефолт Q6*), редагування немає.
+
+**Переміщення (`transfer`):** миттєве (*дефолт Q5*). Для кожної взятої партії джерела: рух `transfer_out` (−q) і нова партія в закладі призначення (`initial_quantity = quantity = q`, ті самі `expires_on`, `unit_cost`, `lot_number`, `supplier_id`, `received_at`; `source_batch_id` = партія джерела; `operation_id` = переміщення) з рухом `transfer_in` (+q). Обидві ноги — в одній транзакції; блокування обох закладів у загальному порядку п.2.
+
+**Інвентаризація:**
+- `POST /stocktakes` створює чернетку (одна на заклад; друга → `409 stocktake_in_progress`). Рядки: передані `productIds` або, без них, усі активні товари, не вимкнені в закладі, плюс товари з ненульовим рівнем у закладі (≤ 2000, інакше `422 too_many_lines` — тоді передавати `productIds`).
+- `PUT /stocktakes/{id}/lines` — upsert підрахунку (`countedQuantity: null` = «не рахували»), можна додавати товари. `expectedVersion` обов'язковий; розбіжність → `409 stocktake_version_conflict` з `currentVersion`; успіх → `version + 1`.
+- Рух у закладі під час чернетки **не** блокується (*дефолт Q8*). `GET` чернетки показує `expectedQuantity` = поточний рівень (живе значення).
+- `POST /stocktakes/{id}/post` `{expectedVersion}`: `SELECT … FOR UPDATE` заголовка з умовою `status = 'draft'` (інакше `409 stocktake_closed`) і версією (інакше `409 stocktake_version_conflict`); рядки з `counted_quantity IS NOT NULL` (жодного → `422 stocktake_empty`); блокування рівнів (п.2); для кожного рядка `diff = counted − level.quantity`, `expected_quantity := level.quantity`:
+  - `diff < 0` → рухи `stocktake_adjust` (−) за FEFO з простроченими;
+  - `diff > 0` → нова партія (`expires_on = surplus_expires_on`, обов'язковий для `track_expiry` → інакше `422 expiry_required`; `unit_cost = product.purchase_price`; `received_at = now()`) і рух `stocktake_adjust` (+);
+  - `diff = 0` → нічого.
+  Одна операція `kind = stocktake`, якщо є хоч одна різниця, інакше без операції. Статус `posted`. Проведена й скасована інвентаризації незмінні.
+- `POST /stocktakes/{id}/cancel` → `cancelled` (лише з `draft`, інакше `409 stocktake_closed`), рухів немає.
+
+**Ідемпотентність** (`POST /receipts`, `/write-offs`, `/transfers`): заголовок `Idempotency-Key` **обов'язковий** (1..128 друкованих ASCII; відсутній → `422 idempotency_key_required`, невалідний → `422 invalid_idempotency_key`). Зберігаються SHA-256 ключа й канонічного тіла запиту. Перед обробкою: ключ уже є → те саме тіло → `200` з тим самим `OperationDto` і `Idempotent-Replayed: true`; інше тіло → `422 idempotency_key_reused`. Паралельні повтори: другий чекає на унікальному індексі й після конфлікту віддає повтор. Перший успіх → `201`. Ключ діє в межах tenant без строку дії.
+
+**Мінімальний залишок і `isLow`:** `effectiveMinStock = setting.min_stock ?? product.min_stock`; `isLow = effectiveMinStock > 0 AND quantity < effectiveMinStock`.
+
+**Активність і дозвіл у закладі:**
+- надходження: товар неактивний → `422 product_inactive`; вимкнений у закладі (`is_enabled = false`) → `422 product_disabled_for_location`; заклад неактивний → `422 location_inactive`; постачальник неактивний → `422 supplier_inactive`;
+- переміщення: заклад призначення неактивний → `422 location_inactive`; товар вимкнений у закладі призначення → `422 product_disabled_for_location`; неактивні товар чи заклад-джерело дозволені (вивезення залишків);
+- списання та інвентаризація дозволені для неактивних товарів і закладів.
+
+### 32.5 API (`/api/beauty/inventory`, помилка `{code, message, …extras}`)
+
+Позначення права: «≥ L» — `[RequirePermission(key, L)]`; scope закладу (`own`/`all`) застосовує Application. «Лім.» — ліміт `Inventory:WritePerUserPerMinute`; «Ідем.» — `Idempotency-Key`.
+
+*Звірено з `InventoryController` (TASK-881): 27 маршрутів, методи, шляхи, права за рівнем і прапорці «Лім.» збігаються з таблицею; розбіжностей не знайдено. Клас-рівень `inventory.view ≥ own`, `[RequireModule]`, `[InboxNoStore]`; `RequestSizeLimit` 8 КБ/64 КБ за §32.1.*
+
+| Метод | Шлях | Право | Тіло / відповідь |
+|---|---|---|---|
+| GET | `/scope` | `inventory.view ≥ own` | `InventoryScopeDto` |
+| GET | `/products?search&category&purpose&supplierId&active=true\|false\|all&cursor&take` | `inventory.view ≥ own` | `{items: ProductDto[], hasMore, nextCursor?}`; `active` за замовч. `true`; сортування `lower(name), id` |
+| GET | `/products/{id}` | `inventory.view ≥ own` | `ProductDetailDto` |
+| GET | `/products/by-barcode?code=` | `inventory.view ≥ own` | `ProductDto` або `404 product_not_found` (точний збіг після `trim`) |
+| GET | `/categories` | `inventory.view ≥ own` | `{items: string[]}` — різні непорожні категорії, ordinal-сортування |
+| POST | `/products` | `inventory.manage = all` | `ProductRequest` → `201 ProductDto`; Лім. |
+| PUT | `/products/{id}` | `inventory.manage = all` | `ProductRequest` → `200 ProductDto`; Лім. |
+| PUT | `/products/{id}/locations/{locationId}` | `inventory.manage ≥ own` + заклад у scope | `{minStock: number\|null, isEnabled: boolean}` → `200 LocationSettingDto`; Лім. |
+| DELETE | `/products/{id}/locations/{locationId}` | `inventory.manage ≥ own` + scope | `204` (повернення до мережевих значень); немає рядка → `404 setting_not_found`; Лім. |
+| GET | `/suppliers?search&active&cursor&take` | `inventory.manage ≥ own` | `{items: SupplierDto[], hasMore, nextCursor?}` |
+| POST | `/suppliers` | `inventory.manage = all` | `SupplierRequest` → `201 SupplierDto`; Лім. |
+| PUT | `/suppliers/{id}` | `inventory.manage = all` | `SupplierRequest` → `200 SupplierDto`; Лім. |
+| GET | `/stock?locationId&search&category&purpose&state=all\|low\|in_stock\|out_of_stock&expiringWithinDays&cursor&take` | `inventory.view ≥ own` + scope | `{location: {id, name, timezone, isActive}, items: StockRowDto[], hasMore, nextCursor?}`; `locationId` обов'язковий (`422 location_required`) |
+| GET | `/stock/summary?search&category&purpose&lowOnly&cursor&take` | `inventory.view ≥ own` | `{locations: [{id, name, isActive}], items: StockSummaryRowDto[], hasMore, nextCursor?}` — по закладах scope («Усі заклади» в UI) |
+| GET | `/batches?locationId&productId&status=active\|expiring\|expired\|empty\|all&expiringWithinDays&cursor&take` | `inventory.view ≥ own` | `{items: BatchDto[], hasMore, nextCursor?}`; без `locationId` — усі заклади scope; `status` за замовч. `active` (`quantity > 0`); сортування FEFO, далі `location_id` |
+| GET | `/movements?locationId&productId&type&operationId&from&to&cursor&take` | `inventory.view ≥ own` | `{items: MovementDto[], hasMore, nextCursor?}`; `from/to` — ISO-8601 з offset, за замовч. останні 30 діб, `to − from ≤ 366 діб`; сортування `occurred_at DESC, id DESC` |
+| GET | `/operations?kind&locationId&from&to&cursor&take` | `inventory.view ≥ own` | `{items: OperationSummaryDto[], hasMore, nextCursor?}` |
+| GET | `/operations/{id}` | `inventory.view ≥ own` + будь-яка нога в scope | `OperationDto` |
+| POST | `/receipts` | `inventory.manage ≥ own` + scope | `ReceiptRequest` → `201 OperationDto`; Ідем.; Лім. |
+| POST | `/write-offs` | `inventory.manage ≥ own` + scope | `WriteOffRequest` → `201 OperationDto`; Ідем.; Лім. |
+| POST | `/transfers` | `inventory.manage ≥ own` + **обидва** заклади в scope | `TransferRequest` → `201 OperationDto`; Ідем.; Лім. |
+| GET | `/stocktakes?locationId&status&cursor&take` | `inventory.view ≥ own` | `{items: StocktakeSummaryDto[], hasMore, nextCursor?}`, сортування `created_at DESC, id DESC` |
+| POST | `/stocktakes` | `inventory.manage ≥ own` + scope | `{locationId, note?, productIds?: uuid[]}` → `201 StocktakeDto`; Лім. |
+| GET | `/stocktakes/{id}` | `inventory.view ≥ own` + scope | `StocktakeDto` |
+| PUT | `/stocktakes/{id}/lines` | `inventory.manage ≥ own` + scope | `{expectedVersion, lines: [{productId, countedQuantity: number\|null, surplusExpiresOn?: date\|null}]}` → `200 StocktakeDto`; Лім. |
+| POST | `/stocktakes/{id}/post` | `inventory.manage ≥ own` + scope | `{expectedVersion}` → `200 {stocktake: StocktakeDto, operation: OperationDto\|null}`; Лім. |
+| POST | `/stocktakes/{id}/cancel` | `inventory.manage ≥ own` + scope | `{expectedVersion}` → `200 StocktakeDto`; Лім. |
+
+**Курсори:** keyset, base64url `{сортувальні значення}|{id}|{hash параметрів}`; нерозбірний або від інших параметрів → `422 invalid_cursor`.
+
+**Порядок перевірок в операціях** (детермінований, фіксують тести): фільтри (§32.1) → прив'язка тіла (`422`) → `Idempotency-Key` (наявність, формат, повтор/`idempotency_key_reused`) → право на поля цін (`403 forbidden_role` `inventory.costs`) → валідація форми (§32.7, `422`, з `line` = індекс рядка) → заклади й scope (`404 location_not_found`) → товари/партії/постачальник (`404`) → активність і дозвіл (`422`) → транзакція з блокуванням і достатністю (`422 insufficient_stock`).
+
+### 32.6 DTO
+
+Усі гроші — number з ≤ 2 знаками, кількості — number з ≤ 3 знаками; дати `yyyy-MM-dd`; моменти — ISO-8601 UTC. Поля з позначкою † присутні лише за `inventory.costs ≥ view` (інакше відсутні в JSON).
+
+```
+InventoryScopeDto   { locations: [{id, name, isActive, timezone, canManage: boolean}], costs: "none"|"view"|"edit",
+                      canEditCatalog: boolean, expiringSoonDays }
+ProductRef          { id, name, unit, purpose, category: string|null, barcode: string|null, isActive }
+ProductDto          { id, name, category|null, unit, barcode|null, purpose, supplier: {id, name}|null,
+                      purchasePrice†: number|null, minStock: number|null, trackExpiry, isActive, note|null,
+                      hasMovements: boolean, createdAt, updatedAt }
+ProductDetailDto    = ProductDto & { locationSettings: LocationSettingDto[] }   // лише заклади scope
+LocationSettingDto  { locationId, minStock: number|null, isEnabled, updatedAt }
+ProductRequest      { name, category?, unit, barcode?, purpose, supplierId?, purchasePrice?, minStock?,
+                      trackExpiry?: boolean (POST за замовч. false; PUT null = без змін),
+                      isActive?: boolean (PUT null = без змін; POST ігнорується), note? }
+                    // PUT: purchasePrice відсутнє або null = без змін (очищення ціни не підтримується);
+                    // решта nullable-полів: null = очистити
+SupplierDto         { id, name, contactName|null, phone|null, email|null, note|null, isActive, productCount }
+SupplierRequest     { name, contactName?, phone?, email?, note?, isActive? (PUT null = без змін) }
+StockRowDto         { product: ProductRef, locationId, quantity, minStock: number|null (ефективний), isLow, isEnabled,
+                      nearestExpiresOn: date|null, expiredQuantity, expiringQuantity,
+                      value†: number, valueIncomplete†: boolean }   // value = Σ quantity × unit_cost партій з ціною
+StockSummaryRowDto  { product: ProductRef, totalQuantity, isLowAnywhere,
+                      locations: [{locationId, quantity, isLow}], value†: number, valueIncomplete†: boolean }
+BatchDto            { id, product: ProductRef, locationId, receivedAt, expiresOn: date|null, lotNumber|null,
+                      initialQuantity, quantity, unitCost†: number|null, supplier: {id, name}|null,
+                      operationId, sourceBatchId|null, status: "active"|"expiring"|"expired"|"empty",
+                      daysToExpiry: integer|null }   // від localToday закладу, від'ємне для прострочених
+MovementDto         { id, operationId, operationKind, type, occurredAt, locationId, product: ProductRef,
+                      batchId|null, quantity (зі знаком), unitCost†: number|null, reason|null, note|null,
+                      counterpartLocationId|null, stocktakeId|null, createdBy: {id, name}|null }
+OperationSummaryDto { id, kind, locationId, toLocationId|null, reason|null, documentNumber|null, createdAt,
+                      createdBy: {id, name}|null, productCount, totalCost†: number|null }
+OperationDto        = OperationSummaryDto & { supplier: {id, name}|null, receivedOn|null, note|null, stocktakeId|null,
+                      movements: MovementDto[] }   // у scope own — лише ноги в закладах scope
+ReceiptRequest      { locationId, supplierId?, documentNumber?, receivedOn?: date, note?,
+                      lines: [{productId, quantity, unitCost?, expiresOn?: date, lotNumber?}] }
+WriteOffRequest     { locationId, reason, note?, lines: [{productId, quantity, batchId?}] }
+TransferRequest     { fromLocationId, toLocationId, note?, lines: [{productId, quantity, batchId?}] }
+StocktakeSummaryDto { id, locationId, status, createdAt, createdBy: {id, name}, postedAt|null, lineCount, countedCount }
+StocktakeDto        = StocktakeSummaryDto & { note|null, version, postedBy: {id, name}|null, cancelledAt|null,
+                      lines: [{product: ProductRef, expectedQuantity: number|null, countedQuantity: number|null,
+                               difference: number|null, surplusExpiresOn: date|null}] }
+                    // draft: expectedQuantity = поточний рівень; posted: знімок на момент проведення
+```
+
+`totalCost†` = Σ |quantity| × `unit_cost` рухів операції, що мають ціну (для переміщення — лише нога `transfer_out`); `null`, якщо жоден рух не має ціни. `createdBy.name` — `users.full_name`; ПД клієнтів у DTO складу немає.
+
+### 32.7 Валідація (422; `extras.line` — 0-based індекс рядка, де застосовно)
+
+| Поле / правило | Код |
+|---|---|
+| `name` після `trim` 1..200 | `invalid_name` |
+| `category` після `trim` ≤ 100 (порожнє → `null`) | `invalid_category` |
+| `unit` ∉ `pcs\|ml\|g\|l\|kg\|pack` | `invalid_unit` |
+| зміна `unit` товару, що має рухи | `unit_locked` |
+| `barcode` після `trim` (порожнє → `null`) не відповідає `^[0-9A-Za-z._-]{1,64}$` | `invalid_barcode` |
+| `purpose` ∉ `sale\|salon_use\|both` | `invalid_purpose` |
+| `purchasePrice`, `unitCost`: < 0, > 1 000 000, > 2 знаків | `invalid_price` |
+| `minStock`: < 0, > 1 000 000, > 3 знаків; не ціле для `pcs\|pack` (*дефолт Q4*) | `invalid_min_stock` |
+| `quantity`, `countedQuantity`: ≤ 0 (для `countedQuantity` — < 0), > 1 000 000, > 3 знаків; не ціле для `pcs\|pack` | `invalid_quantity` |
+| `lines` порожній / > 100 (операції) / > 500 (PUT інвентаризації) / > 2000 (усього в інвентаризації) | `invalid_lines` / `too_many_lines` |
+| однакова пара `(productId, batchId)` двічі в списанні чи переміщенні; повтор `productId` у PUT інвентаризації | `duplicate_line` |
+| дата не `yyyy-MM-dd`, рік поза 2000..2100 | `invalid_date` |
+| `receivedOn` > `localToday` або < `localToday − 365` | `invalid_date` |
+| результуючий залишок (рівень + надходження, переміщення в заклад призначення, надлишок інвентаризації) > `99 999 999 999.999` (межа `numeric(14,3)`) | `quantity_out_of_range` (`line` або `productId`) |
+| `expiresOn` < `localToday` закладу надходження (прострочений товар не приймається); так само `surplusExpiresOn` надлишку при проведенні інвентаризації (`productId` у відповіді) | `invalid_expiry` |
+| `expiresOn` відсутній для товару з `trackExpiry`; `surplusExpiresOn` відсутній при надлишку товару з `trackExpiry` (під час проведення) | `expiry_required` |
+| `reason` ∉ переліку §32.4 | `invalid_reason` |
+| `note` відсутній для `correction\|other` | `note_required` |
+| `note` > 500, `documentNumber` > 64, `lotNumber` > 64 | `invalid_note`, `invalid_document_number`, `invalid_lot_number` |
+| `fromLocationId = toLocationId` | `same_location` |
+| явна прострочена партія в переміщенні | `batch_expired` |
+| `contactName` > 200; `phone` > 32 або символи поза `0-9 + ( ) - . пробіл`; `email` > 320 або без `@` | `invalid_contact_name`, `invalid_phone`, `invalid_email` |
+| `locationId` відсутній у `GET /stock` | `location_required` |
+| `from/to` нерозбірні, `from > to`, діапазон > 366 діб | `invalid_range` |
+| проведення без жодного підрахованого рядка | `stocktake_empty` |
+| `expectedVersion` відсутній | `expected_version_required` |
+| нестача під блокуванням | `insufficient_stock` (`extras.lines: [{line, productId, batchId?, requested, available}]`; для переміщення `available` — без прострочених) |
+
+### 32.8 Коди помилок (зведення) і тексти для UI
+
+Коди додаються в `frontend/features/beauty-auth/errors.ts` (`BY_CODE`). Тексти — пропозиція; остаточні живуть у content-шарі frontend.
+
+| Статус | `code` | Додаткові поля | Текст для UI (uk) |
+|---|---|---|---|
+| 403 | `module_disabled` | — | Модуль «Склад» вимкнено для вашого бізнесу |
+| 403 | `forbidden_role` | `permission`, `required` | Недостатньо прав для цієї дії |
+| 404 | `product_not_found` | — | Товар не знайдено |
+| 404 | `supplier_not_found` | — | Постачальника не знайдено |
+| 404 | `location_not_found` | — | Заклад не знайдено |
+| 404 | `batch_not_found` | `line` | Партію не знайдено |
+| 404 | `operation_not_found` | — | Операцію не знайдено |
+| 404 | `stocktake_not_found` | — | Інвентаризацію не знайдено |
+| 404 | `setting_not_found` | — | Налаштування закладу для товару немає |
+| 409 | `barcode_taken` | — | Товар з таким штрихкодом уже є |
+| 409 | `supplier_name_taken` | — | Постачальник з такою назвою вже є |
+| 409 | `stocktake_in_progress` | `stocktakeId` | У закладі вже триває інвентаризація |
+| 409 | `stocktake_closed` | — | Інвентаризацію вже проведено або скасовано |
+| 409 | `stocktake_version_conflict` | `currentVersion` | Інвентаризацію змінив інший користувач. Оновіть сторінку |
+| 422 | `insufficient_stock` | `lines[]` | Недостатньо товару на залишку |
+| 422 | `product_inactive` | `line` | Товар неактивний |
+| 422 | `product_disabled_for_location` | `line` | Товар вимкнено для цього закладу |
+| 422 | `location_inactive` | — | Заклад неактивний |
+| 422 | `supplier_inactive` | — | Постачальник неактивний |
+| 422 | `same_location` | — | Оберіть інший заклад призначення |
+| 422 | `batch_expired` | `line` | Партія прострочена, її не можна переміщувати |
+| 422 | `unit_locked` | — | Одиницю виміру не можна змінити: товар уже має рух |
+| 422 | `expiry_required` | `line` | Вкажіть термін придатності |
+| 422 | `invalid_expiry` | `line` (надходження) або `productId` (інвентаризація) | Термін придатності вже минув |
+| 422 | `quantity_out_of_range` | `line` (надходження/переміщення) або `productId` (інвентаризація) | Результуючий залишок перевищує максимум (`99 999 999 999.999`, межа `numeric(14,3)`) |
+| 422 | `note_required` | — | Додайте коментар до списання |
+| 422 | `stocktake_empty` | — | Внесіть хоча б один підрахунок |
+| 422 | `idempotency_key_required`, `invalid_idempotency_key` | — | Технічна помилка запиту. Спробуйте ще раз |
+| 422 | `idempotency_key_reused` | — | Цю операцію вже надіслано з іншими даними. Оновіть сторінку |
+| 422 | `invalid_name`, `invalid_category`, `invalid_unit`, `invalid_barcode`, `invalid_purpose`, `invalid_price`, `invalid_min_stock`, `invalid_quantity`, `invalid_lines`, `too_many_lines`, `duplicate_line`, `invalid_date`, `invalid_reason`, `invalid_note`, `invalid_document_number`, `invalid_lot_number`, `invalid_contact_name`, `invalid_phone`, `invalid_email`, `location_required`, `invalid_range`, `invalid_cursor`, `expected_version_required` | `line` (де застосовно) | тексти полів форми |
+| 429 | `rate_limited` | `Retry-After` | Забагато дій. Зачекайте хвилину |
+
+### 32.9 Frontend (TASK-878)
+
+- **Меню й маршрути:** пункт «Склад» у групі `catalog` (`NAV_GROUPS`, `permissions.ts`), `canOpen('/beauty/inventory', prefix)` = модуль `beauty_inventory` ∧ `inventory.view ≥ own`. Дзеркало ключів, рівнів і пресетів у `access.ts`; блок `inventory` на екрані «Команда й доступи» (§30.8) з підписами в content-шарі.
+- **Екрани** (за зразком «Заклади»/«Послуги»): `/beauty/inventory` — залишки з чіпами «Усі заклади» (`/stock/summary`) + заклади з `/scope` (як в Огляді), фільтри стану (низький / закінчується / немає); `/beauty/inventory/products` — каталог (створення/редагування за `canEditCatalog`, налаштування по закладу); `/beauty/inventory/batches` — партії й терміни; `/beauty/inventory/movements` — журнал і операції; `/beauty/inventory/stocktakes` (+ `/[id]`) — інвентаризації. Дії (надходження, списання, переміщення, інвентаризація) показуються лише для закладів з `canManage`; ціни — лише за `costs ≠ none`, поля цін у формах — лише за `costs = edit`.
+- **Клієнт:** `http-inventory.ts` + `mock-inventory.ts` (за зразком marketing; mock реалізує FEFO, інваріанти й коди §32.8), `use-inventory.ts`. `Idempotency-Key` = `crypto.randomUUID()` на відкриття форми й повторно використовується при повторі того самого надсилання.
+- **Чиста логіка + vitest:** статус партії й `daysToExpiry` від переданої дати (не від реального годинника), `isLow`, форматування кількостей з одиницями й десятковою комою, перевірка цілих для `pcs|pack`, мапінг кодів помилок, гейтинг меню.
+- Перевірки: `npx tsc --noEmit`, `npm.cmd run lint`, `npm.cmd test`, mock `NEXT_PUBLIC_USE_MOCK=1`. a11y: таблиці з заголовками, форми з `label`/`aria-describedby` для помилок рядків, модальні діалоги через `ModalDialog`.
+
+### 32.10 Безпека, логи
+
+- RLS FORCE на всіх таблицях §32.3; композитні FK не дають посилатися на товар, заклад, партію чи користувача іншого tenant.
+- IDOR: кожен `locationId`/`batchId`/`operationId`/`stocktakeId` перевіряється на належність до scope актора в Application; поза scope — `404` без розкриття.
+- Закупівельні ціни: лише за `inventory.costs` (§32.2); не логуються.
+- Постачальники: контакти (`contactName`, `phone`, `email`) — ділові дані, видимі лише `inventory.manage ≥ own`; не логуються.
+- Журнал і операції append-only (REVOKE); коригування — лише новими рухами.
+- Логи: `inventory_operation kind={kind} op={id} location={id} to={id|-} lines={n} user={id} replayed={bool}`, `inventory_stocktake_posted id={id} location={id} adjustments={n} user={id}`, `inventory_catalog_changed entity={product|supplier|setting} id={id} user={id}`. Без цін, кількостей у грошах, контактів постачальників, тіл запитів.
+
+### 32.11 Тест-вимоги (етап 1)
+
+Час — лише через `TimeProvider` / `FakeTimeProvider` (backend) і передану дату (frontend); жоден тест не залежить від реального годинника.
+
+1. **Міграція (TASK-876):** Up → Down → Up на копії; `Down` відмовляє за непорожнього журналу; `DO`-блок FORCE; `schema-drift` і `staging-grants-sync` зелені.
+2. **RLS крос-tenant (TASK-876):** для кожної з 9 таблиць — tenant B не бачить і не змінює рядків tenant A; INSERT з чужим `tenant_id` відхиляє WITH CHECK; композитний FK не дає створити партію на товар/заклад іншого tenant (зразок `ServiceCostsRlsTests`).
+3. **Append-only (TASK-876):** app-роль отримує `permission denied` (SQLSTATE 42501) на `UPDATE`/`DELETE` у `beauty_stock_movements` і `beauty_stock_operations`; `INSERT`/`SELECT` працюють.
+4. **CHECK-и:** знак кількості за типом; `batches.quantity` ∈ `[0, initial_quantity]`; `levels.quantity ≥ 0`; узгодженість `kind`/`to_location_id`/`reason`/`stocktake_id`; часткова унікальність штрихкоду й відкритої інвентаризації; ідемпотентність (обидва хеші або жоден).
+5. **FEFO (TASK-877, на фейку і на БД):** порядок `expires_on`, `NULLS LAST`, `received_at`, `id`; списання бере прострочені першими; переміщення пропускає прострочені й рахує `available` без них; явна партія; межа «прострочено» на локальній півночі закладу (заклад `Europe/Kyiv`, `FakeTimeProvider` за хвилину до й після півночі за Києвом, коли UTC-дата інша).
+6. **Переміщення атомарне:** нові партії мають ті самі `expires_on`, `unit_cost`, `received_at`, `source_batch_id`; сума ніг = 0; збій на будь-якому рядку відкочує всю операцію (жодного руху, рівні без змін).
+7. **Інвентаризація:** надлишок → нова партія; нестача → FEFO; нуль → без рухів і без операції; `stocktake_empty`; `expiry_required` для `trackExpiry`; друга чернетка → `409 stocktake_in_progress`; `409 stocktake_version_conflict`; повторне проведення → `409 stocktake_closed`; рух під час чернетки враховано (різниця до рівня на момент проведення).
+8. **Заборона від'ємного залишку:** списання/переміщення понад наявне → `422 insufficient_stock` з `available`; рівні й партії без змін.
+9. **Гонки (зразок `ConcurrencyTests`, реальна БД):** два паралельні списання останньої одиниці → один `201`, один `422 insufficient_stock`, рівень 0; зустрічні переміщення A→B і B→A одного товару паралельно → обидва завершуються без дедлоку; паралельні запити з тим самим `Idempotency-Key` → одна операція, другий `200` + `Idempotent-Replayed`; паралельне проведення інвентаризації і списання → інваріанти тримаються.
+10. **Інваріанти:** після кожного сценарію 5–9 `level = Σ batches = Σ movements` для кожної пари.
+11. **Ідемпотентність:** повтор з тим самим тілом → той самий `id`, `200`; з іншим тілом → `422 idempotency_key_reused`; без ключа → `422 idempotency_key_required`.
+12. **Права й модуль (HTTP, `AuthApiFixture` з `beauty_inventory`):** модуль вимкнено → `403 module_disabled` раніше за `forbidden_role`; specialist на `POST /receipts` → `403 forbidden_role {permission: "inventory.manage", required: "own"}`; `inventory.view = own` бачить лише заклади свого профілю, чужий заклад → `404 location_not_found`; без прив'язки профілю — порожні списки; переміщення в заклад поза scope для `manage = own` → `404`; admin без `revenue.view = all` не отримує `purchasePrice`/`unitCost`/`value` (поля **відсутні** в JSON); `unitCost` у тілі без `inventory.costs = edit` → `403 forbidden_role {permission: "inventory.costs", required: "edit"}`; вимкнений `beauty_analytics` знімає `inventory.costs` в `effective`; `Cache-Control: no-store`; `429 rate_limited`; рядки нових ендпоінтів у `AuthzBaselineMatrixTests`.
+13. **Каталог прав і backfill:** `PermissionCatalog.Version = 2`; обмеження `lte`/`requires`; пресети; backfill — owner без рядків, admin з кастомним `revenue.view = none` отримує `inventory.costs = none`, знімки запрошень доповнено, `access_version + 1`, аудит `migrated`, повторний запуск нічого не змінює.
+14. **Валідація:** кожен код §32.7 має щонайменше один тест (зокрема ціле для `pcs|pack`, `unit_locked`, `barcode_taken`, `invalid_expiry`).
+15. **Frontend:** vitest чистої логіки й мапінгу кодів; гейтинг меню за модулем і `inventory.view`; mock-клієнт відтворює FEFO та `insufficient_stock`.
+
+### 32.12 Задачі етапу 1 (TASK-875…881)
+
+| Задача | Агент | Обсяг | Залежить / артефакти |
+|---|---|---|---|
+| TASK-875 | project-architect | ADR-025 + цей розділ | — → `API-CONTRACT-INVENTORY-V1`; human gate ADR |
+| TASK-876 | database-engineer (skill `beauty-schema`) | міграція `beauty_inventory` за §32.3, EF-сутності й конфігурація, RLS FORCE, CHECK, REVOKE у `setup-db.ps1` і `grants.sql`, `schema.sql` (без BOM, LF), тести §32.11 п.1–4, runbook відкату | `API-CONTRACT-INVENTORY-V1`, ADR-025 `accepted` → `ARTIFACT-INVENTORY-SCHEMA-V1` |
+| TASK-877 | backend-developer (skill `beauty-booking-api`) | `Features/BeautyInventory` (`IInventoryStore`, сервіси, `Result<T>`), `EfBeautyStore.Inventory.cs`, DI, `InventoryController`, throttle, права §32.2 (`PermissionKeys`/`PermissionCatalog`/`PermissionPresets`, `Version = 2`) + міграція backfill, `BeautyModules.Inventory`, dev-скрипти модуля, тести §32.11 п.5–14 | `ARTIFACT-INVENTORY-SCHEMA-V1` → `ARTIFACT-INVENTORY-API-V1` |
+| TASK-878 | frontend-developer (skill `beauty-admin-ui`) | §32.9: mock одразу, http після 877 | `API-CONTRACT-INVENTORY-V1` (mock) → `ARTIFACT-INVENTORY-API-V1` (http) |
+| TASK-879 | qa-engineer (skill `beauty-qa`) | таблиця відповідності ADR-025 / §32 → тести; сценарії §32.11; ручний чекліст mock | TASK-877, TASK-878 |
+| TASK-880 | security-reviewer (skill `beauty-security`) | рев'ю за §32.10: RLS/IDOR за `locationId`, межа `inventory.costs`, append-only, синхронність GRANT, PII постачальників; звіт у `docs/reviews/` | TASK-879 |
+| TASK-881 | documentation-writer (skill `beauty-docs`) | статус §32, `database.md`, runbook (увімкнення модуля, backfill, відкат, gate), примітка «уточнено ADR-025» в ADR-010 §2.11, `known-issues.md` за потреби | TASK-880 |
+
+DAG: 875 → 876 → {877 ∥ 878} → 879 → 880 → 881; 878 стартує на mock після 875. Human gates: прийняття ADR-025; міграція + backfill на staging/prod; увімкнення модуля реальному бізнесу; мердж `integrate/*`.
+
+### 32.13 Етапи 2–3 (орієнтовно; **не специфіковано в цій версії**)
+
+Точні таблиці, DTO, коди й тести з'являться окремою версією цього розділу перед стартом етапу. Нижче — лише рамка з ADR-025 §2.7–2.9.
+
+**Етап 2 — автосписання й сповіщення:**
+- `beauty_service_materials` (послуга, товар `salon_use|both`, кількість; мережа + override закладу на весь набір); API в межах `services.catalog = edit` ∧ `inventory.manage = all` (уточнити).
+- Автосписання в `CompleteWithCostSnapshotAsync` у тій самій транзакції після умовного `UPDATE` статусу; ідемпотентно за `appointment_id`; лише з увімкненим модулем; знімок норм на візиті; прострочені партії не беруться.
+- Нестача: візит завершується, непокрита частина — рух `service_consumption` без партії з ознакою нестачі, дефіцит на рівні (залишок від'ємний), погашення наступним надходженням, сповіщення `shortage`. CHECK `levels.quantity ≥ 0` замінюється моделлю дефіциту.
+- `beauty_staff_alerts` (`low_stock|expiring|shortage`, `dedupe_key`), бейдж за зразком `InboxBadge`, екран сповіщень; воркер `pollInventory` (`beauty.inventory-alerts`, щогодини, «раз на добу» за локальним часом закладу, `WORKER_INVENTORY_ENABLED`, пороги 30/14/7); GRANT воркеру мінімальні.
+- Telegram власнику: прив'язка чату (одноразовий deep-link), повідомлення без ПД клієнтів, outbox + `HttpChannelSender`; вимкнено поза dev до закриття L3 / Q13.
+- Фіксована собівартість ADR-014 не змінюється.
+
+**Етап 3 — продаж, виручка, ПРРО/РРО:**
+- `beauty_product_sales` + рядки, ціна продажу мережа + override закладу, FEFO без прострочених, від'ємний залишок заборонено; ключ `inventory.sales` (`catalogVersion 3`, backfill).
+- Аналітика: необов'язкові `productRevenue` / `productCost` поряд із `revenue`; семантика записів і чистого доходу ADR-014 без змін.
+- `IFiscalService` без провайдера + mock; прод-вмикання продажу — лише після human gate L1/L2 (ADR-025 §7.2) і окремого ADR провайдера.
+
+### 32.14 Відкриті питання
+
+Продуктові Q1–Q14 і юридичні L1–L4 — ADR-025 §7. У цьому контракті застосовано дефолти: Q1 (deputy `manage = all`), Q2 (specialist `view = own`), Q3 (`inventory.sales` в етапі 3), Q4 (цілі для `pcs|pack`), Q5 (миттєве переміщення), Q6 (виправлення через `correction`), Q7 (без прострочених у переміщенні), Q8 (рух під час інвентаризації не блокується), Q9 (`inventory.costs` вимагає `revenue.view = all`), Q10 (категорія — вільний текст). Зміна дефолту — правкою §32 до старту TASK-876/877.

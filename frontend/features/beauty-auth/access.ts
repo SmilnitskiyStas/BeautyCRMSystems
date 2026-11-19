@@ -5,7 +5,7 @@ import type { Role, SessionUser } from "./types";
  * Рівні в кожному ключі впорядковані за зростанням; перший є найнижчим (fail-closed).
  */
 
-/** Каталог `catalogVersion = 1` (§30.2): ключ -> рівні за зростанням. Дзеркало `GET /api/access/catalog`. */
+/** Каталог `catalogVersion = 2` (§30.2, §32.2): ключ -> рівні за зростанням. Дзеркало `GET /api/access/catalog`. */
 export const PERMISSION_LEVELS = {
   "calendar.view": ["none", "own", "all"],
   "calendar.manage": ["none", "own", "all"],
@@ -25,6 +25,10 @@ export const PERMISSION_LEVELS = {
   "locations.access": ["own", "all", "edit"],
   "settings.general": ["none", "view", "edit"],
   "team.manage": ["none", "manage"],
+  // Склад (ADR-025, §32.2): модуль `beauty_inventory`; `catalogVersion = 2`.
+  "inventory.view": ["none", "own", "all"],
+  "inventory.manage": ["none", "own", "all"],
+  "inventory.costs": ["none", "view", "edit"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type PermissionKey = keyof typeof PERMISSION_LEVELS;
@@ -40,6 +44,7 @@ const SPECIALIST: Record<PermissionKey, string> = {
   "channels.inbox": "none", "channels.settings": "none", "ai.use": "none", "ai.settings": "none",
   "services.catalog": "view", "marketing.campaigns": "none", "staff.access": "own", "locations.access": "own",
   "settings.general": "none", "team.manage": "none",
+  "inventory.view": "own", "inventory.manage": "none", "inventory.costs": "none",
 };
 const ADMIN: Record<PermissionKey, string> = {
   "calendar.view": "all", "calendar.manage": "all", "clients.view": "all", "clients.edit": "all",
@@ -47,12 +52,14 @@ const ADMIN: Record<PermissionKey, string> = {
   "channels.inbox": "reply", "channels.settings": "edit", "ai.use": "use", "ai.settings": "edit",
   "services.catalog": "edit", "marketing.campaigns": "edit", "staff.access": "edit", "locations.access": "edit",
   "settings.general": "view", "team.manage": "manage",
+  "inventory.view": "all", "inventory.manage": "all", "inventory.costs": "edit",
 };
 const DEPUTY: Record<PermissionKey, string> = {
   ...ADMIN,
   "revenue.view": "none", "revenue.costs": "none", "channels.settings": "none", "ai.settings": "none",
   "services.catalog": "view", "marketing.campaigns": "none", "staff.access": "all", "locations.access": "all",
   "settings.general": "none", "team.manage": "none",
+  "inventory.costs": "none",
 };
 const OWNER: Record<PermissionKey, string> = { ...ADMIN, "settings.general": "edit" };
 
@@ -184,7 +191,7 @@ export function mockAccessCatalog(): AccessCatalog {
     })),
   });
   return {
-    catalogVersion: 1,
+    catalogVersion: 2,
     roles: [
       { code: "owner", rank: 4, tenantAssignable: false },
       { code: "admin", rank: 3, tenantAssignable: true },
@@ -203,6 +210,7 @@ export function mockAccessCatalog(): AccessCatalog {
       block("locations", ["/beauty/locations"], ["locations.access"], ["beauty_booking"]),
       block("settings", ["/beauty/settings"], ["settings.general"], []),
       block("team", ["/beauty/team"], ["team.manage"], []),
+      block("inventory", ["/beauty/inventory"], ["inventory.view", "inventory.manage", "inventory.costs"], ["beauty_inventory"]),
     ],
     constraints: [
       { type: "lte", key: "calendar.manage", other: "calendar.view" },
@@ -211,6 +219,8 @@ export function mockAccessCatalog(): AccessCatalog {
       { type: "requires", key: "revenue.costs", other: "revenue.view", level: "all" },
       { type: "requires", key: "marketing.campaigns", other: "clients.view", level: "all" },
       { type: "roleCeiling", key: "team.manage", roles: ["admin"] },
+      { type: "lte", key: "inventory.manage", other: "inventory.view" },
+      { type: "requires", key: "inventory.costs", other: "revenue.view", level: "all" },
     ],
     presets: { admin: { ...ROLE_PRESETS.admin }, deputy: { ...ROLE_PRESETS.deputy }, specialist: { ...ROLE_PRESETS.specialist } },
     reservedToOwner: ["ai.provider_keys", "ai.mode_auto", "cancellation.policy", "team.admins", "access.audit"],

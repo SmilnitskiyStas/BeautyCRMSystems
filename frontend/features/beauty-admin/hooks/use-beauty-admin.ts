@@ -57,6 +57,22 @@ export const beautyKeys = {
   aiRequests: ["beauty", "ai", "requests"] as const,
   aiChat: ["beauty", "ai", "chat"] as const,
   aiPlan: (goal: PromoGoalId) => ["beauty", "ai", "plan", goal] as const,
+  // §32: склад. Усі ключі під `["beauty","inventory"]`, тож мутація інвалідує групу одним викликом.
+  inventory: {
+    all: ["beauty", "inventory"] as const,
+    scope: ["beauty", "inventory", "scope"] as const,
+    products: (q: object) => ["beauty", "inventory", "products", q] as const,
+    product: (id: string) => ["beauty", "inventory", "product", id] as const,
+    categories: ["beauty", "inventory", "categories"] as const,
+    suppliers: (q: object) => ["beauty", "inventory", "suppliers", q] as const,
+    stock: (q: object) => ["beauty", "inventory", "stock", q] as const,
+    summary: (q: object) => ["beauty", "inventory", "summary", q] as const,
+    batches: (q: object) => ["beauty", "inventory", "batches", q] as const,
+    movements: (q: object) => ["beauty", "inventory", "movements", q] as const,
+    operations: (q: object) => ["beauty", "inventory", "operations", q] as const,
+    stocktakes: (q: object) => ["beauty", "inventory", "stocktakes", q] as const,
+    stocktake: (id: string) => ["beauty", "inventory", "stocktake", id] as const,
+  },
 };
 
 export const useLocations = (enabled = true) =>

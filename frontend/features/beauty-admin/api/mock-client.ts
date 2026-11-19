@@ -19,6 +19,7 @@ import { createMockAi } from "./mock-ai";
 import { createMockAnalytics } from "./mock-analytics";
 import { createMockCosts } from "./mock-costs";
 import { createMockInbox } from "./mock-inbox";
+import { createMockInventory } from "./mock-inventory";
 import { createMockMarketing } from "./mock-marketing";
 import { createMockTeam } from "./mock-team";
 import { createMockPhones } from "./mock-phone";
@@ -310,6 +311,13 @@ const mockMarketing = createMockMarketing({
   priceOf: (id) => PRICE_LIST.find((s) => s.serviceId === id)?.price ?? 1000,
 });
 
+/** §32: склад. Права за роллю (пресети §32.2); майстер бачить лише заклади свого профілю (демо-майстер `m`). */
+const mockInventory = createMockInventory({
+  role: mockRole,
+  locations: () => locations,
+  specialistLocationIds: () => staff.find((m) => m.id === "m")?.locations.map((l) => l.locationId) ?? [],
+});
+
 const mockAi = createMockAi({ role: mockRole });
 /** §25: телефони клієнтів; один екземпляр для картки клієнта, «Дзвінків» і inbox. */
 const mockPhones = createMockPhones({ role: mockRole });
@@ -348,6 +356,7 @@ export const mockBeautyApi: BeautyAdminApi = {
   testAiKey: mockAi.testAiKey,
   getAiUsage: mockAi.getAiUsage,
 
+  ...mockInventory,
   getServiceCosts: mockCosts.getServiceCosts,
   getServiceCostDetail: mockCosts.getServiceCostDetail,
   setServiceCost: mockCosts.setServiceCost,

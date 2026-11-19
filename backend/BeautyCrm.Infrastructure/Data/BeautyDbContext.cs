@@ -69,6 +69,17 @@ public class BeautyDbContext : DbContext
     public DbSet<Coupon> Coupons => Set<Coupon>();
     public DbSet<CouponRedemption> CouponRedemptions => Set<CouponRedemption>();
 
+    // Склад (TASK-876, §32.3, ADR-025)
+    public DbSet<Supplier> Suppliers => Set<Supplier>();
+    public DbSet<Product> Products => Set<Product>();
+    public DbSet<ProductLocationSetting> ProductLocationSettings => Set<ProductLocationSetting>();
+    public DbSet<StockLevel> StockLevels => Set<StockLevel>();
+    public DbSet<StockOperation> StockOperations => Set<StockOperation>();
+    public DbSet<StockBatch> StockBatches => Set<StockBatch>();
+    public DbSet<StockMovement> StockMovements => Set<StockMovement>();
+    public DbSet<Stocktake> Stocktakes => Set<Stocktake>();
+    public DbSet<StocktakeLine> StocktakeLines => Set<StocktakeLine>();
+
     // auth (TASK-684)
     public DbSet<Tenant> Tenants => Set<Tenant>();
     public DbSet<User> Users => Set<User>();
@@ -613,6 +624,7 @@ public class BeautyDbContext : DbContext
         ConfigureAiSettings(mb);
         ConfigureServiceCosts(mb);
         ConfigureMarketing(mb);
+        ConfigureInventory(mb);
         ConfigureAuth(mb);
         ConfigurePlatform(mb);
     }
@@ -663,6 +675,245 @@ public class BeautyDbContext : DbContext
             b.HasIndex(x => new { x.TenantId, x.ServiceId, x.CreatedAt });
             b.HasIndex(x => new { x.TenantId, x.LocationId });
             b.HasIndex(x => new { x.TenantId, x.UserId });
+        });
+    }
+
+    // ---------- Склад (TASK-876, §32.3, ADR-025; RLS FORCE і ручні індекси в міграції beauty_inventory) ----------
+
+    /// <summary>Композитний tenant-safe FK (tenant_id, fk) -> (tenant_id, id) без навігації.</summary>
+    private static void FkTo<TDep, TPrin>(EntityTypeBuilder<TDep> b, string fkProperty, DeleteBehavior onDelete)
+        where TDep : class where TPrin : class =>
+        b.HasOne<TPrin>().WithMany().HasForeignKey("TenantId", fkProperty).HasPrincipalKey("TenantId", "Id").OnDelete(onDelete);
+
+    /// <summary>Таблиці без updated_at (append-only та заголовки): ключ і AK (tenant_id, id).</summary>
+    private static void KeyOnly<T>(EntityTypeBuilder<T> b, string table, Action<TableBuilder<T>> configureTable) where T : class, ITenantEntity
+    {
+        b.ToTable(table, configureTable);
+        b.HasKey("Id");
+        b.Property<Guid>("Id").HasDefaultValueSql("gen_random_uuid()");
+        b.HasAlternateKey("TenantId", "Id");
+    }
+
+    private static void ConfigureInventory(ModelBuilder mb)
+    {
+        const string Money = "{0} IS NULL OR {0} BETWEEN 0 AND 1000000";
+
+        mb.Entity<Supplier>(b =>
+        {
+            Base(b, "beauty_suppliers", t =>
+                t.HasCheckConstraint("ck_beauty_suppliers_name", "char_length(btrim(name)) BETWEEN 1 AND 200"));
+            b.Property(x => x.Name).HasMaxLength(200);
+            b.Property(x => x.ContactName).HasMaxLength(200);
+            b.Property(x => x.Phone).HasMaxLength(32);
+            b.Property(x => x.Email).HasMaxLength(320);
+            b.Property(x => x.Note).HasMaxLength(500);
+            b.Property(x => x.IsActive).HasDefaultValue(true);
+            // + ux_beauty_suppliers_name ON (tenant_id, lower(name)) - вираз-індекс, лише в SQL міграції
+        });
+
+        mb.Entity<Product>(b =>
+        {
+            Base(b, "beauty_products", t =>
+            {
+                Check<ProductUnit>(t, "beauty_products", "unit");
+                Check<ProductPurpose>(t, "beauty_products", "purpose");
+                t.HasCheckConstraint("ck_beauty_products_name", "char_length(btrim(name)) BETWEEN 1 AND 200");
+                t.HasCheckConstraint("ck_beauty_products_barcode", "barcode IS NULL OR barcode ~ '^[0-9A-Za-z._-]{1,64}$'");
+                t.HasCheckConstraint("ck_beauty_products_purchase_price", string.Format(Money, "purchase_price"));
+                t.HasCheckConstraint("ck_beauty_products_min_stock", "min_stock IS NULL OR min_stock >= 0");
+            });
+            b.Property(x => x.Name).HasMaxLength(200);
+            b.Property(x => x.Category).HasMaxLength(100);
+            Enum(b.Property(x => x.Unit)).HasMaxLength(8);
+            b.Property(x => x.Barcode).HasMaxLength(64);
+            Enum(b.Property(x => x.Purpose)).HasMaxLength(16);
+            b.Property(x => x.PurchasePrice).HasPrecision(12, 2);
+            b.Property(x => x.MinStock).HasPrecision(14, 3);
+            b.Property(x => x.TrackExpiry).HasDefaultValue(false);
+            b.Property(x => x.IsActive).HasDefaultValue(true);
+            b.Property(x => x.Note).HasMaxLength(500);
+            FkTo<Product, Supplier>(b, "SupplierId", DeleteBehavior.Restrict);
+            FkTo<Product, User>(b, "UpdatedByUserId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.Barcode }).IsUnique().HasDatabaseName("ux_beauty_products_barcode")
+                .HasFilter("barcode IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.IsActive, x.Name }).HasDatabaseName("ix_beauty_products_active_name");
+            b.HasIndex(x => new { x.TenantId, x.SupplierId }).HasDatabaseName("ix_beauty_products_supplier");
+            b.HasIndex(x => new { x.TenantId, x.UpdatedByUserId });
+        });
+
+        mb.Entity<ProductLocationSetting>(b =>
+        {
+            Base(b, "beauty_product_location_settings", t =>
+                t.HasCheckConstraint("ck_beauty_product_location_settings_min_stock", "min_stock IS NULL OR min_stock >= 0"));
+            b.Property(x => x.MinStock).HasPrecision(14, 3);
+            b.Property(x => x.IsEnabled).HasDefaultValue(true);
+            FkTo<ProductLocationSetting, Product>(b, "ProductId", DeleteBehavior.Cascade);
+            FkTo<ProductLocationSetting, Location>(b, "LocationId", DeleteBehavior.Cascade);
+            FkTo<ProductLocationSetting, User>(b, "UpdatedByUserId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.ProductId, x.LocationId }).IsUnique().HasDatabaseName("ux_beauty_product_location_settings_pair");
+            b.HasIndex(x => new { x.TenantId, x.LocationId });
+            b.HasIndex(x => new { x.TenantId, x.UpdatedByUserId });
+        });
+
+        mb.Entity<StockLevel>(b =>
+        {
+            Base(b, "beauty_stock_levels", t =>
+                t.HasCheckConstraint("ck_beauty_stock_levels_quantity", "quantity >= 0"));
+            b.Property(x => x.Quantity).HasPrecision(14, 3).HasDefaultValue(0m);
+            FkTo<StockLevel, Location>(b, "LocationId", DeleteBehavior.Restrict);
+            FkTo<StockLevel, Product>(b, "ProductId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.LocationId, x.ProductId }).IsUnique().HasDatabaseName("ux_beauty_stock_levels_pair");
+            b.HasIndex(x => new { x.TenantId, x.ProductId });
+        });
+
+        mb.Entity<StockOperation>(b =>
+        {
+            KeyOnly(b, "beauty_stock_operations", t =>
+            {
+                Check<StockOperationKind>(t, "beauty_stock_operations", "kind");
+                t.HasCheckConstraint("ck_beauty_stock_operations_transfer_target", "(kind = 'transfer') = (to_location_id IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_stock_operations_transfer_distinct", "to_location_id IS NULL OR to_location_id <> location_id");
+                t.HasCheckConstraint("ck_beauty_stock_operations_receipt_fields",
+                    "kind = 'receipt' OR (supplier_id IS NULL AND document_number IS NULL AND received_on IS NULL)");
+                t.HasCheckConstraint("ck_beauty_stock_operations_reason",
+                    $"reason IS NULL OR {EnumText<WriteOffReason>.CheckSql("reason")}");
+                t.HasCheckConstraint("ck_beauty_stock_operations_reason_kind", "(kind = 'write_off') = (reason IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_stock_operations_stocktake", "(kind = 'stocktake') = (stocktake_id IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_stock_operations_idempotency",
+                    "(idempotency_key_hash IS NULL) = (idempotency_request_hash IS NULL)");
+            });
+            Enum(b.Property(x => x.Kind)).HasMaxLength(24);
+            b.Property(x => x.Reason).HasConversion(new EnumMemberConverter<WriteOffReason>()).HasMaxLength(16);
+            b.Property(x => x.DocumentNumber).HasMaxLength(64);
+            b.Property(x => x.ReceivedOn).HasColumnType("date");
+            b.Property(x => x.Note).HasMaxLength(500);
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            b.Property(x => x.IdempotencyKeyHash).HasMaxLength(64);
+            b.Property(x => x.IdempotencyRequestHash).HasMaxLength(64);
+            FkTo<StockOperation, Location>(b, "LocationId", DeleteBehavior.Restrict);
+            FkTo<StockOperation, Location>(b, "ToLocationId", DeleteBehavior.Restrict);
+            FkTo<StockOperation, Supplier>(b, "SupplierId", DeleteBehavior.Restrict);
+            FkTo<StockOperation, Stocktake>(b, "StocktakeId", DeleteBehavior.Restrict);
+            FkTo<StockOperation, User>(b, "CreatedByUserId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.StocktakeId }).IsUnique().HasDatabaseName("ux_beauty_stock_operations_stocktake")
+                .HasFilter("stocktake_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.IdempotencyKeyHash }).IsUnique().HasDatabaseName("ux_beauty_stock_operations_idempotency")
+                .HasFilter("idempotency_key_hash IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.LocationId, x.CreatedAt, x.Id }).IsDescending(false, false, true, true)
+                .HasDatabaseName("ix_beauty_stock_operations_location_created");
+            b.HasIndex(x => new { x.TenantId, x.ToLocationId, x.CreatedAt }).IsDescending(false, false, true)
+                .HasDatabaseName("ix_beauty_stock_operations_to_location_created").HasFilter("to_location_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.SupplierId }).HasFilter("supplier_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.CreatedByUserId }).HasFilter("created_by_user_id IS NOT NULL");
+        });
+
+        mb.Entity<StockBatch>(b =>
+        {
+            Base(b, "beauty_stock_batches", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_stock_batches_expires_on",
+                    "expires_on IS NULL OR expires_on BETWEEN DATE '2000-01-01' AND DATE '2100-12-31'");
+                t.HasCheckConstraint("ck_beauty_stock_batches_initial_quantity", "initial_quantity > 0");
+                t.HasCheckConstraint("ck_beauty_stock_batches_quantity", "quantity >= 0 AND quantity <= initial_quantity");
+                t.HasCheckConstraint("ck_beauty_stock_batches_unit_cost", string.Format(Money, "unit_cost"));
+            });
+            b.Property(x => x.ExpiresOn).HasColumnType("date");
+            b.Property(x => x.LotNumber).HasMaxLength(64);
+            b.Property(x => x.InitialQuantity).HasPrecision(14, 3);
+            b.Property(x => x.Quantity).HasPrecision(14, 3);
+            b.Property(x => x.UnitCost).HasPrecision(12, 2);
+            b.HasAlternateKey("TenantId", "Id", "ProductId", "LocationId"); // ціль складеного FK рухів (рух = партія за товаром/закладом)
+            FkTo<StockBatch, Location>(b, "LocationId", DeleteBehavior.Restrict);
+            FkTo<StockBatch, Product>(b, "ProductId", DeleteBehavior.Restrict);
+            FkTo<StockBatch, StockOperation>(b, "OperationId", DeleteBehavior.Restrict);
+            FkTo<StockBatch, StockBatch>(b, "SourceBatchId", DeleteBehavior.Restrict);
+            FkTo<StockBatch, Supplier>(b, "SupplierId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.LocationId, x.ProductId, x.ExpiresOn, x.ReceivedAt, x.Id })
+                .HasDatabaseName("ix_beauty_stock_batches_fefo").HasFilter("quantity > 0");
+            b.HasIndex(x => new { x.TenantId, x.LocationId, x.ExpiresOn }).HasDatabaseName("ix_beauty_stock_batches_expiry")
+                .HasFilter("quantity > 0 AND expires_on IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.ProductId });
+            b.HasIndex(x => new { x.TenantId, x.OperationId });
+            b.HasIndex(x => new { x.TenantId, x.SourceBatchId }).HasFilter("source_batch_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.SupplierId }).HasFilter("supplier_id IS NOT NULL");
+        });
+
+        mb.Entity<StockMovement>(b =>
+        {
+            KeyOnly(b, "beauty_stock_movements", t =>
+            {
+                Check<StockMovementType>(t, "beauty_stock_movements", "type");
+                t.HasCheckConstraint("ck_beauty_stock_movements_batch", "batch_id IS NOT NULL OR type = 'service_consumption'");
+                t.HasCheckConstraint("ck_beauty_stock_movements_quantity_sign",
+                    "(type IN ('receipt', 'transfer_in') AND quantity > 0) " +
+                    "OR (type IN ('write_off', 'transfer_out', 'service_consumption', 'sale') AND quantity < 0) " +
+                    "OR (type = 'stocktake_adjust' AND quantity <> 0)");
+            });
+            Enum(b.Property(x => x.Type)).HasMaxLength(24);
+            b.Property(x => x.Quantity).HasPrecision(14, 3);
+            b.Property(x => x.UnitCost).HasPrecision(12, 2);
+            b.Property(x => x.OccurredAt).HasDefaultValueSql("now()");
+            FkTo<StockMovement, StockOperation>(b, "OperationId", DeleteBehavior.Restrict);
+            FkTo<StockMovement, Location>(b, "LocationId", DeleteBehavior.Restrict);
+            FkTo<StockMovement, Product>(b, "ProductId", DeleteBehavior.Restrict);
+            // рух і його партія збігаються за товаром і закладом: композитний FK (MATCH SIMPLE: batch_id NULL не перевіряється)
+            b.HasOne<StockBatch>().WithMany().HasForeignKey("TenantId", "BatchId", "ProductId", "LocationId")
+                .HasPrincipalKey("TenantId", "Id", "ProductId", "LocationId").OnDelete(DeleteBehavior.Restrict);
+            FkTo<StockMovement, User>(b, "CreatedByUserId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.LocationId, x.OccurredAt, x.Id }).IsDescending(false, false, true, true)
+                .HasDatabaseName("ix_beauty_stock_movements_location_occurred");
+            b.HasIndex(x => new { x.TenantId, x.ProductId, x.OccurredAt }).IsDescending(false, false, true)
+                .HasDatabaseName("ix_beauty_stock_movements_product_occurred");
+            b.HasIndex(x => new { x.TenantId, x.OperationId }).HasDatabaseName("ix_beauty_stock_movements_operation");
+            b.HasIndex(x => new { x.TenantId, x.BatchId, x.ProductId, x.LocationId }).HasDatabaseName("ix_beauty_stock_movements_batch");
+            b.HasIndex(x => new { x.TenantId, x.CreatedByUserId }).HasFilter("created_by_user_id IS NOT NULL");
+        });
+
+        mb.Entity<Stocktake>(b =>
+        {
+            KeyOnly(b, "beauty_stocktakes", t =>
+            {
+                Check<StocktakeStatus>(t, "beauty_stocktakes", "status");
+                t.HasCheckConstraint("ck_beauty_stocktakes_version", "version >= 1");
+                t.HasCheckConstraint("ck_beauty_stocktakes_posted",
+                    "(status = 'posted') = (posted_at IS NOT NULL AND posted_by_user_id IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_stocktakes_cancelled", "(status = 'cancelled') = (cancelled_at IS NOT NULL)");
+            });
+            Enum(b.Property(x => x.Status)).HasMaxLength(16).HasDefaultValue(StocktakeStatus.Draft);
+            b.Property(x => x.Note).HasMaxLength(500);
+            b.Property(x => x.Version).HasDefaultValue(1);
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            FkTo<Stocktake, Location>(b, "LocationId", DeleteBehavior.Restrict);
+            FkTo<Stocktake, User>(b, "CreatedByUserId", DeleteBehavior.Restrict);
+            FkTo<Stocktake, User>(b, "PostedByUserId", DeleteBehavior.Restrict);
+            FkTo<Stocktake, User>(b, "CancelledByUserId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.LocationId }).IsUnique().HasDatabaseName("ux_beauty_stocktakes_open")
+                .HasFilter("status = 'draft'");
+            b.HasIndex(x => new { x.TenantId, x.LocationId, x.CreatedAt }).IsDescending(false, false, true)
+                .HasDatabaseName("ix_beauty_stocktakes_location_created");
+            b.HasIndex(x => new { x.TenantId, x.CreatedByUserId });
+            b.HasIndex(x => new { x.TenantId, x.PostedByUserId }).HasFilter("posted_by_user_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.CancelledByUserId }).HasFilter("cancelled_by_user_id IS NOT NULL");
+        });
+
+        mb.Entity<StocktakeLine>(b =>
+        {
+            Base(b, "beauty_stocktake_lines", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_stocktake_lines_counted", "counted_quantity IS NULL OR counted_quantity >= 0");
+                t.HasCheckConstraint("ck_beauty_stocktake_lines_expected", "expected_quantity >= 0");
+                t.HasCheckConstraint("ck_beauty_stocktake_lines_surplus_expires_on",
+                    "surplus_expires_on IS NULL OR surplus_expires_on BETWEEN DATE '2000-01-01' AND DATE '2100-12-31'");
+            });
+            b.Property(x => x.CountedQuantity).HasPrecision(14, 3);
+            b.Property(x => x.ExpectedQuantity).HasPrecision(14, 3);
+            b.Property(x => x.SurplusExpiresOn).HasColumnType("date");
+            FkTo<StocktakeLine, Stocktake>(b, "StocktakeId", DeleteBehavior.Cascade);
+            FkTo<StocktakeLine, Product>(b, "ProductId", DeleteBehavior.Restrict);
+            FkTo<StocktakeLine, User>(b, "UpdatedByUserId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.StocktakeId, x.ProductId }).IsUnique().HasDatabaseName("ux_beauty_stocktake_lines_pair");
+            b.HasIndex(x => new { x.TenantId, x.ProductId });
+            b.HasIndex(x => new { x.TenantId, x.UpdatedByUserId }).HasFilter("updated_by_user_id IS NOT NULL");
         });
     }
 

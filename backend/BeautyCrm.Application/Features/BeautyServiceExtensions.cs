@@ -36,6 +36,8 @@ public static class BeautyServiceExtensions
         services.AddScoped<AbsenceService>();
         services.AddScoped<OverviewService>();
         services.AddScoped<LocationService>();
+        services.TryAddSingleton(new BeautyCrm.Application.Features.BeautyInventory.InventoryOptions()); // ADR-025: склад
+        services.AddScoped<BeautyCrm.Application.Features.BeautyInventory.InventoryService>();
         return services;
     }
 }

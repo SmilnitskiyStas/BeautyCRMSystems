@@ -231,3 +231,31 @@ describe("F8: публічний mock бере дані з того самого
     expect(isClosedDate("2026-10-18", { closedWeekdays: [], workingHours: null })).toBe(false);
   });
 });
+
+describe("склад (§32): одні заклади й майстри з рештою демо", () => {
+  it("scope власника = усі заклади демо; майстер - лише заклади свого профілю й без цін", async () => {
+    const managed = await mockBeautyApi.getManagedLocations();
+    const owner = await mockBeautyApi.getInventoryScope();
+    expect(owner.locations.map((l) => l.id).sort()).toEqual(managed.map((l) => l.id).sort());
+    expect(owner.costs).toBe("edit");
+
+    process.env.NEXT_PUBLIC_MOCK_ROLE = "specialist";
+    const staff = await mockBeautyApi.getStaff();
+    const mine = staff.find((m) => m.id === "m")!.locations.map((l) => l.locationId).sort();
+    const own = await mockBeautyApi.getInventoryScope();
+    expect(own.locations.map((l) => l.id).sort()).toEqual(mine.filter((id) => managed.find((l) => l.id === id)?.isActive !== false).sort());
+    expect(own.costs).toBe("none");
+    expect(own.locations.every((l) => !l.canManage)).toBe(true);
+    const summary = await mockBeautyApi.getStockSummary();
+    expect(summary.locations.map((l) => l.id).sort()).toEqual(own.locations.map((l) => l.id).sort());
+  });
+
+  it("сид складу: залишки лише в закладах демо, терміни від «сьогодні» (є прострочена й близька партія)", async () => {
+    const ids = new Set((await mockBeautyApi.getManagedLocations()).map((l) => l.id));
+    const batches = (await mockBeautyApi.getBatches({ status: "all", take: 200 })).items;
+    expect(batches.length).toBeGreaterThan(0);
+    for (const b of batches) expect(ids.has(b.locationId)).toBe(true);
+    expect(batches.some((b) => b.status === "expired")).toBe(true);
+    expect(batches.some((b) => b.status === "expiring")).toBe(true);
+  });
+});
