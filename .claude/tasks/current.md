@@ -135,6 +135,19 @@
 | TASK-879 | qa-engineer | review | QA складу етап 1: таблиця відповідності ADR-025, RLS крос-tenant, FEFO, атомарність переміщень, інвентаризація, гонки, права/модуль | .claude/logs/tasks/TASK-879.md |
 | TASK-880 | security-reviewer | planned | Рев'ю безпеки складу етап 1: RLS/IDOR, межа inventory.costs, append-only журнал, синхронність GRANT, PII; звіт у docs/reviews/ | .claude/logs/tasks/TASK-880.md |
 | TASK-881 | documentation-writer | planned | Документація складу етап 1: §32 статус, database.md, runbook (модуль, backfill, відкат), known-issues | .claude/logs/tasks/TASK-881.md |
+| TASK-882 | project-architect | review (gate схеми D3) | Склад етап 2a: ADR-025 §11 (D1–D4) + контракт §32.15–§32.25 v0.36 (норми, дефіцит, автосписання, сповіщення, воркер), розбиття 883…894 | .claude/logs/tasks/TASK-882.md |
+| TASK-883 | database-engineer | blocked (gate схеми) | Склад 2a: міграція — набори/рядки норм, shortage_quantity, is_shortage + CHECK, appointment_id + UNIQUE, expected_shortage, beauty_staff_alerts, RLS, GRANT воркера, schema.sql, тести | .claude/logs/tasks/TASK-883.md |
+| TASK-884 | backend-developer | planned | Склад 2a: API норм матеріалів (§32.16), unit_locked/purpose_locked, тести | .claude/logs/tasks/TASK-884.md |
+| TASK-885 | backend-developer | planned | Склад 2a: автосписання в CompleteWithCostSnapshotAsync (SAVEPOINT, ідемпотентність за appointment_id), погашення дефіциту (надходження/переміщення/інвентаризація), розширення DTO, тести | .claude/logs/tasks/TASK-885.md |
+| TASK-886 | backend-developer | planned | Склад 2a: API сповіщень /alerts (список, read, read-all, unread-count), scope, тести | .claude/logs/tasks/TASK-886.md |
+| TASK-887 | backend-developer | planned | Склад 2a: воркер pollInventory (beauty.inventory-alerts щогодини, добовий гейт, 30/14/7/0, розв'язання, WORKER_INVENTORY_ENABLED), тести | .claude/logs/tasks/TASK-887.md |
+| TASK-888 | frontend-developer | planned | Склад 2a: норми в картці послуги, екран і бейдж сповіщень, дефіцит/сальдо в залишках, рух і інвентаризація; mock → http | .claude/logs/tasks/TASK-888.md |
+| TASK-889 | project-architect | blocked (gate L3) | Склад 2b: контракт Telegram власнику (прив'язка чату, відправка ботом салону за прапором) | .claude/logs/tasks/TASK-889.md |
+| TASK-890 | integrations-developer | blocked (889) | Склад 2b: прив'язка чату owner (deep-link токен), відправка алертів через outbox, міграція 2b | .claude/logs/tasks/TASK-890.md |
+| TASK-891 | frontend-developer | blocked (889) | Склад 2b: UI прив'язки/відв'язки Telegram у профілі власника | .claude/logs/tasks/TASK-891.md |
+| TASK-892 | qa-engineer | planned | QA складу 2a: таблиця відповідності §32.15–§32.22, наскрізні сценарії, ручний чекліст | .claude/logs/tasks/TASK-892.md |
+| TASK-893 | security-reviewer | planned | Рев'ю безпеки складу 2a: RLS/IDOR норм і алертів, append-only, GRANT воркера, ПД у алертах, транзакція завершення візиту | .claude/logs/tasks/TASK-893.md |
+| TASK-894 | documentation-writer | planned | Документація складу 2a: database.md, runbook (прапори, gate, відкат), known-issues, ADR-025 §10 | .claude/logs/tasks/TASK-894.md |
 
 ## ADR-017: індивідуальна ціна й тривалість майстра (TASK-804…814)
 
@@ -426,3 +439,25 @@ ADR: `.claude/docs/adr/ADR-018-shelfguard-control-plane-integration.md` (propose
 - **TASK-879 (qa-engineer).** Залежності: TASK-877, TASK-878. Критерії: таблиця відповідності ADR-025; сценарії FEFO, атомарне переміщення, інвентаризація, нестача (для етапу 1 — лише від'ємний залишок заборонено/422 за рішенням ADR), гонки, 403 `module_disabled`/`forbidden_role`; тести без залежності від реального годинника.
 - **TASK-880 (security-reviewer).** Залежності: TASK-879. Критерії: звіт у `docs/reviews/`; RLS і IDOR за `locationId`; межа `inventory.costs`; append-only журнал; синхронність GRANT (setup-db / grants.sql / staging-grants-sync тест); відсутність ПД і собівартості у відповідях для прав без `costs`.
 - **TASK-881 (documentation-writer).** Залежності: TASK-880. Критерії: §32 позначено статусом, `database.md` (нові таблиці, міграція), runbook (модуль, backfill, відкат, gate), `known-issues.md` за потреби; тригери workflow.
+
+## Склад beauty_inventory, етап 2a (TASK-882…888, 892…894) і 2b (TASK-889…891)
+
+Джерело: ADR-025 §11 (рішення власника D1–D4, 2026-11-19), контракт §32.15–§32.25 v0.36 (`API-CONTRACT-INVENTORY-V2`). Гілка `feature/inventory-stage2a`. Класифікація: feature, risk high (фінансово критичний потік завершення візиту, зміна CHECK append-only таблиці).
+
+**Human gates:** (1) схема 2a (D3: `shortage_quantity`, заміна `ck_beauty_stock_movements_batch`, нові таблиці) — до старту TASK-883; (2) мердж TASK-885 (зміна `CompleteWithCostSnapshotAsync`) — після TASK-893; (3) міграція 2a на staging/prod і `WORKER_INVENTORY_ENABLED=true` поза dev; (4) 2b — gate L3 (правова підстава `chat_id`), окремий PR; (5) мердж `integrate/*`.
+
+**DAG:** 882 → [gate 1] → 883 → {884 ∥ 885 ∥ 886 ∥ 887} → 892 → 893 → 894. 888: mock після 882, http після 884+885+886. 2b: [gate L3] ∧ 2a прийнято → 889 → {890 ∥ 891}.
+
+- **TASK-882 (project-architect).** Залежності: none. Критерії: ADR-025 §11 (D1–D4, альтернативи); контракт §32.15–§32.25 (норми, дефіцит з інваріантами, алгоритм автосписання, алерти, воркер, коди, тести, задачі); заглушка 2b; task log.
+- **TASK-883 (database-engineer, `beauty-schema`).** Залежності: TASK-882, gate 1. Артефакт: `ARTIFACT-INVENTORY-SCHEMA-V2`. Критерії: одна міграція за §32.16/§32.17/§32.19; RLS ENABLE+FORCE+`tenant_isolation` і `DO`-блок на 3 нових таблицях; CHECK і UNIQUE дослівно з контракту; тригери append-only не зачеплено; `Down` відмовляє за рухів `is_shortage` або операцій з `appointment_id`; GRANT воркера синхронно в `setup-db.ps1` і `grants.sql`; `schema.sql` (без BOM, LF); EF-сутності; тести §32.22 п.1; Up→Down→Up на копії.
+- **TASK-884 (backend-developer, `beauty-booking-api`).** Залежності: TASK-883. Артефакт: `ARTIFACT-INVENTORY-MATERIALS-API`. Критерії: 4 маршрути §32.16 (новий `EfBeautyStore.Materials.cs`), `[ReminderRoles(owner, admin)]` + `inventory.manage = all` на запис; scope override для `own`; `unit_locked`/`purpose_locked`; throttle; коди §32.21; тести §32.22 п.2 + рядки `AuthzBaselineMatrixTests`.
+- **TASK-885 (backend-developer).** Залежності: TASK-883 (HTTP-сценарії — після 884). Артефакт: `ARTIFACT-INVENTORY-CONSUMPTION`. Критерії: алгоритм §32.18 п.0–10 у транзакції `CompleteWithCostSnapshotAsync` (SAVEPOINT, ON CONFLICT за `appointment_id`, FEFO без прострочених, порядок блокувань, алерт `shortage`); `InventoryModuleGate`; `Inventory:AutoConsumptionEnabled`; погашення дефіциту в надходженні, нозі призначення переміщення й інвентаризації (§32.17); розширення DTO; тести §32.22 п.3–5 на реальній БД з `FakeTimeProvider`; `cost_snapshot` без змін; `dotnet test` зелений з `BEAUTY_TEST_REQUIRE_DB=1`. Мердж — gate 2.
+- **TASK-886 (backend-developer).** Залежності: TASK-883. Артефакт: `ARTIFACT-INVENTORY-ALERTS-API`. Критерії: 4 маршрути §32.19; scope закладів; `404 alert_not_found`; DTO без ПД клієнтів (тест серіалізації); throttle; тести §32.22 п.6.
+- **TASK-887 (backend-developer, `beauty-worker-jobs`).** Залежності: TASK-883 (`schema.sql`). Критерії: `pollInventory` за §32.20; `isInventoryEnabled` (порт, pg-адаптер, фейк); `main.ts` (щогодини), `.env.worker.example`; валідація env; тести §32.22 п.7; `npm.cmd test`, `npm run build` зелені.
+- **TASK-888 (frontend-developer, `beauty-admin-ui`).** Залежності: TASK-882 (mock), TASK-884/885/886 (http). Критерії: розділ «Матеріали» в картці послуги (видно за модулем і `inventory.view`, редагування owner/admin з `inventory.manage = all`; вибір лише `salon_use|both`); екран `/beauty/inventory/alerts` і бейдж (опитування 30 с, «99+», прочитати/усі); сальдо й дефіцит у залишках, ярлики рухів нестачі, «Списання на послугу», `expectedShortage` в інвентаризації; mock + http; коди в `errors.ts`; vitest §32.22 п.8; `tsc`, `lint`, `test`, a11y.
+- **TASK-889 (project-architect).** Залежності: gate L3, прийняття 2a. Критерії: контракт 2b (таблиця прив'язок, токен deep-link, прапор, outbox, тексти без ПД).
+- **TASK-890 (integrations-developer, `channels-integrations`).** Залежності: TASK-889. Критерії: за контрактом 2b.
+- **TASK-891 (frontend-developer).** Залежності: TASK-889. Критерії: за контрактом 2b.
+- **TASK-892 (qa-engineer, `beauty-qa`).** Залежності: TASK-884…888. Критерії: таблиця відповідності ADR-025 §11 / §32.15–§32.22 → тести; інваріанти §32.17 у randomized-тесті; ручний чекліст mock; без реального годинника.
+- **TASK-893 (security-reviewer, `beauty-security`).** Залежності: TASK-892. Критерії: звіт у `docs/reviews/`; RLS/IDOR норм і алертів; append-only після зміни CHECK; GRANT воркера мінімальні й синхронні; відсутність ПД у алертах і логах; поведінка SAVEPOINT і відсутність подвійного списання.
+- **TASK-894 (documentation-writer, `beauty-docs`).** Залежності: TASK-893. Критерії: статус §32 v0.36, `database.md` (нові таблиці й колонки), runbook (прапори, gate, відкат міграції 2a), known-issues, ADR-025 §10.
