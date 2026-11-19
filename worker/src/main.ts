@@ -1,5 +1,5 @@
 import pg from "pg";
-import { HttpChannelSender } from "./adapters/channel-sender";
+import { HttpChannelSender, TELEGRAM_API, sendTelegramText } from "./adapters/channel-sender";
 import { loadKey } from "./adapters/channel-crypto";
 import { MockChannelSender, useMockChannels } from "./adapters/mock-channel-sender";
 import { EmailSender, loadEmailConfig } from "./adapters/email-sender";
@@ -7,6 +7,7 @@ import { PgBeautyData } from "./adapters/pg-data";
 import { DEFAULT_WINDOW, PgPollStore } from "./adapters/pg-poll-store";
 import { LoggerNotificationLog, PgAdvisoryIdempotency, PgQueuePort, consoleLogger } from "./adapters/pg-support";
 import { PgInventoryAlerts, loadInventoryConfig } from "./inventory/alerts";
+import { PgInventoryTelegram, loadInventoryTelegramConfig } from "./inventory/telegram";
 import { TenantDb } from "./db/tenant-db";
 import { assertMarketingLegalGate } from "./marketing-gate";
 import { StaticTenantDirectory, type TenantDirectory } from "./db/tenants";
@@ -19,7 +20,7 @@ import { PgFeedbackStore } from "./feedback/feedback-store";
 import { pollFeedback } from "./feedback/poller";
 import { NONCE_CLEANUP_EVERY_MS, purgeControlPlaneNonces } from "./maintenance/nonce-cleanup";
 import { Scheduler } from "./scheduler/scheduler";
-import { pollCampaigns, pollConfirmations, pollInventory, pollOutbox, pollReminders, pollReviews, pollWinback, type PollContext } from "./scheduler/pollers";
+import { pollCampaigns, pollConfirmations, pollInventory, pollInventoryTelegram, pollOutbox, pollReminders, pollReviews, pollWinback, type PollContext } from "./scheduler/pollers";
 
 const MIN = 60_000;
 
@@ -68,6 +69,11 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
     inventoryEnabled: /^true$/i.test(env.WORKER_INVENTORY_ENABLED ?? ""),
     inventory: new PgInventoryAlerts(db, consoleLogger),
     inventoryConfig: loadInventoryConfig(env),
+    // §32.24.6: owner Telegram alerts: ONLY the literal "true" enables build+send (cleanup always runs); invalid QUIET_*/ADMIN_BASE_URL => throws.
+    inventoryTelegramEnabled: /^true$/i.test(env.WORKER_INVENTORY_TELEGRAM_ENABLED?.trim() ?? ""),
+    inventoryTelegram: new PgInventoryTelegram(db, useMockChannels(env) && !env["Channels__EncryptionKey"] ? Buffer.alloc(32) : loadKey(env["Channels__EncryptionKey"]),
+      (token, chatId, text) => useMockChannels(env) ? Promise.resolve({ externalMessageId: null }) : sendTelegramText(fetch, TELEGRAM_API, token, chatId, text, { disablePreview: true }), consoleLogger),
+    inventoryTelegramConfig: loadInventoryTelegramConfig(env),
     reminderButtonsEnabled: /^true$/i.test(env.WORKER_REMINDER_BUTTONS_ENABLED ?? ""),
     reminderMinLeadMinutes: Number.isFinite(lead) && lead >= 0 && env.WORKER_REMINDER_MIN_LEAD_MINUTES ? lead : DEFAULT_MIN_LEAD_MINUTES,
   };
@@ -92,6 +98,7 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
     // hourly: a pass deferred by the 09-20 window / daily limit resumes; keys are per lapse and frequency is checked, so reruns never duplicate
     { name: "beauty.winback", everyMs: 60 * MIN, run: () => pollWinback(ctx) },
     { name: "beauty.inventory-alerts", everyMs: 60 * MIN, run: () => pollInventory(ctx) },
+    { name: "beauty.inventory-telegram", everyMs: 5 * MIN, run: () => pollInventoryTelegram(ctx) },
   ], consoleLogger);
   return {
     scheduler, ctx,

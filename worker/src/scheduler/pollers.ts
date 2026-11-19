@@ -10,6 +10,7 @@ import { processWinback } from "../jobs/beauty-winback";
 import { processCampaign } from "../jobs/beauty-campaign";
 import type { BeautyDeps } from "../ports";
 import { DEFAULT_INVENTORY_CONFIG, type InventoryAlertConfig, type InventoryAlertStore } from "../inventory/alerts";
+import { DEFAULT_TELEGRAM_CONFIG, type InventoryTelegramConfig, type InventoryTelegramStore } from "../inventory/telegram";
 
 export interface PollContext {
   deps: BeautyDeps;
@@ -38,6 +39,10 @@ export interface PollContext {
   /** Inventory alerts store (PgInventoryAlerts); without it pollInventory is idle. */
   inventory?: InventoryAlertStore;
   inventoryConfig?: InventoryAlertConfig;
+  /** WORKER_INVENTORY_TELEGRAM_ENABLED (§32.24.6, default false): ONLY the literal `true` enables build+send; cleanup always runs. */
+  inventoryTelegramEnabled?: boolean;
+  inventoryTelegram?: InventoryTelegramStore;
+  inventoryTelegramConfig?: InventoryTelegramConfig;
 }
 
 export interface PollResult { processed: number; errors: number }
@@ -187,4 +192,23 @@ export function pollInventory(ctx: PollContext): Promise<PollResult> {
     ctx.logger.info(`inventory_alerts tenant=${currentTenantId()} locations=${r.locations} created=${r.created} resolved=${r.resolved} capped=${r.capped}`);
     return { processed: r.created + r.resolved, errors: r.errors };
   }, "pollInventory");
+}
+
+/**
+ * Owner's Telegram inventory alerts (§32.24.5): every 5 min. Cleanup (expired links, tenant_inactive, stale pending, 30-day retention)
+ * ALWAYS runs; build + send only with WORKER_INVENTORY_TELEGRAM_ENABLED=true and the tenant's `beauty_inventory` module.
+ * Logs carry counts and ids only (never chat_id, tokens, texts).
+ */
+export function pollInventoryTelegram(ctx: PollContext): Promise<PollResult> {
+  const store = ctx.inventoryTelegram;
+  if (!store) return Promise.resolve({ processed: 0, errors: 0 });
+  return forEachTenant(ctx, async () => {
+    const now = ctx.deps.now();
+    await store.cleanup(now);
+    if (ctx.inventoryTelegramEnabled !== true) return { processed: 0, errors: 0 };
+    if (!(await ctx.deps.data.isInventoryEnabled())) return { processed: 0, errors: 0 }; // module off, silently idle
+    const r = await store.runForTenant(now, ctx.inventoryTelegramConfig ?? DEFAULT_TELEGRAM_CONFIG);
+    ctx.logger.info(`inventory_telegram tenant=${currentTenantId()} built=${r.built} sent=${r.sent} failed=${r.failed} revoked=${r.revoked} capped=${r.capped}`);
+    return { processed: r.built + r.sent, errors: r.errors };
+  }, "pollInventoryTelegram");
 }
