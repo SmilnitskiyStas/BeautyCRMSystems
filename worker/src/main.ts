@@ -6,6 +6,7 @@ import { EmailSender, loadEmailConfig } from "./adapters/email-sender";
 import { PgBeautyData } from "./adapters/pg-data";
 import { DEFAULT_WINDOW, PgPollStore } from "./adapters/pg-poll-store";
 import { LoggerNotificationLog, PgAdvisoryIdempotency, PgQueuePort, consoleLogger } from "./adapters/pg-support";
+import { PgInventoryAlerts, loadInventoryConfig } from "./inventory/alerts";
 import { TenantDb } from "./db/tenant-db";
 import { assertMarketingLegalGate } from "./marketing-gate";
 import { StaticTenantDirectory, type TenantDirectory } from "./db/tenants";
@@ -18,7 +19,7 @@ import { PgFeedbackStore } from "./feedback/feedback-store";
 import { pollFeedback } from "./feedback/poller";
 import { NONCE_CLEANUP_EVERY_MS, purgeControlPlaneNonces } from "./maintenance/nonce-cleanup";
 import { Scheduler } from "./scheduler/scheduler";
-import { pollCampaigns, pollConfirmations, pollOutbox, pollReminders, pollReviews, pollWinback, type PollContext } from "./scheduler/pollers";
+import { pollCampaigns, pollConfirmations, pollInventory, pollOutbox, pollReminders, pollReviews, pollWinback, type PollContext } from "./scheduler/pollers";
 
 const MIN = 60_000;
 
@@ -63,6 +64,10 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
     // §26.2: campaigns and winback are off unless explicitly enabled (legal gate §26.16).
     campaignsEnabled: /^true$/i.test(env.WORKER_CAMPAIGNS_ENABLED ?? ""),
     winbackEnabled: /^true$/i.test(env.WORKER_WINBACK_ENABLED ?? ""),
+    // §32.20: inventory alerts are off unless explicitly enabled; invalid WORKER_INVENTORY_* => loadInventoryConfig throws (no start).
+    inventoryEnabled: /^true$/i.test(env.WORKER_INVENTORY_ENABLED ?? ""),
+    inventory: new PgInventoryAlerts(db),
+    inventoryConfig: loadInventoryConfig(env),
     reminderButtonsEnabled: /^true$/i.test(env.WORKER_REMINDER_BUTTONS_ENABLED ?? ""),
     reminderMinLeadMinutes: Number.isFinite(lead) && lead >= 0 && env.WORKER_REMINDER_MIN_LEAD_MINUTES ? lead : DEFAULT_MIN_LEAD_MINUTES,
   };
@@ -86,6 +91,7 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
     { name: "beauty.campaigns", everyMs: 1 * MIN, run: () => pollCampaigns(ctx) },
     // hourly: a pass deferred by the 09-20 window / daily limit resumes; keys are per lapse and frequency is checked, so reruns never duplicate
     { name: "beauty.winback", everyMs: 60 * MIN, run: () => pollWinback(ctx) },
+    { name: "beauty.inventory-alerts", everyMs: 60 * MIN, run: () => pollInventory(ctx) },
   ], consoleLogger);
   return {
     scheduler, ctx,

@@ -33,6 +33,7 @@ export function makeDeps(init: {
       campaignSendGuard: async () => init.guard ?? null,
       listLapsedClients: async () => init.lapsed ?? [],
       isMarketingEnabled: async () => true,
+      isInventoryEnabled: async () => true,
       enqueueWinbackMessage: async (m) => {
         const ex = [...messages.values()].find((x) => x.idempotencyKey === m.idempotencyKey);
         if (ex) return { result: "duplicate" };

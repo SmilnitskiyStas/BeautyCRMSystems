@@ -9,6 +9,7 @@ import { processDueReminder } from "../jobs/beauty-reminder";
 import { processWinback } from "../jobs/beauty-winback";
 import { processCampaign } from "../jobs/beauty-campaign";
 import type { BeautyDeps } from "../ports";
+import { DEFAULT_INVENTORY_CONFIG, type InventoryAlertConfig, type InventoryAlertStore } from "../inventory/alerts";
 
 export interface PollContext {
   deps: BeautyDeps;
@@ -32,6 +33,11 @@ export interface PollContext {
   campaignsEnabled?: boolean;
   /** WORKER_WINBACK_ENABLED (§26.2, default false in main.ts). `false` => pollWinback does nothing; unset = enabled (hand-built contexts/tests). */
   winbackEnabled?: boolean;
+  /** WORKER_INVENTORY_ENABLED (§32.20, default false in main.ts). `false` => pollInventory does nothing; unset = enabled (hand-built contexts/tests). */
+  inventoryEnabled?: boolean;
+  /** Inventory alerts store (PgInventoryAlerts); without it pollInventory is idle. */
+  inventory?: InventoryAlertStore;
+  inventoryConfig?: InventoryAlertConfig;
 }
 
 export interface PollResult { processed: number; errors: number }
@@ -165,4 +171,20 @@ export function pollConfirmations(ctx: PollContext): Promise<PollResult> {
     }
     return res;
   }, "pollConfirmations");
+}
+
+/**
+ * Staff alerts of the inventory module (§32.19-§32.20): hourly; resolves stale alerts every run, creates new ones only after the
+ * venue's local gate hour, deduplicated by key. Gated by WORKER_INVENTORY_ENABLED and the tenant's `beauty_inventory` module.
+ * Logs carry counts only (no product names, quantities or client data).
+ */
+export function pollInventory(ctx: PollContext): Promise<PollResult> {
+  if (ctx.inventoryEnabled === false || !ctx.inventory) return Promise.resolve({ processed: 0, errors: 0 });
+  const store = ctx.inventory;
+  return forEachTenant(ctx, async () => {
+    if (!(await ctx.deps.data.isInventoryEnabled())) return { processed: 0, errors: 0 }; // module off, silently idle
+    const r = await store.runForTenant(ctx.deps.now(), ctx.inventoryConfig ?? DEFAULT_INVENTORY_CONFIG);
+    ctx.logger.info(`inventory_alerts locations=${r.locations} created=${r.created} resolved=${r.resolved} capped=${r.capped}`);
+    return { processed: r.created + r.resolved, errors: r.errors };
+  }, "pollInventory");
 }
