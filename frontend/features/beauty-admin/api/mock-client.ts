@@ -20,6 +20,8 @@ import { createMockAnalytics } from "./mock-analytics";
 import { createMockCosts } from "./mock-costs";
 import { createMockInbox } from "./mock-inbox";
 import { createMockInventory } from "./mock-inventory";
+import { createMockInventoryV2 } from "./mock-inventory-v2";
+import { createMockInventoryV3 } from "./mock-inventory-v3";
 import { createMockMarketing } from "./mock-marketing";
 import { createMockTeam } from "./mock-team";
 import { createMockPhones } from "./mock-phone";
@@ -318,6 +320,31 @@ const mockInventory = createMockInventory({
   specialistLocationIds: () => staff.find((m) => m.id === "m")?.locations.map((l) => l.locationId) ?? [],
 });
 
+/** §32.16, §32.19 (етап 2a): норми матеріалів і сповіщення складу. */
+const mockInventoryV2 = createMockInventoryV2({
+  role: mockRole,
+  services: () => SERVICES,
+  locations: () => locations,
+  specialistLocationIds: () => staff.find((m) => m.id === "m")?.locations.map((l) => l.locationId) ?? [],
+  inventory: mockInventory,
+});
+
+/**
+ * §32.24 (етап 2b): Telegram-сповіщення власнику. Прапорці mock: `NEXT_PUBLIC_MOCK_TG_ALERTS=off` (feature вимкнено),
+ * `NEXT_PUBLIC_MOCK_TG_BOTS=0|2` (немає бота / кілька ботів). У браузері стани рухаються самі (кожні 6 с).
+ */
+const mockInventoryV3 = createMockInventoryV3({
+  role: mockRole,
+  featureEnabled: () => process.env.NEXT_PUBLIC_MOCK_TG_ALERTS !== "off",
+  channels: () => {
+    const n = process.env.NEXT_PUBLIC_MOCK_TG_BOTS;
+    if (n === "0") return [];
+    if (n === "2") return [{ id: "mock-tg-1", name: "Telegram-бот салону" }, { id: "mock-tg-2", name: "Telegram-бот барбершопу" }];
+    return [{ id: "mock-tg-1", name: "Telegram-бот салону" }];
+  },
+  autoAdvanceMs: typeof window !== "undefined" && process.env.NODE_ENV !== "test" ? 6_000 : 0,
+});
+
 const mockAi = createMockAi({ role: mockRole });
 /** §25: телефони клієнтів; один екземпляр для картки клієнта, «Дзвінків» і inbox. */
 const mockPhones = createMockPhones({ role: mockRole });
@@ -357,6 +384,10 @@ export const mockBeautyApi: BeautyAdminApi = {
   getAiUsage: mockAi.getAiUsage,
 
   ...mockInventory,
+  ...mockInventoryV2,
+  getTelegramLink: mockInventoryV3.getTelegramLink,
+  createTelegramLink: mockInventoryV3.createTelegramLink,
+  deleteTelegramLink: mockInventoryV3.deleteTelegramLink,
   getServiceCosts: mockCosts.getServiceCosts,
   getServiceCostDetail: mockCosts.getServiceCostDetail,
   setServiceCost: mockCosts.setServiceCost,

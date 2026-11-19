@@ -46,7 +46,10 @@ public class StockLevel : TenantEntity
 {
     public Guid LocationId { get; set; }
     public Guid ProductId { get; set; }
+    /// <summary>Quantity >= 0 (партії й рівень не від'ємні). Облікове сальдо = Quantity - ShortageQuantity (§32.17, етап 2a).</summary>
     public decimal Quantity { get; set; }
+    /// <summary>Непокрита нестача автосписання (>= 0), гаситься наступним приходом (§32.17).</summary>
+    public decimal ShortageQuantity { get; set; }
 }
 
 /// <summary>Заголовок операції складу. Append-only для app-ролі (REVOKE UPDATE, DELETE у grants).</summary>
@@ -63,6 +66,8 @@ public class StockOperation : ITenantEntity
     public DateOnly? ReceivedOn { get; set; }
     public WriteOffReason? Reason { get; set; }
     public Guid? StocktakeId { get; set; }
+    /// <summary>Запис, що списав матеріали (лише service_consumption; UNIQUE на (tenant, appointment) = ідемпотентність, §32.18).</summary>
+    public Guid? AppointmentId { get; set; }
     public string? Note { get; set; }
     /// <summary>null = система (етап 2); в етапі 1 завжди заповнено.</summary>
     public Guid? CreatedByUserId { get; set; }
@@ -95,7 +100,10 @@ public class StockMovement : ITenantEntity
     public Guid OperationId { get; set; }
     public Guid LocationId { get; set; }
     public Guid ProductId { get; set; }
+    /// <summary>NULL тільки для рухів нестачі (IsShortage), §32.17.</summary>
     public Guid? BatchId { get; set; }
+    /// <summary>Рух нестачі/погашення нестачі без партії (CHECK (batch_id IS NULL) = is_shortage).</summary>
+    public bool IsShortage { get; set; }
     public StockMovementType Type { get; set; }
     public decimal Quantity { get; set; }
     public decimal? UnitCost { get; set; }
@@ -130,6 +138,50 @@ public class StocktakeLine : TenantEntity
     public decimal? CountedQuantity { get; set; }
     /// <summary>Пишеться при проведенні.</summary>
     public decimal? ExpectedQuantity { get; set; }
+    /// <summary>Знімок дефіциту при проведенні (§32.17).</summary>
+    public decimal? ExpectedShortage { get; set; }
     public DateOnly? SurplusExpiresOn { get; set; }
     public Guid? UpdatedByUserId { get; set; }
+}
+
+// ---- Склад, етап 2a (ADR-025 §11, контракт §32.16-§32.19, TASK-883). RLS ENABLE+FORCE і ручні частини - в міграції beauty_inventory_stage2a ----
+
+/// <summary>Набір норм матеріалів послуги: LocationId == null - мережевий, інакше override закладу (замінює весь набір, §32.16).</summary>
+public class ServiceMaterialSet : TenantEntity
+{
+    public Guid ServiceId { get; set; }
+    public Guid? LocationId { get; set; }
+    public Guid UpdatedByUserId { get; set; }
+}
+
+/// <summary>Рядок норми: товар і кількість на одну послугу (в одиниці товару).</summary>
+public class ServiceMaterial : TenantEntity
+{
+    public Guid SetId { get; set; }
+    public Guid ProductId { get; set; }
+    /// <summary>0 &lt; q &lt;= 100000, 3 знаки.</summary>
+    public decimal Quantity { get; set; }
+}
+
+/// <summary>Сповіщення персоналу (§32.19): low_stock | expiring | shortage; без ПД клієнтів і без appointment_id.</summary>
+public class StaffAlert : TenantEntity
+{
+    /// <summary>low_stock | expiring | shortage (CHECK).</summary>
+    public string Kind { get; set; } = null!;
+    public Guid LocationId { get; set; }
+    public Guid ProductId { get; set; }
+    public Guid? BatchId { get; set; }
+    public Guid? OperationId { get; set; }
+    /// <summary>Знімок: low_stock - сальдо; expiring - кількість партії; shortage - непокрита частина.</summary>
+    public decimal Quantity { get; set; }
+    public decimal? Threshold { get; set; }
+    public DateOnly? ExpiresOn { get; set; }
+    /// <summary>0..365; 0 = прострочено (лише expiring).</summary>
+    public short? DaysBucket { get; set; }
+    public string DedupeKey { get; set; } = null!;
+    /// <summary>open | read | resolved (CHECK).</summary>
+    public string Status { get; set; } = "open";
+    public DateTimeOffset? ReadAt { get; set; }
+    public Guid? ReadByUserId { get; set; }
+    public DateTimeOffset? ResolvedAt { get; set; }
 }

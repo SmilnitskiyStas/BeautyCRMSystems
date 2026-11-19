@@ -160,8 +160,8 @@ public sealed class InventoryMigrationTests
             await Rejects(conn, Op(keyHash: "'" + new string('a', 64) + "'"), "ck_beauty_stock_operations_idempotency");
             foreach (var reason in new[] { "expired", "damaged", "lost", "internal_use", "correction", "other" })
                 await Exec(conn, Op(kind: "write_off", reason: $"'{reason}'"));
-            foreach (var kind in new[] { "service_consumption", "sale" }) // етапи 2-3: CHECK надмножина
-                await Exec(conn, Op(kind: kind));
+            await Exec(conn, Op(kind: "sale")); // етап 3: CHECK надмножина
+            await Rejects(conn, Op(kind: "service_consumption"), "ck_beauty_stock_operations_appointment"); // з 2a: лише разом із записом (покрито InventoryStage2aMigrationTests)
             var receipt = await Id(conn, Op(supplierId: $"'{supplier}'", keyHash: $"'{new string('a', 64)}'", reqHash: $"'{new string('b', 64)}'") + " RETURNING id");
             var transfer = await Id(conn, Op(kind: "transfer", to: $"'{locB}'") + " RETURNING id");
             await Rejects(conn, Op(keyHash: $"'{new string('a', 64)}'", reqHash: $"'{new string('c', 64)}'"), "ux_beauty_stock_operations_idempotency");
@@ -210,7 +210,7 @@ public sealed class InventoryMigrationTests
             await Rejects(conn, Mv("sale", "1", batch.ToString()), "ck_beauty_stock_movements_quantity_sign");
             await Rejects(conn, Mv("stocktake_adjust", "0", batch.ToString()), "ck_beauty_stock_movements_quantity_sign");
             await Rejects(conn, Mv("write_off", "-1"), "ck_beauty_stock_movements_batch");
-            await Exec(conn, Mv("service_consumption", "-1")); // непокрита нестача (етап 2): без партії
+            await Rejects(conn, Mv("service_consumption", "-1"), "ck_beauty_stock_movements_batch"); // з 2a без партії лише is_shortage (InventoryStage2aMigrationTests)
             await Exec(conn, Mv("receipt", "10.125", batch.ToString()));
             await Exec(conn, Mv("stocktake_adjust", "-0.5", batch.ToString(), stOp.ToString()));
             await Exec(conn, Mv("stocktake_adjust", "0.5", batch.ToString(), stOp.ToString()));

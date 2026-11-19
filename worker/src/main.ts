@@ -1,13 +1,16 @@
 import pg from "pg";
-import { HttpChannelSender } from "./adapters/channel-sender";
+import { HttpChannelSender, TELEGRAM_API, sendTelegramText } from "./adapters/channel-sender";
 import { loadKey } from "./adapters/channel-crypto";
 import { MockChannelSender, useMockChannels } from "./adapters/mock-channel-sender";
 import { EmailSender, loadEmailConfig } from "./adapters/email-sender";
 import { PgBeautyData } from "./adapters/pg-data";
 import { DEFAULT_WINDOW, PgPollStore } from "./adapters/pg-poll-store";
 import { LoggerNotificationLog, PgAdvisoryIdempotency, PgQueuePort, consoleLogger } from "./adapters/pg-support";
+import { PgInventoryAlerts, loadInventoryConfig } from "./inventory/alerts";
+import { PgInventoryTelegram, loadInventoryTelegramConfig } from "./inventory/telegram";
 import { TenantDb } from "./db/tenant-db";
 import { assertMarketingLegalGate } from "./marketing-gate";
+import { assertInventoryTelegramGate } from "./inventory/telegram-gate";
 import { StaticTenantDirectory, type TenantDirectory } from "./db/tenants";
 import { DEFAULT_CLIENT_INTERVAL_DAYS, DEFAULT_MARKETING_DAILY_LIMIT } from "./jobs/beauty-common";
 import { DEFAULT_CAMPAIGN_BATCH, DEFAULT_FAVORITE_SERVICES_DAYS } from "./jobs/beauty-campaign";
@@ -19,7 +22,7 @@ import { pollFeedback } from "./feedback/poller";
 import { POLL_EVERY_MS, PURGE_EVERY_MS, PgPasswordResetStore, createPasswordMailer, loadPublicAppUrl, pollPasswordResets } from "./auth/password-reset";
 import { NONCE_CLEANUP_EVERY_MS, purgeControlPlaneNonces } from "./maintenance/nonce-cleanup";
 import { Scheduler } from "./scheduler/scheduler";
-import { pollCampaigns, pollConfirmations, pollOutbox, pollReminders, pollReviews, pollWinback, type PollContext } from "./scheduler/pollers";
+import { pollCampaigns, pollConfirmations, pollInventory, pollInventoryTelegram, pollOutbox, pollReminders, pollReviews, pollWinback, type PollContext } from "./scheduler/pollers";
 
 const MIN = 60_000;
 
@@ -28,6 +31,7 @@ export interface WorkerRuntime { scheduler: Scheduler; ctx: PollContext; stop():
 /** Wires the DB-driven worker: `WORKER_DATABASE_URL` must be a role WITHOUT BYPASSRLS. */
 export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants?: TenantDirectory): Promise<WorkerRuntime> {
   assertMarketingLegalGate(env);
+  const inventoryTelegramAllowlist = assertInventoryTelegramGate(env); // M1: L3 legal gate / pre-L3 staging allowlist
   const url = env.WORKER_DATABASE_URL;
   if (!url) throw new Error("WORKER_DATABASE_URL is not set");
   const emailConfig = loadEmailConfig(env); // кидає помилку, якщо EMAIL_MODE=smtp без повної конфігурації
@@ -64,6 +68,16 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
     // §26.2: campaigns and winback are off unless explicitly enabled (legal gate §26.16).
     campaignsEnabled: /^true$/i.test(env.WORKER_CAMPAIGNS_ENABLED ?? ""),
     winbackEnabled: /^true$/i.test(env.WORKER_WINBACK_ENABLED ?? ""),
+    // §32.20: inventory alerts are off unless explicitly enabled; invalid WORKER_INVENTORY_* => loadInventoryConfig throws (no start).
+    inventoryEnabled: /^true$/i.test(env.WORKER_INVENTORY_ENABLED ?? ""),
+    inventory: new PgInventoryAlerts(db, consoleLogger),
+    inventoryConfig: loadInventoryConfig(env),
+    // §32.24.6: owner Telegram alerts: ONLY the literal "true" enables build+send (cleanup always runs); invalid QUIET_*/ADMIN_BASE_URL => throws.
+    inventoryTelegramEnabled: /^true$/i.test(env.WORKER_INVENTORY_TELEGRAM_ENABLED?.trim() ?? ""),
+    inventoryTelegram: new PgInventoryTelegram(db, useMockChannels(env) && !env["Channels__EncryptionKey"] ? Buffer.alloc(32) : loadKey(env["Channels__EncryptionKey"]),
+      (token, chatId, text) => useMockChannels(env) ? Promise.resolve({ externalMessageId: null }) : sendTelegramText(fetch, TELEGRAM_API, token, chatId, text, { disablePreview: true }), consoleLogger),
+    inventoryTelegramConfig: loadInventoryTelegramConfig(env),
+    inventoryTelegramTenantAllowlist: inventoryTelegramAllowlist ?? undefined,
     reminderButtonsEnabled: /^true$/i.test(env.WORKER_REMINDER_BUTTONS_ENABLED ?? ""),
     reminderMinLeadMinutes: Number.isFinite(lead) && lead >= 0 && env.WORKER_REMINDER_MIN_LEAD_MINUTES ? lead : DEFAULT_MIN_LEAD_MINUTES,
   };
@@ -94,6 +108,8 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
     { name: "beauty.campaigns", everyMs: 1 * MIN, run: () => pollCampaigns(ctx) },
     // hourly: a pass deferred by the 09-20 window / daily limit resumes; keys are per lapse and frequency is checked, so reruns never duplicate
     { name: "beauty.winback", everyMs: 60 * MIN, run: () => pollWinback(ctx) },
+    { name: "beauty.inventory-alerts", everyMs: 60 * MIN, run: () => pollInventory(ctx) },
+    { name: "beauty.inventory-telegram", everyMs: 5 * MIN, run: () => pollInventoryTelegram(ctx) },
   ], consoleLogger);
   return {
     scheduler, ctx,

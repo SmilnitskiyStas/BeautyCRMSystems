@@ -58,7 +58,7 @@ internal static class HttpSend
 
 /// <summary>Telegram Bot API. Webhook authenticity: X-Telegram-Bot-Api-Secret-Token set via setWebhook.</summary>
 public sealed class TelegramAdapter(HttpClient http, IChannelCredentialsProvider creds)
-    : IChannelAdapter, IChannelCallbackAcknowledger, IChannelMessageEditor, IChannelCommandsSync
+    : IChannelAdapter, IChannelCallbackAcknowledger, IChannelMessageEditor, IChannelCommandsSync, IChannelBotInfo
 {
     private const string ApiBase = "https://api.telegram.org";
     /// <summary>Тайм-аут setMyCommands (§23.4).</summary>
@@ -110,7 +110,8 @@ public sealed class TelegramAdapter(HttpClient http, IChannelCredentialsProvider
             var ts = m.TryGetProperty("date", out var d)
                 ? DateTimeOffset.FromUnixTimeSeconds(d.GetInt64()) : DateTimeOffset.UtcNow;
             var inbound = new InboundMessage(Channel, $"{chatId}:{m.GetProperty("message_id").GetRawText()}", chatId,
-                from.GetProperty("id").GetRawText(), SenderName(from), text, ts, kind);
+                from.GetProperty("id").GetRawText(), SenderName(from), text, ts, kind)
+            { Forwarded = ForwardKeys.Any(k => m.TryGetProperty(k, out _)) };
             if (kind == InboundKinds.Contact) inbound = inbound with { ContactVerdict = ContactVerdict(m, chat, from, out var phone), ContactPhone = phone };
             if (kind == InboundKinds.Location && TryTransientPoint(m, out var lat, out var lon))
                 inbound = inbound with { TransientLatitude = lat, TransientLongitude = lon };
@@ -128,7 +129,7 @@ public sealed class TelegramAdapter(HttpClient http, IChannelCredentialsProvider
     }
 
     private static readonly Regex StateCallbackData = new(
-        @"^(by|bn|bo|sp|rc|ac|aa|ar|cy|cn|mc|co):[A-Za-z0-9_-]{22}(:[0-9])?\z", RegexOptions.CultureInvariant);
+        @"^(by|bn|bo|sp|rc|ac|aa|ar|cy|cn|mc|co|iy|in):[A-Za-z0-9_-]{22}(:[0-9])?\z", RegexOptions.CultureInvariant);
     /// <summary>§28.5: станові дії потоку запису, index обов'язковий (27 байт).</summary>
     private static readonly Regex FlowCallbackData = new(@"^(fl|fs|fp|fd|ft|fn):[A-Za-z0-9_-]{22}:[0-9]\z", RegexOptions.CultureInvariant);
     private static readonly Regex StatelessCallbackData = new(@"^i:(book|my|help|human|stop|phone|mkt|mkoff)\z", RegexOptions.CultureInvariant);
@@ -340,6 +341,22 @@ public sealed class TelegramAdapter(HttpClient http, IChannelCredentialsProvider
         });
         try { await HttpSend.PostAsync(http, req, "Telegram editMessageReplyMarkup", ct, telegramCodes: true); }
         catch (PermanentChannelException ex) when (ex.Code is ChannelSendCodes.MessageNotModified or ChannelSendCodes.MessageNotFound) { }
+    }
+
+    /// <summary>getMe -> result.username (етап 2b, §32.24.3). Тайм-аут задає викликач; null, якщо відповідь без username.</summary>
+    public async Task<string?> GetBotUsernameAsync(CancellationToken ct)
+    {
+        var token = Token();
+        using var req = Call(token, "getMe", new { });
+        var body = await HttpSend.PostForBodyAsync(http, req, "Telegram getMe", ct, telegramCodes: true);
+        if (string.IsNullOrEmpty(body)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            return doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("result", out var r) && r.ValueKind == JsonValueKind.Object
+                && r.TryGetProperty("username", out var u) && u.ValueKind == JsonValueKind.String ? u.GetString() : null;
+        }
+        catch (JsonException) { return null; }
     }
 
     /// <summary>setMyCommands двічі: без language_code і з language_code=uk (§23.4). Тайм-аут <see cref="CommandsTimeout"/> на обидва виклики.</summary>

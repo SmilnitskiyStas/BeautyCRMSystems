@@ -123,6 +123,8 @@ export interface BeautyDataPort {
   enqueueWinbackMessage(msg: OutboundMessage, now: Date, opts: CampaignEnqueueOptions): Promise<WinbackEnqueueResult>;
   /** The current tenant has the `beauty_marketing` module (kill switch together with the WORKER_* flags). */
   isMarketingEnabled(): Promise<boolean>;
+  /** The current tenant has the `beauty_inventory` module (§32.20 gate). */
+  isInventoryEnabled(): Promise<boolean>;
   /** `minIntervalDays` (default 7): clients with a marketing message queued/sent within it are left out (§26.5 frequency). */
   listLapsedClients(now: Date, inactiveDays: number, minIntervalDays?: number): Promise<LapsedClient[]>;
   /** Create message row, or return the existing one for the same key. */

@@ -180,6 +180,8 @@ export const canEditStaff = gate("staff.access", "edit");
 /** Склад (§32.2): перегляд закладів scope = `own`; керування (операції) = `manage >= own`; каталог товарів = `manage = all`; ціни = `costs`. */
 export const canViewInventory = (s: AccessSubject) => accessOf(s).hasModule("beauty_inventory") && accessOf(s).can("inventory.view", "own");
 export const canManageInventory = (s: AccessSubject) => accessOf(s).hasModule("beauty_inventory") && accessOf(s).can("inventory.manage", "own");
+/** Норми матеріалів (§32.16): змінюють лише з `inventory.manage = all` (сервер додатково вимагає owner/admin). */
+export const canEditInventoryNorms = (s: AccessSubject) => accessOf(s).hasModule("beauty_inventory") && accessOf(s).can("inventory.manage", "all");
 export const canSeeInventoryCosts = gate("inventory.costs", "view");
 export const canEditInventoryCosts = gate("inventory.costs", "edit");
 /** Календар: `own` - лише власні записи (майстер у пресеті). */

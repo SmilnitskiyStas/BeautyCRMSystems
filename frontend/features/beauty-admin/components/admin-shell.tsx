@@ -6,11 +6,13 @@ import { useEffect, Suspense, useId, useMemo, useRef, useState, useSyncExternalS
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthGate, useAuth } from "@/features/beauty-auth/components/auth-provider";
 import { BusinessSwitcher } from "@/features/beauty-auth/components/business-switcher";
-import { canUseAi, canUseInbox, canUseMarketing, navFor, navGroupsFor, type NavItem } from "@/features/beauty-auth/permissions";
+import { canUseAi, canUseInbox, canUseMarketing, canViewInventory, navFor, navGroupsFor, type NavItem } from "@/features/beauty-auth/permissions";
 import { ROLE_LABEL } from "@/features/beauty-auth/types";
 import { useAiPanel } from "../hooks/use-ai-panel";
 import { useNeedsReplyCount } from "../hooks/use-inbox";
 import { useMarketingAvailability } from "../hooks/use-marketing";
+import { useUnreadAlertCount } from "../hooks/use-staff-alerts";
+import { alertBadgeText } from "../inventory/logic";
 import { aiContextFor } from "./ai-contexts";
 import { FeedbackDialog } from "./feedback-dialog";
 
@@ -32,6 +34,22 @@ function InboxBadge() {
   );
 }
 
+/**
+ * Бейдж непрочитаних сповіщень складу біля пункту «Склад» (§32.19): опитування 30 с лише коли модуль `beauty_inventory`
+ * увімкнено і є `inventory.view` (`canViewInventory`); `module_disabled` від сервера - бейдж не показується.
+ */
+export function InventoryBadge() {
+  const { user } = useAuth();
+  const count = useUnreadAlertCount(canViewInventory(user)).data ?? 0;
+  if (count <= 0) return null;
+  return (
+    <span data-testid="inventory-badge" className="ml-2 inline-flex min-w-6 items-center justify-center rounded-full bg-white px-1.5 text-[13px] font-bold text-(--ink)">
+      <span aria-hidden="true">{alertBadgeText(count)}</span>
+      <span className="sr-only">, нових сповіщень складу: {count > 99 ? "понад 99" : count}</span>
+    </span>
+  );
+}
+
 /** Підсумковий індикатор на заголовку згорнутого блоку, що містить «Розмови». */
 function InboxDot() {
   const { user } = useAuth();
@@ -40,6 +58,18 @@ function InboxDot() {
   return (
     <span data-testid="inbox-group-dot" className="ml-2 inline-flex size-2.5 rounded-full bg-white">
       <span className="sr-only">, потрібна відповідь: {count}</span>
+    </span>
+  );
+}
+
+/** Індикатор на заголовку згорнутого блоку, що містить «Склад». */
+function InventoryDot() {
+  const { user } = useAuth();
+  const count = useUnreadAlertCount(canViewInventory(user)).data ?? 0;
+  if (count <= 0) return null;
+  return (
+    <span data-testid="inventory-group-dot" className="ml-2 inline-flex size-2.5 rounded-full bg-white">
+      <span className="sr-only">, нових сповіщень складу: {count > 99 ? "понад 99" : count}</span>
     </span>
   );
 }
@@ -97,6 +127,7 @@ function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
     >
       {item.label}
       {item.href === "/beauty/inbox" ? <InboxBadge /> : null}
+      {item.href === "/beauty/inventory" ? <InventoryBadge /> : null}
     </Link>
   );
 }
@@ -134,6 +165,7 @@ function NavGroupSection({
         <span className="flex items-center">
           {label}
           {!expanded && items.some((n) => n.href === "/beauty/inbox") ? <InboxDot /> : null}
+          {!expanded && items.some((n) => n.href === "/beauty/inventory") ? <InventoryDot /> : null}
         </span>
         <span aria-hidden="true" className={`transition-transform ${expanded ? "rotate-90" : ""}`}>
           ›

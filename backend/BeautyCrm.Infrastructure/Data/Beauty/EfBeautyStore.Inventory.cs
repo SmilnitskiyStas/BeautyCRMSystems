@@ -128,10 +128,18 @@ public sealed partial class EfBeautyStore : IInventoryStore
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         var p = (await db.Products.FromSqlInterpolated($"SELECT * FROM beauty_products WHERE id = {id} FOR UPDATE").ToListAsync(ct)).FirstOrDefault();
         if (p is null) { await tx.RollbackAsync(ct); db.ChangeTracker.Clear(); return new(CatalogWriteOutcome.NotFound); }
-        if (p.Unit != EnumText<ProductUnit>.FromDb(data.Unit) && await db.StockMovements.AsNoTracking().AnyAsync(m => m.ProductId == id, ct))
+        var unitChanged = p.Unit != EnumText<ProductUnit>.FromDb(data.Unit);
+        var toSale = p.Purpose != ProductPurpose.Sale && EnumText<ProductPurpose>.FromDb(data.Purpose) == ProductPurpose.Sale;
+        var inNorms = (unitChanged || toSale) && await ProductInNormsAsync(id, ct); // §32.16: unit_locked / purpose_locked (під блокуванням рядка товару)
+        if (unitChanged && (inNorms || await db.StockMovements.AsNoTracking().AnyAsync(m => m.ProductId == id, ct)))
         {
             await tx.RollbackAsync(ct); db.ChangeTracker.Clear();
             return new(CatalogWriteOutcome.UnitLocked);
+        }
+        if (toSale && inNorms)
+        {
+            await tx.RollbackAsync(ct); db.ChangeTracker.Clear();
+            return new(CatalogWriteOutcome.PurposeLocked);
         }
         Apply(p, data);
         p.UpdatedByUserId = userId;
@@ -224,6 +232,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
         public Product P = null!;
         public Guid LocationId;
         public decimal Qty;
+        public decimal Shortage;
         public decimal? SettingMin;
         public bool Enabled;
     }
@@ -240,12 +249,12 @@ public sealed partial class EfBeautyStore : IInventoryStore
         from l in lj.DefaultIfEmpty()
         join s in db.ProductLocationSettings on new { L = loc.Id, P = p.Id } equals new { L = s.LocationId, P = s.ProductId } into sj
         from s in sj.DefaultIfEmpty()
-        select new Pair { P = p, LocationId = loc.Id, Qty = l == null ? 0m : l.Quantity, SettingMin = s == null ? null : s.MinStock, Enabled = s == null || s.IsEnabled };
+        select new Pair { P = p, LocationId = loc.Id, Qty = l == null ? 0m : l.Quantity, Shortage = l == null ? 0m : l.ShortageQuantity, SettingMin = s == null ? null : s.MinStock, Enabled = s == null || s.IsEnabled };
 
     /// <summary>Спільні фільтри каталогу (категорія, призначення, пошук) і «кандидат у залишки»; null = порожній результат (невідоме призначення).</summary>
     private static IQueryable<Pair>? FilterPairs(IQueryable<Pair> q, string? category, string? purpose, string? search)
     {
-        q = q.Where(x => x.Qty > 0 || (x.P.IsActive && x.Enabled));
+        q = q.Where(x => x.Qty > 0 || x.Shortage > 0 || (x.P.IsActive && x.Enabled));
         if (category is not null) q = q.Where(x => x.P.Category == category);
         if (purpose is not null)
         {
@@ -284,7 +293,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
         if (FilterPairs(Pairs([loc]), f.Category, f.Purpose, f.Search) is not { } q) return [];
         switch (f.State)
         {
-            case "low": q = q.Where(x => (x.SettingMin ?? x.P.MinStock) > 0 && x.Qty < (x.SettingMin ?? x.P.MinStock)); break;
+            case "low": q = q.Where(x => (x.SettingMin ?? x.P.MinStock) > 0 && x.Qty - x.Shortage < (x.SettingMin ?? x.P.MinStock)); break;
             case "in_stock": q = q.Where(x => x.Qty > 0); break;
             case "out_of_stock": q = q.Where(x => x.Qty <= 0); break;
         }
@@ -313,7 +322,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
             var r = rows[id];
             var a = agg.GetValueOrDefault(id);
             return new StockRaw(ToRef(r.P), r.Qty, r.P.MinStock, r.SettingMin, r.Enabled, a?.Nearest, a?.Expired ?? 0, a?.Expiring ?? 0,
-                Money(a?.Value ?? 0), (a?.NoCost ?? 0) > 0);
+                Money(a?.Value ?? 0), (a?.NoCost ?? 0) > 0, r.Shortage);
         })];
     }
 
@@ -321,7 +330,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
     {
         var locs = f.LocationIds;
         if (FilterPairs(Pairs(locs), f.Category, f.Purpose, f.Search) is not { } q) return [];
-        if (f.LowOnly) q = q.Where(x => (x.SettingMin ?? x.P.MinStock) > 0 && x.Qty < (x.SettingMin ?? x.P.MinStock));
+        if (f.LowOnly) q = q.Where(x => (x.SettingMin ?? x.P.MinStock) > 0 && x.Qty - x.Shortage < (x.SettingMin ?? x.P.MinStock));
 
         var keys = (await q.Select(x => new { x.P.Id, x.P.Name }).Distinct().ToListAsync(ct)).Select(k => (k.Id, k.Name));
         var ids = PageKeys(keys, after, take);
@@ -342,7 +351,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
         return [.. pairs.OrderBy(r => position[r.P.Id]).ThenBy(r => order[r.LocationId]).Select(r =>
         {
             agg.TryGetValue((r.LocationId, r.P.Id), out var a);
-            return new SummaryRaw(ToRef(r.P), r.LocationId, r.Qty, r.P.MinStock, r.SettingMin, r.Enabled, Money(a?.Value ?? 0), (a?.NoCost ?? 0) > 0);
+            return new SummaryRaw(ToRef(r.P), r.LocationId, r.Qty, r.P.MinStock, r.SettingMin, r.Enabled, Money(a?.Value ?? 0), (a?.NoCost ?? 0) > 0, r.Shortage);
         })];
     }
 
@@ -422,7 +431,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
             var counterpart = m.Type == StockMovementType.TransferOut ? op.ToLocationId : m.Type == StockMovementType.TransferIn ? op.LocationId : null;
             return new MovementDto(m.Id, m.OperationId, EnumText<StockOperationKind>.ToDb(op.Kind), EnumText<StockMovementType>.ToDb(m.Type), m.OccurredAt,
                 m.LocationId, ToRef(products[m.ProductId]), m.BatchId, m.Quantity, m.UnitCost,
-                op.Reason is { } r ? EnumText<WriteOffReason>.ToDb(r) : null, op.Note, counterpart, op.StocktakeId, Named(m.CreatedByUserId, users));
+                op.Reason is { } r ? EnumText<WriteOffReason>.ToDb(r) : null, op.Note, counterpart, op.StocktakeId, Named(m.CreatedByUserId, users), m.IsShortage);
         })];
     }
 
@@ -479,7 +488,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
         var users = await UserNamesAsync(ops.Where(o => o.CreatedByUserId != null).Select(o => o.CreatedByUserId!.Value), ct);
         return [.. ops.Select(o => new OperationSummaryDto(o.Id, EnumText<StockOperationKind>.ToDb(o.Kind), o.LocationId, o.ToLocationId,
             o.Reason is { } r ? EnumText<WriteOffReason>.ToDb(r) : null, o.DocumentNumber, o.CreatedAt, Named(o.CreatedByUserId, users),
-            moves[o.Id].Select(m => m.ProductId).Distinct().Count(), TotalCost(moves[o.Id], o.Kind)))];
+            moves[o.Id].Select(m => m.ProductId).Distinct().Count(), TotalCost(moves[o.Id], o.Kind), o.AppointmentId))];
     }
 
     public async Task<OperationDto?> GetOperationAsync(Guid id, CancellationToken ct)
@@ -492,7 +501,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
         return new OperationDto(o.Id, EnumText<StockOperationKind>.ToDb(o.Kind), o.LocationId, o.ToLocationId,
             o.Reason is { } r ? EnumText<WriteOffReason>.ToDb(r) : null, o.DocumentNumber, o.CreatedAt, Named(o.CreatedByUserId, users),
             moves.Select(m => m.ProductId).Distinct().Count(), TotalCost(moves, o.Kind), Named(o.SupplierId, suppliers), o.ReceivedOn, o.Note, o.StocktakeId,
-            await MapMovementsAsync(moves, ct));
+            await MapMovementsAsync(moves, ct), o.AppointmentId);
     }
 
     public async Task<KeyedOperation?> FindOperationByKeyAsync(string keyHash, CancellationToken ct)

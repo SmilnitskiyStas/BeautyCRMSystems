@@ -61,15 +61,37 @@ public sealed partial class EfBeautyStore
 
     private static BatchRow ToRow(StockBatch b) => new(b.Id, b.ProductId, b.ExpiresOn, b.ReceivedAt, b.Quantity, b.UnitCost, b.LotNumber, b.SupplierId);
 
-    private StockMovement Move(StockOperation op, Guid locationId, Guid productId, Guid? batchId, StockMovementType type, decimal qty, decimal? cost, Guid? user, DateTimeOffset now)
+    private StockMovement Move(StockOperation op, Guid locationId, Guid productId, Guid? batchId, StockMovementType type, decimal qty, decimal? cost, Guid? user, DateTimeOffset now, bool isShortage = false)
     {
         var m = new StockMovement
         {
-            Id = NextMovementId(op), OperationId = op.Id, LocationId = locationId, ProductId = productId, BatchId = batchId, Type = type,
+            Id = NextMovementId(op), OperationId = op.Id, LocationId = locationId, ProductId = productId, BatchId = batchId, IsShortage = isShortage, Type = type,
             Quantity = qty, UnitCost = cost, CreatedByUserId = user, OccurredAt = now,
         };
         db.StockMovements.Add(m);
         return m;
+    }
+
+    /// <summary>
+    /// §32.17: ЄДИНИЙ алгоритм «прихід у пару» (надходження й нога призначення переміщення). Лише під FOR UPDATE рівня. Спершу гасить дефіцит
+    /// c = min(q, s): окремий рух is_shortage (+c, без партії, з ціною рядка); партія (initial = quantity = q - c) і рух створюються лише для
+    /// q - c &gt; 0. <paramref name="batch"/> - заготовка партії (кількості виставляються тут). Повертає створену партію або null (q = c).
+    /// </summary>
+    private StockBatch? ApplyIncoming(StockOperation op, StockLevel level, StockBatch batch, StockMovementType type, decimal q, decimal? unitCost, Guid? user, DateTimeOffset now)
+    {
+        var c = Math.Min(q, level.ShortageQuantity);
+        if (c > 0)
+        {
+            Move(op, level.LocationId, level.ProductId, null, type, c, unitCost, user, now, isShortage: true);
+            level.ShortageQuantity -= c;
+        }
+        var rest = q - c;
+        if (rest <= 0) return null;
+        batch.InitialQuantity = rest; batch.Quantity = rest;
+        db.StockBatches.Add(batch);
+        Move(op, level.LocationId, level.ProductId, batch.Id, type, rest, unitCost, user, now);
+        level.Quantity += rest;
+        return batch;
     }
 
     /// <summary>
@@ -126,6 +148,7 @@ public sealed partial class EfBeautyStore
         if (location is null || !location.IsActive) return await RejectAsync(tx, "location_inactive", null, ct);
         var enabled = await LockEnabledAsync(h.LocationId, pids, ct);
         var added = new Dictionary<Guid, decimal>();
+        var simShortage = levels.Where(x => x.Key.Loc == h.LocationId).ToDictionary(x => x.Key.Prod, x => x.Value.ShortageQuantity);
         for (var i = 0; i < lines.Count; i++)
         {
             var l = lines[i];
@@ -133,7 +156,9 @@ public sealed partial class EfBeautyStore
             if (enabled.TryGetValue(p.Id, out var en) && !en) return await RejectAsync(tx, "product_disabled_for_location", i, ct);
             if (Fractional(p, l.Quantity)) return await RejectAsync(tx, "invalid_quantity", i, ct);
             if (p.TrackExpiry && l.ExpiresOn is null) return await RejectAsync(tx, "expiry_required", i, ct);
-            added[p.Id] = added.GetValueOrDefault(p.Id) + l.Quantity;
+            var covered = Math.Min(l.Quantity, simShortage.GetValueOrDefault(p.Id)); // §32.17: межа рівня - після погашення дефіциту
+            simShortage[p.Id] = simShortage.GetValueOrDefault(p.Id) - covered;
+            added[p.Id] = added.GetValueOrDefault(p.Id) + (l.Quantity - covered);
             if (levels[(h.LocationId, p.Id)].Quantity + added[p.Id] > InventoryService.MaxLevel) return await RejectAsync(tx, "quantity_out_of_range", i, ct);
         }
 
@@ -145,9 +170,7 @@ public sealed partial class EfBeautyStore
                 SupplierId = h.SupplierId ?? productSupplier.GetValueOrDefault(l.ProductId), ReceivedAt = h.Now, ExpiresOn = l.ExpiresOn,
                 LotNumber = l.LotNumber, InitialQuantity = l.Quantity, Quantity = l.Quantity, UnitCost = l.UnitCost, CreatedAt = h.Now, UpdatedAt = h.Now,
             };
-            db.StockBatches.Add(batch);
-            Move(op, h.LocationId, l.ProductId, batch.Id, StockMovementType.Receipt, l.Quantity, l.UnitCost, h.UserId, h.Now);
-            levels[(h.LocationId, l.ProductId)].Quantity += l.Quantity;
+            ApplyIncoming(op, levels[(h.LocationId, l.ProductId)], batch, StockMovementType.Receipt, l.Quantity, l.UnitCost, h.UserId, h.Now);
         }
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
@@ -213,9 +236,12 @@ public sealed partial class EfBeautyStore
         if (plan.Shortages.FirstOrDefault(x => x.BatchExpired) is { } expired) return await RejectAsync(tx, "batch_expired", expired.Line, ct);
         if (plan.Shortages.Count > 0) { await tx.RollbackAsync(ct); db.ChangeTracker.Clear(); return new(StockWriteStatus.Insufficient, null, plan.Shortages); }
         var moved = new Dictionary<Guid, decimal>();
+        var simShortage = levels.Where(x => x.Key.Loc == to).ToDictionary(x => x.Key.Prod, x => x.Value.ShortageQuantity);
         foreach (var t in plan.Takes)
         {
-            moved[t.ProductId] = moved.GetValueOrDefault(t.ProductId) + t.Quantity;
+            var covered = Math.Min(t.Quantity, simShortage.GetValueOrDefault(t.ProductId)); // §32.17: межа - після погашення дефіциту
+            simShortage[t.ProductId] = simShortage.GetValueOrDefault(t.ProductId) - covered;
+            moved[t.ProductId] = moved.GetValueOrDefault(t.ProductId) + (t.Quantity - covered);
             if (levels[(to, t.ProductId)].Quantity + moved[t.ProductId] > InventoryService.MaxLevel) return await RejectAsync(tx, "quantity_out_of_range", t.Line, ct);
         }
 
@@ -232,9 +258,7 @@ public sealed partial class EfBeautyStore
                 ReceivedAt = src.ReceivedAt, ExpiresOn = src.ExpiresOn, LotNumber = src.LotNumber, InitialQuantity = t.Quantity, Quantity = t.Quantity,
                 UnitCost = src.UnitCost, CreatedAt = h.Now, UpdatedAt = h.Now,
             };
-            db.StockBatches.Add(dst);
-            levels[(to, t.ProductId)].Quantity += t.Quantity;
-            Move(op, to, t.ProductId, dst.Id, StockMovementType.TransferIn, t.Quantity, src.UnitCost, h.UserId, h.Now);
+            ApplyIncoming(op, levels[(to, t.ProductId)], dst, StockMovementType.TransferIn, t.Quantity, src.UnitCost, h.UserId, h.Now);
         }
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
@@ -250,14 +274,17 @@ public sealed partial class EfBeautyStore
         var pids = lines.Select(l => l.ProductId).ToList();
         var products = await db.Products.AsNoTracking().Where(p => pids.Contains(p.Id)).ToDictionaryAsync(p => p.Id, ct);
         var live = s.Status == StocktakeStatus.Draft
-            ? await db.StockLevels.AsNoTracking().Where(l => l.LocationId == s.LocationId && pids.Contains(l.ProductId)).ToDictionaryAsync(l => l.ProductId, l => l.Quantity, ct)
+            ? await db.StockLevels.AsNoTracking().Where(l => l.LocationId == s.LocationId && pids.Contains(l.ProductId)).ToDictionaryAsync(l => l.ProductId, l => (l.Quantity, l.ShortageQuantity), ct)
             : [];
         var users = await UserNamesAsync([s.CreatedByUserId, .. s.PostedByUserId is { } p ? new[] { p } : []], ct);
         var dtoLines = lines.Select(l =>
         {
-            decimal? expected = s.Status == StocktakeStatus.Draft ? live.GetValueOrDefault(l.ProductId) : l.ExpectedQuantity;
-            decimal? diff = l.CountedQuantity is { } c && expected is { } e ? c - e : null;
-            return new StocktakeLineDto(ToRef(products[l.ProductId]), expected, l.CountedQuantity, diff, l.SurplusExpiresOn);
+            var draft = s.Status == StocktakeStatus.Draft;
+            decimal? expected = draft ? live.GetValueOrDefault(l.ProductId).Quantity : l.ExpectedQuantity;
+            decimal? expectedShortage = draft ? live.GetValueOrDefault(l.ProductId).ShortageQuantity : l.ExpectedShortage;
+            // §32.17: різниця - до облікового сальдо (expected - expectedShortage)
+            decimal? diff = l.CountedQuantity is { } c && expected is { } e ? c - (e - (expectedShortage ?? 0m)) : null;
+            return new StocktakeLineDto(ToRef(products[l.ProductId]), expected, l.CountedQuantity, diff, l.SurplusExpiresOn, expectedShortage);
         }).OrderBy(l => l.Product.Name.ToLowerInvariant(), StringComparer.Ordinal).ThenBy(l => l.Product.Id).ToList();
         return new StocktakeDto(s.Id, s.LocationId, EnumText<StocktakeStatus>.ToDb(s.Status), s.CreatedAt, Named(s.CreatedByUserId, users)!, s.PostedAt,
             lines.Count, lines.Count(l => l.CountedQuantity != null), s.Note, s.Version, Named(s.PostedByUserId, users), s.CancelledAt, dtoLines);
@@ -307,7 +334,7 @@ public sealed partial class EfBeautyStore
         else
         {
             var disabled = await db.ProductLocationSettings.AsNoTracking().Where(s => s.LocationId == locationId && !s.IsEnabled).Select(s => s.ProductId).ToListAsync(ct);
-            var withStock = await db.StockLevels.AsNoTracking().Where(l => l.LocationId == locationId && l.Quantity != 0).Select(l => l.ProductId).ToListAsync(ct);
+            var withStock = await db.StockLevels.AsNoTracking().Where(l => l.LocationId == locationId && (l.Quantity != 0 || l.ShortageQuantity > 0)).Select(l => l.ProductId).ToListAsync(ct);
             ids = await db.Products.AsNoTracking().Where(p => (p.IsActive && !disabled.Contains(p.Id)) || withStock.Contains(p.Id)).Select(p => p.Id).ToListAsync(ct);
         }
         if (ids.Count > InventoryService.MaxStocktakeLines) return new(StocktakeWriteStatus.TooManyLines);
@@ -408,6 +435,7 @@ public sealed partial class EfBeautyStore
         {
             var level = levels[(loc, l.ProductId)].Quantity;
             l.ExpectedQuantity = level;
+            l.ExpectedShortage = levels[(loc, l.ProductId)].ShortageQuantity;
             var diff = l.CountedQuantity!.Value - level;
             if (diff < 0) shortLines.Add(new StockLine(shortLines.Count, l.ProductId, -diff, null));
             else if (diff > 0)
@@ -432,10 +460,18 @@ public sealed partial class EfBeautyStore
         }
 
         StockOperation? op = null;
-        if (shortLines.Count > 0 || surplus.Count > 0)
+        var shortageResets = lines.Where(l => levels[(loc, l.ProductId)].ShortageQuantity > 0).OrderBy(l => l.ProductId).ToList();
+        if (shortLines.Count > 0 || surplus.Count > 0 || shortageResets.Count > 0)
         {
             op = new StockOperation { Id = Guid.NewGuid(), Kind = StockOperationKind.Stocktake, LocationId = loc, StocktakeId = id, CreatedByUserId = userId, CreatedAt = now };
             db.StockOperations.Add(op);
+        }
+        // §32.17: фізичний підрахунок - істина: дефіцит пари обнуляється рухом stocktake_adjust +s (is_shortage), далі diff від level.quantity
+        foreach (var l in shortageResets)
+        {
+            var lv = levels[(loc, l.ProductId)];
+            Move(op!, loc, l.ProductId, null, StockMovementType.StocktakeAdjust, lv.ShortageQuantity, null, userId, now, isShortage: true);
+            lv.ShortageQuantity = 0;
         }
         if (shortLines.Count > 0)
         {

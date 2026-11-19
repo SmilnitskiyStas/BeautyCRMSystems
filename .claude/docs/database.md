@@ -990,6 +990,51 @@ Tests: `TenantIsolationTests.cs`, `CancellationHistoryRlsTests.cs`, `StaffHarden
 
 ---
 
+### Склад, етап 2a (`beauty_inventory`, ADR-025 §11, контракт §32.15–§32.25)
+
+Міграція `beauty_inventory_stage2a` (TASK-883, адитивна; `Down` відмовляє, якщо є рух `is_shortage` або операція з `appointment_id`). FORCE RLS на всіх нових таблицях (`DO`-блок міграції падає без нього).
+
+- **Норми:** `beauty_service_material_sets` (набір на мережу або заклад; `NULLS NOT DISTINCT` за закладом; порожній набір = «без списання в закладі») і `beauty_service_materials` (рядки: товар, `quantity`; лише товари `salon_use|both`).
+- **`beauty_stock_levels`:** + `shortage_quantity numeric(14,3) NOT NULL DEFAULT 0` CHECK `>= 0`. `quantity >= 0` лишається.
+- **`beauty_stock_movements`:** + `is_shortage boolean NOT NULL DEFAULT false`; CHECK `(batch_id IS NULL) = is_shortage` (замість попереднього `ck_beauty_stock_movements_batch`); `ck_beauty_stock_movements_shortage` (рядок нестачі — лише `service_consumption`, або додатна нога погашення `receipt|transfer_in|stocktake_adjust`).
+- **`beauty_stock_operations`:** + `appointment_id uuid NULL` (композитний FK `(tenant_id, appointment_id)` → `beauty_appointments` RESTRICT); CHECK `(kind = 'service_consumption') = (appointment_id IS NOT NULL)`; UNIQUE `ux_beauty_stock_operations_appointment (tenant_id, appointment_id) WHERE appointment_id IS NOT NULL` — ідемпотентність автосписання за візитом.
+- **`beauty_stocktake_lines`:** + `expected_shortage numeric(14,3) NULL` CHECK `>= 0`.
+- **`beauty_staff_alerts`** (нова): `kind` `low_stock|expiring|shortage`; `location_id`, `product_id`, `batch_id NULL`, `operation_id NULL`; CHECK `(kind = 'expiring') = (batch_id IS NOT NULL)`, `(kind = 'shortage') = (operation_id IS NOT NULL)`; знімок `quantity`, `threshold`, `expires_on`, `days_bucket 0..365`; `dedupe_key varchar(200)`, UNIQUE `(tenant_id, dedupe_key)`; `status` `open|read|resolved` з CHECK на `resolved_at`/`read_at`; без ПД клієнтів.
+
+**Інваріанти (для кожної пари заклад×товар, після кожної транзакції):**
+1. `level.quantity = Σ batches.quantity = Σ movements.quantity WHERE NOT is_shortage` (≥ 0);
+2. `level.shortage_quantity = −Σ movements.quantity WHERE is_shortage` (≥ 0);
+3. `Σ movements.quantity = quantity − shortage_quantity` (сальдо, може бути < 0).
+
+Журнали `beauty_stock_movements` і `beauty_stock_operations` — append-only (тригери + `REVOKE UPDATE, DELETE` для app-ролі). Погашення дефіциту — нові рухи, не `UPDATE`.
+
+**GRANT (синхронно `deploy/staging/db/grants.sql` і `scripts/dev/setup-db.ps1`; тест `staging-grants-sync`):**
+- app-роль: DML на нові таблиці через наявний `GRANT … ON ALL TABLES`; REVOKE append-only з етапу 1 без змін.
+- роль воркера (`beautycrm_worker`): `SELECT` на `beauty_stock_levels`, `beauty_stock_batches`, `beauty_products`, `beauty_product_location_settings`, `beauty_locations`; `SELECT, INSERT, UPDATE` на `beauty_staff_alerts`; без `DELETE`. Звуження за звітом security (L4): `UPDATE (status, resolved_at, updated_at)`, колонковий `SELECT` на `beauty_products` без `purchase_price` — у роботі.
+
+**Схема для тестів:** `worker/src/testing/schema.sql` перегенеровано після міграції (без BOM, LF); інакше падає `schema-drift.test.ts`.
+
+**Тест-вимоги:** див. контракт §32.22; RLS крос-tenant для нових таблиць; Up → Down → Up на копії.
+
+### Склад, етап 2b — Telegram власнику (`beauty_inventory`, ADR-025 §12, контракт §32.24)
+
+Міграція `20261119142456_beauty_inventory_stage2b` (TASK-895, адитивна). Чотири нові таблиці: RLS ENABLE + FORCE + `tenant_isolation`; FK композитні `(tenant_id, …)`.
+
+- **`beauty_staff_telegram_links`** — прив'язка й одноразовий токен; один рядок = одна спроба. Стани `issued | claimed | active | revoked`. `token_hash` — SHA-256 від 32 байт (`octet_length = 32`), TTL 15 хв. `chat_id_encrypted` — AES-GCM (ключ каналів), `chat_id_hash` — HMAC для пошуку. Згода: `consent_version` (`^inv-tg-v[0-9]+$`), `consent_at`. Часткові UNIQUE: `user_open` (один незакритий рядок на користувача), `chat_open` (один користувач на чат у боті tenant), `token`. CHECK форми стану (`issued`: є токен, немає чату; `claimed`: є токен і чат; `active`: токена немає, є чат; `revoked`: токена і чату немає). `revoked` не видаляється — стирається лише чат. Індекс для прибирання прострочених `issued|claimed`.
+- **`beauty_staff_telegram_link_events`** — append-only журнал (`issued | claimed | activated | declined | revoked | rejected`; `actor = user|bot|system`). Без `chat_id`, хешу, токена, username. `REVOKE UPDATE, DELETE, TRUNCATE` для app- і worker-ролей + тригер. Фактично `declined` не пишеться: відмова — `revoked` з `reason = declined` (§32.24.13).
+- **`beauty_staff_notifications`** — службова черга (outbox, ADR-003): `kind alert|digest`, `status pending|sending|sent|failed|cancelled`, `attempts 0..10`, `next_attempt_at`, `dedupe_key` (UNIQUE `(tenant_id, dedupe_key)`), `body` 1..4096. Без `chat_id` (адреса береться з прив'язки в момент відправки). Фінальні рядки старше 30 днів видаляє воркер.
+- **`beauty_staff_notification_alerts`** — зв'язок адресат × алерт: PK `(tenant_id, notification_id, alert_id)`, UNIQUE `(tenant_id, link_id, alert_id)` — кожен алерт кожному адресату не більше одного разу. FK `notification` CASCADE, `alert` і `link` RESTRICT.
+
+**Інваріанти:** `(chat_id_encrypted IS NULL) = (chat_id_hash IS NULL)`; `(revoke_reason IS NULL) = (status <> 'revoked')`; `(status = 'sent') = (sent_at IS NOT NULL)`; один активний чат на користувача, один користувач на чат у боті tenant. Відв'язка стирає `chat_id_*` і `token_hash` в тому самому `UPDATE`.
+
+**GRANT (синхронно `scripts/dev/setup-db.ps1`, `deploy/staging/db/grants.sql`; тест `staging-grants-sync`):**
+- app-роль: DML на (a), (c), (d) через `ON ALL TABLES`; на журнал (b) — `SELECT, INSERT`.
+- роль воркера (`beautycrm_worker`): (a) колонковий `SELECT (id, tenant_id, user_id, channel_id, status, chat_id_encrypted, token_expires_at, activated_at)` і колонковий `UPDATE (status, token_hash, chat_id_encrypted, chat_id_hash, revoked_at, revoke_reason, last_delivery_at, updated_at)`; (b) `INSERT`; (c) `SELECT, INSERT, UPDATE, DELETE`; (d) `SELECT, INSERT`; `users` — колонковий `SELECT (id, tenant_id, role, is_active, state)`; `beauty_products` — `name, unit` (без `purchase_price`).
+
+**Відкат:** `Down` відмовляє (`inventory stage2b history exists`), якщо є прив'язка не в `issued` або рядок журналу. Видалення історії — лише ручно власником БД з `ALTER TABLE … DISABLE TRIGGER` (human gate, runbook §2d). Схема тестів `worker/src/testing/schema.sql` перегенерована.
+
+---
+
 ## 9. Known Constraints
 
 - No composite primary keys across tenants (all PKs include tenant_id as first column or via UNIQUE constraint).

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useStock, useStockSummary } from "../hooks/use-inventory";
-import { formatQuantity, formatYmd, valueLabel } from "../inventory/logic";
+import { balanceLabel, formatQuantity, formatYmd, valueLabel } from "../inventory/logic";
 import type { InventoryScope, StockRow } from "../inventory/types";
 import { InputField, InventoryPage, LoadMore, LocationChips, locationName } from "./inventory-parts";
 import { OperationDialog, type OperationKindForm } from "./inventory-operation-dialog";
@@ -20,6 +20,7 @@ function RowBadges({ r, soonDays }: { r: StockRow; soonDays: number }) {
     <span className="flex flex-wrap gap-1.5">
       {r.quantity === 0 ? <Badge tone="neutral">Немає</Badge> : null}
       {r.isLow && r.quantity > 0 ? <Badge tone="wait">Мало</Badge> : null}
+      {r.shortageQuantity > 0 ? <Badge tone="promo">{r.balance < 0 ? "У мінусі" : "Є нестача"}</Badge> : null}
       {r.expiredQuantity > 0 ? <Badge tone="promo">Є прострочене</Badge> : null}
       {r.expiringQuantity > 0 ? <Badge tone="wait">{`Спливає за ${soonDays} діб`}</Badge> : null}
       {!r.isEnabled ? <Badge tone="neutral">Вимкнено в закладі</Badge> : null}
@@ -47,12 +48,19 @@ function LocationStock({ scope, locationId, search, state }: { scope: InventoryS
         <Card>
           <Table caption="Залишки закладу" headers={["Товар", "Залишок", "Мін. залишок", "Найближчий термін", "Стан", ...(showValue ? ["Вартість"] : [])]} minWidth={760}>
             {rows.map((r) => (
-              <tr key={r.product.id} className={`border-t border-(--line) ${r.isLow || r.expiredQuantity > 0 ? "bg-[#FFF8E6]" : ""}`}>
+              <tr key={r.product.id} className={`border-t border-(--line) ${r.isLow || r.shortageQuantity > 0 || r.expiredQuantity > 0 ? "bg-[#FFF8E6]" : ""}`}>
                 <th scope="row" className={`${TD} text-left font-semibold`}>
                   {r.product.name}
                   {r.product.category ? <span className="block text-[13px] font-normal text-(--muted)">{r.product.category}</span> : null}
                 </th>
-                <td className={TD}>{formatQuantity(r.quantity, r.product.unit)}</td>
+                <td className={TD}>
+                  {formatQuantity(r.quantity, r.product.unit)}
+                  {r.shortageQuantity > 0 ? (
+                    <span className="block text-[13px] font-semibold text-[#8A1F1F]" data-testid="stock-shortage">
+                      Нестача: {formatQuantity(r.shortageQuantity, r.product.unit)}. Сальдо: {balanceLabel(r.balance, r.product.unit)}
+                    </span>
+                  ) : null}
+                </td>
                 <td className={TD}>{r.minStock !== null && r.minStock > 0 ? formatQuantity(r.minStock, r.product.unit) : "—"}</td>
                 <td className={TD}>{formatYmd(r.nearestExpiresOn)}</td>
                 <td className={TD}>
@@ -92,12 +100,16 @@ function SummaryStock({ scope, search, state }: { scope: InventoryScope; search:
                   {r.product.name}
                   {r.isLowAnywhere ? <Badge tone="wait" className="ml-2">Мало десь</Badge> : null}
                 </th>
-                <td className={TD}>{formatQuantity(r.totalQuantity, r.product.unit)}</td>
+                <td className={TD}>
+                  {formatQuantity(r.totalQuantity, r.product.unit)}
+                  {r.totalShortage > 0 ? <span className="block text-[13px] font-semibold text-[#8A1F1F]">Нестача: {formatQuantity(r.totalShortage, r.product.unit)}</span> : null}
+                </td>
                 <td className={TD}>
                   <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
                     {r.locations.map((l) => (
                       <li key={l.locationId}>
                         {locationName(locations, l.locationId)}: {formatQuantity(l.quantity, r.product.unit)}
+                        {l.shortageQuantity > 0 ? <span className="font-semibold text-[#8A1F1F]"> (нестача {formatQuantity(l.shortageQuantity, r.product.unit)}, сальдо {balanceLabel(l.balance, r.product.unit)})</span> : null}
                         {l.isLow ? <span className="font-semibold text-[#7A4B00]"> (мало)</span> : null}
                       </li>
                     ))}

@@ -284,6 +284,7 @@ public sealed class AccessQaGapTests(AuthApiFixture fx) : IClassFixture<AuthApiF
         if (Starts("api/beauty/channels") || Starts("api/beauty/analytics") || Starts("api/beauty/service-costs")
             || route.EndsWith("/costs", StringComparison.Ordinal) || route == "api/beauty/me/revenue"
             || Starts("api/beauty/settings/reminders")) return RoleDeny;
+        if (write && Starts("api/beauty/inventory/services/") && route.EndsWith("/materials", StringComparison.Ordinal)) return RoleDeny; // §32.16: норми матеріалів лише owner/admin
         if (write && (Starts("api/beauty/services") || Starts("api/beauty/promotions"))) return RoleDeny; // services.catalog = view
         if (write && Starts("api/beauty/locations")) return RoleDeny; // locations.access = all, не edit
         if (write && Starts("api/beauty/specialists") && !route.Contains("/absences", StringComparison.Ordinal)) return RoleDeny; // staff.access = all, не edit

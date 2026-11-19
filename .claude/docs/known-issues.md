@@ -126,7 +126,7 @@ Description: `GET /operations/{id}` повертає рухи, відсорто�
 Resolution: окрема задача: або зберігати порядок списання (наприклад, колонка порядку рядка), або явно задокументувати в §32.6 як не FEFO. Клієнти не повинні покладатися на порядок.
 
 
-### KI-015: Приклади env не містять обов'язкових змінних ADR-024 (API не стартує на staging)
+### KI-I1: Приклади env не містять обов'язкових змінних ADR-024 (API не стартує на staging)
 Severity: high
 Status: open
 Discovered in: TASK-869 (перевірка env після TASK-863/865)
@@ -135,7 +135,7 @@ Area: infra, backend
 Description: `deploy/staging/.env.api.example` і корневий `.env.example` не містять `Auth__LoginAttemptKeyPepper` (≥ 32 байти) і `Auth__LegacyTenantLogin__DeprecatedAt` / `__SunsetAt`. Поза Development `AuthSetup` кидає виняток на старті. Скопійований приклад дає падіння API.
 Resolution: додати змінні з коментарями в обидва приклади (людина задає значення на сервері); до того — runbook §2b.4 як попередження. Код не змінювався.
 
-### KI-016: Нормалізація пошти в preflight (SQL) і в застосунку (C#) може розходитися
+### KI-I2: Нормалізація пошти в preflight (SQL) і в застосунку (C#) може розходитися
 Severity: medium
 Status: open
 Discovered in: TASK-861
@@ -144,7 +144,7 @@ Area: database, backend
 Description: preflight і міграція нормалізують `lower(btrim(email))` (SQL), застосунок — `Trim().ToLowerInvariant()`. Для Unicode-регістру й не-пробільних whitespace результати можуть різнитися. Частина таких адрес у звіті preflight (розділ 4) видна лише як аномалія. Пошта, яку застосунок не знайде через SQL-нормалізацію (або навпаки), може дати дубль або хибне `email_in_use`.
 Resolution: до застосування міграції на staging переглянути розділ 4 звіту preflight; аномалії виправити вручну. Вирівнювання правил нормалізації — окреме рішення (ADR-024: без Unicode-нормалізації).
 
-### KI-017: Лист «Пароль змінено» без часу зміни
+### KI-I3: Лист «Пароль змінено» без часу зміни
 Severity: low
 Status: accepted-risk
 Discovered in: TASK-872
@@ -153,7 +153,7 @@ Area: worker, database
 Description: контракт §31.7.3 вимагає час зміни (UTC) у листі. `auth_password_reset_claim_delivery` не повертає timestamp, тому лист без часу. Бюджет повторів (24 год) рахується в пам'яті процесу воркера.
 Accepted-risk: плейсхолдер погоджується людиною. Зміна потребує claim-функції з timestamp і міграції (окрема задача).
 
-### KI-018: Воркер без метрик; бюджети повторів і троттли процес-локальні
+### KI-I4: Воркер без метрик; бюджети повторів і троттли процес-локальні
 Severity: low
 Status: accepted-risk
 Discovered in: TASK-865, TASK-872
@@ -162,7 +162,7 @@ Area: worker, infra, backend
 Description: у воркері немає метрик (лише логи без пошти й токенів). Backoff і 24-годинний бюджет листів зберігаються в пам'яті; після рестарту відлік починається знову. У API `LoginEmailThrottle`, ліміти `password/forgot`, `InviteEmailCheckThrottle` — in-memory на інстанс (кожен інстанс рахує окремо).
 Accepted-risk: однаково з `OwnerInviteThrottle`; один інстанс API і воркера на staging. Перед масштабуванням — спільний лічильник (окрема задача). Квоти ідентичностей і блокування в БД і від рестарту не залежать.
 
-### KI-019: Алерти ADR-024 ще не налаштовані
+### KI-I5: Алерти ADR-024 ще не налаштовані
 Severity: medium
 Status: open
 Discovered in: TASK-864, TASK-860 (§31.9, §31.12)
@@ -171,7 +171,7 @@ Area: infra
 Description: передбачено алерти (`identity_created{via="staff_invite"}` > 10 / добу на tenant; сплеск `invite_email_in_use`; частка `invalid_credentials`). Метрики в API є, алертів у devops немає.
 Resolution: devops налаштовує алерти (окрема задача). До того — перегляд метрик вручну при релізі.
 
-### KI-020: Вимога релізу F-1 (IP клієнта за BFF) ще не перевірена на сервері
+### KI-I6: Вимога релізу F-1 (IP клієнта за BFF) ще не перевірена на сервері
 Severity: high
 Status: open
 Discovered in: TASK-871 (ADR-024 E-14)
@@ -180,6 +180,37 @@ Area: infra, security
 Description: без правильного `Beauty__TrustedProxies` + статичної адреси `web` (`BEAUTY_WEB_IP`) + nginx `X-Forwarded-For $remote_addr` ліміт `auth` (10/хв) спільний для всіх користувачів, тобто будь-хто без автентифікації блокує вхід усім. Код і конфіг у репозиторії готові; на сервері нічого не застосовано, smoke §6.6 не виконано.
 Resolution: людина застосовує конфіг, виконує smoke (`deploy/staging/README.md` §6.6), результат — у `.claude/logs/tasks/TASK-871.md`. Реліз TASK-866 і фази 2 заблоковано до цього.
 
+### KI-019: Guard службових повідомлень пропускає неканонічну форму команди
+Severity: medium
+Status: open (виправлення в роботі)
+Discovered in: TASK-897 (QA-1), TASK-898
+Resolved in: —
+Area: backend, security
+
+Description: `IsServiceShape` порівнює сирий текст: `" /start inv_…"`, `"\n/start inv_…"`, `/START`, `/start@Bot` потрапляють у клієнтський потік, і живий токен прив'язки зберігається в `beauty_messages`.
+
+Root cause (з звіту): класифікація службового повідомлення без нормалізації форми команди.
+Правило (до виправлення): перед класифікацією нормалізувати текст (Trim, регістронезалежно, зняти `@botname`); тест на кожну форму; токен, що потрапив у клієнтський потік, — дефект критичності high.
+
+### KI-020: Запобіжник прод-вмикання не розрізняє staging і прод
+Severity: medium
+Status: open (M1, виправлення в роботі)
+Discovered in: TASK-898
+Resolved in: —
+Area: backend, worker, config, ops
+
+Description: `TelegramL3Approved` діє лише поза `Development`; staging не `Development`, тож тестова прив'язка вимагала б `L3Approved=true`, тобто ключ юридичного gate мав би двозначний сенс. Воркер запобіжника не має взагалі.
+Правило (до виправлення): юридичний запобіжник розрізняє staging і прод явно (окремий ключ + allowlist tenant), не за `ASPNETCORE_ENVIRONMENT`; worker перевіряє його на старті так само, як backend. Кожен запобіжник тестувати на обох середовищах.
+
+### KI-021: Два незалежні прапори — аварійне вимкнення вимикало лише backend
+Severity: medium
+Status: open (M2, виправлення в роботі)
+Discovered in: TASK-898
+Resolved in: —
+Area: ops, backend, worker
+
+Description: `/status` казав «вимкнено», а алерти воркера йшли: `TelegramOwnerAlertsEnabled=false` не зупиняв `WORKER_INVENTORY_TELEGRAM_ENABLED=true`.
+Правило: аварійне вимкнення відправки = обидва прапори (runbook §2d); прапор, що керує одним процесом, не є вимикачем; статус, що описує стан системи, має відповідати фактичній поведінці (нейтральний текст, якщо не можна гарантувати).
 
 ## Resolved Issues
 
@@ -291,3 +322,62 @@ Description: `POST /auth/switch` без `refreshToken` відповідав `422
 Root cause: `[Required]` на полі секрету сесії; контракт §31.15 п.10 вимагає `401 invalid_token`.
 Resolution: прибрано `[Required]` з `SwitchRequest.RefreshToken`; `422` лишився для відсутнього `tenantId` і `same_tenant`.
 Prevention: відсутність секрету сесії = `401`, а не `422`. `[Required]` лише для несекретних полів.
+### KI-015: SAVEPOINT узято після читань кроку; ChangeTracker.Clear у catch відкидав незбережене
+Severity: high
+Status: resolved
+Discovered in: TASK-885 (review), TASK-893 (security-review, I2/I5)
+Resolved in: TASK-885 (SAVEPOINT до читань), інваріант зафіксовано коментарем у `EfBeautyStore.InventoryConsumption.cs`
+Area: backend, database
+
+Description: якщо SAVEPOINT береться після першого читання кроку, помилка читання переводить транзакцію в aborted, і відкат лише кроку неможливий. Окремо: `ChangeTracker.Clear()` у catch відкинув би незбережені tracked-зміни, якщо складовий крок колись використає `SaveChangesAsync`.
+
+Root cause: SAVEPOINT сприймався як «обгортка запису», а не як межа відкату для всіх запитів кроку. Інваріант «крок пише лише raw SQL / `ExecuteUpdate`» не був записаний.
+
+Resolution: SAVEPOINT береться першою дією кроку (до будь-якого читання); крок не викликає `SaveChangesAsync`; коментар над кодом фіксує інваріант.
+
+Prevention: у будь-якому кроці з `SAVEPOINT` перший SQL після нього — або сам крок. Крок, що відкочується через SAVEPOINT, пише лише raw SQL / `ExecuteUpdate`; якщо з'являється `SaveChangesAsync` — `ChangeTracker.Clear()` у catch заборонено (замість нього `ROLLBACK TO SAVEPOINT` і `Entry.State` reset). Тест: ін'єкція помилки в першому читанні кроку → візит `completed`, рухів немає.
+
+### KI-016: Складовий крок списання без `lock_timeout` тримав рядок візиту до 30 с
+Severity: medium
+Status: resolved
+Discovered in: TASK-885 (security-review M1, TASK-893)
+Resolved in: TASK-893 (`SET LOCAL lock_timeout` після SAVEPOINT; перевірити тестом перед закриттям)
+Area: backend, database
+
+Description: якщо рівень складу заблоковано іншою транзакцією, завершення візиту чекало до `CommandTimeout` (30 с), тримаючи рядок візиту. При обриві HTTP-запиту `OperationCanceledException` не потрапляла в `catch` і відкочувала весь візит, включно зі статусом `completed`, що суперечить «візит завершується завжди».
+
+Root cause: `CommandTimeout` і `CancellationToken` були єдиним обмеженням очікування блокування; SAVEPOINT не обмежував очікування, а лише відкочував помилку.
+
+Resolution: `SET LOCAL lock_timeout` одразу після SAVEPOINT (`55P03` відкочує SAVEPOINT); рішення щодо `CancellationToken` для складового кроку й коміту — у TASK-893.
+
+Prevention: у кожній транзакції, що має «не блокувати основну дію» (складський крок, сповіщення), ставити `lock_timeout` короткий і в межах SAVEPOINT. Тест: блокування рівня іншою транзакцією → візит `completed` за обмежений час, лог `inventory_consumption_failed sqlstate=55P03`.
+
+### KI-017: Модульний гейт автосписання покладався лише на RLS
+Severity: low
+Status: resolved
+Discovered in: TASK-885 (security-review L2)
+Resolved in: TASK-893 (явний фільтр `tenant_id`, `lower(module)`, `InventoryModuleGate`)
+Area: backend, security
+
+Description: перевірка модуля в складовому кроці не фільтрувала `tenant_id` явно і порівнювала регістр по-різному з API (`OrdinalIgnoreCase`) і воркером (`lower(m)`). Коректно лише завдяки RLS.
+
+Root cause: гейт писався як «запит, що RLS і так обмежить», без уніфікації з іншими шляхами.
+
+Resolution: окремий `InventoryModuleGate` з явним `tenant_id` і регістронезалежним порівнянням; API, воркер і склад використовують його.
+
+Prevention: кожен гейт (модуль, прапор, право) має явний фільтр tenant і одну реалізацію порівняння. Не покладатися на RLS як єдиний захист у коді; RLS — другий шар (ADR-002). Тест: модуль увімкнено в іншому tenant → автосписання не відбувається.
+
+### KI-018: Нерозпізнане значення вимикача `Inventory:AutoConsumptionEnabled` лишало автосписання увімкненим
+Severity: low
+Status: resolved
+Discovered in: TASK-885 (security-review L1)
+Resolved in: TASK-893 (будь-яке присутнє значення, крім `true`, вимикає)
+Area: backend, config, ops
+
+Description: значення `0`, `off`, `no` при аварійному вимкненні не вимикали автосписання, бо парсинг `bool.TryParse` при невдачі повертав «увімкнено».
+
+Root cause: для аварійного вимикача використано правило «невалідне = за замовчуванням», а не «невалідне = безпечний стан». Для вимикача безпечний стан — вимкнено.
+
+Resolution: вимкнено, якщо ключ присутній і його значення не `true` (без урахування регістру); відсутній ключ — увімкнено за замовчуванням.
+
+Prevention: аварійний вимикач (аварійне вимкнення) вважає вимкненим будь-яке присутнє значення, крім явного `true`; відсутній ключ дає дефолт коду. Документувати в runbook (§2c). Тест: `0`, `off`, `no`, порожнє → вимкнено.

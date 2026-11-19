@@ -112,4 +112,65 @@ describe("http §32: шляхи, методи, заголовки", () => {
     expect(last()[0]).toBe("/api/beauty/inventory/movements?type=write_off&from=2026-10-01T00%3A00%3A00Z&to=2026-10-14T23%3A59%3A59Z");
     expect(r.items[0]).toMatchObject({ id: "m", type: "receipt", quantity: 0, createdBy: null });
   });
+
+  it("етап 2a: нові поля залишків адитивні (fallback для старого сервера)", async () => {
+    apiJson.mockResolvedValueOnce({ location: { id: "c" }, items: [{ product: ref, locationId: "c", quantity: 0, shortageQuantity: 0.3, balance: -0.3 }, { product: ref, locationId: "c", quantity: 4 }], hasMore: false });
+    const r = await httpBeautyApi.getStock({ locationId: "c" });
+    expect(r.items[0]).toMatchObject({ shortageQuantity: 0.3, balance: -0.3 });
+    expect(r.items[1]).toMatchObject({ shortageQuantity: 0, balance: 4 });
+    apiJson.mockResolvedValueOnce({ items: [{ product: ref, totalQuantity: 3, totalShortage: 1, locations: [{ locationId: "c", quantity: 3, shortageQuantity: 1, balance: 2, isLow: true }] }], locations: [] });
+    const sum = await httpBeautyApi.getStockSummary();
+    expect(sum.items[0]).toMatchObject({ totalShortage: 1, locations: [{ shortageQuantity: 1, balance: 2 }] });
+    apiJson.mockResolvedValueOnce({ items: [{ id: "m", type: "service_consumption", isShortage: true, batchId: null, quantity: -0.3 }], hasMore: false });
+    expect((await httpBeautyApi.getMovements({ type: "service_consumption" })).items[0]).toMatchObject({ isShortage: true, batchId: null });
+    apiJson.mockResolvedValueOnce({ items: [{ id: "o", kind: "service_consumption", appointmentId: "ap1" }], hasMore: false });
+    expect((await httpBeautyApi.getOperations({ kind: "service_consumption" })).items[0]).toMatchObject({ appointmentId: "ap1" });
+  });
+
+  it("норми: шляхи, методи, тіло; DELETE з locationId лише для закладу", async () => {
+    apiJson.mockResolvedValueOnce({ serviceId: "s1", serviceName: "Манікюр", network: { serviceId: "s1", locationId: null, lines: [{ product: ref, quantity: 2 }], updatedAt: "t", updatedBy: { id: "u", name: "Анна" } }, locations: [{ serviceId: "s1", locationId: "c", locationName: "Центр", lines: [] }] });
+    const d = await httpBeautyApi.getServiceMaterials("s1");
+    expect(last()[0]).toBe("/api/beauty/inventory/services/s1/materials");
+    expect(d.network?.lines[0]).toMatchObject({ quantity: 2 });
+    expect(d.locations[0]).toMatchObject({ locationId: "c", locationName: "Центр", lines: [] });
+    apiJson.mockResolvedValueOnce({ serviceId: "s1", locationId: "c", lines: [], updatedAt: "t" });
+    await httpBeautyApi.setServiceMaterials("s1", { locationId: "c", lines: [] });
+    expect(last()[0]).toBe("/api/beauty/inventory/services/s1/materials");
+    expect(last()[1]).toMatchObject({ method: "PUT", cache: "no-store" });
+    expect(JSON.parse(last()[1]!.body!)).toEqual({ locationId: "c", lines: [] });
+    await httpBeautyApi.deleteServiceMaterials("s1", null);
+    expect(last()[0]).toBe("/api/beauty/inventory/services/s1/materials");
+    expect(last()[1]).toMatchObject({ method: "DELETE" });
+    await httpBeautyApi.deleteServiceMaterials("s1", "c");
+    expect(last()[0]).toBe("/api/beauty/inventory/services/s1/materials?locationId=c");
+    apiJson.mockResolvedValueOnce({ items: [] });
+    await httpBeautyApi.getServiceMaterialsList();
+    expect(last()[0]).toBe("/api/beauty/inventory/service-materials?includeInactive=false");
+  });
+
+  it("сповіщення: query, лічильник, read, read-all; ПД клієнтів не копіюються в DTO", async () => {
+    apiJson.mockResolvedValueOnce({
+      items: [{ id: "a1", kind: "shortage", status: "open", location: { id: "c", name: "Центр" }, product: ref, operationId: "op1", quantity: 0.3, createdAt: "t", clientName: "Не повинно", appointmentId: "ap", phone: "+380" }],
+      hasMore: true,
+      nextCursor: "n",
+    });
+    const r = await httpBeautyApi.getInventoryAlerts({ status: "open", kind: "shortage", locationId: "c", take: 500 });
+    expect(last()[0]).toBe("/api/beauty/inventory/alerts?status=open&kind=shortage&locationId=c&take=200");
+    expect(last()[1]).toMatchObject({ cache: "no-store" });
+    expect(JSON.stringify(r)).not.toMatch(/Не повинно|appointmentId|380|phone|clientName/);
+    expect(r.items[0]).toMatchObject({ kind: "shortage", operationId: "op1", batch: null });
+    apiJson.mockResolvedValueOnce({ count: 7 });
+    expect(await httpBeautyApi.getInventoryAlertsUnreadCount()).toBe(7);
+    expect(last()[0]).toBe("/api/beauty/inventory/alerts/unread-count");
+    apiJson.mockResolvedValueOnce({ id: "a1", kind: "low_stock", status: "read" });
+    expect((await httpBeautyApi.markInventoryAlertRead("a1")).status).toBe("read");
+    expect(last()[0]).toBe("/api/beauty/inventory/alerts/a1/read");
+    expect(last()[1]).toMatchObject({ method: "POST" });
+    apiJson.mockResolvedValueOnce({ updated: 4 });
+    expect(await httpBeautyApi.markAllInventoryAlertsRead("c")).toBe(4);
+    expect(last()[0]).toBe("/api/beauty/inventory/alerts/read-all?locationId=c");
+    apiJson.mockResolvedValueOnce({ updated: 2 });
+    expect(await httpBeautyApi.markAllInventoryAlertsRead()).toBe(2);
+    expect(last()[0]).toBe("/api/beauty/inventory/alerts/read-all");
+  });
 });
