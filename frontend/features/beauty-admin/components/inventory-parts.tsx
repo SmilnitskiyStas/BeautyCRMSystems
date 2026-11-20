@@ -16,6 +16,7 @@ import { ERROR_TEXT } from "./staff-parts";
 const SECTIONS = [
   { href: "/beauty/inventory", label: "Залишки", exact: true },
   { href: "/beauty/inventory/products", label: "Товари" },
+  { href: "/beauty/inventory/categories", label: "Категорії" },
   { href: "/beauty/inventory/suppliers", label: "Постачальники", manageOnly: true },
   { href: "/beauty/inventory/batches", label: "Партії й терміни" },
   { href: "/beauty/inventory/movements", label: "Журнал рухів" },

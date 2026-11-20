@@ -71,6 +71,7 @@ public class BeautyDbContext : DbContext
 
     // Склад (TASK-876, §32.3, ADR-025)
     public DbSet<Supplier> Suppliers => Set<Supplier>();
+    public DbSet<ProductCategory> ProductCategories => Set<ProductCategory>();
     public DbSet<Product> Products => Set<Product>();
     public DbSet<ProductLocationSetting> ProductLocationSettings => Set<ProductLocationSetting>();
     public DbSet<StockLevel> StockLevels => Set<StockLevel>();
@@ -721,6 +722,21 @@ public class BeautyDbContext : DbContext
             // + ux_beauty_suppliers_name ON (tenant_id, lower(name)) - вираз-індекс, лише в SQL міграції
         });
 
+        mb.Entity<ProductCategory>(b =>
+        {
+            Base(b, "beauty_product_categories", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_product_categories_name", "char_length(btrim(name)) BETWEEN 1 AND 100");
+                t.HasCheckConstraint("ck_beauty_product_categories_no_self_parent", "parent_id IS NULL OR parent_id <> id");
+            });
+            b.Property(x => x.Name).HasMaxLength(100);
+            b.Property(x => x.SortOrder).HasDefaultValue(0);
+            b.Property(x => x.IsArchived).HasDefaultValue(false);
+            FkTo<ProductCategory, ProductCategory>(b, "ParentId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.ParentId }).HasDatabaseName("ix_beauty_product_categories_parent");
+            // + ux_beauty_product_categories_name ON (tenant_id, COALESCE(parent_id, nil-uuid), lower(name)) - вираз-індекс, лише в SQL міграції
+        });
+
         mb.Entity<Product>(b =>
         {
             Base(b, "beauty_products", t =>
@@ -730,6 +746,7 @@ public class BeautyDbContext : DbContext
                 t.HasCheckConstraint("ck_beauty_products_name", "char_length(btrim(name)) BETWEEN 1 AND 200");
                 t.HasCheckConstraint("ck_beauty_products_barcode", "barcode IS NULL OR barcode ~ '^[0-9A-Za-z._-]{1,64}$'");
                 t.HasCheckConstraint("ck_beauty_products_purchase_price", string.Format(Money, "purchase_price"));
+                t.HasCheckConstraint("ck_beauty_products_sale_price", "sale_price IS NULL OR sale_price BETWEEN 0 AND 1000000");
                 t.HasCheckConstraint("ck_beauty_products_min_stock", "min_stock IS NULL OR min_stock >= 0");
             });
             b.Property(x => x.Name).HasMaxLength(200);
@@ -738,11 +755,14 @@ public class BeautyDbContext : DbContext
             b.Property(x => x.Barcode).HasMaxLength(64);
             Enum(b.Property(x => x.Purpose)).HasMaxLength(16);
             b.Property(x => x.PurchasePrice).HasPrecision(12, 2);
+            b.Property(x => x.SalePrice).HasPrecision(12, 2);
             b.Property(x => x.MinStock).HasPrecision(14, 3);
             b.Property(x => x.TrackExpiry).HasDefaultValue(false);
             b.Property(x => x.IsActive).HasDefaultValue(true);
             b.Property(x => x.Note).HasMaxLength(500);
             FkTo<Product, Supplier>(b, "SupplierId", DeleteBehavior.Restrict);
+            FkTo<Product, ProductCategory>(b, "CategoryId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.CategoryId }).HasDatabaseName("ix_beauty_products_category").HasFilter("category_id IS NOT NULL");
             FkTo<Product, User>(b, "UpdatedByUserId", DeleteBehavior.Restrict);
             b.HasIndex(x => new { x.TenantId, x.Barcode }).IsUnique().HasDatabaseName("ux_beauty_products_barcode")
                 .HasFilter("barcode IS NOT NULL");

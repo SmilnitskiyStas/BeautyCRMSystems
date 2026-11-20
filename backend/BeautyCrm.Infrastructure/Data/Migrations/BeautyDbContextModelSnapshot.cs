@@ -3598,6 +3598,10 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(100)")
                         .HasColumnName("category");
 
+                    b.Property<Guid?>("CategoryId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("category_id");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("timestamp with time zone")
@@ -3636,6 +3640,11 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)")
                         .HasColumnName("purpose");
+
+                    b.Property<decimal?>("SalePrice")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("sale_price");
 
                     b.Property<Guid?>("SupplierId")
                         .HasColumnType("uuid")
@@ -3678,6 +3687,10 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasDatabaseName("ux_beauty_products_barcode")
                         .HasFilter("barcode IS NOT NULL");
 
+                    b.HasIndex("TenantId", "CategoryId")
+                        .HasDatabaseName("ix_beauty_products_category")
+                        .HasFilter("category_id IS NOT NULL");
+
                     b.HasIndex("TenantId", "SupplierId")
                         .HasDatabaseName("ix_beauty_products_supplier");
 
@@ -3699,7 +3712,72 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
 
                             t.HasCheckConstraint("ck_beauty_products_purpose", "purpose IN ('sale', 'salon_use', 'both')");
 
+                            t.HasCheckConstraint("ck_beauty_products_sale_price", "sale_price IS NULL OR sale_price BETWEEN 0 AND 1000000");
+
                             t.HasCheckConstraint("ck_beauty_products_unit", "unit IN ('pcs', 'ml', 'g', 'l', 'kg', 'pack')");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductCategory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<bool>("IsArchived")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("is_archived");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("name");
+
+                    b.Property<Guid?>("ParentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("parent_id");
+
+                    b.Property<int>("SortOrder")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0)
+                        .HasColumnName("sort_order");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_product_categories");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_product_categories_tenant_id_id");
+
+                    b.HasIndex("TenantId", "ParentId")
+                        .HasDatabaseName("ix_beauty_product_categories_parent");
+
+                    b.ToTable("beauty_product_categories", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_product_categories_name", "char_length(btrim(name)) BETWEEN 1 AND 100");
+
+                            t.HasCheckConstraint("ck_beauty_product_categories_no_self_parent", "parent_id IS NULL OR parent_id <> id");
                         });
                 });
 
@@ -7221,6 +7299,13 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.Product", b =>
                 {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.ProductCategory", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CategoryId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_products_beauty_product_categories_tenant_id_categor");
+
                     b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Supplier", null)
                         .WithMany()
                         .HasForeignKey("TenantId", "SupplierId")
@@ -7235,6 +7320,16 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_beauty_products_users_tenant_id_updated_by_user_id");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductCategory", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.ProductCategory", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ParentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_product_categories_beauty_product_categories_tenant_");
                 });
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductLocationSetting", b =>

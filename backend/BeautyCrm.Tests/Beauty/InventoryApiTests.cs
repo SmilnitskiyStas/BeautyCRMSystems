@@ -119,7 +119,7 @@ public sealed class InventoryApiTests(AuthApiFixture fx) : IClassFixture<AuthApi
 
     private static async Task<Guid> NewProduct(HttpClient c, string token, string name, string unit = "pcs", bool trackExpiry = false, decimal? price = null, string? barcode = null)
     {
-        var r = await Call(c, HttpMethod.Post, "/products", token, new { name, unit, purpose = "both", trackExpiry, purchasePrice = price, barcode });
+        var r = await Call(c, HttpMethod.Post, "/products", token, new { name, unit, purpose = "both", salePrice = 10, trackExpiry, purchasePrice = price, barcode });
         return (await Ok(r, HttpStatusCode.Created)).GetProperty("id").GetGuid();
     }
 
@@ -186,6 +186,8 @@ public sealed class InventoryApiTests(AuthApiFixture fx) : IClassFixture<AuthApi
             foreach (var (m, path) in new[]
                      {
                          (HttpMethod.Get, "/scope"), (HttpMethod.Get, "/products"), (HttpMethod.Get, $"/products/{id}"), (HttpMethod.Post, "/products"),
+                         (HttpMethod.Get, "/categories"), (HttpMethod.Post, "/categories"), (HttpMethod.Put, $"/categories/{id}"), (HttpMethod.Put, $"/categories/{id}/move"),
+                         (HttpMethod.Post, $"/categories/{id}/archive"), (HttpMethod.Post, $"/categories/{id}/unarchive"), (HttpMethod.Delete, $"/categories/{id}"),
                          (HttpMethod.Get, "/suppliers"), (HttpMethod.Get, "/stock?locationId=" + t.L1), (HttpMethod.Get, "/stock/summary"),
                          (HttpMethod.Get, "/batches"), (HttpMethod.Get, "/movements"), (HttpMethod.Get, "/operations"),
                          (HttpMethod.Post, "/receipts"), (HttpMethod.Post, "/write-offs"), (HttpMethod.Post, "/transfers"),
@@ -360,7 +362,7 @@ public sealed class InventoryApiTests(AuthApiFixture fx) : IClassFixture<AuthApi
         await Fails(await Call(c, HttpMethod.Put, $"/products/{prod}/locations/{t.Loc2}", t.SpecOwn, new { minStock = 1, isEnabled = true }), HttpStatusCode.NotFound, "location_not_found");
         Assert.Equal(HttpStatusCode.OK, (await Call(c, HttpMethod.Put, $"/products/{prod}/locations/{t.L1}", t.SpecOwn, new { minStock = 1, isEnabled = true })).StatusCode);
         // каталог й постачальники - лише manage = all
-        await Fails(await Call(c, HttpMethod.Post, "/products", t.SpecOwn, new { name = "X", unit = "pcs", purpose = "sale" }), HttpStatusCode.Forbidden, "forbidden_role");
+        await Fails(await Call(c, HttpMethod.Post, "/products", t.SpecOwn, new { name = "X", unit = "pcs", purpose = "sale", salePrice = 10 }), HttpStatusCode.Forbidden, "forbidden_role");
         await Fails(await Call(c, HttpMethod.Post, "/suppliers", t.SpecOwn, new { name = "S" }), HttpStatusCode.Forbidden, "forbidden_role");
         Assert.Equal(HttpStatusCode.OK, (await Get(c, "/suppliers", t.SpecOwn)).StatusCode); // перегляд контактів: manage >= own
         Assert.Equal(5, await LevelAsync(t.Id, t.Loc2, prod));
@@ -383,7 +385,7 @@ public sealed class InventoryApiTests(AuthApiFixture fx) : IClassFixture<AuthApi
         await Fails(await Get(c, $"/stock?locationId={a.L1}", b.Owner), HttpStatusCode.NotFound, "location_not_found");
         await Fails(await Op(c, "/receipts", b.Owner, new { locationId = a.L1, lines = new[] { new { productId = prodB, quantity = 1 } } }), HttpStatusCode.NotFound, "location_not_found");
         await Fails(await Op(c, "/receipts", b.Owner, new { locationId = b.L1, lines = new[] { new { productId = prodA, quantity = 1 } } }), HttpStatusCode.NotFound, "product_not_found");
-        await Fails(await Call(c, HttpMethod.Put, $"/products/{prodA}", b.Owner, new { name = "hijack", unit = "pcs", purpose = "sale" }), HttpStatusCode.NotFound, "product_not_found");
+        await Fails(await Call(c, HttpMethod.Put, $"/products/{prodA}", b.Owner, new { name = "hijack", unit = "pcs", purpose = "sale", salePrice = 10 }), HttpStatusCode.NotFound, "product_not_found");
         Assert.Equal(prodB, (await Ok(await Get(c, "/products/by-barcode?code=SAME-1", b.Owner))).GetProperty("id").GetGuid());
         Assert.Equal(["B-product"], (await Ok(await Get(c, "/products?active=all", b.Owner))).GetProperty("items").EnumerateArray().Select(p => p.GetProperty("name").GetString()).ToArray());
         Assert.Empty((await Ok(await Get(c, "/movements", b.Owner))).GetProperty("items").EnumerateArray());
@@ -404,23 +406,30 @@ public sealed class InventoryApiTests(AuthApiFixture fx) : IClassFixture<AuthApi
         await Fails(await Call(c, HttpMethod.Post, "/suppliers", t.Admin, new { name = "" }), HttpStatusCode.UnprocessableEntity, "invalid_name");
         var supId = sup.GetProperty("id").GetGuid();
 
-        var p = await Ok(await Call(c, HttpMethod.Post, "/products", t.Admin, new { name = "Shampoo", unit = "pcs", purpose = "sale", barcode = "4820-1", supplierId = supId, minStock = 3, category = "Hair" }), HttpStatusCode.Created);
+        var p = await Ok(await Call(c, HttpMethod.Post, "/products", t.Admin, new { name = "Shampoo", unit = "pcs", purpose = "sale", salePrice = 10, barcode = "4820-1", supplierId = supId, minStock = 3, category = "Hair" }), HttpStatusCode.Created);
         var id = p.GetProperty("id").GetGuid();
         Assert.Equal("Acme", p.GetProperty("supplier").GetProperty("name").GetString());
         Assert.False(p.GetProperty("hasMovements").GetBoolean());
-        await Fails(await Call(c, HttpMethod.Post, "/products", t.Admin, new { name = "Dup", unit = "pcs", purpose = "sale", barcode = "4820-1" }), HttpStatusCode.Conflict, "barcode_taken");
-        await Fails(await Call(c, HttpMethod.Post, "/products", t.Admin, new { name = "Bad", unit = "bottle", purpose = "sale" }), HttpStatusCode.UnprocessableEntity, "invalid_unit");
-        await Fails(await Call(c, HttpMethod.Post, "/products", t.Admin, new { name = "Bad", unit = "pcs", purpose = "sale", barcode = "bad code" }), HttpStatusCode.UnprocessableEntity, "invalid_barcode");
-        await Fails(await Call(c, HttpMethod.Post, "/products", t.Admin, new { name = "Bad", unit = "pcs", purpose = "sale", minStock = 1.5 }), HttpStatusCode.UnprocessableEntity, "invalid_min_stock");
-        await Fails(await Call(c, HttpMethod.Post, "/products", t.Admin, new { name = "Bad", unit = "pcs", purpose = "sale", supplierId = Guid.NewGuid() }), HttpStatusCode.NotFound, "supplier_not_found");
+        Assert.Equal(10m, p.GetProperty("salePrice").GetDecimal());
+        await Fails(await Call(c, HttpMethod.Post, "/products", t.Admin, new { name = "NoPrice", unit = "pcs", purpose = "sale" }), HttpStatusCode.UnprocessableEntity, "sale_price_required");
+        await Fails(await Call(c, HttpMethod.Post, "/products", t.Admin, new { name = "NegPrice", unit = "pcs", purpose = "both", salePrice = -1 }), HttpStatusCode.UnprocessableEntity, "invalid_price");
+        var salon = await Ok(await Call(c, HttpMethod.Post, "/products", t.Admin, new { name = "Salon only", unit = "pcs", purpose = "salon_use", salePrice = 99 }), HttpStatusCode.Created);
+        Assert.Equal(JsonValueKind.Null, salon.GetProperty("salePrice").ValueKind);
+        await Fails(await Call(c, HttpMethod.Put, $"/products/{salon.GetProperty("id").GetGuid()}", t.Admin, new { name = "Salon only", unit = "pcs", purpose = "sale" }), HttpStatusCode.UnprocessableEntity, "sale_price_required");
+        Assert.Equal(10m, (await Ok(await Get(c, $"/products/{id}", t.Spec))).GetProperty("salePrice").GetDecimal());
+        await Fails(await Call(c, HttpMethod.Post, "/products", t.Admin, new { name = "Dup", unit = "pcs", purpose = "sale", salePrice = 10, barcode = "4820-1" }), HttpStatusCode.Conflict, "barcode_taken");
+        await Fails(await Call(c, HttpMethod.Post, "/products", t.Admin, new { name = "Bad", unit = "bottle", purpose = "sale", salePrice = 10 }), HttpStatusCode.UnprocessableEntity, "invalid_unit");
+        await Fails(await Call(c, HttpMethod.Post, "/products", t.Admin, new { name = "Bad", unit = "pcs", purpose = "sale", salePrice = 10, barcode = "bad code" }), HttpStatusCode.UnprocessableEntity, "invalid_barcode");
+        await Fails(await Call(c, HttpMethod.Post, "/products", t.Admin, new { name = "Bad", unit = "pcs", purpose = "sale", salePrice = 10, minStock = 1.5 }), HttpStatusCode.UnprocessableEntity, "invalid_min_stock");
+        await Fails(await Call(c, HttpMethod.Post, "/products", t.Admin, new { name = "Bad", unit = "pcs", purpose = "sale", salePrice = 10, supplierId = Guid.NewGuid() }), HttpStatusCode.NotFound, "supplier_not_found");
 
-        Assert.Equal(["Hair"], (await Ok(await Get(c, "/categories", t.Spec))).GetProperty("items").EnumerateArray().Select(x => x.GetString()).ToArray());
+        Assert.Equal(["Hair"], (await Ok(await Get(c, "/products/categories", t.Spec))).GetProperty("items").EnumerateArray().Select(x => x.GetString()).ToArray());
         Assert.Equal(id, (await Ok(await Get(c, "/products/by-barcode?code=%204820-1%20", t.Spec))).GetProperty("id").GetGuid());
         await Fails(await Get(c, "/products/by-barcode?code=none", t.Spec), HttpStatusCode.NotFound, "product_not_found");
 
         await Receive(c, t.Admin, t.L1, id, 2);
-        await Fails(await Call(c, HttpMethod.Put, $"/products/{id}", t.Admin, new { name = "Shampoo", unit = "ml", purpose = "sale" }), HttpStatusCode.UnprocessableEntity, "unit_locked");
-        var upd = await Ok(await Call(c, HttpMethod.Put, $"/products/{id}", t.Admin, new { name = "Shampoo 2", unit = "pcs", purpose = "both", isActive = false }));
+        await Fails(await Call(c, HttpMethod.Put, $"/products/{id}", t.Admin, new { name = "Shampoo", unit = "ml", purpose = "sale", salePrice = 10 }), HttpStatusCode.UnprocessableEntity, "unit_locked");
+        var upd = await Ok(await Call(c, HttpMethod.Put, $"/products/{id}", t.Admin, new { name = "Shampoo 2", unit = "pcs", purpose = "both", salePrice = 10, isActive = false }));
         Assert.Equal("Shampoo 2", upd.GetProperty("name").GetString());
         Assert.False(upd.GetProperty("isActive").GetBoolean());
         Assert.True(upd.GetProperty("hasMovements").GetBoolean());
@@ -939,7 +948,7 @@ public sealed class InventoryApiTests(AuthApiFixture fx) : IClassFixture<AuthApi
         var c = NewClient();
         var t = await NewTenantAsync();
         var prod = await NewProduct(c, t.Admin, "Low", price: 1m);
-        Assert.Equal(HttpStatusCode.OK, (await Call(c, HttpMethod.Put, $"/products/{prod}", t.Admin, new { name = "Low", unit = "pcs", purpose = "both", minStock = 5 })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await Call(c, HttpMethod.Put, $"/products/{prod}", t.Admin, new { name = "Low", unit = "pcs", purpose = "both", salePrice = 10, minStock = 5 })).StatusCode);
         await Receive(c, t.Admin, t.L1, prod, 3, exp: Far);
         await Receive(c, t.Admin, t.Loc2, prod, 8);
         var expired = await SeedBatchAsync(t.Id, t.L1, prod, 2, Expired);

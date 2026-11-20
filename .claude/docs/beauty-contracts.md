@@ -4559,7 +4559,7 @@ POST /reset { "expectedVersion": 4, "dryRun": false }
 
 Артефакт `API-CONTRACT-INVENTORY-V1` (TASK-875). Джерело рішень: **ADR-025** (статус `accepted` 2026-11-18; етап 1 реалізовано, див. ADR-025 §10). При розбіжності діє ADR, а зміна семантики потребує нового ADR. Позначка *(дефолт Qn)* — рекомендований дефолт відкритого питання ADR-025 §7; його змінюють правкою цього розділу.
 - **Нумерація:** §31 і версія v0.34 зайняті гілкою mobile (ADR-024, global identity, не злито в цю гілку), тому цей розділ — §32, v0.35. §29–§31 цей розділ не змінює.
-- **Версії §32:** v0.35 (2026-11-18, TASK-875) — етап 1, §32.1–§32.14. **v0.36** (2026-11-19, TASK-882, `API-CONTRACT-INVENTORY-V2`) — етап 2a, §32.15–§32.25: норми матеріалів, дефіцит, автосписання, сповіщення персоналу, воркер. Адитивно змінює §32.3, §32.4, §32.6 (дефіцит, позначено «з v0.36»). Етап 2b (Telegram власнику) — лише заглушка §32.24. **v0.37** (2026-11-19, TASK-889, `API-CONTRACT-INVENTORY-V3`, proposed) — етап 2b: §32.24 замінено повною специфікацією (прив'язка чату owner, guard вхідних, службова черга, прапори, приватність, API, UI, задачі); інші підрозділи §32 не змінено.
+- **Версії §32:** v0.35 (2026-11-18, TASK-875) — етап 1, §32.1–§32.14. **v0.36** (2026-11-19, TASK-882, `API-CONTRACT-INVENTORY-V2`) — етап 2a, §32.15–§32.25: норми матеріалів, дефіцит, автосписання, сповіщення персоналу, воркер. Адитивно змінює §32.3, §32.4, §32.6 (дефіцит, позначено «з v0.36»). Етап 2b (Telegram власнику) — лише заглушка §32.24. **v0.37** (2026-11-19, TASK-889, `API-CONTRACT-INVENTORY-V3`, proposed) — етап 2b: §32.24 замінено повною специфікацією (прив'язка чату owner, guard вхідних, службова черга, прапори, приватність, API, UI, задачі); інші підрозділи §32 не змінено. **v0.38** (2026-11-20, `API-CONTRACT-INVENTORY-V4`) — роздрібна ціна товару `salePrice` (§32.26): поле в `ProductDto`/`ProductRequest`, обов'язкове для `purpose` = `sale|both`, код `sale_price_required`; нових маршрутів немає.
 - **Обсяг цієї версії:** **етап 1** (каталог товарів, постачальники, залишки по закладах і зведено, партії й терміни, надходження, списання, переміщення, інвентаризація) — детально. **Етапи 2–3** — лише орієнтовно в §32.13, позначено «не специфіковано в цій версії».
 - **Розширює** §30.2/§30.3 (блок `inventory` у каталозі прав, `catalogVersion = 2`; §32.2) і §30.6 (карта «ендпоінт → право» для `/api/beauty/inventory/*` — у §32.5). Інші розділи не змінюються.
 
@@ -4727,7 +4727,8 @@ POST /reset { "expectedVersion": 4, "dryRun": false }
 | GET | `/products?search&category&purpose&supplierId&active=true\|false\|all&cursor&take` | `inventory.view ≥ own` | `{items: ProductDto[], hasMore, nextCursor?}`; `active` за замовч. `true`; сортування `lower(name), id` |
 | GET | `/products/{id}` | `inventory.view ≥ own` | `ProductDetailDto` |
 | GET | `/products/by-barcode?code=` | `inventory.view ≥ own` | `ProductDto` або `404 product_not_found` (точний збіг після `trim`) |
-| GET | `/categories` | `inventory.view ≥ own` | `{items: string[]}` — різні непорожні категорії, ordinal-сортування |
+| GET | `/products/categories` | `inventory.view ≥ own` | `{items: string[]}` — різні непорожні **текстові** категорії товарів, ordinal-сортування (застарілий список; **раніше `GET /categories`** — шлях віддано дереву, §32.27) |
+| — | `/categories…` (дерево) | див. §32.27 | GET/POST/PUT/PUT move/POST archive/unarchive/DELETE |
 | POST | `/products` | `inventory.manage = all` | `ProductRequest` → `201 ProductDto`; Лім. |
 | PUT | `/products/{id}` | `inventory.manage = all` | `ProductRequest` → `200 ProductDto`; Лім. |
 | PUT | `/products/{id}/locations/{locationId}` | `inventory.manage ≥ own` + заклад у scope | `{minStock: number\|null, isEnabled: boolean}` → `200 LocationSettingDto`; Лім. |
@@ -4764,11 +4765,11 @@ InventoryScopeDto   { locations: [{id, name, isActive, timezone, canManage: bool
                       canEditCatalog: boolean, expiringSoonDays }
 ProductRef          { id, name, unit, purpose, category: string|null, barcode: string|null, isActive }
 ProductDto          { id, name, category|null, unit, barcode|null, purpose, supplier: {id, name}|null,
-                      purchasePrice†: number|null, minStock: number|null, trackExpiry, isActive, note|null,
+                      purchasePrice†: number|null, salePrice: number|null (роздрібна, §32.26; видима для всіх з inventory.view), minStock: number|null, trackExpiry, isActive, note|null,
                       hasMovements: boolean, createdAt, updatedAt }
 ProductDetailDto    = ProductDto & { locationSettings: LocationSettingDto[] }   // лише заклади scope
 LocationSettingDto  { locationId, minStock: number|null, isEnabled, updatedAt }
-ProductRequest      { name, category?, unit, barcode?, purpose, supplierId?, purchasePrice?, minStock?,
+ProductRequest      { name, category?, unit, barcode?, purpose, supplierId?, purchasePrice?, salePrice? (обов'язкове для purpose sale|both; для salon_use ігнорується → null; PUT = повна заміна, без злиття), minStock?,
                       trackExpiry?: boolean (POST за замовч. false; PUT null = без змін),
                       isActive?: boolean (PUT null = без змін; POST ігнорується), note? }
                     // PUT: purchasePrice відсутнє або null = без змін (очищення ціни не підтримується);
@@ -4814,7 +4815,8 @@ StocktakeDto        = StocktakeSummaryDto & { note|null, version, postedBy: {id,
 | зміна `unit` товару, що має рухи | `unit_locked` |
 | `barcode` після `trim` (порожнє → `null`) не відповідає `^[0-9A-Za-z._-]{1,64}$` | `invalid_barcode` |
 | `purpose` ∉ `sale\|salon_use\|both` | `invalid_purpose` |
-| `purchasePrice`, `unitCost`: < 0, > 1 000 000, > 2 знаків | `invalid_price` |
+| `purchasePrice`, `salePrice`, `unitCost`: < 0, > 1 000 000, > 2 знаків | `invalid_price` |
+| `salePrice` відсутнє/`null` за `purpose` = `sale\|both` (на POST і PUT, у т.ч. перше редагування старого товару без ціни) | `sale_price_required` |
 | `minStock`: < 0, > 1 000 000, > 3 знаків; не ціле для `pcs\|pack` (*дефолт Q4*) | `invalid_min_stock` |
 | `quantity`, `countedQuantity`: ≤ 0 (для `countedQuantity` — < 0), > 1 000 000, > 3 знаків; не ціле для `pcs\|pack` | `invalid_quantity` |
 | `lines` порожній / > 100 (операції) / > 500 (PUT інвентаризації) / > 2000 (усього в інвентаризації) | `invalid_lines` / `too_many_lines` |
@@ -4871,7 +4873,7 @@ StocktakeDto        = StocktakeSummaryDto & { note|null, version, postedBy: {id,
 | 422 | `stocktake_empty` | — | Внесіть хоча б один підрахунок |
 | 422 | `idempotency_key_required`, `invalid_idempotency_key` | — | Технічна помилка запиту. Спробуйте ще раз |
 | 422 | `idempotency_key_reused` | — | Цю операцію вже надіслано з іншими даними. Оновіть сторінку |
-| 422 | `invalid_name`, `invalid_category`, `invalid_unit`, `invalid_barcode`, `invalid_purpose`, `invalid_price`, `invalid_min_stock`, `invalid_quantity`, `invalid_lines`, `too_many_lines`, `duplicate_line`, `invalid_date`, `invalid_reason`, `invalid_note`, `invalid_document_number`, `invalid_lot_number`, `invalid_contact_name`, `invalid_phone`, `invalid_email`, `location_required`, `invalid_range`, `invalid_cursor`, `expected_version_required` | `line` (де застосовно) | тексти полів форми |
+| 422 | `invalid_name`, `invalid_category`, `invalid_unit`, `invalid_barcode`, `invalid_purpose`, `invalid_price`, `sale_price_required`, `invalid_min_stock`, `invalid_quantity`, `category_not_found`, `category_archived`, `category_depth`, `category_cycle`, `category_limit`, `invalid_sort_order`, `invalid_lines`, `too_many_lines`, `duplicate_line`, `invalid_date`, `invalid_reason`, `invalid_note`, `invalid_document_number`, `invalid_lot_number`, `invalid_contact_name`, `invalid_phone`, `invalid_email`, `location_required`, `invalid_range`, `invalid_cursor`, `expected_version_required` | `line` (де застосовно) | тексти полів форми |
 | 429 | `rate_limited` | `Retry-After` | Забагато дій. Зачекайте хвилину |
 
 ### 32.9 Frontend (TASK-878)
@@ -5447,3 +5449,38 @@ DAG: 889 → [G1] → 895 → {890 ∥ 896}; 891 — mock після G1, http п
 **Вирівнювання з рішенням «тихе пропускання»:** технічний збій складового кроку не блокує візит (2a-Q1, прийнятий ризик, I3). Компенсація — лог `inventory_consumption_failed` (Error) і процедура в runbook (інвентаризація, §2b runbook).
 
 **Виправлено в TASK-893 (раніше відкладені):** L3 — воркер ковтав помилки закладу без логу; тепер лог `inventory_alerts_location_failed tenant={id} location={id} errorCode={code}` (без ПД) і `tenant=` у підсумковому логу. L4 — GRANT воркера звужено: `GRANT UPDATE (status, resolved_at, updated_at) ON beauty_staff_alerts` і колонковий `SELECT (id, tenant_id, is_active, min_stock)` на `beauty_products` (без `purchase_price`); обидва файли (`deploy/staging/db/grants.sql`, `scripts/dev/setup-db.ps1`) синхронно.
+
+### 32.26 Роздрібна ціна товару (v0.38, 2026-11-20, `API-CONTRACT-INVENTORY-V4`)
+
+Рішення користувача (human gate G1 схеми): роздрібна ціна винесена з етапу 3 в етап 1.x; **перевизначення ціни по закладах — етап 3** (тут не робиться).
+
+- **Схема:** `beauty_products.sale_price numeric(12,2) NULL`, CHECK `ck_beauty_products_sale_price` (`sale_price IS NULL OR sale_price BETWEEN 0 AND 1000000`, як `purchase_price`). Одна мережева ціна на tenant. Міграція `20261120084056_beauty_inventory_sale_price` (ADD COLUMN NULL; Down = DROP COLUMN, дані цін втрачаються — прийнято). Воркер колонку не читає (колонковий GRANT без змін).
+- **DTO:** `salePrice: number|null` у `ProductDto`/`ProductDetailDto` (список, деталі, by-barcode; завжди присутнє в JSON, `null` для `salon_use` і старих продажних товарів без ціни). Запит: `salePrice?: number` у `ProductRequest` (POST/PUT `/products`).
+- **Видимість і права:** `salePrice` бачать усі з `inventory.view` (це не собівартість), змінює `inventory.manage = all` (як решта каталогу). `purchasePrice` лишається за `inventory.costs` — права не змішуються. Нових маршрутів немає.
+- **Обов'язковість:** `purpose` = `sale|both` → `salePrice` обов'язкове (не `null`), `0..1000000`, ≤ 2 знаків (`0` допустимо — узгоджено з `purchasePrice`); відсутнє → `422 sale_price_required`, поза діапазоном/точністю → `422 invalid_price`. `purpose` = `salon_use` → значення ігнорується, зберігається `NULL` (зміна `sale|both` → `salon_use` обнуляє ціну). PUT — повна заміна (на відміну від `purchasePrice`, злиття з наявним немає).
+- **Існуючі дані:** продажні товари без ціни лишаються `NULL` і читаються без помилок; при першому PUT такого товару ціну треба вказати (інакше `sale_price_required`). Зміна `isActive` через повний PUT теж вимагає ціни.
+- Ідемпотентність, журнал операцій, залишки (`ProductRef`) і воркер не змінено.
+
+### 32.27 Дерево категорій товарів (v0.39, 2026-11-20, `API-CONTRACT-INVENTORY-V5`)
+
+Рішення користувача (human gate G1 схеми). Раніше `beauty_products.category` — вільний текст (≤ 100) із datalist на фронті. Тепер додається дерево категорій (до 3 рівнів); **стара текстова `category` лишається без змін** (не мігрується й не видаляється; прибирання — окремою задачею), дерево стартує **порожнім**.
+
+- **Схема:** `beauty_product_categories` (`id`, `tenant_id`, `parent_id NULL` = корінь, `name varchar(100)`, `sort_order int` за замовч. 0, `is_archived bool` за замовч. false, `created_at`, `updated_at`; RLS ENABLE+FORCE+`tenant_isolation`). Композитний FK `(tenant_id, parent_id)` → та сама таблиця, `ON DELETE RESTRICT`; CHECK імені (`btrim` 1..100) і `parent_id <> id`. Унікальний індекс `ux_beauty_product_categories_name (tenant_id, COALESCE(parent_id, nil-uuid), lower(name))` (корінь теж унікальний). `beauty_products.category_id uuid NULL` + композитний FK `(tenant_id, category_id)` → категорії, `RESTRICT`, частковий індекс. Міграція `20261120085617_beauty_inventory_product_categories` (ADD TABLE + ADD COLUMN NULL; Down = DROP — дані дерева втрачаються, **Down відмовляє** `RAISE EXCEPTION 'product categories exist'`, якщо в таблиці є рядки). GRANT: app-роль покрита `ALL TABLES`; воркеру доступ не потрібен.
+- **Права/доступ:** клас `[RequireModule beauty_inventory]` (вимкнено → `403 module_disabled`); читання `inventory.view ≥ own`; усі зміни `inventory.manage = all` (як каталог товарів; specialist-пресет → `403 forbidden_role`, deputy/admin/owner можуть). Записи під throttle `Inventory:WritePerUserPerMinute` (`429 rate_limited`), `Cache-Control: no-store`. Чужий/неіснуючий id (інший tenant) → `404 category_not_found` (IDOR). Зміни логуються як `inventory_catalog_changed entity=category` (окремого журналу змін довідники складу не мають).
+- **Маршрути** (`/api/beauty/inventory`):
+
+| Метод | Шлях | Тіло | Відповідь |
+|---|---|---|---|
+| GET | `/categories?includeArchived=false` | — | `200 {items: CategoryDto[]}` — плоский список усіх вузлів, порядок: `parentId` (корені першими), `sortOrder`, `name`; за замовч. без архівних |
+| POST | `/categories` | `{name, parentId?, sortOrder?}` | `201 CategoryDto` |
+| PUT | `/categories/{id}` | `{name, sortOrder?}` | `200 CategoryDto` — перейменування (+порядок); `parentId` у тілі ігнорується; без `sortOrder` порядок лишається |
+| PUT | `/categories/{id}/move` | `{parentId?, sortOrder?}` | `200 CategoryDto` — `parentId` = `null`/відсутній → у корінь; без `sortOrder` лишається |
+| POST | `/categories/{id}/archive` · `/unarchive` | — | `200 CategoryDto` (ідемпотентно) |
+| DELETE | `/categories/{id}` | — | `204`; `409 category_not_empty`, якщо є підкатегорії (у т.ч. архівні) або товари (у т.ч. архівні/неактивні); інакше фізичне видалення |
+
+- **`CategoryDto`:** `{id, parentId: guid|null, name, sortOrder, isArchived, productCount, childCount}`; `productCount` — прямі товари (усі), `childCount` — прямі підкатегорії (усі, у т.ч. архівні). Списки без архівних (`includeArchived=false`) **можуть містити вузли, чий батько архівний і тому не повернутий** — клієнт трактує такі як корені (або бере `includeArchived=true` для керування деревом).
+- **Валідація/коди:** `name` після `trim` 1..100 → інакше `422 invalid_name`; `sortOrder` ∈ −1 000 000..1 000 000 → `422 invalid_sort_order`; глибина ≤ 3 (корінь = 1; для move враховується висота всього піддерева) → `422 category_depth`; нащадок/сам вузол як новий батько → `422 category_cycle`; дубль імені під тим самим батьком без регістру (у межах tenant, корінь — окрема група) → `409 category_name_taken`; > 500 категорій на tenant → `422 category_limit`; батько для POST/move не знайдений (у т.ч. чужий) → `404 category_not_found`; **створення/переміщення під архівного батька → `422 category_archived`** (залишити вузол у тому ж архівному батьку, змінивши лише `sortOrder`, можна). Порядок перевірок для маршрутів з `{id}`: права → існування `{id}` (404) → валідація тіла → правила дерева. Зміни дерева серіалізуються advisory-блокуванням tenant (гонки не обходять глибину/цикл/ліміт).
+- **Архівування:** ховає категорію з вибору у формі (за замовч. список без архівних); товари зберігаються; **каскаду немає** — діти лишаються (видимі) під архівним батьком, їх архівують окремо.
+- **Товар:** `ProductDto`/`ProductDetailDto` + `categoryId: guid|null` і `categoryPath: string|null` (`"Волосся › Фарби"`, корінь → лист, роздільник ` › `; обчислюється на читанні, для архівних категорій теж повертається); старе `category` (текст) — як було. `ProductRequest.categoryId?`: `null`/відсутній → без категорії (PUT — повна заміна, як `salePrice`); не знайдена в tenant → `422 category_not_found`; архівна → `422 category_archived` (**але** товар, що вже в архівній категорії, редагується з тим самим `categoryId`). Текстове `category` у запиті підтримується як раніше. Фільтра списку товарів за `categoryId` поки немає.
+- **Зворотна сумісність:** `GET /categories` раніше повертав `{items: string[]}` (текстові категорії); тепер повертає вузли дерева. Старий список перенесено на `GET /products/categories` (та сама відповідь і права).
+- Нові коди помилок: `category_not_found` (404; 422 у запиті товару), `category_archived`, `category_depth`, `category_cycle`, `category_limit`, `invalid_sort_order` (422), `category_name_taken`, `category_not_empty` (409).

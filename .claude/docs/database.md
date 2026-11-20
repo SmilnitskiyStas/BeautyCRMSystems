@@ -998,3 +998,13 @@ pg_dump -U postgres beautycrm --blobs --roles > beautycrm.sql
 psql -U postgres < beautycrm.sql
 # Recreate roles: CREATE ROLE beautycrm_app NOSUPERUSER NOBYPASSRLS; GRANT ...
 ```
+
+### Склад: роздрібна ціна (ADR-025, контракт §32.26)
+
+- `beauty_products.sale_price numeric(12,2) NULL` + CHECK `ck_beauty_products_sale_price` (`IS NULL OR BETWEEN 0 AND 1000000`). NULL для `salon_use` і старих продажних товарів. Міграція `20261120084056_beauty_inventory_sale_price`: ADD COLUMN NULL без перезапису; Down = DROP COLUMN (ціни втрачаються). GRANT-и без змін (табличні покривають колонку; воркер читає колонково без `sale_price`).
+
+### Склад: дерево категорій товарів (ADR-025, контракт §32.27)
+
+- `beauty_product_categories`: `id`, `tenant_id`, `parent_id NULL` (композитний FK `(tenant_id, parent_id)` на ту ж таблицю, `RESTRICT`), `name varchar(100)` (CHECK `btrim` 1..100), `sort_order int DEFAULT 0`, `is_archived bool DEFAULT false`, `created_at`/`updated_at`; CHECK `parent_id <> id`; унікальний `ux_beauty_product_categories_name (tenant_id, COALESCE(parent_id, nil-uuid), lower(name))`; `ix_beauty_product_categories_parent (tenant_id, parent_id)`. RLS ENABLE+FORCE+`tenant_isolation` (як решта таблиць складу). Глибина (≤ 3), цикли й ліміт 500 — у сервісі під advisory-блокуванням tenant.
+- `beauty_products.category_id uuid NULL` + композитний FK `(tenant_id, category_id)` → категорії (`RESTRICT`) + частковий індекс `ix_beauty_products_category`. Стара `category` (текст) лишається, дерево стартує порожнім.
+- Міграція `20261120085617_beauty_inventory_product_categories`: ADD TABLE + ADD COLUMN NULL; Down = DROP (дані дерева втрачаються), але відмовляє `RAISE EXCEPTION 'product categories exist'`, якщо є рядки. GRANT: app-роль — `ALL TABLES`; воркеру доступ не потрібен.

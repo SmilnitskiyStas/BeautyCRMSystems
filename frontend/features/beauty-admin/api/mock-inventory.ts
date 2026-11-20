@@ -1,5 +1,6 @@
 import { BeautyApiError } from "@/features/beauty-auth/errors";
 import { todayInZone } from "../../beauty-shared/zone-time";
+import { MAX_CATEGORY_DEPTH, depthOf, moveProblem, pathOf } from "../inventory/categories";
 import {
   batchStatus,
   daysToExpiry,
@@ -13,6 +14,8 @@ import {
 import type {
   Batch,
   BatchQuery,
+  Category,
+  CategoryRequest,
   CostsAccess,
   InventoryScope,
   LocationSetting,
@@ -127,15 +130,25 @@ interface OperationRec {
   stocktakeId: string | null;
   appointmentId?: string | null;
 }
+interface CategoryRec {
+  id: string;
+  parentId: string | null;
+  name: string;
+  sortOrder: number;
+  isArchived: boolean;
+}
+const CATEGORY_LIMIT = 500;
 interface ProductRec {
   id: string;
   name: string;
   category: string | null;
+  categoryId: string | null;
   unit: StockUnit;
   barcode: string | null;
   purpose: Product["purpose"];
   supplierId: string | null;
   purchasePrice: number | null;
+  salePrice: number | null;
   minStock: number | null;
   trackExpiry: boolean;
   isActive: boolean;
@@ -200,6 +213,7 @@ export function createMockInventory(deps: InventoryMockDeps) {
   const nextId = (p: string) => `${p}${++seq}`;
   const suppliers: SupplierRec[] = [];
   const products: ProductRec[] = [];
+  const categories: CategoryRec[] = [];
   const settings = new Map<string, LocationSetting>();
   const batches: BatchRec[] = [];
   const movements: MovementRec[] = [];
@@ -234,16 +248,40 @@ export function createMockInventory(deps: InventoryMockDeps) {
     writes.push(t);
   }
 
+  // ---------- дерево категорій ----------
+  const categoryById = (id: string) => categories.find((c) => c.id === id);
+  const toCategory = (c: CategoryRec): Category => ({
+    id: c.id,
+    parentId: c.parentId,
+    name: c.name,
+    sortOrder: c.sortOrder,
+    isArchived: c.isArchived,
+    productCount: products.filter((p) => p.categoryId === c.id).length,
+    childCount: categories.filter((x) => x.parentId === c.id).length,
+  });
+  const nextSortOrder = (parentId: string | null) => Math.max(0, ...categories.filter((c) => c.parentId === parentId).map((c) => c.sortOrder)) + 1;
+  function checkCategoryName(raw: string): string {
+    const name = (raw ?? "").trim();
+    if (name.length < 1 || name.length > 100) throw err(422, "invalid_name");
+    return name;
+  }
+  function assertCategoryNameFree(name: string, parentId: string | null, exceptId: string | null) {
+    if (categories.some((c) => c.id !== exceptId && c.parentId === parentId && norm(c.name) === norm(name))) throw err(409, "category_name_taken");
+  }
+
   // ---------- DTO ----------
   const toProduct = (p: ProductRec): Product => ({
     id: p.id,
     name: p.name,
     category: p.category,
+    categoryId: p.categoryId,
+    categoryPath: p.categoryId ? pathOf(categories, p.categoryId) || null : null,
     unit: p.unit,
     barcode: p.barcode,
     purpose: p.purpose,
     supplier: supplierRef(p.supplierId),
     ...(costs() !== "none" ? { purchasePrice: p.purchasePrice } : {}),
+    salePrice: p.salePrice,
     minStock: p.minStock,
     trackExpiry: p.trackExpiry,
     isActive: p.isActive,
@@ -391,11 +429,13 @@ export function createMockInventory(deps: InventoryMockDeps) {
         id: nextId("p"),
         name,
         category,
+        categoryId: null,
         unit,
         barcode: null,
         purpose,
         supplierId: suppliers[0]!.id,
         purchasePrice: null,
+        salePrice: null,
         minStock: null,
         trackExpiry: false,
         isActive: true,
@@ -407,12 +447,26 @@ export function createMockInventory(deps: InventoryMockDeps) {
       products.push(p);
       return p;
     };
-    const shampoo = mkP("Шампунь професійний 500 мл", "Догляд за волоссям", "pcs", "both", { barcode: "4820000000011", purchasePrice: 320, minStock: 6, trackExpiry: true });
+    const mkC = (name: string, parentId: string | null, sortOrder = 0) => {
+      const c: CategoryRec = { id: nextId("c"), parentId, name, sortOrder, isArchived: false };
+      categories.push(c);
+      return c;
+    };
+    const hair = mkC("Волосся", null, 1);
+    const dyes = mkC("Фарби", hair.id, 1);
+    const ammoniaFree = mkC("Безаміачні", dyes.id);
+    const shampoos = mkC("Шампуні", hair.id, 2);
+    const nails = mkC("Нігті", null, 2);
+    const gelPolish = mkC("Гель-лаки", nails.id);
+    const shampoo = mkP("Шампунь професійний 500 мл", "Догляд за волоссям", "pcs", "both", { barcode: "4820000000011", purchasePrice: 320, salePrice: 450, minStock: 6, trackExpiry: true });
     const dye = mkP("Фарба для волосся 60 мл", "Фарбування", "pcs", "salon_use", { purchasePrice: 140, minStock: 10, trackExpiry: true, supplierId: suppliers[1]!.id });
-    const gel = mkP("Гель-лак (база)", "Нігті", "pcs", "both", { barcode: "4820000000028", purchasePrice: 210, minStock: 4, supplierId: suppliers[1]!.id });
+    const gel = mkP("Гель-лак (база)", "Нігті", "pcs", "both", { barcode: "4820000000028", purchasePrice: 210, salePrice: 299.9, minStock: 4, supplierId: suppliers[1]!.id });
     const disinfect = mkP("Дезінфікуючий розчин", "Гігієна", "l", "salon_use", { purchasePrice: 95, minStock: 2.5, trackExpiry: true });
     const gloves = mkP("Рукавички одноразові (уп. 100 шт)", "Гігієна", "pack", "salon_use", { purchasePrice: 180, minStock: 20 });
-    const mask = mkP("Маска для обличчя", "Косметологія", "ml", "sale", { purchasePrice: 4.5, minStock: 1000, trackExpiry: true, supplierId: suppliers[1]!.id });
+    const mask = mkP("Маска для обличчя", "Косметологія", "ml", "sale", { purchasePrice: 4.5, salePrice: 9, minStock: 1000, trackExpiry: true, supplierId: suppliers[1]!.id });
+    shampoo.categoryId = shampoos.id;
+    dye.categoryId = ammoniaFree.id;
+    gel.categoryId = gelPolish.id;
     mkP("Віск для депіляції", "Депіляція", "g", "salon_use", { purchasePrice: 0.6, minStock: 0 });
     mkP("Знятий з виробництва крем", "Косметологія", "pcs", "sale", { isActive: false });
 
@@ -500,8 +554,87 @@ export function createMockInventory(deps: InventoryMockDeps) {
       return wait({ ...toProduct(p), locationSettings });
     },
 
-    async getInventoryCategories(): Promise<string[]> {
-      return wait([...new Set(products.map((p) => p.category).filter((c): c is string => !!c))].sort());
+    async getInventoryCategories(includeArchived = false): Promise<Category[]> {
+      return wait(categories.filter((c) => includeArchived || !c.isArchived).map(toCategory));
+    },
+
+    async createInventoryCategory(r: CategoryRequest): Promise<Category> {
+      requireCatalog();
+      rateLimit();
+      const name = checkCategoryName(r.name);
+      const parentId = r.parentId ?? null;
+      if (parentId !== null) {
+        const parent = categoryById(parentId);
+        if (!parent) throw err(422, "category_not_found");
+        if (parent.isArchived) throw err(422, "category_archived");
+        if (depthOf(categories, parentId) >= MAX_CATEGORY_DEPTH) throw err(422, "category_depth");
+      }
+      if (categories.length >= CATEGORY_LIMIT) throw err(422, "category_limit");
+      assertCategoryNameFree(name, parentId, null);
+      const c: CategoryRec = { id: nextId("c"), parentId, name, sortOrder: r.sortOrder ?? nextSortOrder(parentId), isArchived: false };
+      categories.push(c);
+      return wait(toCategory(c));
+    },
+
+    async updateInventoryCategory(id: string, r: { name: string; sortOrder?: number }): Promise<Category> {
+      requireCatalog();
+      rateLimit();
+      const c = categoryById(id);
+      if (!c) throw err(404, "category_not_found");
+      const name = checkCategoryName(r.name);
+      assertCategoryNameFree(name, c.parentId, c.id);
+      c.name = name;
+      if (r.sortOrder !== undefined) c.sortOrder = r.sortOrder;
+      return wait(toCategory(c));
+    },
+
+    async moveInventoryCategory(id: string, r: { parentId?: string | null; sortOrder?: number }): Promise<Category> {
+      requireCatalog();
+      rateLimit();
+      const c = categoryById(id);
+      if (!c) throw err(404, "category_not_found");
+      const parentId = r.parentId ?? null;
+      if (parentId !== null) {
+        const parent = categoryById(parentId);
+        if (!parent) throw err(422, "category_not_found");
+        if (parent.isArchived) throw err(422, "category_archived");
+      }
+      const problem = moveProblem(categories, id, parentId);
+      if (problem) throw err(422, problem);
+      assertCategoryNameFree(c.name, parentId, c.id);
+      c.parentId = parentId;
+      c.sortOrder = r.sortOrder ?? nextSortOrder(parentId);
+      return wait(toCategory(c));
+    },
+
+    async archiveInventoryCategory(id: string): Promise<Category> {
+      requireCatalog();
+      rateLimit();
+      const c = categoryById(id);
+      if (!c) throw err(404, "category_not_found");
+      c.isArchived = true;
+      return wait(toCategory(c));
+    },
+
+    async unarchiveInventoryCategory(id: string): Promise<Category> {
+      requireCatalog();
+      rateLimit();
+      const c = categoryById(id);
+      if (!c) throw err(404, "category_not_found");
+      const parent = c.parentId ? categoryById(c.parentId) : undefined;
+      if (parent?.isArchived) throw err(422, "category_archived");
+      c.isArchived = false;
+      return wait(toCategory(c));
+    },
+
+    async deleteInventoryCategory(id: string): Promise<void> {
+      requireCatalog();
+      rateLimit();
+      const c = categoryById(id);
+      if (!c) throw err(404, "category_not_found");
+      if (categories.some((x) => x.parentId === id) || products.some((p) => p.categoryId === id)) throw err(409, "category_not_empty");
+      categories.splice(categories.indexOf(c), 1);
+      return wait(undefined);
     },
 
     async createInventoryProduct(r: ProductRequest): Promise<Product> {
@@ -512,11 +645,13 @@ export function createMockInventory(deps: InventoryMockDeps) {
         id: nextId("p"),
         name: "",
         category: null,
+        categoryId: null,
         unit: r.unit,
         barcode: null,
         purpose: r.purpose,
         supplierId: null,
         purchasePrice: null,
+        salePrice: null,
         minStock: null,
         trackExpiry: r.trackExpiry === true,
         isActive: true,
@@ -1059,25 +1194,39 @@ export function createMockInventory(deps: InventoryMockDeps) {
   function applyProduct(p: ProductRec, r: ProductRequest, isUpdate: boolean) {
     const name = (r.name ?? "").trim();
     if (name.length < 1 || name.length > 200) throw err(422, "invalid_name");
-    const category = (r.category ?? "").trim();
-    if (category.length > 100) throw err(422, "invalid_category");
+    // Дерево: `categoryId` відсутнє = без змін; `null` = очистити. Архівну категорію можна лише лишити як є.
+    let categoryId = p.categoryId;
+    if (r.categoryId !== undefined) {
+      if (r.categoryId === null) categoryId = null;
+      else {
+        const c = categoryById(r.categoryId);
+        if (!c) throw err(422, "category_not_found");
+        if (c.isArchived && r.categoryId !== p.categoryId) throw err(422, "category_archived");
+        categoryId = r.categoryId;
+      }
+    }
     if (!["pcs", "ml", "g", "l", "kg", "pack"].includes(r.unit)) throw err(422, "invalid_unit");
     if (isUpdate && r.unit !== p.unit && hasMovements(p.id)) throw err(422, "unit_locked");
     const barcode = (r.barcode ?? "").trim();
     if (barcode && !/^[0-9A-Za-z._-]{1,64}$/.test(barcode)) throw err(422, "invalid_barcode");
     if (!["sale", "salon_use", "both"].includes(r.purpose)) throw err(422, "invalid_purpose");
     if (r.purchasePrice !== undefined && r.purchasePrice !== null && (r.purchasePrice < 0 || r.purchasePrice > 1_000_000 || !decimalsOk(r.purchasePrice, 2))) throw err(422, "invalid_price");
+    const sold = r.purpose !== "salon_use";
+    const salePrice = sold ? (r.salePrice ?? null) : null;
+    if (sold && salePrice === null) throw err(422, "sale_price_required");
+    if (salePrice !== null && (salePrice < 0 || salePrice > 1_000_000 || !decimalsOk(salePrice, 2))) throw err(422, "invalid_price");
     if (r.minStock !== undefined && r.minStock !== null) checkMinStock(r.minStock, r.unit);
     if ((r.note ?? "").trim().length > 500) throw err(422, "invalid_note");
     if (r.supplierId && !suppliers.some((s) => s.id === r.supplierId)) throw err(404, "supplier_not_found");
     if (barcode && products.some((x) => x.id !== p.id && x.barcode === barcode)) throw err(409, "barcode_taken");
     p.name = name;
-    p.category = category || null;
+    p.categoryId = categoryId;
     p.unit = r.unit;
     p.barcode = barcode || null;
     p.purpose = r.purpose;
     p.supplierId = r.supplierId || null;
     if (r.purchasePrice !== undefined && r.purchasePrice !== null) p.purchasePrice = r.purchasePrice;
+    p.salePrice = salePrice;
     p.minStock = r.minStock ?? null;
     if (r.trackExpiry !== undefined && r.trackExpiry !== null) p.trackExpiry = r.trackExpiry;
     if (isUpdate && r.isActive !== undefined && r.isActive !== null) p.isActive = r.isActive;

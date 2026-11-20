@@ -141,12 +141,13 @@ describe("FEFO", () => {
 
 const product = (over: Partial<ProductFormValues> = {}): ProductFormValues => ({
   name: "Шампунь",
-  category: "",
+  categoryId: "",
   unit: "pcs",
   barcode: "",
   purpose: "both",
   supplierId: "",
   purchasePrice: "",
+  salePrice: "10",
   minStock: "",
   trackExpiry: false,
   isActive: true,
@@ -168,13 +169,31 @@ describe("валідація форми товару", () => {
     expect(validateProduct(product({ purchasePrice: "abc" }), { canEditCosts: true }).purchasePrice).toBeTruthy();
     expect(validateProduct(product({ purchasePrice: "abc" }), { canEditCosts: false }).purchasePrice).toBeUndefined();
   });
+  it("роздрібна ціна: обов'язкова для sale/both, не для salon_use, від'ємна/некоректна - помилка", () => {
+    const o = { canEditCosts: false };
+    expect(validateProduct(product({ purpose: "sale", salePrice: "" }), o).salePrice).toBeTruthy();
+    expect(validateProduct(product({ purpose: "both", salePrice: " " }), o).salePrice).toBeTruthy();
+    expect(validateProduct(product({ purpose: "salon_use", salePrice: "" }), o).salePrice).toBeUndefined();
+    expect(validateProduct(product({ purpose: "both", salePrice: "-5" }), o).salePrice).toBeTruthy();
+    expect(validateProduct(product({ purpose: "both", salePrice: "1,234" }), o).salePrice).toBeTruthy();
+    expect(validateProduct(product({ purpose: "both", salePrice: "0" }), o).salePrice).toBeUndefined();
+    expect(validateProduct(product({ purpose: "both", salePrice: "99,90" }), o).salePrice).toBeUndefined();
+  });
+  it("payload: salePrice числом для sale/both, null для salon_use, незалежно від costs", () => {
+    expect(toProductRequest(product({ purpose: "both", salePrice: "99,9" }), { canEditCosts: false, isEdit: false })).toMatchObject({ salePrice: 99.9 });
+    expect(toProductRequest(product({ purpose: "salon_use", salePrice: "5" }), { canEditCosts: true, isEdit: true })).toMatchObject({ salePrice: null });
+  });
+  it("помилка 422 sale_price_required має зрозуміле повідомлення", () => {
+    expect(humanizeInventoryError(new BeautyApiError(422, "sale_price_required", "x"))).toMatch(/роздрібну ціну/);
+  });
   it("тіло запиту: без права ціна не передається; isActive лише в редагуванні; порожнє -> null", () => {
-    const withPrice = product({ purchasePrice: "12,5", category: " Гігієна ", minStock: "3" });
-    expect(toProductRequest(withPrice, { canEditCosts: true, isEdit: false })).toMatchObject({ purchasePrice: 12.5, category: "Гігієна", minStock: 3 });
+    const withPrice = product({ purchasePrice: "12,5", categoryId: "c7", minStock: "3" });
+    expect(toProductRequest(withPrice, { canEditCosts: true, isEdit: false })).toMatchObject({ purchasePrice: 12.5, categoryId: "c7", minStock: 3 });
+    expect("category" in toProductRequest(withPrice, { canEditCosts: true, isEdit: false })).toBe(false);
     const noRight = toProductRequest(withPrice, { canEditCosts: false, isEdit: false });
     expect("purchasePrice" in noRight).toBe(false);
     expect("isActive" in noRight).toBe(false);
-    expect(toProductRequest(product(), { canEditCosts: false, isEdit: true })).toMatchObject({ isActive: true, barcode: null, supplierId: null, category: null });
+    expect(toProductRequest(product(), { canEditCosts: false, isEdit: true })).toMatchObject({ isActive: true, barcode: null, supplierId: null, categoryId: null });
   });
   it("постачальник: телефон, пошта, довжини", () => {
     const ok = { name: "ТОВ", contactName: "", phone: "+380 (44) 123-45-67", email: "a@b.ua", note: "" };

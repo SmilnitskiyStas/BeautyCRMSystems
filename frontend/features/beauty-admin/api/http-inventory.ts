@@ -9,6 +9,7 @@ import type {
   StaffAlert,
   Batch,
   BatchStatus,
+  Category,
   CostsAccess,
   InventoryScope,
   LocationSetting,
@@ -90,11 +91,14 @@ export function toProduct(v: unknown): Product {
     id: str(o.id) ?? "",
     name: str(o.name) ?? "",
     category: str(o.category),
+    categoryId: str(o.categoryId),
+    categoryPath: str(o.categoryPath),
     unit: oneOf<StockUnit>(o.unit, UNITS, "pcs"),
     barcode: str(o.barcode),
     purpose: oneOf<ProductPurpose>(o.purpose, PURPOSES, "both"),
     supplier: ref(o.supplier),
     ...optNum(o, "purchasePrice"),
+    salePrice: num(o.salePrice),
     minStock: num(o.minStock),
     trackExpiry: o.trackExpiry === true,
     isActive: o.isActive !== false,
@@ -102,6 +106,19 @@ export function toProduct(v: unknown): Product {
     hasMovements: o.hasMovements === true,
     createdAt: str(o.createdAt) ?? "",
     updatedAt: str(o.updatedAt) ?? "",
+  };
+}
+
+export function toCategory(v: unknown): Category {
+  const o = obj(v);
+  return {
+    id: str(o.id) ?? "",
+    parentId: str(o.parentId),
+    name: str(o.name) ?? "",
+    sortOrder: num0(o.sortOrder),
+    isArchived: o.isArchived === true,
+    productCount: num0(o.productCount),
+    childCount: num0(o.childCount),
   };
 }
 
@@ -358,6 +375,12 @@ type InventoryApi = Pick<
   | "getInventoryProducts"
   | "getInventoryProduct"
   | "getInventoryCategories"
+  | "createInventoryCategory"
+  | "updateInventoryCategory"
+  | "moveInventoryCategory"
+  | "archiveInventoryCategory"
+  | "unarchiveInventoryCategory"
+  | "deleteInventoryCategory"
   | "createInventoryProduct"
   | "updateInventoryProduct"
   | "setProductLocationSetting"
@@ -418,7 +441,19 @@ export const httpInventoryApi: InventoryApi = {
     const raw = await get<unknown>(`/products/${enc(id)}`);
     return { ...toProduct(raw), locationSettings: list(obj(raw).locationSettings).map(toSetting) };
   },
-  getInventoryCategories: async () => list(obj(await get("/categories")).items).filter((x): x is string => typeof x === "string"),
+  // Контракт: плоский масив вузлів (на випадок обгортки `{ items }` приймаємо і її).
+  getInventoryCategories: async (includeArchived = false) => {
+    const raw = await get<unknown>("/categories", { includeArchived });
+    return (Array.isArray(raw) ? raw : list(obj(raw).items)).map(toCategory);
+  },
+  createInventoryCategory: async (r) => toCategory(await send("POST", "/categories", r)),
+  updateInventoryCategory: async (id, r) => toCategory(await send("PUT", `/categories/${enc(id)}`, r)),
+  moveInventoryCategory: async (id, r) => toCategory(await send("PUT", `/categories/${enc(id)}/move`, r)),
+  archiveInventoryCategory: async (id) => toCategory(await send("POST", `/categories/${enc(id)}/archive`)),
+  unarchiveInventoryCategory: async (id) => toCategory(await send("POST", `/categories/${enc(id)}/unarchive`)),
+  deleteInventoryCategory: async (id) => {
+    await apiJson<void>(`${B}/categories/${enc(id)}`, { method: "DELETE", cache: "no-store" });
+  },
   createInventoryProduct: async (r) => toProduct(await send("POST", "/products", r)),
   updateInventoryProduct: async (id, r) => toProduct(await send("PUT", `/products/${enc(id)}`, r)),
   setProductLocationSetting: async (productId, locationId, input) => toSetting(await send("PUT", `/products/${enc(productId)}/locations/${enc(locationId)}`, input)),

@@ -101,7 +101,7 @@ public sealed class InventoryGapApiTests(AuthApiFixture fx) : IClassFixture<Auth
 
     private static async Task<Guid> NewProduct(HttpClient c, string token, string name, string unit = "pcs")
     {
-        var r = await Call(c, HttpMethod.Post, "/products", token, new { name, unit, purpose = "both", trackExpiry = false });
+        var r = await Call(c, HttpMethod.Post, "/products", token, new { name, unit, purpose = "both", salePrice = 10, trackExpiry = false });
         return (await Ok(r, HttpStatusCode.Created)).GetProperty("id").GetGuid();
     }
 

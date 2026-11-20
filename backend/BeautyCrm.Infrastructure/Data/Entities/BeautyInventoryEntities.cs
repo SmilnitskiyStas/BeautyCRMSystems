@@ -14,16 +14,29 @@ public class Supplier : TenantEntity
     public bool IsActive { get; set; } = true;
 }
 
+/// <summary>Категорія товарів (дерево до 3 рівнів, ADR-025). ParentId NULL = корінь. Унікальне ім'я в межах батька без урахування регістру (вираз-індекс у міграції).</summary>
+public class ProductCategory : TenantEntity
+{
+    public Guid? ParentId { get; set; }
+    public string Name { get; set; } = null!;
+    public int SortOrder { get; set; }
+    public bool IsArchived { get; set; }
+}
+
 /// <summary>Товар мережі (каталог). Рівні й партії - по закладах.</summary>
 public class Product : TenantEntity
 {
     public string Name { get; set; } = null!;
     public string? Category { get; set; }
+    /// <summary>Категорія з дерева (beauty_product_categories); стара текстова Category лишається без змін.</summary>
+    public Guid? CategoryId { get; set; }
     public ProductUnit Unit { get; set; }
     public string? Barcode { get; set; }
     public ProductPurpose Purpose { get; set; }
     public Guid? SupplierId { get; set; }
     public decimal? PurchasePrice { get; set; }
+    /// <summary>Роздрібна ціна (мережева, одна на tenant); NULL для salon_use і для старих продажних товарів.</summary>
+    public decimal? SalePrice { get; set; }
     public decimal? MinStock { get; set; }
     public bool TrackExpiry { get; set; }
     public bool IsActive { get; set; } = true;

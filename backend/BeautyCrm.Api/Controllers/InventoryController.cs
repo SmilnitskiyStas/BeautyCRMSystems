@@ -76,9 +76,75 @@ public sealed class InventoryController(InventoryService inventory, InventoryThr
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public Task<IActionResult> Product(Guid id, CancellationToken ct) => Run(a => inventory.GetProductAsync(a, id, ct));
 
-    [HttpGet("categories")]
-    public Task<IActionResult> Categories(CancellationToken ct) =>
+    /// <summary>Застарілий плоский список текстових категорій товарів (було GET /categories; дерево категорій - §32.27).</summary>
+    [HttpGet("products/categories")]
+    public Task<IActionResult> LegacyCategories(CancellationToken ct) =>
         Run(a => inventory.ListCategoriesAsync(a, ct), items => Ok(new { items }));
+
+    // ---------- дерево категорій (§32.27) ----------
+
+    [HttpGet("categories")]
+    [ProducesResponseType<IReadOnlyList<CategoryDto>>(StatusCodes.Status200OK)]
+    public Task<IActionResult> CategoryNodes([FromQuery] bool includeArchived = false, CancellationToken ct = default) =>
+        Run(a => inventory.ListCategoryNodesAsync(a, includeArchived, ct), items => Ok(new { items }));
+
+    [HttpPost("categories")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.All)]
+    [RequestSizeLimit(SmallBody)]
+    [ProducesResponseType<CategoryDto>(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> CreateCategory([FromBody] CategoryRequest request, CancellationToken ct) =>
+        Run(a => inventory.CreateCategoryAsync(a, request, ct), Created, write: true);
+
+    [HttpPut("categories/{id:guid}")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.All)]
+    [RequestSizeLimit(SmallBody)]
+    [ProducesResponseType<CategoryDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> UpdateCategory(Guid id, [FromBody] CategoryRequest request, CancellationToken ct) =>
+        Run(a => inventory.UpdateCategoryAsync(a, id, request, ct), write: true);
+
+    [HttpPut("categories/{id:guid}/move")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.All)]
+    [RequestSizeLimit(SmallBody)]
+    [ProducesResponseType<CategoryDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> MoveCategory(Guid id, [FromBody] CategoryMoveRequest request, CancellationToken ct) =>
+        Run(a => inventory.MoveCategoryAsync(a, id, request, ct), write: true);
+
+    [HttpPost("categories/{id:guid}/archive")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.All)]
+    [ProducesResponseType<CategoryDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> ArchiveCategory(Guid id, CancellationToken ct) =>
+        Run(a => inventory.SetCategoryArchivedAsync(a, id, true, ct), write: true);
+
+    [HttpPost("categories/{id:guid}/unarchive")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.All)]
+    [ProducesResponseType<CategoryDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> UnarchiveCategory(Guid id, CancellationToken ct) =>
+        Run(a => inventory.SetCategoryArchivedAsync(a, id, false, ct), write: true);
+
+    [HttpDelete("categories/{id:guid}")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.All)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> DeleteCategory(Guid id, CancellationToken ct) =>
+        Run(a => inventory.DeleteCategoryAsync(a, id, ct), _ => NoContent(), write: true);
 
     [HttpPost("products")]
     [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.All)]

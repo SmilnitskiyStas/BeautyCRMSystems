@@ -14,6 +14,8 @@ import type {
   ProductDetail,
   ProductQuery,
   ProductRequest,
+  Category,
+  CategoryRequest,
   ReceiptRequest,
   StockPage,
   StockQuery,
@@ -434,8 +436,19 @@ export interface BeautyAdminApi {
   getInventoryProducts(q?: ProductQuery): Promise<Page<Product>>;
   /** GET /inventory/products/{id}: з `locationSettings` закладів scope. 404 product_not_found. */
   getInventoryProduct(id: string): Promise<ProductDetail>;
-  /** GET /inventory/categories: різні непорожні категорії. */
-  getInventoryCategories(): Promise<string[]>;
+  /** GET /inventory/categories?includeArchived: плоский список вузлів дерева категорій (до 3 рівнів). */
+  getInventoryCategories(includeArchived?: boolean): Promise<Category[]>;
+  /** POST /inventory/categories (`inventory.manage`): 409 category_name_taken, 422 category_depth|category_limit|category_not_found|category_archived|invalid_name. */
+  createInventoryCategory(r: CategoryRequest): Promise<Category>;
+  /** PUT /inventory/categories/{id}: перейменування / порядок. 404/422 category_not_found, 409 category_name_taken. */
+  updateInventoryCategory(id: string, r: { name: string; sortOrder?: number }): Promise<Category>;
+  /** PUT /inventory/categories/{id}/move: 422 category_cycle|category_depth|category_archived, 409 category_name_taken. */
+  moveInventoryCategory(id: string, r: { parentId?: string | null; sortOrder?: number }): Promise<Category>;
+  /** POST /inventory/categories/{id}/archive | /unarchive. */
+  archiveInventoryCategory(id: string): Promise<Category>;
+  unarchiveInventoryCategory(id: string): Promise<Category>;
+  /** DELETE /inventory/categories/{id}: 409 category_not_empty (є підкатегорії або товари). */
+  deleteInventoryCategory(id: string): Promise<void>;
   /** POST /inventory/products (`inventory.manage = all`): 409 barcode_taken, 422 invalid_*, 403 forbidden_role (`purchasePrice` без `costs = edit`). */
   createInventoryProduct(r: ProductRequest): Promise<Product>;
   /** PUT /inventory/products/{id}: + 422 unit_locked. */

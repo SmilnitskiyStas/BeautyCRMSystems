@@ -7726,3 +7726,137 @@ BEGIN
 END $EF$;
 COMMIT;
 
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261120084056_beauty_inventory_sale_price') THEN
+    ALTER TABLE beauty_products ADD sale_price numeric(12,2);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261120084056_beauty_inventory_sale_price') THEN
+    ALTER TABLE beauty_products ADD CONSTRAINT ck_beauty_products_sale_price CHECK (sale_price IS NULL OR sale_price BETWEEN 0 AND 1000000);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261120084056_beauty_inventory_sale_price') THEN
+    INSERT INTO "__EFMigrationsHistory" (migration_id, product_version)
+    VALUES ('20261120084056_beauty_inventory_sale_price', '8.0.11');
+    END IF;
+END $EF$;
+COMMIT;
+
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261120085617_beauty_inventory_product_categories') THEN
+    ALTER TABLE beauty_products ADD category_id uuid;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261120085617_beauty_inventory_product_categories') THEN
+    CREATE TABLE beauty_product_categories (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        parent_id uuid,
+        name character varying(100) NOT NULL,
+        sort_order integer NOT NULL DEFAULT 0,
+        is_archived boolean NOT NULL DEFAULT FALSE,
+        tenant_id uuid NOT NULL,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        updated_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_product_categories PRIMARY KEY (id),
+        CONSTRAINT ak_beauty_product_categories_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT ck_beauty_product_categories_name CHECK (char_length(btrim(name)) BETWEEN 1 AND 100),
+        CONSTRAINT ck_beauty_product_categories_no_self_parent CHECK (parent_id IS NULL OR parent_id <> id),
+        CONSTRAINT fk_beauty_product_categories_beauty_product_categories_tenant_ FOREIGN KEY (tenant_id, parent_id) REFERENCES beauty_product_categories (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261120085617_beauty_inventory_product_categories') THEN
+    CREATE INDEX ix_beauty_products_category ON beauty_products (tenant_id, category_id) WHERE category_id IS NOT NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261120085617_beauty_inventory_product_categories') THEN
+    CREATE INDEX ix_beauty_product_categories_parent ON beauty_product_categories (tenant_id, parent_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261120085617_beauty_inventory_product_categories') THEN
+    ALTER TABLE beauty_products ADD CONSTRAINT fk_beauty_products_beauty_product_categories_tenant_id_categor FOREIGN KEY (tenant_id, category_id) REFERENCES beauty_product_categories (tenant_id, id) ON DELETE RESTRICT;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261120085617_beauty_inventory_product_categories') THEN
+    CREATE UNIQUE INDEX ux_beauty_product_categories_name ON beauty_product_categories (tenant_id, COALESCE(parent_id, '00000000-0000-0000-0000-000000000000'::uuid), lower(name));
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261120085617_beauty_inventory_product_categories') THEN
+    ALTER TABLE beauty_product_categories ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261120085617_beauty_inventory_product_categories') THEN
+    ALTER TABLE beauty_product_categories FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261120085617_beauty_inventory_product_categories') THEN
+
+                    CREATE POLICY tenant_isolation ON beauty_product_categories
+                        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+                        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261120085617_beauty_inventory_product_categories') THEN
+
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_class WHERE oid = to_regclass('public.beauty_product_categories') AND relrowsecurity AND relforcerowsecurity
+        ) THEN
+            RAISE EXCEPTION 'FORCE ROW LEVEL SECURITY is not enabled on beauty_product_categories';
+        END IF;
+    END
+    $$;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261120085617_beauty_inventory_product_categories') THEN
+    INSERT INTO "__EFMigrationsHistory" (migration_id, product_version)
+    VALUES ('20261120085617_beauty_inventory_product_categories', '8.0.11');
+    END IF;
+END $EF$;
+COMMIT;
+
