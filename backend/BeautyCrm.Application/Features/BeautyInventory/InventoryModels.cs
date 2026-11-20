@@ -69,15 +69,15 @@ public record OperationSummaryDto(
     Guid Id, string Kind, Guid LocationId, Guid? ToLocationId, string? Reason, string? DocumentNumber, DateTimeOffset CreatedAt,
     InventoryNamedRef? CreatedBy, int ProductCount,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? TotalCost,
-    Guid? AppointmentId = null);
+    Guid? AppointmentId = null, Guid? ProductOrderId = null);
 
 public sealed record OperationDto(
     Guid Id, string Kind, Guid LocationId, Guid? ToLocationId, string? Reason, string? DocumentNumber, DateTimeOffset CreatedAt,
     InventoryNamedRef? CreatedBy, int ProductCount,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? TotalCost,
     InventoryNamedRef? Supplier, DateOnly? ReceivedOn, string? Note, Guid? StocktakeId, IReadOnlyList<MovementDto> Movements,
-    Guid? AppointmentId = null)
-    : OperationSummaryDto(Id, Kind, LocationId, ToLocationId, Reason, DocumentNumber, CreatedAt, CreatedBy, ProductCount, TotalCost, AppointmentId);
+    Guid? AppointmentId = null, Guid? ProductOrderId = null)
+    : OperationSummaryDto(Id, Kind, LocationId, ToLocationId, Reason, DocumentNumber, CreatedAt, CreatedBy, ProductCount, TotalCost, AppointmentId, ProductOrderId);
 
 public sealed record StocktakeLineDto(ProductRef Product, decimal? ExpectedQuantity, decimal? CountedQuantity, decimal? Difference, DateOnly? SurplusExpiresOn, decimal? ExpectedShortage = null);
 

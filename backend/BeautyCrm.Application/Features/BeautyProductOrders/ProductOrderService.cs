@@ -39,7 +39,10 @@ public sealed partial class ProductOrderService(
 
     /// <summary>§33.16: pending_payment без оплати в процесі й з минулим резервом = expired (навіть якщо воркер ще не закрив).</summary>
     public static string EffectiveStatus(ProductOrderView o, DateTimeOffset now) =>
-        o.Status == PendingPayment && o.PaymentStartedAt is null && o.ReservationExpiresAt <= now ? "expired" : o.Status;
+        EffectiveStatus(o.Status, o.PaymentStartedAt, o.ReservationExpiresAt, now);
+
+    public static string EffectiveStatus(string status, DateTimeOffset? paymentStartedAt, DateTimeOffset reservationExpiresAt, DateTimeOffset now) =>
+        status == PendingPayment && paymentStartedAt is null && reservationExpiresAt <= now ? "expired" : status;
 
     public PublicProductOrderDto ToDto(ProductOrderView o, DateTimeOffset now)
     {
@@ -346,6 +349,7 @@ public static class ProductOrderServiceExtensions
     {
         services.AddSingleton(options);
         services.AddScoped<ProductOrderService>();
+        services.AddScoped<ProductOrderAdminService>(); // CRM (TASK-903): не залежить від PublicTenantResolver й прапора Enabled
         return services;
     }
 }
