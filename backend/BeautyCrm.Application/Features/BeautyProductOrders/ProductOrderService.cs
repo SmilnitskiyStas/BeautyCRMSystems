@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using BeautyCrm.Application.Features.BeautyAuth;
 using BeautyCrm.Application.Features.BeautyBooking;
@@ -117,7 +118,7 @@ public sealed partial class ProductOrderService(
             return Error.Validation("invalid_request", "locationId is required.");
 
         var name = req.Customer?.Name?.Trim();
-        if (name is null || name.Length is < 2 or > 100 || name.Any(char.IsControl))
+        if (name is null || name.Length is < 2 or > 100 || name.EnumerateRunes().Any(r => Rune.IsControl(r) || Rune.GetUnicodeCategory(r) == UnicodeCategory.Format))
             return Error.Validation("invalid_name", "Customer name must be 2-100 characters.");
         var phone = PhoneNormalizer.Normalize(req.Customer?.Phone);
         if (phone is null) return Error.Validation("invalid_phone", "Phone must be in international format, e.g. +380501234567.");
@@ -233,18 +234,22 @@ public sealed partial class ProductOrderService(
         var now = clock.GetUtcNow();
 
         var claim = await store.ClaimPaymentAsync(found.Id, now, TimeSpan.FromSeconds(options.PaymentStaleSeconds), options.MaxPaymentAttempts, ct);
-        switch (claim.Kind)
+        if (claim.Kind == ClaimKind.NoClaim) return NoClaim(claim.Order ?? found, now);
+
+        // Після claim: власний timeout замість токена запиту (обрив клієнта не лишає списання без фіналізації).
+        using var cts = new CancellationTokenSource(ProductOrderPaymentFlow.PostClaimTimeout);
+        var pct = cts.Token;
+        var order = claim.Order!;
+        var claimAt = order.PaymentStartedAt!.Value;
+        if (claim.Kind == ClaimKind.Reconcile)
+            log.LogInformation("product_order_payment order={OrderId} attempt={Attempt} result={Result}", found.Id, order.PaymentAttempts, "reconciled");
+
+        if (claim.Kind == ClaimKind.Reconcile && claim.PaymentStatus == "paid")
         {
-            case ClaimKind.NoClaim:
-                return NoClaim(claim.Order ?? found, now);
-            case ClaimKind.Reconcile when claim.PaymentStatus == "paid":
-                log.LogInformation("product_order_payment order={OrderId} attempt={Attempt} result={Result}", found.Id, claim.Order!.PaymentAttempts, "reconciled");
-                return await FinalizeAsync(claim.Order!, claim.PaymentId, null, ct);
-            default:
-                if (claim.Kind == ClaimKind.Reconcile)
-                    log.LogInformation("product_order_payment order={OrderId} attempt={Attempt} result={Result}", found.Id, claim.Order!.PaymentAttempts, "reconciled");
-                return await ChargeAsync(claim.Order!, claim.PaymentId, ct);
+            if (claim.RefundPending) return await CompensateAsync(order, claim.PaymentId, claimAt, true, pct);
+            return await FinalizeAsync(order, claim.PaymentId, claimAt, null, pct);
         }
+        return await ChargeAsync(order, claim.PaymentId, claimAt, pct);
     }
 
     private Result<PublicProductOrderResult> NoClaim(ProductOrderView o, DateTimeOffset now)
@@ -269,24 +274,53 @@ public sealed partial class ProductOrderService(
         return WithOrder(ErrorKind.Conflict, "payment_in_progress", "Payment is in progress.", o, now);
     }
 
-    /// <summary>Списання поза транзакцією БД (ChargeAsync ідемпотентний за PaymentId); виняток = лишаємо «в процесі» (reconcile дозавершить).</summary>
-    private async Task<Result<PublicProductOrderResult>> ChargeAsync(ProductOrderView o, Guid paymentId, CancellationToken ct)
+    /// <summary>
+    /// Списання поза транзакцією БД (ChargeAsync ідемпотентний за PaymentId). Виняток/timeout/невизначена відповідь = результат НЕВІДОМИЙ:
+    /// claim не скидаємо, лишаємо «в процесі» (reconcile дозавершить тим самим PaymentId). Скидаємо лише явну відмову (код) і лише CAS-ом.
+    /// </summary>
+    private async Task<Result<PublicProductOrderResult>> ChargeAsync(ProductOrderView o, Guid paymentId, DateTimeOffset claimAt, CancellationToken ct)
     {
-        var charge = await payments.ChargeAsync(new PaymentCharge(paymentId, PaymentPurpose.ProductOrder, o.Id, o.Total, Currency), ct);
+        PaymentResult charge;
+        try
+        {
+            charge = await payments.ChargeAsync(new PaymentCharge(paymentId, PaymentPurpose.ProductOrder, o.Id, o.Total, Currency), ct);
+        }
+        catch (Exception ex)
+        {
+            log.LogError("product_order_payment_unknown order={OrderId} error={Error}", o.Id, ex.GetType().Name);
+            return await InProgressAsync(o, "unknown");
+        }
         if (!charge.Success)
         {
-            await store.MarkPaymentFailedAsync(o.Id, paymentId, ct);
+            if (!ProductOrderPaymentFlow.IsExplicitDecline(charge))
+            {
+                log.LogError("product_order_payment_unknown order={OrderId} error={Error}", o.Id, "no_decline_code");
+                return await InProgressAsync(o, "unknown");
+            }
+            if (!await store.MarkPaymentFailedAsync(o.Id, paymentId, claimAt, ct))
+            {
+                // claim уже не наш (перехоплено reconcile) або платіж не pending: стан належить іншому виконавцю
+                log.LogWarning("product_order_payment_cas_lost order={OrderId}", o.Id);
+                return NoClaim(await store.GetOrderAsync(o.Id, ct) ?? o, clock.GetUtcNow());
+            }
             var fresh = await store.GetOrderAsync(o.Id, ct) ?? o;
             log.LogInformation("product_order_payment order={OrderId} attempt={Attempt} result={Result}", o.Id, fresh.PaymentAttempts, "failed");
             Result_("payment_failed");
             return WithOrder(ErrorKind.PaymentFailed, "payment_failed", "Card payment failed.", fresh, clock.GetUtcNow());
         }
-        return await FinalizeAsync(o, paymentId, charge.ProviderPaymentId, ct);
+        return await FinalizeAsync(o, paymentId, claimAt, charge.ProviderPaymentId, ct);
     }
 
-    private async Task<Result<PublicProductOrderResult>> FinalizeAsync(ProductOrderView o, Guid paymentId, string? providerPaymentId, CancellationToken ct)
+    private async Task<Result<PublicProductOrderResult>> InProgressAsync(ProductOrderView o, string result)
     {
-        var fin = await store.FinalizePaidAsync(o.Id, paymentId, providerPaymentId, clock.GetUtcNow(), ct);
+        Result_("payment_" + result);
+        var fresh = await store.GetOrderAsync(o.Id, CancellationToken.None) ?? o;
+        return WithOrder(ErrorKind.Conflict, "payment_in_progress", "Payment is in progress.", fresh, clock.GetUtcNow());
+    }
+
+    private async Task<Result<PublicProductOrderResult>> FinalizeAsync(ProductOrderView o, Guid paymentId, DateTimeOffset claimAt, string? providerPaymentId, CancellationToken ct)
+    {
+        var fin = await store.FinalizePaidAsync(o.Id, paymentId, claimAt, providerPaymentId, clock.GetUtcNow(), ct);
         var now = clock.GetUtcNow();
         switch (fin.Kind)
         {
@@ -298,24 +332,21 @@ public sealed partial class ProductOrderService(
                 return new PublicProductOrderResult(ToDto(fin.Order!, now), true);
             case FinalizeKind.NotPending:
                 return WithOrder(ErrorKind.Conflict, "order_closed", "The order is closed.", fin.Order!, now);
+            case FinalizeKind.ClaimLost:
+                log.LogWarning("product_order_payment_cas_lost order={OrderId}", o.Id);
+                return NoClaim(fin.Order ?? o, now);
         }
 
-        // Товар зник під час оплати: повернення 100%. Успіх -> refunded; збій -> лишається «в процесі» (reconcile/адмін), лог Error.
+        // Товар зник під час оплати: повернення 100%.
         log.LogInformation("product_order_payment order={OrderId} attempt={Attempt} result={Result}", o.Id, o.PaymentAttempts, "stock_unavailable");
         Result_("stock_unavailable");
-        var refunded = false;
-        try
-        {
-            refunded = (await payments.RefundAsync(paymentId, o.Total, ct)).Success;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            log.LogError(ex, "product_order_compensation_failed order={OrderId}", o.Id);
-        }
-        if (refunded)
-            await store.CompensateAsync(o.Id, paymentId, clock.GetUtcNow(), ct);
-        else
-            log.LogError("product_order_compensation_failed order={OrderId}", o.Id);
+        return await CompensateAsync(o, paymentId, claimAt, false, ct);
+    }
+
+    /// <summary>Намір (окрема транзакція) -> повернення -> refunded. Збій = лишається «в процесі» з маркером наміру; reconcile лише повторює повернення.</summary>
+    private async Task<Result<PublicProductOrderResult>> CompensateAsync(ProductOrderView o, Guid paymentId, DateTimeOffset claimAt, bool intentMarked, CancellationToken ct)
+    {
+        await ProductOrderPaymentFlow.CompensateAsync(store, payments, log, clock, o.Id, paymentId, o.Total, claimAt, intentMarked);
         var after = await store.GetOrderAsync(o.Id, ct) ?? o;
         return WithOrder(ErrorKind.Conflict, "stock_unavailable", "The product ran out during payment.", after, clock.GetUtcNow());
     }

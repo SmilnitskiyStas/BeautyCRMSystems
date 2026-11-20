@@ -63,9 +63,10 @@ public interface IProductOrderAdminStore
     Task<AdminOrderDetail?> GetProductOrderDetailAsync(Guid id, CancellationToken ct);
     /// <summary>Умовний UPDATE: status = 'paid' AND refund_started_at IS NULL. true = видано цим викликом.</summary>
     Task<bool> FulfillProductOrderAsync(Guid id, Guid userId, DateTimeOffset now, CancellationToken ct);
-    /// <summary>Claim повернення: status = 'paid' AND (refund_started_at IS NULL OR &lt; now - stale). true = захоплено.</summary>
-    Task<bool> ClaimProductOrderRefundAsync(Guid id, DateTimeOffset now, TimeSpan stale, CancellationToken ct);
-    Task ReleaseProductOrderRefundClaimAsync(Guid id, CancellationToken ct);
+    /// <summary>Claim повернення: status = 'paid' AND (refund_started_at IS NULL OR &lt; now - stale). Повертає значення claim (refund_started_at) або null.</summary>
+    Task<DateTimeOffset?> ClaimProductOrderRefundAsync(Guid id, DateTimeOffset now, TimeSpan stale, CancellationToken ct);
+    /// <summary>Скидає claim лише якщо refund_started_at == <paramref name="claimStartedAt"/> (CAS).</summary>
+    Task<bool> ReleaseProductOrderRefundClaimAsync(Guid id, DateTimeOffset claimStartedAt, CancellationToken ct);
     /// <summary>Після успішного повернення провайдером: одна транзакція (замовлення -> рівні -> товари): sale_return у ті самі партії, платіж refunded, замовлення refunded.</summary>
     Task<RefundFinalizeKind> FinalizeProductOrderRefundAsync(Guid id, Guid userId, string? note, DateTimeOffset now, CancellationToken ct);
 }

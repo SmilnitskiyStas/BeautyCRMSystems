@@ -462,6 +462,69 @@ public sealed class ProductOrdersAdminApiTests(AuthApiFixture fx) : IClassFixtur
     }
 
     [SkippableFact]
+    public async Task refund_provider_exception_keeps_claim_instead_of_releasing_it()
+    {
+        NeedDb();
+        var e = await NewEnvAsync();
+        var h = NewHost();
+        var p = await AddProductAsync(e, "Shampoo", 100m, null, (5, Far));
+        var paid = await PlacePaidAsync(h, e, e.L1, p, 1);
+        h.Pay.ThrowOnRefund = true; // результат повернення невідомий
+        await Expect(await CrmPost(h, paid.Id, "cancel", e.Owner), HttpStatusCode.Conflict, "refund_in_progress");
+        await using (var ctx = fx.Db.CreateContext(e.T.TenantId))
+        {
+            var po = await ctx.ProductOrders.AsNoTracking().FirstAsync(x => x.Id == paid.Id);
+            Assert.Equal(ProductOrderStatus.Paid, po.Status);
+            Assert.NotNull(po.RefundStartedAt); // claim не скинуто: повтор до stale заблоковано, повернення вдруге не викликається
+        }
+        h.Pay.ThrowOnRefund = false;
+        await Expect(await CrmPost(h, paid.Id, "cancel", e.Owner), HttpStatusCode.Conflict, "refund_in_progress");
+        Assert.Equal(1, h.Pay.RefundCalls);
+        await Expect(await CrmPost(h, paid.Id, "fulfill", e.Owner), HttpStatusCode.Conflict, "refund_in_progress");
+    }
+
+    [SkippableFact]
+    public async Task slow_refund_decline_does_not_release_claim_taken_over_by_another()
+    {
+        NeedDb();
+        var e = await NewEnvAsync();
+        var h = NewHost();
+        var p = await AddProductAsync(e, "Shampoo", 100m, null, (5, Far));
+        var paid = await PlacePaidAsync(h, e, e.L1, p, 1);
+        // під час повернення A «інший» виконавець перехоплює claim (нове значення refund_started_at)
+        DateTimeOffset taken = default;
+        h.Pay.FailRefund = true;
+        h.Pay.OnRefund = async () =>
+        {
+            taken = DateTimeOffset.UtcNow.AddMilliseconds(500);
+            await SetOrderAsync(e, paid.Id, o => o.RefundStartedAt = taken);
+        };
+        await Expect(await CrmPost(h, paid.Id, "cancel", e.Owner), HttpStatusCode.PaymentRequired, "refund_failed");
+        await using var ctx = fx.Db.CreateContext(e.T.TenantId);
+        var po = await ctx.ProductOrders.AsNoTracking().FirstAsync(x => x.Id == paid.Id);
+        Assert.NotNull(po.RefundStartedAt); // CAS: claim B не стерто
+    }
+
+    [SkippableFact]
+    public async Task refund_finalize_not_paid_is_409_and_not_a_success()
+    {
+        NeedDb();
+        var e = await NewEnvAsync();
+        var h = NewHost();
+        var p = await AddProductAsync(e, "Shampoo", 100m, null, (5, Far));
+        var paid = await PlacePaidAsync(h, e, e.L1, p, 1);
+        // під час повернення замовлення виходить зі стану paid (інший процес)
+        h.Pay.OnRefund = () => SetOrderAsync(e, paid.Id, o =>
+        {
+            o.Status = ProductOrderStatus.Cancelled;
+            o.CloseReason = ProductOrderCloseReason.Staff;
+            o.ClosedAt = DateTimeOffset.UtcNow;
+            o.RefundStartedAt = null;
+        });
+        await Expect(await CrmPost(h, paid.Id, "cancel", e.Owner), HttpStatusCode.Conflict, "refund_state_conflict");
+    }
+
+    [SkippableFact]
     public async Task refund_in_progress_blocks_fulfill_and_cancel_until_stale()
     {
         NeedDb();

@@ -9,6 +9,10 @@ public sealed class ProductOrdersOptions
     public const int MaxLines = 20;
     public const int MaxQuantityPerLine = 10;
     public const int MaxCatalogItems = 500;
+    /// <summary>Резерв «оплата в процесі» враховується лише якщо payment_started_at свіжіший за цей строк (зависла оплата не тримає товар вічно).</summary>
+    public const int InProgressReserveMinutes = 15;
+    /// <summary>Маркер наміру повернення в beauty_payments.provider (платіж paid, замовлення pending_payment): reconcile лише повторює повернення.</summary>
+    public const string RefundIntentMarker = "refunding";
 
     /// <summary>Лише литерал <c>true</c> (без регістру) вмикає; за замовчуванням вимкнено.</summary>
     public bool Enabled { get; set; }
@@ -105,9 +109,10 @@ public enum ClaimKind { Claimed, Reconcile, NoClaim }
 
 /// <param name="PaymentId">Claimed - новий платіж; Reconcile - останній платіж замовлення (або новий, якщо жодного pending/paid немає).</param>
 /// <param name="PaymentStatus">Reconcile: стан останнього платежу (pending | paid); новий платіж = pending.</param>
-public sealed record ClaimOutcome(ClaimKind Kind, ProductOrderView? Order, Guid PaymentId = default, string? PaymentStatus = null);
+/// <param name="RefundPending">Reconcile: на платежі зафіксовано намір повернення (stock_unavailable) - лише повторити повернення, не фіналізувати.</param>
+public sealed record ClaimOutcome(ClaimKind Kind, ProductOrderView? Order, Guid PaymentId = default, string? PaymentStatus = null, bool RefundPending = false);
 
-public enum FinalizeKind { Paid, AlreadyPaid, NotPending, StockUnavailable }
+public enum FinalizeKind { Paid, AlreadyPaid, NotPending, StockUnavailable, ClaimLost }
 
 public sealed record FinalizeOutcome(FinalizeKind Kind, ProductOrderView? Order);
 
@@ -126,12 +131,17 @@ public interface IProductOrderStore
 
     /// <summary>Крок 1 оплати (§33.16): умовний UPDATE-claim + платіж pending; завислу оплату (старшу за stale) перехоплює для reconcile.</summary>
     Task<ClaimOutcome> ClaimPaymentAsync(Guid orderId, DateTimeOffset now, TimeSpan stale, int maxAttempts, CancellationToken ct);
-    /// <summary>Відмова картки: платіж failed, payment_started_at = NULL (спроба витрачена).</summary>
-    Task MarkPaymentFailedAsync(Guid orderId, Guid paymentId, CancellationToken ct);
+    /// <summary>Перехоплення завислої оплати лише за CAS по старому payment_started_at (без нового claim і без збільшення спроб).</summary>
+    Task<ClaimOutcome> ClaimReconcileAsync(Guid orderId, DateTimeOffset expectedStartedAt, DateTimeOffset now, TimeSpan stale, CancellationToken ct);
+    /// <summary>Відмова картки (CAS): платіж failed і payment_started_at = NULL лише якщо payment_started_at == <paramref name="claimStartedAt"/> і платіж був pending. false = claim чужий/змінився.</summary>
+    Task<bool> MarkPaymentFailedAsync(Guid orderId, Guid paymentId, DateTimeOffset claimStartedAt, CancellationToken ct);
+    /// <summary>Фіксація наміру повернення (окрема коротка транзакція) ДО виклику RefundAsync; потребує paid-платежу й чинного claim.</summary>
+    Task<bool> BeginCompensationAsync(Guid orderId, Guid paymentId, DateTimeOffset claimStartedAt, DateTimeOffset now, CancellationToken ct);
     /// <summary>Платіж paid -> фіналізація: FEFO-списання (без прострочених), операція sale, рухи sale, клієнт, статус paid - одна транзакція.</summary>
-    Task<FinalizeOutcome> FinalizePaidAsync(Guid orderId, Guid paymentId, string? providerPaymentId, DateTimeOffset now, CancellationToken ct);
+    Task<FinalizeOutcome> FinalizePaidAsync(Guid orderId, Guid paymentId, DateTimeOffset claimStartedAt, string? providerPaymentId, DateTimeOffset now, CancellationToken ct);
     /// <summary>Після успішного повернення провайдером: замовлення refunded (stock_unavailable, 100%), платіж refunded.</summary>
-    Task CompensateAsync(Guid orderId, Guid paymentId, DateTimeOffset now, CancellationToken ct);
+    /// <returns>false - замовлення/платіж не змінено (claim не збігся або платіж не paid).</returns>
+    Task<bool> CompensateAsync(Guid orderId, Guid paymentId, DateTimeOffset claimStartedAt, DateTimeOffset now, CancellationToken ct);
     /// <summary>Умовне скасування неоплаченого (§33.16): true - скасовано цим викликом. <paramref name="by"/>: client | staff.</summary>
     Task<bool> CancelUnpaidAsync(Guid orderId, string by, Guid? userId, string? note, DateTimeOffset now, CancellationToken ct);
 }

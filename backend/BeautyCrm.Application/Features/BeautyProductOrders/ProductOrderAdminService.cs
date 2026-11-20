@@ -235,26 +235,39 @@ public sealed class ProductOrderAdminService(
     private async Task<Result<ProductOrderCancelDto>> CancelPaidAsync(Actor actor, AdminOrderDetail d, Guid paymentId, string? note, DateTimeOffset now, CancellationToken ct)
     {
         var id = d.Row.Id;
-        if (!await admin.ClaimProductOrderRefundAsync(id, now, Stale, ct)) return await OutcomeAsync(actor, id, now, ct);
+        if (await admin.ClaimProductOrderRefundAsync(id, now, Stale, ct) is not { } refundClaim) return await OutcomeAsync(actor, id, now, ct);
 
-        var refunded = false;
+        // Після claim: власний timeout замість токена запиту. Виняток/timeout/відповідь без коду = результат НЕВІДОМИЙ: claim не скидаємо
+        // (повтор після stale повторить ідемпотентне повернення); скидаємо лише явну відмову й лише CAS-ом по власному claim.
+        using var cts = new CancellationTokenSource(ProductOrderPaymentFlow.PostClaimTimeout);
+        RefundResult? refund = null;
         try
         {
-            refunded = (await payments.RefundAsync(paymentId, d.Row.Total, ct)).Success;
+            refund = await payments.RefundAsync(paymentId, d.Row.Total, cts.Token);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
-            log?.LogWarning(ex, "product_order_refund_failed order={OrderId} user={UserId}", id, actor.UserId);
+            log?.LogError("product_order_refund_unknown order={OrderId} user={UserId} error={Error}", id, actor.UserId, ex.GetType().Name);
         }
-        if (!refunded)
+        if (refund is null || (!refund.Success && string.IsNullOrWhiteSpace(refund.Error)))
         {
-            await admin.ReleaseProductOrderRefundClaimAsync(id, CancellationToken.None);
+            if (refund is not null) log?.LogError("product_order_refund_unknown order={OrderId} user={UserId} error={Error}", id, actor.UserId, "no_decline_code");
+            return Error.Conflict("refund_in_progress", "The refund status is unknown. Retry later.");
+        }
+        if (!refund.Success)
+        {
+            await admin.ReleaseProductOrderRefundClaimAsync(id, refundClaim, CancellationToken.None);
             log?.LogWarning("product_order_refund_failed order={OrderId} user={UserId}", id, actor.UserId);
             return Error.PaymentFailed("refund_failed", "The refund failed. The order is unchanged.");
         }
 
         // Гроші повернено: фіксація не повинна скасовуватись токеном запиту (інакше claim лишиться до stale, повтор доведе до кінця).
-        await admin.FinalizeProductOrderRefundAsync(id, actor.UserId, note, clock.GetUtcNow(), CancellationToken.None);
+        var fin = await admin.FinalizeProductOrderRefundAsync(id, actor.UserId, note, clock.GetUtcNow(), CancellationToken.None);
+        if (fin == RefundFinalizeKind.NotPaid)
+        {
+            log?.LogError("product_order_refund_finalize_failed order={OrderId} user={UserId} reason={Reason}", id, actor.UserId, "not_paid");
+            return Error.Conflict("refund_state_conflict", "The refund was issued but the order state changed. Check the order.");
+        }
         log?.LogInformation("product_order_cancelled order={OrderId} by={By} refund={Refund}", id, "staff", true);
         var after = (await ReloadAsync(id, CancellationToken.None)).Value!;
         return new ProductOrderCancelDto(Detail(actor, after, clock.GetUtcNow()), after.RefundAmount ?? d.Row.Total);
@@ -273,47 +286,50 @@ public sealed class ProductOrderAdminService(
             return Error.Conflict("nothing_to_reconcile", "There is no payment in progress.");
         if (started >= now - Stale) return Error.Conflict("payment_in_progress", "Payment is in progress.");
 
-        var claim = await orders.ClaimPaymentAsync(id, now, Stale, options.MaxPaymentAttempts, ct);
+        // Окремий claim лише за CAS по старому payment_started_at (не може стартувати нову спробу оплати).
+        var claim = await orders.ClaimReconcileAsync(id, started, now, Stale, ct);
         if (claim.Kind == ClaimKind.NoClaim) return Error.Conflict("payment_in_progress", "Payment is in progress.");
         var order = claim.Order!;
+        var claimAt = order.PaymentStartedAt!.Value;
         log?.LogInformation("product_order_payment order={OrderId} attempt={Attempt} result={Result}", id, order.PaymentAttempts, "reconciled");
 
-        string? provider = null;
-        if (!(claim.Kind == ClaimKind.Reconcile && claim.PaymentStatus == "paid"))
+        // Після claim: власний timeout замість токена запиту.
+        using var cts = new CancellationTokenSource(ProductOrderPaymentFlow.PostClaimTimeout);
+        var pct = cts.Token;
+
+        if (claim.PaymentStatus == "paid" && claim.RefundPending)
         {
-            try
-            {
-                var charge = await payments.ChargeAsync(new PaymentCharge(claim.PaymentId, PaymentPurpose.ProductOrder, id, order.Total, ProductOrderService.Currency), ct);
-                if (!charge.Success)
-                {
-                    await orders.MarkPaymentFailedAsync(id, claim.PaymentId, ct);
-                    return Detail(actor, (await ReloadAsync(id, ct)).Value!, clock.GetUtcNow());
-                }
-                provider = charge.ProviderPaymentId;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                // лишається «в процесі»: наступний reconcile повторить Charge з тим самим PaymentId
-                log?.LogError(ex, "product_order_reconcile_failed order={OrderId}", id);
-                return Detail(actor, (await ReloadAsync(id, ct)).Value!, clock.GetUtcNow());
-            }
+            // намір повернення вже зафіксовано: лише повторюємо повернення, ніколи не фіналізуємо
+            await ProductOrderPaymentFlow.CompensateAsync(orders, payments, log, clock, id, claim.PaymentId, order.Total, claimAt, true);
+            return Detail(actor, (await ReloadAsync(id, ct)).Value!, clock.GetUtcNow());
         }
 
-        var fin = await orders.FinalizePaidAsync(id, claim.PaymentId, provider, clock.GetUtcNow(), ct);
-        if (fin.Kind == FinalizeKind.StockUnavailable)
+        string? provider = null;
+        if (claim.PaymentStatus != "paid")
         {
-            var refunded = false;
+            PaymentResult charge;
             try
             {
-                refunded = (await payments.RefundAsync(claim.PaymentId, order.Total, ct)).Success;
+                charge = await payments.ChargeAsync(new PaymentCharge(claim.PaymentId, PaymentPurpose.ProductOrder, id, order.Total, ProductOrderService.Currency), pct);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex)
             {
-                log?.LogError(ex, "product_order_compensation_failed order={OrderId}", id);
+                // результат невідомий: лишається «в процесі», наступний reconcile повторить Charge з тим самим PaymentId
+                log?.LogError("product_order_reconcile_failed order={OrderId} error={Error}", id, ex.GetType().Name);
+                return Detail(actor, (await ReloadAsync(id, ct)).Value!, clock.GetUtcNow());
             }
-            if (refunded) await orders.CompensateAsync(id, claim.PaymentId, clock.GetUtcNow(), ct);
-            else log?.LogError("product_order_compensation_failed order={OrderId}", id);
+            if (!charge.Success)
+            {
+                if (ProductOrderPaymentFlow.IsExplicitDecline(charge)) await orders.MarkPaymentFailedAsync(id, claim.PaymentId, claimAt, pct);
+                else log?.LogError("product_order_reconcile_failed order={OrderId} error={Error}", id, "no_decline_code");
+                return Detail(actor, (await ReloadAsync(id, ct)).Value!, clock.GetUtcNow());
+            }
+            provider = charge.ProviderPaymentId;
         }
+
+        var fin = await orders.FinalizePaidAsync(id, claim.PaymentId, claimAt, provider, clock.GetUtcNow(), pct);
+        if (fin.Kind == FinalizeKind.StockUnavailable)
+            await ProductOrderPaymentFlow.CompensateAsync(orders, payments, log, clock, id, claim.PaymentId, order.Total, claimAt, false);
         return Detail(actor, (await ReloadAsync(id, ct)).Value!, clock.GetUtcNow());
     }
 }

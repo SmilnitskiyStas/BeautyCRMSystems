@@ -45,11 +45,13 @@ public sealed partial class EfBeautyStore : IProductOrderStore
 
     /// <summary>
     /// available = Σ quantity непрострочених партій закладу − reserved (§33.16). reserved = Σ quantity рядків замовлень закладу в pending_payment,
-    /// де резерв не минув АБО оплата в процесі. Без блокувань (блокування рівнів - на боці виклику).
+    /// де резерв не минув АБО оплата в процесі (не старша за InProgressReserveMinutes). Без блокувань (блокування рівнів - на боці виклику).
     /// </summary>
     private async Task<Dictionary<Guid, decimal>> AvailabilityAsync(Guid locationId, IReadOnlyCollection<Guid> productIds, DateOnly today, DateTimeOffset now, CancellationToken ct)
     {
         if (productIds.Count == 0) return [];
+        // «оплата в процесі» тримає резерв лише обмежений час (зависла оплата не блокує товар вічно; фіналізація перевіряє наявність під блокуванням)
+        var inProgressSince = now.AddMinutes(-ProductOrdersOptions.InProgressReserveMinutes);
         var ids = productIds.ToArray();
         var stock = (await db.StockBatches.AsNoTracking()
                 .Where(b => b.LocationId == locationId && ids.Contains(b.ProductId) && b.Quantity > 0 && (b.ExpiresOn == null || b.ExpiresOn >= today))
@@ -58,7 +60,7 @@ public sealed partial class EfBeautyStore : IProductOrderStore
         var reserved = (await (from l in db.ProductOrderLines.AsNoTracking()
                                join o in db.ProductOrders.AsNoTracking() on l.OrderId equals o.Id
                                where o.LocationId == locationId && ids.Contains(l.ProductId) && o.Status == ProductOrderStatus.PendingPayment
-                                     && (o.ReservationExpiresAt > now || o.PaymentStartedAt != null)
+                                     && (o.ReservationExpiresAt > now || (o.PaymentStartedAt != null && o.PaymentStartedAt > inProgressSince))
                                group l by l.ProductId into g
                                select new { g.Key, Q = g.Sum(x => x.Quantity) }).ToListAsync(ct))
             .ToDictionary(x => x.Key, x => (decimal)x.Q);
@@ -73,9 +75,11 @@ public sealed partial class EfBeautyStore : IProductOrderStore
         if (loc is null) return null;
         var disabled = (await db.ProductLocationSettings.AsNoTracking().Where(s => s.LocationId == locationId && !s.IsEnabled)
             .Select(s => s.ProductId).ToListAsync(ct)).ToHashSet();
-        var products = (await db.Products.AsNoTracking()
-                .Where(p => p.IsActive && (p.Purpose == ProductPurpose.Sale || p.Purpose == ProductPurpose.Both) && p.SalePrice > 0).ToListAsync(ct))
-            .Where(p => !disabled.Contains(p.Id)).ToList();
+        var disabledIds = disabled.ToList();
+        // обмеження вибірки в SQL: MaxCatalogItems + 1 (щоб визначити truncated)
+        var products = await db.Products.AsNoTracking()
+            .Where(p => p.IsActive && (p.Purpose == ProductPurpose.Sale || p.Purpose == ProductPurpose.Both) && p.SalePrice > 0 && !disabledIds.Contains(p.Id))
+            .OrderBy(p => p.Name).ThenBy(p => p.Id).Take(ProductOrdersOptions.MaxCatalogItems + 1).ToListAsync(ct);
         var paths = await CategoryPathsAsync(ct);
         var avail = await AvailabilityAsync(locationId, [.. products.Select(p => p.Id)], SlotCalculator.LocalDate(now, loc.Timezone), now, ct);
 
@@ -192,32 +196,41 @@ public sealed partial class EfBeautyStore : IProductOrderStore
             return new(ClaimKind.Claimed, await GetOrderAsync(orderId, ct), payment.Id, "pending");
         }
 
+        await tx.RollbackAsync(ct);
+        db.ChangeTracker.Clear();
         var view = await GetOrderAsync(orderId, ct);
         if (view is { Status: "pending_payment", PaymentStartedAt: { } started } && started < now - stale)
+            return await ClaimReconcileAsync(orderId, started, now, stale, ct);
+        return new(ClaimKind.NoClaim, view);
+    }
+
+    public async Task<ClaimOutcome> ClaimReconcileAsync(Guid orderId, DateTimeOffset expectedStartedAt, DateTimeOffset now, TimeSpan stale, CancellationToken ct)
+    {
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var threshold = now - stale;
+        // reconcile: перехоплення завислої оплати (CAS за старим payment_started_at); спробу не збільшуємо
+        var taken = await db.Database.ExecuteSqlInterpolatedAsync($@"
+            UPDATE beauty_product_orders SET payment_started_at = {now}, updated_at = {now}
+            WHERE id = {orderId} AND status = 'pending_payment' AND payment_started_at = {expectedStartedAt} AND payment_started_at < {threshold}", ct);
+        if (taken == 1)
         {
-            // reconcile: перехоплення завислої оплати (CAS за старим payment_started_at); спробу не збільшуємо
-            var taken = await db.Database.ExecuteSqlInterpolatedAsync($@"
-                UPDATE beauty_product_orders SET payment_started_at = {now}, updated_at = {now}
-                WHERE id = {orderId} AND status = 'pending_payment' AND payment_started_at = {started}", ct);
-            if (taken == 1)
+            var total = await db.ProductOrders.AsNoTracking().Where(o => o.Id == orderId).Select(o => o.TotalAmount).FirstAsync(ct);
+            var last = await db.Payments.AsNoTracking().Where(p => p.ProductOrderId == orderId && (p.Status == PaymentStatus.Pending || p.Status == PaymentStatus.Paid))
+                .OrderByDescending(p => p.CreatedAt).ThenByDescending(p => p.Id).FirstOrDefaultAsync(ct);
+            if (last is null)
             {
-                var last = await db.Payments.AsNoTracking().Where(p => p.ProductOrderId == orderId && (p.Status == PaymentStatus.Pending || p.Status == PaymentStatus.Paid))
-                    .OrderByDescending(p => p.CreatedAt).ThenByDescending(p => p.Id).FirstOrDefaultAsync(ct);
-                if (last is null)
-                {
-                    last = NewOrderPayment(orderId, view.Total);
-                    db.Payments.Add(last);
-                    await db.SaveChangesAsync(ct);
-                }
-                await tx.CommitAsync(ct);
-                db.ChangeTracker.Clear();
-                return new(ClaimKind.Reconcile, await GetOrderAsync(orderId, ct), last.Id, EnumText<PaymentStatus>.ToDb(last.Status));
+                last = NewOrderPayment(orderId, total);
+                db.Payments.Add(last);
+                await db.SaveChangesAsync(ct);
             }
-            view = await GetOrderAsync(orderId, ct);
+            await tx.CommitAsync(ct);
+            db.ChangeTracker.Clear();
+            return new(ClaimKind.Reconcile, await GetOrderAsync(orderId, ct), last.Id, EnumText<PaymentStatus>.ToDb(last.Status),
+                last.Status == PaymentStatus.Paid && last.Provider == ProductOrdersOptions.RefundIntentMarker);
         }
         await tx.RollbackAsync(ct);
         db.ChangeTracker.Clear();
-        return new(ClaimKind.NoClaim, view);
+        return new(ClaimKind.NoClaim, await GetOrderAsync(orderId, ct));
     }
 
     private static Payment NewOrderPayment(Guid orderId, decimal total) => new()
@@ -225,25 +238,60 @@ public sealed partial class EfBeautyStore : IProductOrderStore
         Id = Guid.NewGuid(), ProductOrderId = orderId, Amount = total, Method = BeautyCrm.Infrastructure.Data.Entities.PaymentMethod.Card, Status = PaymentStatus.Pending,
     };
 
-    public async Task MarkPaymentFailedAsync(Guid orderId, Guid paymentId, CancellationToken ct)
+    public async Task<bool> MarkPaymentFailedAsync(Guid orderId, Guid paymentId, DateTimeOffset claimStartedAt, CancellationToken ct)
     {
         var now = (clock ?? TimeProvider.System).GetUtcNow();
         await using var tx = await db.Database.BeginTransactionAsync(ct);
-        await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE beauty_payments SET status = 'failed', updated_at = {now} WHERE id = {paymentId} AND status = 'pending'", ct);
-        await db.Database.ExecuteSqlInterpolatedAsync(
-            $"UPDATE beauty_product_orders SET payment_started_at = NULL, updated_at = {now} WHERE id = {orderId} AND status = 'pending_payment'", ct);
+        // CAS: скидаємо claim лише власний (повільний A не стирає claim B після перехоплення) і лише якщо платіж був pending
+        var released = await db.Database.ExecuteSqlInterpolatedAsync($@"
+            UPDATE beauty_product_orders SET payment_started_at = NULL, updated_at = {now}
+            WHERE id = {orderId} AND status = 'pending_payment' AND payment_started_at = {claimStartedAt}", ct);
+        var failed = released == 1
+            ? await db.Database.ExecuteSqlInterpolatedAsync($@"
+                UPDATE beauty_payments SET status = 'failed', updated_at = {now} WHERE id = {paymentId} AND product_order_id = {orderId} AND status = 'pending'", ct)
+            : 0;
+        if (released != 1 || failed != 1)
+        {
+            await tx.RollbackAsync(ct);
+            db.ChangeTracker.Clear();
+            return false;
+        }
         await tx.CommitAsync(ct);
         db.ChangeTracker.Clear();
+        return true;
     }
 
-    public async Task<FinalizeOutcome> FinalizePaidAsync(Guid orderId, Guid paymentId, string? providerPaymentId, DateTimeOffset now, CancellationToken ct)
+    public async Task<bool> BeginCompensationAsync(Guid orderId, Guid paymentId, DateTimeOffset claimStartedAt, DateTimeOffset now, CancellationToken ct)
+    {
+        // Маркер наміру без міграції: beauty_payments.provider = 'refunding' (payments.status має CHECK pending|paid|failed|refunded).
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var own = await db.Database.ExecuteSqlInterpolatedAsync($@"
+            UPDATE beauty_product_orders SET updated_at = {now}
+            WHERE id = {orderId} AND status = 'pending_payment' AND payment_started_at = {claimStartedAt}", ct);
+        var marked = own == 1
+            ? await db.Database.ExecuteSqlInterpolatedAsync($@"
+                UPDATE beauty_payments SET provider = {ProductOrdersOptions.RefundIntentMarker}, updated_at = {now}
+                WHERE id = {paymentId} AND product_order_id = {orderId} AND status = 'paid'", ct)
+            : 0;
+        if (own != 1 || marked != 1)
+        {
+            await tx.RollbackAsync(ct);
+            db.ChangeTracker.Clear();
+            return false;
+        }
+        await tx.CommitAsync(ct);
+        db.ChangeTracker.Clear();
+        return true;
+    }
+
+    public async Task<FinalizeOutcome> FinalizePaidAsync(Guid orderId, Guid paymentId, DateTimeOffset claimStartedAt, string? providerPaymentId, DateTimeOffset now, CancellationToken ct)
     {
         // Фаза 1: гроші списано - фіксуємо це окремо (рівно один paid-платіж; повтор ідемпотентний). Далі, навіть при збої, reconcile дозавершить.
         await using (var tx1 = await db.Database.BeginTransactionAsync(ct))
         {
             await db.Database.ExecuteSqlInterpolatedAsync($@"
                 UPDATE beauty_payments SET status = 'paid', provider_payment_id = coalesce(provider_payment_id, {providerPaymentId}), paid_at = coalesce(paid_at, {now}), updated_at = {now}
-                WHERE id = {paymentId} AND status = 'pending'", ct);
+                WHERE id = {paymentId} AND product_order_id = {orderId} AND status = 'pending'", ct);
             await tx1.CommitAsync(ct);
         }
 
@@ -260,6 +308,10 @@ public sealed partial class EfBeautyStore : IProductOrderStore
         if (order is null) return await Done(FinalizeKind.NotPending);
         if (order.Status is ProductOrderStatus.Paid or ProductOrderStatus.Fulfilled) return await Done(FinalizeKind.AlreadyPaid);
         if (order.Status != ProductOrderStatus.PendingPayment) return await Done(FinalizeKind.NotPending);
+        // фаза 2 лише для чинного claim і paid-платежу цього замовлення без маркера наміру повернення (інакше - лише повтор повернення)
+        if (order.PaymentStartedAt != claimStartedAt) return await Done(FinalizeKind.ClaimLost);
+        var pay = await db.Payments.AsNoTracking().Where(p => p.Id == paymentId && p.ProductOrderId == orderId).Select(p => new { p.Status, p.Provider }).FirstOrDefaultAsync(ct);
+        if (pay is null || pay.Status != PaymentStatus.Paid || pay.Provider == ProductOrdersOptions.RefundIntentMarker) return await Done(FinalizeKind.ClaimLost);
 
         var lines = await db.ProductOrderLines.AsNoTracking().Where(l => l.OrderId == orderId).OrderBy(l => l.LineNo).ToListAsync(ct);
         var pids = lines.Select(l => l.ProductId).ToList();
@@ -294,16 +346,26 @@ public sealed partial class EfBeautyStore : IProductOrderStore
         return new(FinalizeKind.Paid, await GetOrderAsync(orderId, ct));
     }
 
-    public async Task CompensateAsync(Guid orderId, Guid paymentId, DateTimeOffset now, CancellationToken ct)
+    public async Task<bool> CompensateAsync(Guid orderId, Guid paymentId, DateTimeOffset claimStartedAt, DateTimeOffset now, CancellationToken ct)
     {
         await using var tx = await db.Database.BeginTransactionAsync(ct);
-        await db.Database.ExecuteSqlInterpolatedAsync($@"
+        var closed = await db.Database.ExecuteSqlInterpolatedAsync($@"
             UPDATE beauty_product_orders SET status = 'refunded', close_reason = 'stock_unavailable', closed_at = {now}, refund_amount = total_amount,
                    payment_id = {paymentId}, payment_started_at = NULL, updated_at = {now}
-            WHERE id = {orderId} AND status = 'pending_payment'", ct);
-        await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE beauty_payments SET status = 'refunded', updated_at = {now} WHERE id = {paymentId} AND status = 'paid'", ct);
+            WHERE id = {orderId} AND status = 'pending_payment' AND payment_started_at = {claimStartedAt}", ct);
+        var refunded = closed == 1
+            ? await db.Database.ExecuteSqlInterpolatedAsync(
+                $"UPDATE beauty_payments SET status = 'refunded', updated_at = {now} WHERE id = {paymentId} AND product_order_id = {orderId} AND status = 'paid'", ct)
+            : 0;
+        if (closed != 1 || refunded != 1)
+        {
+            await tx.RollbackAsync(ct);
+            db.ChangeTracker.Clear();
+            return false;
+        }
         await tx.CommitAsync(ct);
         db.ChangeTracker.Clear();
+        return true;
     }
 
     // ---------- P5: скасування неоплаченого ----------

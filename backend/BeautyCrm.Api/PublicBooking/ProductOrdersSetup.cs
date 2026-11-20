@@ -1,6 +1,7 @@
 using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Application.Features.BeautyProductOrders;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace BeautyCrm.Api.PublicBooking;
 
@@ -25,7 +26,7 @@ public static class ProductOrdersSetup
         };
         services.AddBeautyProductOrdersApplication(options);
         var productionOrUnknown = env is null || env.IsProduction();
-        services.AddSingleton<IHostedService>(sp => new ProductOrdersStartupGuard(options, productionOrUnknown, sp.GetRequiredService<IPaymentService>()));
+        services.AddSingleton<IHostedService>(sp => new ProductOrdersStartupGuard(options, productionOrUnknown, sp.GetRequiredService<IPaymentService>(), sp.GetService<ILogger<ProductOrdersStartupGuard>>()));
         return services;
     }
 
@@ -40,11 +41,15 @@ public static class ProductOrdersSetup
 }
 
 /// <summary>Падає на старті, якщо замовлення товарів увімкнено у Production з mock-оплатою.</summary>
-public sealed class ProductOrdersStartupGuard(ProductOrdersOptions options, bool productionOrUnknown, IPaymentService payments) : IHostedService
+public sealed class ProductOrdersStartupGuard(ProductOrdersOptions options, bool productionOrUnknown, IPaymentService payments, ILogger<ProductOrdersStartupGuard>? log = null) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        ProductOrdersOptions.ValidateForHost(options.Enabled, productionOrUnknown, payments is MockPaymentService);
+        var mock = payments is MockPaymentService;
+        ProductOrdersOptions.ValidateForHost(options.Enabled, productionOrUnknown, mock);
+        // Не-Production: mock дозволено (dev/staging/тести), але гучно попереджаємо - картки не списуються по-справжньому.
+        if (options.Enabled && mock)
+            log?.LogWarning("ProductOrders:Enabled=true with MockPaymentService (non-Production environment): no real card charges are made.");
         return Task.CompletedTask;
     }
 

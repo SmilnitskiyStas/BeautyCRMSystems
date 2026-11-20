@@ -96,21 +96,27 @@ public sealed partial class EfBeautyStore : IProductOrderAdminStore
         return n == 1;
     }
 
-    public async Task<bool> ClaimProductOrderRefundAsync(Guid id, DateTimeOffset now, TimeSpan stale, CancellationToken ct)
+    public async Task<DateTimeOffset?> ClaimProductOrderRefundAsync(Guid id, DateTimeOffset now, TimeSpan stale, CancellationToken ct)
     {
         var threshold = now - stale;
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
         var n = await db.Database.ExecuteSqlInterpolatedAsync($@"
             UPDATE beauty_product_orders SET refund_started_at = {now}, updated_at = {now}
             WHERE id = {id} AND status = 'paid' AND (refund_started_at IS NULL OR refund_started_at < {threshold})", ct);
+        // значення claim читаємо з БД (точність timestamptz) у тій самій транзакції: рядок заблоковано нашим UPDATE
+        var claim = n == 1 ? await db.ProductOrders.AsNoTracking().Where(o => o.Id == id).Select(o => o.RefundStartedAt).FirstAsync(ct) : null;
+        await tx.CommitAsync(ct);
         db.ChangeTracker.Clear();
-        return n == 1;
+        return claim;
     }
 
-    public async Task ReleaseProductOrderRefundClaimAsync(Guid id, CancellationToken ct)
+    public async Task<bool> ReleaseProductOrderRefundClaimAsync(Guid id, DateTimeOffset claimStartedAt, CancellationToken ct)
     {
-        await db.Database.ExecuteSqlInterpolatedAsync(
-            $"UPDATE beauty_product_orders SET refund_started_at = NULL WHERE id = {id} AND status = 'paid'", ct);
+        // CAS: скидаємо лише власний claim (повільний A не стирає claim B після stale-перехоплення)
+        var n = await db.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE beauty_product_orders SET refund_started_at = NULL WHERE id = {id} AND status = 'paid' AND refund_started_at = {claimStartedAt}", ct);
         db.ChangeTracker.Clear();
+        return n == 1;
     }
 
     public async Task<RefundFinalizeKind> FinalizeProductOrderRefundAsync(Guid id, Guid userId, string? note, DateTimeOffset now, CancellationToken ct)

@@ -27,6 +27,12 @@ internal sealed class FakeOrderPayments : IPaymentService
     public bool DeclineAll;
     public bool FailRefund;
     public int ChargeDelayMs;
+    /// <summary>Номер виклику Charge (з 1) -> затримка мс / відмова: сценарії «повільний A, швидкий B».</summary>
+    public Func<int, int>? DelayFor;
+    public Func<int, bool>? DeclineFor;
+    /// <summary>Виняток замість результату повернення (невідомий результат); хук під час повернення (зміна стану замовлення).</summary>
+    public bool ThrowOnRefund;
+    public Func<Task>? OnRefund;
     private int _throwAfterCharge;
     public void ThrowAfterChargeOnce() => _throwAfterCharge = 1;
 
@@ -35,18 +41,21 @@ internal sealed class FakeOrderPayments : IPaymentService
 
     public async Task<PaymentResult> ChargeAsync(PaymentCharge c, CancellationToken ct)
     {
-        Interlocked.Increment(ref ChargeCalls);
+        var call = Interlocked.Increment(ref ChargeCalls);
         if (ChargeDelayMs > 0) await Task.Delay(ChargeDelayMs, ct);
-        if (DeclineAll) return new PaymentResult(false, null, "declined");
+        if (DelayFor?.Invoke(call) is > 0 and var d) await Task.Delay(d, ct);
+        if (DeclineAll || DeclineFor?.Invoke(call) == true) return new PaymentResult(false, null, "declined");
         Charged.AddOrUpdate(c.PaymentId, 1, (_, v) => v + 1);
         if (Interlocked.Exchange(ref _throwAfterCharge, 0) == 1) throw new InvalidOperationException("injected failure after charge");
         return new PaymentResult(true, $"fake_{c.PaymentId:N}", null);
     }
 
-    public Task<RefundResult> RefundAsync(Guid paymentId, decimal amount, CancellationToken ct)
+    public async Task<RefundResult> RefundAsync(Guid paymentId, decimal amount, CancellationToken ct)
     {
         Interlocked.Increment(ref RefundCalls);
-        return Task.FromResult(FailRefund ? new RefundResult(false, null, "down") : new RefundResult(true, "fake_refund", null));
+        if (OnRefund is not null) await OnRefund();
+        if (ThrowOnRefund) throw new InvalidOperationException("injected refund failure");
+        return await Task.FromResult(FailRefund ? new RefundResult(false, null, "down") : new RefundResult(true, "fake_refund", null));
     }
 }
 
@@ -524,6 +533,146 @@ public sealed class ProductOrdersApiTests(AuthApiFixture fx) : IClassFixture<Aut
         Assert.Equal(1m, await AssertInvariantAsync(e, p));
         await using var ctx = fx.Db.CreateContext(e.T.TenantId);
         Assert.Equal(1, await ctx.StockOperations.CountAsync(o => o.Kind == StockOperationKind.Sale));
+    }
+
+    // ---------- security-рев'ю: M1/M3/M4/L1-L5 ----------
+
+    [SkippableFact]
+    public async Task client_abort_after_claim_still_completes_payment_with_own_token()
+    {
+        NeedDb();
+        var e = await NewEnvAsync();
+        var pay = new FakeOrderPayments { ChargeDelayMs = 700 };
+        var h = NewHost(pay: pay);
+        var p = await AddProductAsync(e, "Shampoo", 100m, stock: 3);
+        var (token, _) = await CreateAsync(h, e, [Line(p, 1)]);
+        using var cts = new CancellationTokenSource();
+        var req = new HttpRequestMessage(HttpMethod.Post, $"/api/public/{e.Slug}/product-orders/{token}/pay") { Content = JsonContent.Create(new { }) };
+        var call = h.Client.SendAsync(req, cts.Token);
+        await Task.Delay(300); // claim зроблено, Charge триває
+        cts.Cancel();
+        try { await call; } catch (OperationCanceledException) { /* клієнт обірвав запит */ }
+
+        // платіж завершується попри обрив: гроші списано -> замовлення paid, а не «в процесі» до reconcile
+        JsonElement j = default;
+        for (var i = 0; i < 40; i++)
+        {
+            await Task.Delay(250);
+            j = await Expect(await GetOrder(h, e, token), HttpStatusCode.OK);
+            if (j.GetProperty("status").GetString() == "paid") break;
+        }
+        Assert.Equal("paid", j.GetProperty("status").GetString());
+        Assert.Single(pay.Charged);
+        Assert.Equal(2m, await AssertInvariantAsync(e, p));
+    }
+
+    [SkippableFact]
+    public async Task in_progress_reserve_is_bounded_stale_payment_does_not_hold_stock_forever()
+    {
+        NeedDb();
+        var e = await NewEnvAsync();
+        var h = NewHost();
+        var p = await AddProductAsync(e, "Last unit", 100m, stock: 1);
+        var (tokenA, _) = await CreateAsync(h, e, [Line(p, 1)], RandPhone());
+        // оплата в процесі свіжа: резерв тримається навіть після TTL
+        await SetOrderAsync(e, tokenA, o => { o.PaymentStartedAt = DateTimeOffset.UtcNow.AddMinutes(-1); o.ReservationExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-2); });
+        await Expect(await CreateRawAsync(h, e, [Line(p, 1)], RandPhone()), HttpStatusCode.UnprocessableEntity, "insufficient_stock");
+        // оплата «зависла» (старша за межу резерву): товар знову доступний, фіналізація й так перевіряє наявність під блокуванням
+        await SetOrderAsync(e, tokenA, o => o.PaymentStartedAt = DateTimeOffset.UtcNow.AddMinutes(-ProductOrdersOptions.InProgressReserveMinutes - 5));
+        await Expect(await CreateRawAsync(h, e, [Line(p, 1)], RandPhone()), HttpStatusCode.Created);
+    }
+
+    [SkippableFact]
+    public async Task provider_exception_keeps_claim_and_payment_pending_for_reconcile()
+    {
+        NeedDb();
+        var e = await NewEnvAsync();
+        var h = NewHost();
+        var p = await AddProductAsync(e, "Shampoo", 100m, stock: 3);
+        var (token, _) = await CreateAsync(h, e, [Line(p, 1)]);
+        h.Pay.ThrowAfterChargeOnce(); // провайдер списав і кинув виняток: результат невідомий
+        var r = await Expect(await Post(h, e, token, "pay"), HttpStatusCode.Conflict, "payment_in_progress");
+        Assert.True(r.GetProperty("order").GetProperty("paymentInProgress").GetBoolean());
+        Assert.Contains(h.Logs, l => l.Contains("product_order_payment_unknown"));
+        Assert.DoesNotContain(h.Logs, l => l.Contains("injected failure")); // текст винятку (потенційні ПД) не логується
+        await using var ctx = fx.Db.CreateContext(e.T.TenantId);
+        var po = await ctx.ProductOrders.AsNoTracking().FirstAsync();
+        Assert.NotNull(po.PaymentStartedAt);
+        Assert.Equal(PaymentStatus.Pending, (await ctx.Payments.AsNoTracking().FirstAsync(x => x.ProductOrderId == po.Id)).Status);
+        Assert.Equal(1, po.PaymentAttempts);
+    }
+
+    [SkippableFact]
+    public async Task slow_decline_of_old_claim_does_not_erase_claim_or_payment_of_reconciler()
+    {
+        NeedDb();
+        var e = await NewEnvAsync();
+        var pay = new FakeOrderPayments { DelayFor = c => c == 1 ? 1200 : 0, DeclineFor = c => c == 1 };
+        var h = NewHost(pay: pay);
+        var p = await AddProductAsync(e, "Shampoo", 100m, stock: 3);
+        var (token, _) = await CreateAsync(h, e, [Line(p, 1)]);
+        var a = Post(h, e, token, "pay"); // A: claim, повільна відмова
+        await Task.Delay(400);
+        await SetOrderAsync(e, token, o => o.PaymentStartedAt = DateTimeOffset.UtcNow.AddMinutes(-10)); // A «завис»
+        var b = await Post(h, e, token, "pay"); // B: reconcile-claim, швидкий успіх
+        Assert.Equal(HttpStatusCode.OK, b.StatusCode);
+        var aRes = await a; // A відмову не застосовує (CAS): не payment_failed
+        Assert.NotEqual(HttpStatusCode.PaymentRequired, aRes.StatusCode);
+        var j = await Expect(await GetOrder(h, e, token), HttpStatusCode.OK);
+        Assert.Equal("paid", j.GetProperty("status").GetString());
+        await using var ctx = fx.Db.CreateContext(e.T.TenantId);
+        Assert.Equal(0, await ctx.Payments.CountAsync(x => x.ProductOrderId != null && x.Status == PaymentStatus.Failed));
+        Assert.Equal(1, await ctx.StockOperations.CountAsync(o => o.Kind == StockOperationKind.Sale));
+        Assert.Equal(2m, await AssertInvariantAsync(e, p));
+    }
+
+    [SkippableFact]
+    public async Task compensation_records_refund_intent_and_reconcile_only_refunds_never_finalizes()
+    {
+        NeedDb();
+        var e = await NewEnvAsync();
+        var h = NewHost();
+        var p = await AddProductAsync(e, "Shampoo", 100m, stock: 1);
+        var (token, _) = await CreateAsync(h, e, [Line(p, 1)]);
+        await using (var ctx = fx.Db.CreateContext(e.T.TenantId))
+        {
+            await ctx.StockBatches.ExecuteUpdateAsync(s => s.SetProperty(b => b.Quantity, 0m));
+            await ctx.StockLevels.ExecuteUpdateAsync(s => s.SetProperty(l => l.Quantity, 0m));
+        }
+        h.Pay.ThrowOnRefund = true; // повернення: результат невідомий
+        var r = await Expect(await Post(h, e, token, "pay"), HttpStatusCode.Conflict, "stock_unavailable");
+        Assert.Equal("pending_payment", r.GetProperty("order").GetProperty("status").GetString());
+        Assert.Contains(h.Logs, l => l.Contains("product_order_compensation_failed"));
+        await using (var ctx = fx.Db.CreateContext(e.T.TenantId))
+        {
+            var pm = await ctx.Payments.AsNoTracking().FirstAsync(x => x.ProductOrderId != null);
+            Assert.Equal(PaymentStatus.Paid, pm.Status);
+            Assert.Equal(ProductOrdersOptions.RefundIntentMarker, pm.Provider); // намір зафіксовано ДО повернення
+        }
+
+        // товар «повернувся» на склад, але reconcile лише повторює повернення і не фіналізує
+        await AddBatchAsync(e, p, 5, Far);
+        await SetOrderAsync(e, token, o => o.PaymentStartedAt = DateTimeOffset.UtcNow.AddMinutes(-10));
+        h.Pay.ThrowOnRefund = false;
+        var again = await Expect(await Post(h, e, token, "pay"), HttpStatusCode.Conflict, "stock_unavailable");
+        Assert.Equal("refunded", again.GetProperty("order").GetProperty("status").GetString());
+        Assert.Equal(2, h.Pay.RefundCalls);
+        Assert.Single(h.Pay.Charged);
+        await using var c2 = fx.Db.CreateContext(e.T.TenantId);
+        Assert.False(await c2.StockOperations.AnyAsync(o => o.Kind == StockOperationKind.Sale));
+        Assert.Equal(1, await c2.Payments.CountAsync(x => x.ProductOrderId != null && x.Status == PaymentStatus.Refunded));
+    }
+
+    [SkippableFact]
+    public async Task customer_name_with_format_or_control_characters_is_rejected()
+    {
+        NeedDb();
+        var e = await NewEnvAsync();
+        var h = NewHost();
+        var p = await AddProductAsync(e, "Shampoo", 100m, stock: 5);
+        foreach (var bad in new[] { "Оле​на", "Олена‮", "⁦Олена", "Ол\u0007ена", "Олена﻿", "Олена\U000E0001" })
+            await Expect(await CreateRawAsync(h, e, [Line(p, 1)], RandPhone(), bad), HttpStatusCode.UnprocessableEntity, "invalid_name");
+        await Expect(await CreateRawAsync(h, e, [Line(p, 1)], RandPhone(), "Оленка-Марія"), HttpStatusCode.Created);
     }
 
     [SkippableFact]
