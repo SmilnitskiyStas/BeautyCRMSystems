@@ -376,8 +376,14 @@ export const usePromoPreview = (draft: PromoDraft) =>
     placeholderData: keepPreviousData,
   });
 
-export const useCreatePromotion = () =>
-  useMutation({ mutationFn: (draft: PromoDraft) => beautyApi.createPromotion(draft) });
+export function useCreatePromotion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (draft: PromoDraft) => beautyApi.createPromotion(draft),
+    // Список акцій (вкладка «Акції») оновлюється після створення.
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["beauty", "marketing", "promotions"] }),
+  });
+}
 
 export const useNetworkAnalytics = (q: AnalyticsQuery) =>
   useQuery({ queryKey: beautyKeys.network(q), queryFn: () => beautyApi.getNetworkAnalytics(q) });

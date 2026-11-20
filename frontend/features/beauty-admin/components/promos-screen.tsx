@@ -1,218 +1,87 @@
 "use client";
 
-import { useState } from "react";
-import { useCreatePromotion, useLocations, usePriceList, usePromoPreview } from "../hooks/use-beauty-admin";
-import { useCreateCoupon, useMarketingAvailability } from "../hooks/use-marketing";
-import { addDaysIso, durationLabel, money, todayIso } from "../format";
-import { couponFormErrors, humanizeMarketingError, humanizePromoError, promoPeriodError, ymdToDmy } from "../marketing/logic";
-import { dateToIso } from "../marketing/wizard";
-import type { PromoDraft } from "../types";
-import { AccessFields, CodesCard, PromotionsCard, type AccessValue } from "./promo-access";
-import { Card, Chip, FIELD_INPUT, FIELD_LABEL, LinkButton, PageHeader, QueryState, SecondaryButton, Table, TD } from "./ui";
+import { useRef, useState, type KeyboardEvent } from "react";
+import { useSearchParams } from "next/navigation";
+import { useAuth } from "@/features/beauty-auth/components/auth-provider";
+import { canManageCatalog, canUseMarketing } from "@/features/beauty-auth/permissions";
+import { useMarketingAvailability } from "../hooks/use-marketing";
+import { CodesTab, OffersTab, PricesTab } from "./promo-lists";
+import { PageHeader } from "./ui";
 
-const PERCENTS = [10, 15, 20, 30];
+type Tab = "prices" | "offers" | "codes";
 
-function toggle(list: string[], id: string): string[] {
-  return list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
+const TAB_LABEL: Record<Tab, string> = { prices: "Прайс-лист", offers: "Акції", codes: "Коди" };
+const DEFAULT_TAB: Tab = "offers";
+
+const isTab = (v: string | null | undefined): v is Tab => v === "prices" || v === "offers" || v === "codes";
+
+/** Активна вкладка живе в URL (`?tab=`): посилання й F5 зберігають розділ; History API синхронізується з `useSearchParams`. */
+function writeTab(tab: Tab) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("tab", tab);
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
 export function PromosScreen() {
-  const [today] = useState(() => todayIso());
-  const [name, setName] = useState("");
-  const [percent, setPercent] = useState(20);
-  // null = користувач ще не чіпав вибір: діють усі активні заклади з API.
-  const [pickedLocations, setPickedLocations] = useState<string[] | null>(null);
-  const [serviceIds, setServiceIds] = useState<string[]>([]);
-  const [from, setFrom] = useState(today);
-  const [to, setTo] = useState(() => addDaysIso(today, 7));
-  const [access, setAccess] = useState<AccessValue>({ access: "public", code: "", maxUses: "", from: "", to: "" });
-  const [created, setCreated] = useState<{ id: string; name: string; couponError?: string } | null>(null);
-  const marketing = useMarketingAvailability();
-  const marketingOn = !marketing.disabled;
-  const createCoupon = useCreateCoupon();
+  const { user } = useAuth();
+  const sp = useSearchParams();
+  const marketing = useMarketingAvailability(canUseMarketing(user));
+  // Розсилки/купони доступні за правом marketing.campaigns і якщо модуль підключено.
+  const marketingOn = canUseMarketing(user) && !marketing.disabled;
+  const canCreate = canManageCatalog(user);
 
-  const locations = useLocations();
-  const priceList = usePriceList();
-  // Для перерахунку цін назва й дати не потрібні — не перезапитуємо на кожну літеру.
-  const activeLocationIds = (locations.data ?? []).filter((l) => l.isActive !== false).map((l) => l.id);
-  const locationIds = pickedLocations ?? activeLocationIds;
-  const preview = usePromoPreview({ name: "", from: "", to: "", percent, locationIds, serviceIds });
-  const create = useCreatePromotion();
+  const tabs: Tab[] = marketingOn ? ["prices", "offers", "codes"] : ["prices", "offers"];
+  const [picked, setPicked] = useState<string | null>(() => sp?.get("tab") ?? null);
+  const tab: Tab = isTab(picked) && tabs.includes(picked) ? picked : DEFAULT_TAB;
+  const refs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
 
-  const codeOnly = marketingOn && access.access === "code_only";
-  // Строк коду за замовчуванням збігається з періодом акції.
-  const couponPeriod = { from: access.from || from, to: access.to || to };
-  const couponErrors = codeOnly ? couponFormErrors({ code: access.code, maxUses: access.maxUses, ...couponPeriod }) : {};
-  const periodError = promoPeriodError(from, to, today);
-  const canLaunch = name.trim().length > 0 && locationIds.length > 0 && serviceIds.length > 0 && !periodError && Object.keys(couponErrors).length === 0;
-  const hint = !name.trim() ? "Вкажіть назву акції." : locationIds.length === 0 ? "Оберіть хоча б один заклад." : serviceIds.length === 0 ? "Оберіть хоча б одну послугу." : null;
-  const draft: PromoDraft = { name: name.trim(), percent, locationIds, serviceIds, from, to, access: codeOnly ? "code_only" : "public" };
-
-  async function saveCoupon(promotionId: string, promoName: string) {
-    try {
-      await createCoupon.mutateAsync({
-        promotionId,
-        code: access.code.trim(),
-        validFrom: dateToIso(couponPeriod.from, false),
-        validTo: dateToIso(couponPeriod.to, true),
-        ...(access.maxUses.trim() ? { maxUses: Number(access.maxUses) } : {}),
-      });
-      setCreated({ id: promotionId, name: promoName });
-    } catch (e) {
-      setCreated({ id: promotionId, name: promoName, couponError: humanizeMarketingError(e, "Не вдалося створити код.") });
-    }
+  function select(next: Tab, focus = false) {
+    setPicked(next);
+    writeTab(next);
+    if (focus) refs.current[next]?.focus();
   }
 
-  async function launch() {
-    setCreated(null);
-    try {
-      const r = await create.mutateAsync(draft);
-      if (codeOnly) await saveCoupon(r.id, draft.name);
-      else setCreated({ id: r.id, name: draft.name });
-    } catch {
-      /* стан помилки показує create.isError */
-    }
+  function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    const i = tabs.indexOf(tab);
+    const target =
+      e.key === "ArrowRight" ? tabs[(i + 1) % tabs.length] : e.key === "ArrowLeft" ? tabs[(i - 1 + tabs.length) % tabs.length] : e.key === "Home" ? tabs[0] : e.key === "End" ? tabs[tabs.length - 1] : null;
+    if (!target) return;
+    e.preventDefault();
+    select(target, true);
   }
 
   return (
     <>
-      <PageHeader title="Ціни та акції" subtitle="Прайс мережі, власні ціни закладів і нова акція." />
-      <div className="flex flex-wrap items-start gap-6">
-        <Card className="flex-[999_1_560px]">
-          <h2 className="mb-3.5 text-lg font-semibold">Прайс-лист</h2>
-          <QueryState isPending={preview.isPending} isError={preview.isError} onRetry={() => preview.refetch()}>
-            <Table headers={["Послуга", "Тривалість", "Ціна мережі", "З акцією", "Заклади"]} minWidth={600}>
-              {preview.data?.rows.map((r) => (
-                <tr key={r.serviceId} className="border-t border-(--line)">
-                  <td className={`${TD} font-semibold`}>{r.name}</td>
-                  <td className={`${TD} text-(--muted)`}>{durationLabel(r.durationMinutes)}</td>
-                  <td className={TD}>{money(r.price)}</td>
-                  <td className={`${TD} font-semibold ${r.promoPrice !== null ? "text-(--promo)" : "text-(--muted)"}`}>
-                    {r.promoPrice !== null ? money(r.promoPrice) : "—"}
-                  </td>
-                  <td className={`${TD} text-(--muted)`}>{r.where}</td>
-                </tr>
-              ))}
-            </Table>
-          </QueryState>
-        </Card>
-
-        <section className="flex min-w-0 flex-[1_1_380px] flex-col gap-5">
-          <form
-            className="flex min-w-0 flex-col gap-[18px] rounded-2xl bg-white p-5"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (canLaunch) void launch();
-            }}
-          >
-            <h2 className="text-lg font-semibold">Нова акція</h2>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="promo-name" className={FIELD_LABEL}>Назва</label>
-              <input id="promo-name" type="text" maxLength={200} placeholder="Наприклад, «Осінній манікюр»" value={name} onChange={(e) => setName(e.target.value)} className={FIELD_INPUT} />
-            </div>
-
-            <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0">
-              <legend className={`${FIELD_LABEL} mb-2 p-0`}>Знижка</legend>
-              <div className="flex flex-wrap gap-2">
-                {PERCENTS.map((p) => (
-                  <Chip key={p} variant="square" pressed={percent === p} onClick={() => setPercent(p)}>
-                    −{p}%
-                  </Chip>
-                ))}
-              </div>
-            </fieldset>
-
-            <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0">
-              <legend className={`${FIELD_LABEL} mb-2 p-0`}>Де діє</legend>
-              <div className="flex flex-wrap gap-2">
-                {locations.data?.map((l) => (
-                  <Chip key={l.id} pressed={locationIds.includes(l.id)} onClick={() => setPickedLocations(toggle(locationIds, l.id))}>
-                    {l.name}
-                  </Chip>
-                ))}
-              </div>
-            </fieldset>
-
-            <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0">
-              <legend className={`${FIELD_LABEL} mb-2 p-0`}>Для яких послуг</legend>
-              <div className="flex flex-wrap gap-2">
-                {priceList.data?.map((s) => (
-                  <Chip key={s.serviceId} variant="soft" pressed={serviceIds.includes(s.serviceId)} onClick={() => setServiceIds(toggle(serviceIds, s.serviceId))}>
-                    {s.name}
-                  </Chip>
-                ))}
-              </div>
-            </fieldset>
-
-            <AccessFields value={access} onChange={setAccess} errors={couponErrors} marketingOn={marketingOn} />
-
-            <div className="flex flex-wrap gap-3">
-              <div className="flex min-w-[140px] flex-1 flex-col gap-1.5">
-                <label htmlFor="d-from" className={FIELD_LABEL}>Діє з</label>
-                <input id="d-from" type="date" min={today} value={from} onChange={(e) => setFrom(e.target.value)} aria-invalid={periodError ? true : undefined} className={FIELD_INPUT} />
-              </div>
-              <div className="flex min-w-[140px] flex-1 flex-col gap-1.5">
-                <label htmlFor="d-to" className={FIELD_LABEL}>Діє по</label>
-                <input id="d-to" type="date" min={from || today} value={to} onChange={(e) => setTo(e.target.value)} aria-invalid={periodError ? true : undefined} className={FIELD_INPUT} />
-              </div>
-            </div>
-            {periodError ? <p role="alert" data-testid="promo-period-error" className="text-[13px] text-[#8A1F1F]">{periodError}</p> : null}
-
+      <PageHeader title="Ціни та акції" subtitle="Прайс мережі, акції та промокоди." />
+      <div role="tablist" aria-label="Розділи цін та акцій" onKeyDown={onKeyDown} className="flex flex-wrap gap-2">
+        {tabs.map((t) => {
+          const active = t === tab;
+          return (
             <button
-              type="submit"
-              disabled={!canLaunch || create.isPending}
-              className="min-h-[52px] cursor-pointer rounded-[26px] border-0 bg-(--accent) text-base font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+              key={t}
+              ref={(el) => {
+                refs.current[t] = el;
+              }}
+              type="button"
+              role="tab"
+              id={`promos-tab-${t}`}
+              aria-selected={active}
+              aria-controls={`promos-panel-${t}`}
+              tabIndex={active ? 0 : -1}
+              onClick={() => select(t)}
+              className={`inline-flex min-h-11 cursor-pointer items-center rounded-[22px] border-2 px-4 text-sm font-semibold ${
+                active ? "border-(--accent) bg-(--accent) text-white" : "border-(--line-strong) bg-white text-(--ink)"
+              }`}
             >
-              {create.isPending ? "Запускаємо…" : "Запустити акцію"}
+              {TAB_LABEL[t]}
             </button>
-            {hint ? <p className="text-[13px] text-(--muted)">{hint}</p> : null}
-            {created ? (
-              <div role="status" data-testid="promo-created" className="flex flex-col gap-2 rounded-xl bg-[#DDF3E6] px-3 py-2 text-sm text-[#145A32]">
-                <span>Акцію «{created.name}» запущено: {ymdToDmy(from)} - {ymdToDmy(to)}.</span>
-                {marketingOn ? (
-                  <span>
-                    <LinkButton href={`/beauty/campaigns/new?promotionId=${encodeURIComponent(created.id)}`} ariaLabel={`Розіслати клієнтам: ${created.name}`}>
-                      Розіслати клієнтам
-                    </LinkButton>
-                  </span>
-                ) : null}
-              </div>
-            ) : null}
-            {created?.couponError ? (
-              <div role="alert" className="flex flex-col gap-2 rounded-xl bg-[#FBE4E4] px-3 py-2 text-sm text-[#8A1F1F]">
-                <span>Акцію створено, але код не збережено: {created.couponError}</span>
-                <span>
-                  <SecondaryButton disabled={createCoupon.isPending} onClick={() => void saveCoupon(created.id, created.name)}>
-                    Створити код ще раз
-                  </SecondaryButton>
-                </span>
-              </div>
-            ) : null}
-            {create.isError ? (
-              <p role="alert" className="text-sm text-[#8A1F1F]">
-                {humanizePromoError(create.error)}
-              </p>
-            ) : null}
-          </form>
-
-          <PromotionsCard marketingOn={marketingOn} />
-          <CodesCard />
-
-          <Card as="div" className="flex flex-col gap-3">
-            <div className="text-[13px] font-semibold text-(--muted)">Так акцію побачить клієнт</div>
-            <div className="flex flex-col gap-2 rounded-2xl border-2 border-(--promo) bg-[#FFF8F3] p-4">
-              <span className="self-start rounded-lg bg-[#FDE9DC] px-2 py-1 text-[13px] font-semibold text-(--promo)">
-                −{percent}% до {ymdToDmy(to) || "…"}
-              </span>
-              <span className="text-base font-semibold">Манікюр + гель-лак</span>
-              <span className="text-[13px] text-(--muted)">{preview.data?.locationSummary ?? "…"}</span>
-              <span className="flex items-baseline gap-2.5">
-                <span className="text-xl font-semibold">{preview.data ? money(preview.data.samplePrice) : "…"}</span>
-                <span className="text-sm text-(--muted) line-through">{preview.data ? money(preview.data.sampleOriginal) : ""}</span>
-              </span>
-            </div>
-          </Card>
-        </section>
+          );
+        })}
+      </div>
+      <div role="tabpanel" id={`promos-panel-${tab}`} aria-labelledby={`promos-tab-${tab}`} className="flex min-w-0 flex-col gap-4">
+        {tab === "prices" ? <PricesTab /> : null}
+        {tab === "offers" ? <OffersTab marketingOn={marketingOn} canCreate={canCreate} canCodes={marketingOn} /> : null}
+        {tab === "codes" ? <CodesTab canManage={marketingOn} /> : null}
       </div>
     </>
   );
