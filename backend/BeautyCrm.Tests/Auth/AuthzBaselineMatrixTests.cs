@@ -225,6 +225,13 @@ public sealed class AuthzBaselineMatrixTests(AuthApiFixture fx) : IClassFixture<
         Open("GET", "api/beauty/inventory/movements", "200"),
         Open("GET", "api/beauty/inventory/operations", "200"),
         Open("GET", "api/beauty/inventory/operations/{id:guid}", "404"),
+        // ---- замовлення товарів клієнтами (ADR-026 §33.13, TASK-903): перегляд view=own, дії manage=own (specialist: manage=none)
+        Open("GET", "api/beauty/inventory/product-orders", "200"),
+        Open("GET", "api/beauty/inventory/product-orders/counts", "200"),
+        Open("GET", "api/beauty/inventory/product-orders/{id:guid}", "404"),
+        MgmtFilter("POST", "api/beauty/inventory/product-orders/{id:guid}/fulfill", "404"),
+        MgmtFilter("POST", "api/beauty/inventory/product-orders/{id:guid}/cancel", "404"),
+        MgmtFilter("POST", "api/beauty/inventory/product-orders/{id:guid}/reconcile-payment", "404"),
         MgmtFilter("POST", "api/beauty/inventory/receipts", "422"),
         MgmtFilter("POST", "api/beauty/inventory/write-offs", "422"),
         MgmtFilter("POST", "api/beauty/inventory/transfers", "422"),

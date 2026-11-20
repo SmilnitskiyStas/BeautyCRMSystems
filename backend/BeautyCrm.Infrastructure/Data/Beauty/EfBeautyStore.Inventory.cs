@@ -493,7 +493,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
         var users = await UserNamesAsync(ops.Where(o => o.CreatedByUserId != null).Select(o => o.CreatedByUserId!.Value), ct);
         return [.. ops.Select(o => new OperationSummaryDto(o.Id, EnumText<StockOperationKind>.ToDb(o.Kind), o.LocationId, o.ToLocationId,
             o.Reason is { } r ? EnumText<WriteOffReason>.ToDb(r) : null, o.DocumentNumber, o.CreatedAt, Named(o.CreatedByUserId, users),
-            moves[o.Id].Select(m => m.ProductId).Distinct().Count(), TotalCost(moves[o.Id], o.Kind), o.AppointmentId))];
+            moves[o.Id].Select(m => m.ProductId).Distinct().Count(), TotalCost(moves[o.Id], o.Kind), o.AppointmentId, o.ProductOrderId))];
     }
 
     public async Task<OperationDto?> GetOperationAsync(Guid id, CancellationToken ct)
@@ -506,7 +506,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
         return new OperationDto(o.Id, EnumText<StockOperationKind>.ToDb(o.Kind), o.LocationId, o.ToLocationId,
             o.Reason is { } r ? EnumText<WriteOffReason>.ToDb(r) : null, o.DocumentNumber, o.CreatedAt, Named(o.CreatedByUserId, users),
             moves.Select(m => m.ProductId).Distinct().Count(), TotalCost(moves, o.Kind), Named(o.SupplierId, suppliers), o.ReceivedOn, o.Note, o.StocktakeId,
-            await MapMovementsAsync(moves, ct), o.AppointmentId);
+            await MapMovementsAsync(moves, ct), o.AppointmentId, o.ProductOrderId);
     }
 
     public async Task<KeyedOperation?> FindOperationByKeyAsync(string keyHash, CancellationToken ct)

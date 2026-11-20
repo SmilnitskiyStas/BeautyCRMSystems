@@ -49,6 +49,7 @@ export const MOVEMENT_LABEL: Record<MovementType, string> = {
   stocktake_adjust: "Коригування інвентаризації",
   service_consumption: "Витрата на послугу",
   sale: "Продаж",
+  sale_return: "Повернення продажу",
 };
 export const KIND_LABEL: Record<OperationKind, string> = {
   receipt: "Надходження",
@@ -57,6 +58,7 @@ export const KIND_LABEL: Record<OperationKind, string> = {
   stocktake: "Інвентаризація",
   service_consumption: "Витрата на послугу",
   sale: "Продаж",
+  sale_return: "Повернення продажу",
 };
 
 export const BATCH_STATUS_VIEW: Record<BatchStatus, { label: string; tone: "ok" | "wait" | "promo" | "neutral" }> = {

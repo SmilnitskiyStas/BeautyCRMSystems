@@ -7,6 +7,8 @@ import { useAuth } from "@/features/beauty-auth/components/auth-provider";
 import { canManageInventory, canViewInventory } from "@/features/beauty-auth/permissions";
 import { BeautyApiError } from "@/features/beauty-auth/errors";
 import { useInventoryScope } from "../hooks/use-inventory";
+import { useProductOrderCounts } from "../hooks/use-product-orders";
+import { ordersBadgeText } from "../inventory/orders";
 import { humanizeInventoryError, isIntegerUnit } from "../inventory/logic";
 import type { InventoryScope, StockUnit } from "../inventory/types";
 import { Card, Chip, FIELD_INPUT, FIELD_LABEL, PageHeader, QueryState, SecondaryButton } from "./ui";
@@ -19,10 +21,24 @@ const SECTIONS = [
   { href: "/beauty/inventory/categories", label: "Категорії" },
   { href: "/beauty/inventory/suppliers", label: "Постачальники", manageOnly: true },
   { href: "/beauty/inventory/batches", label: "Партії й терміни" },
+  { href: "/beauty/inventory/orders", label: "Замовлення", orders: true },
   { href: "/beauty/inventory/movements", label: "Журнал рухів" },
   { href: "/beauty/inventory/stocktakes", label: "Інвентаризації" },
   { href: "/beauty/inventory/alerts", label: "Сповіщення" },
 ] as const;
+
+/** Бейдж «оплачені до видачі» (`counts.paid`): число для зору, повний підпис для скрінрідера; «99+» понад 99. */
+function OrdersBadge() {
+  const { user } = useAuth();
+  const count = useProductOrderCounts(canViewInventory(user)).data?.paid ?? 0;
+  if (count <= 0) return null;
+  return (
+    <span data-testid="orders-badge" className="ml-2 inline-flex min-w-6 items-center justify-center rounded-full bg-(--ink) px-1.5 text-[13px] font-bold text-white">
+      <span aria-hidden="true">{ordersBadgeText(count)}</span>
+      <span className="sr-only">, оплачених до видачі: {count > 99 ? "понад 99" : count}</span>
+    </span>
+  );
+}
 
 function SectionNav() {
   const { user } = useAuth();
@@ -42,6 +58,7 @@ function SectionNav() {
             }`}
           >
             {s.label}
+            {"orders" in s ? <OrdersBadge /> : null}
           </Link>
         );
       })}

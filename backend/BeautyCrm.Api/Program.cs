@@ -58,6 +58,7 @@ builder.Services
     .AddBeautyAuthApi(builder.Configuration) // JWT, ролі, rate limit; без Auth:JwtSigningKey додаток не стартує
     .AddBeautyAiApi(builder.Configuration) // налаштування ШІ (TASK-716): ліміт ключів, мапінг винятків ШІ, swagger-фільтр секрету
     .AddBeautyPublicBookingApi(builder.Configuration, builder.Environment) // публічний запис /api/public/{slug} (TASK-688)
+    .AddBeautyProductOrdersApi(builder.Configuration, builder.Environment) // замовлення товарів клієнтами (ADR-026, §33)
     .AddBeautyAnalyticsApi(builder.Configuration); // ліміт деталей аналітики на користувача (TASK-764, §24.2)
 // Купони (TASK-778, §26.2): ліміти спроб і строк утримання пропозиції з конфігу (Coupons:*); значення обмежуються в CouponOptions
 builder.Services.Replace(ServiceDescriptor.Singleton(new BeautyCrm.Application.Features.BeautyCoupons.CouponOptions

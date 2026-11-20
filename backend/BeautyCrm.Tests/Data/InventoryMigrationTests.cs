@@ -155,7 +155,7 @@ public sealed class InventoryMigrationTests
             await Rejects(conn, Op(keyHash: "'" + new string('a', 64) + "'"), "ck_beauty_stock_operations_idempotency");
             foreach (var reason in new[] { "expired", "damaged", "lost", "internal_use", "correction", "other" })
                 await Exec(conn, Op(kind: "write_off", reason: $"'{reason}'"));
-            await Exec(conn, Op(kind: "sale")); // етап 3: CHECK надмножина
+            await Rejects(conn, Op(kind: "sale"), "ck_beauty_stock_operations_product_order"); // ADR-026: sale лише із замовленням (див. ProductOrdersMigrationTests)
             await Rejects(conn, Op(kind: "service_consumption"), "ck_beauty_stock_operations_appointment"); // з 2a: лише разом із записом (покрито InventoryStage2aMigrationTests)
             var receipt = await Id(conn, Op(supplierId: $"'{supplier}'", keyHash: $"'{new string('a', 64)}'", reqHash: $"'{new string('b', 64)}'") + " RETURNING id");
             var transfer = await Id(conn, Op(kind: "transfer", to: $"'{locB}'") + " RETURNING id");

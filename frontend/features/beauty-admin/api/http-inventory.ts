@@ -56,8 +56,8 @@ const optNum = <K extends string>(o: Raw, key: K): Partial<Record<K, number | nu
 const UNITS = ["pcs", "ml", "g", "l", "kg", "pack"] as const satisfies readonly StockUnit[];
 const PURPOSES = ["sale", "salon_use", "both"] as const satisfies readonly ProductPurpose[];
 const BATCH_STATUSES = ["active", "expiring", "expired", "empty"] as const satisfies readonly BatchStatus[];
-const MOVEMENT_TYPES = ["receipt", "write_off", "transfer_out", "transfer_in", "stocktake_adjust", "service_consumption", "sale"] as const satisfies readonly MovementType[];
-const KINDS = ["receipt", "write_off", "transfer", "stocktake", "service_consumption", "sale"] as const satisfies readonly OperationKind[];
+const MOVEMENT_TYPES = ["receipt", "write_off", "transfer_out", "transfer_in", "stocktake_adjust", "service_consumption", "sale", "sale_return"] as const satisfies readonly MovementType[];
+const KINDS = ["receipt", "write_off", "transfer", "stocktake", "service_consumption", "sale", "sale_return"] as const satisfies readonly OperationKind[];
 const REASONS = ["expired", "damaged", "lost", "internal_use", "correction", "other"] as const satisfies readonly WriteOffReason[];
 const STOCKTAKE_STATUSES = ["draft", "posted", "cancelled"] as const satisfies readonly StocktakeStatus[];
 const ALERT_KINDS = ["low_stock", "expiring", "shortage"] as const satisfies readonly AlertKind[];
@@ -220,6 +220,7 @@ function toMovement(v: unknown): Movement {
     counterpartLocationId: str(o.counterpartLocationId),
     stocktakeId: str(o.stocktakeId),
     createdBy: ref(o.createdBy),
+    ...(str(o.productOrderId) ? { productOrderId: str(o.productOrderId) } : {}),
   };
 }
 
@@ -236,6 +237,7 @@ function toOperationSummary(v: unknown): OperationSummary {
     createdBy: ref(o.createdBy),
     productCount: num0(o.productCount),
     appointmentId: str(o.appointmentId),
+    ...(str(o.productOrderId) ? { productOrderId: str(o.productOrderId) } : {}),
     ...optNum(o, "totalCost"),
   };
 }
