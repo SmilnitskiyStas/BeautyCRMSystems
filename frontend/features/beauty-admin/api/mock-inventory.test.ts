@@ -63,7 +63,7 @@ describe("права за роллю й scope", () => {
     const { inv, setRole } = setup();
     setRole("deputy");
     const e = await expectError(
-      inv.createInventoryProduct({ name: "Новий", unit: "pcs", purpose: "both", purchasePrice: 10 }),
+      inv.createInventoryProduct({ name: "Новий", unit: "pcs", purpose: "both", salePrice: 20, purchasePrice: 10 }),
       403,
       "forbidden_role",
     );
@@ -79,16 +79,30 @@ describe("права за роллю й scope", () => {
 describe("каталог", () => {
   it("штрихкод унікальний (409), одиницю з рухами не змінити (422 unit_locked), цілі мін. залишки для шт", async () => {
     const { inv } = setup();
-    await expectError(inv.createInventoryProduct({ name: "X", unit: "pcs", purpose: "both", barcode: "4820000000011" }), 409, "barcode_taken");
-    await expectError(inv.createInventoryProduct({ name: "X", unit: "pcs", purpose: "both", minStock: 1.5 }), 422, "invalid_min_stock");
-    await expectError(inv.createInventoryProduct({ name: " ", unit: "pcs", purpose: "both" }), 422, "invalid_name");
+    await expectError(inv.createInventoryProduct({ name: "X", unit: "pcs", purpose: "both", salePrice: 1, barcode: "4820000000011" }), 409, "barcode_taken");
+    await expectError(inv.createInventoryProduct({ name: "X", unit: "pcs", purpose: "both", salePrice: 1, minStock: 1.5 }), 422, "invalid_min_stock");
+    await expectError(inv.createInventoryProduct({ name: " ", unit: "pcs", purpose: "both", salePrice: 1 }), 422, "invalid_name");
     const shampoo = (await inv.getInventoryProducts({ search: "Шампунь" })).items[0]!;
     expect(shampoo.hasMovements).toBe(true);
-    await expectError(inv.updateInventoryProduct(shampoo.id, { name: shampoo.name, unit: "ml", purpose: "both" }), 422, "unit_locked");
-    const created = await inv.createInventoryProduct({ name: "Новий товар", unit: "pcs", purpose: "sale", purchasePrice: 12.5 });
+    await expectError(inv.updateInventoryProduct(shampoo.id, { name: shampoo.name, unit: "ml", purpose: "both", salePrice: 1 }), 422, "unit_locked");
+    const created = await inv.createInventoryProduct({ name: "Новий товар", unit: "pcs", purpose: "sale", salePrice: 30, purchasePrice: 12.5 });
     expect(created.purchasePrice).toBe(12.5);
-    const changed = await inv.updateInventoryProduct(created.id, { name: "Новий товар", unit: "ml", purpose: "sale" });
+    const changed = await inv.updateInventoryProduct(created.id, { name: "Новий товар", unit: "ml", purpose: "sale", salePrice: 30 });
     expect(changed.unit).toBe("ml");
+  });
+
+  it("роздрібна ціна: обов'язкова для sale/both, не для salon_use (скидається в null), ≥0 і 2 знаки", async () => {
+    const { inv } = setup();
+    await expectError(inv.createInventoryProduct({ name: "A", unit: "pcs", purpose: "sale" }), 422, "sale_price_required");
+    await expectError(inv.createInventoryProduct({ name: "A", unit: "pcs", purpose: "both", salePrice: null }), 422, "sale_price_required");
+    await expectError(inv.createInventoryProduct({ name: "A", unit: "pcs", purpose: "sale", salePrice: -1 }), 422, "invalid_price");
+    await expectError(inv.createInventoryProduct({ name: "A", unit: "pcs", purpose: "sale", salePrice: 1.234 }), 422, "invalid_price");
+    const salon = await inv.createInventoryProduct({ name: "B", unit: "pcs", purpose: "salon_use", salePrice: 5 });
+    expect(salon.salePrice).toBeNull();
+    const sold = await inv.createInventoryProduct({ name: "C", unit: "pcs", purpose: "both", salePrice: 99.5 });
+    expect(sold.salePrice).toBe(99.5);
+    const seeded = (await inv.getInventoryProducts({ search: "Шампунь" })).items[0]!;
+    expect(seeded.salePrice).toBe(450);
   });
 
   it("налаштування закладу: min_stock override змінює isLow, DELETE повертає мережеве", async () => {

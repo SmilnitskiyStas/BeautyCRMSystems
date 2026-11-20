@@ -35,6 +35,7 @@ const valuesOf = (p: Product | null): ProductFormValues => ({
   purpose: p?.purpose ?? "both",
   supplierId: p?.supplier?.id ?? "",
   purchasePrice: numberToField(p?.purchasePrice),
+  salePrice: numberToField(p?.salePrice),
   minStock: numberToField(p?.minStock),
   trackExpiry: p?.trackExpiry ?? false,
   isActive: p?.isActive ?? true,
@@ -168,7 +169,8 @@ export function ProductForm({ product, scope, onClose }: { product: Product | nu
   const canEditCosts = scope.costs === "edit";
   const readOnly = isEdit ? !scope.canEditCatalog : false;
   const set = <K extends keyof ProductFormValues>(k: K, v: ProductFormValues[K]) => {
-    setValues((cur) => ({ ...cur, [k]: v }));
+    // Для salon_use роздрібної ціни немає: значення очищується.
+    setValues((cur) => ({ ...cur, [k]: v, ...(k === "purpose" && v === "salon_use" ? { salePrice: "" } : {}) }));
     setSaved(null);
     if (k === "isActive") setConfirmingOff(false);
   };
@@ -249,6 +251,19 @@ export function ProductForm({ product, scope, onClose }: { product: Product | nu
           options={suppliers.items.map((s) => ({ value: s.id, label: s.isActive ? s.name : `${s.name} (неактивний)` }))}
           disabled={readOnly}
         />
+        {values.purpose !== "salon_use" ? (
+          <InputField
+            label="Роздрібна ціна"
+            required
+            inputMode="decimal"
+            value={values.salePrice}
+            onChange={(v) => set("salePrice", v)}
+            suffix="₴"
+            error={errors.salePrice}
+            disabled={readOnly}
+            hint={isEdit && product.salePrice === null ? "Ціну не вказано — вкажіть її. За одиницю виміру" : "За одиницю виміру"}
+          />
+        ) : null}
         {canEditCosts ? (
           <InputField label="Закупівельна ціна" inputMode="decimal" value={values.purchasePrice} onChange={(v) => set("purchasePrice", v)} suffix="₴" error={errors.purchasePrice} disabled={readOnly} hint="За одиницю виміру" />
         ) : null}

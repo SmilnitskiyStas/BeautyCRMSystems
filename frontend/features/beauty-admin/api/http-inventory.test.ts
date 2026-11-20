@@ -37,6 +37,13 @@ describe("http §32: шляхи, методи, заголовки", () => {
     expect(r).toEqual({ items: [], hasMore: true, nextCursor: "abc" });
   });
 
+  it("salePrice мапиться з відповіді (відсутнє -> null)", async () => {
+    apiJson.mockResolvedValueOnce({ items: [{ id: "p1", name: "A", unit: "ml", purpose: "sale", salePrice: 12.5 }, { id: "p2", name: "B", unit: "ml", purpose: "salon_use" }], hasMore: false });
+    const items = (await httpBeautyApi.getInventoryProducts()).items;
+    expect(items[0]!.salePrice).toBe(12.5);
+    expect(items[1]!.salePrice).toBeNull();
+  });
+
   it("ціни †: поле є лише коли сервер його віддав (без права - відсутнє, не 0)", async () => {
     apiJson.mockResolvedValueOnce({ items: [{ id: "p1", name: "A", unit: "ml", purpose: "sale", supplier: { id: "s", name: "S" } }], hasMore: false });
     const noCost = (await httpBeautyApi.getInventoryProducts()).items[0]!;

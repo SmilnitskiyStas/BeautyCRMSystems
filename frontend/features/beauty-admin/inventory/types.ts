@@ -51,6 +51,8 @@ export interface Product {
   purpose: ProductPurpose;
   supplier: NamedRef | null;
   purchasePrice?: number | null;
+  /** Роздрібна ціна за одиницю: обов'язкова для `sale`/`both`, `null` для `salon_use` (і для старих товарів без ціни). Видно всім з `inventory.view`. */
+  salePrice: number | null;
   minStock: number | null;
   trackExpiry: boolean;
   isActive: boolean;
@@ -77,6 +79,8 @@ export interface ProductRequest {
   supplierId?: string | null;
   /** Лише за `inventory.costs = edit`; без права поле не передається взагалі. */
   purchasePrice?: number | null;
+  /** Обов'язкова для `sale`/`both`; для `salon_use` надсилається `null`. */
+  salePrice?: number | null;
   minStock?: number | null;
   trackExpiry?: boolean;
   isActive?: boolean;

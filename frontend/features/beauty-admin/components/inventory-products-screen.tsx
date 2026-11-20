@@ -66,7 +66,7 @@ export function InventoryProductsScreen() {
               <Card>
                 <Table
                   caption="Товари"
-                  headers={["Товар", "Категорія", "Од.", "Штрихкод", "Постачальник", "Призначення", ...(scope.costs !== "none" ? ["Закупівельна ціна"] : []), "Мін. залишок", "Статус", "Дії"]}
+                  headers={["Товар", "Категорія", "Од.", "Штрихкод", "Постачальник", "Призначення", "Роздрібна ціна", ...(scope.costs !== "none" ? ["Закупівельна ціна"] : []), "Мін. залишок", "Статус", "Дії"]}
                   minWidth={980}
                 >
                   {q.items.map((p) => (
@@ -80,6 +80,15 @@ export function InventoryProductsScreen() {
                       <td className={TD}>{p.barcode ?? "—"}</td>
                       <td className={TD}>{p.supplier?.name ?? "—"}</td>
                       <td className={TD}>{PURPOSE_LABEL[p.purpose]}</td>
+                      <td className={TD}>
+                        {p.purpose === "salon_use" ? (
+                          "—"
+                        ) : p.salePrice === null ? (
+                          <span className="text-[#8A5A00]">не вказана</span>
+                        ) : (
+                          formatMoney(p.salePrice)
+                        )}
+                      </td>
                       {scope.costs !== "none" ? <td className={TD}>{p.purchasePrice === null || p.purchasePrice === undefined ? "—" : formatMoney(p.purchasePrice)}</td> : null}
                       <td className={TD}>{p.minStock !== null && p.minStock > 0 ? formatQuantity(p.minStock, p.unit) : "—"}</td>
                       <td className={TD}>{p.isActive ? <Badge tone="ok">Активний</Badge> : <Badge tone="neutral">Неактивний</Badge>}</td>

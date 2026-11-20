@@ -95,6 +95,7 @@ export function toProduct(v: unknown): Product {
     purpose: oneOf<ProductPurpose>(o.purpose, PURPOSES, "both"),
     supplier: ref(o.supplier),
     ...optNum(o, "purchasePrice"),
+    salePrice: num(o.salePrice),
     minStock: num(o.minStock),
     trackExpiry: o.trackExpiry === true,
     isActive: o.isActive !== false,

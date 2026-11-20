@@ -136,6 +136,7 @@ interface ProductRec {
   purpose: Product["purpose"];
   supplierId: string | null;
   purchasePrice: number | null;
+  salePrice: number | null;
   minStock: number | null;
   trackExpiry: boolean;
   isActive: boolean;
@@ -244,6 +245,7 @@ export function createMockInventory(deps: InventoryMockDeps) {
     purpose: p.purpose,
     supplier: supplierRef(p.supplierId),
     ...(costs() !== "none" ? { purchasePrice: p.purchasePrice } : {}),
+    salePrice: p.salePrice,
     minStock: p.minStock,
     trackExpiry: p.trackExpiry,
     isActive: p.isActive,
@@ -396,6 +398,7 @@ export function createMockInventory(deps: InventoryMockDeps) {
         purpose,
         supplierId: suppliers[0]!.id,
         purchasePrice: null,
+        salePrice: null,
         minStock: null,
         trackExpiry: false,
         isActive: true,
@@ -407,12 +410,12 @@ export function createMockInventory(deps: InventoryMockDeps) {
       products.push(p);
       return p;
     };
-    const shampoo = mkP("Шампунь професійний 500 мл", "Догляд за волоссям", "pcs", "both", { barcode: "4820000000011", purchasePrice: 320, minStock: 6, trackExpiry: true });
+    const shampoo = mkP("Шампунь професійний 500 мл", "Догляд за волоссям", "pcs", "both", { barcode: "4820000000011", purchasePrice: 320, salePrice: 450, minStock: 6, trackExpiry: true });
     const dye = mkP("Фарба для волосся 60 мл", "Фарбування", "pcs", "salon_use", { purchasePrice: 140, minStock: 10, trackExpiry: true, supplierId: suppliers[1]!.id });
-    const gel = mkP("Гель-лак (база)", "Нігті", "pcs", "both", { barcode: "4820000000028", purchasePrice: 210, minStock: 4, supplierId: suppliers[1]!.id });
+    const gel = mkP("Гель-лак (база)", "Нігті", "pcs", "both", { barcode: "4820000000028", purchasePrice: 210, salePrice: 299.9, minStock: 4, supplierId: suppliers[1]!.id });
     const disinfect = mkP("Дезінфікуючий розчин", "Гігієна", "l", "salon_use", { purchasePrice: 95, minStock: 2.5, trackExpiry: true });
     const gloves = mkP("Рукавички одноразові (уп. 100 шт)", "Гігієна", "pack", "salon_use", { purchasePrice: 180, minStock: 20 });
-    const mask = mkP("Маска для обличчя", "Косметологія", "ml", "sale", { purchasePrice: 4.5, minStock: 1000, trackExpiry: true, supplierId: suppliers[1]!.id });
+    const mask = mkP("Маска для обличчя", "Косметологія", "ml", "sale", { purchasePrice: 4.5, salePrice: 9, minStock: 1000, trackExpiry: true, supplierId: suppliers[1]!.id });
     mkP("Віск для депіляції", "Депіляція", "g", "salon_use", { purchasePrice: 0.6, minStock: 0 });
     mkP("Знятий з виробництва крем", "Косметологія", "pcs", "sale", { isActive: false });
 
@@ -517,6 +520,7 @@ export function createMockInventory(deps: InventoryMockDeps) {
         purpose: r.purpose,
         supplierId: null,
         purchasePrice: null,
+        salePrice: null,
         minStock: null,
         trackExpiry: r.trackExpiry === true,
         isActive: true,
@@ -1067,6 +1071,10 @@ export function createMockInventory(deps: InventoryMockDeps) {
     if (barcode && !/^[0-9A-Za-z._-]{1,64}$/.test(barcode)) throw err(422, "invalid_barcode");
     if (!["sale", "salon_use", "both"].includes(r.purpose)) throw err(422, "invalid_purpose");
     if (r.purchasePrice !== undefined && r.purchasePrice !== null && (r.purchasePrice < 0 || r.purchasePrice > 1_000_000 || !decimalsOk(r.purchasePrice, 2))) throw err(422, "invalid_price");
+    const sold = r.purpose !== "salon_use";
+    const salePrice = sold ? (r.salePrice ?? null) : null;
+    if (sold && salePrice === null) throw err(422, "sale_price_required");
+    if (salePrice !== null && (salePrice < 0 || salePrice > 1_000_000 || !decimalsOk(salePrice, 2))) throw err(422, "invalid_price");
     if (r.minStock !== undefined && r.minStock !== null) checkMinStock(r.minStock, r.unit);
     if ((r.note ?? "").trim().length > 500) throw err(422, "invalid_note");
     if (r.supplierId && !suppliers.some((s) => s.id === r.supplierId)) throw err(404, "supplier_not_found");
@@ -1078,6 +1086,7 @@ export function createMockInventory(deps: InventoryMockDeps) {
     p.purpose = r.purpose;
     p.supplierId = r.supplierId || null;
     if (r.purchasePrice !== undefined && r.purchasePrice !== null) p.purchasePrice = r.purchasePrice;
+    p.salePrice = salePrice;
     p.minStock = r.minStock ?? null;
     if (r.trackExpiry !== undefined && r.trackExpiry !== null) p.trackExpiry = r.trackExpiry;
     if (isUpdate && r.isActive !== undefined && r.isActive !== null) p.isActive = r.isActive;

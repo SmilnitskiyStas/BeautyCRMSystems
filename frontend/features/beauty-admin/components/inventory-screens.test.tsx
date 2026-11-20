@@ -286,6 +286,7 @@ describe("товари й постачальники", () => {
     await user.click(screen.getByRole("button", { name: "Додати товар" }));
     const form = screen.getByRole("form", { name: "Новий товар" });
     await user.type(within(form).getByLabelText(/^Назва/), "Тестовий товар");
+    await user.type(within(form).getByLabelText(/^Роздрібна ціна/), "199,90");
     await user.type(within(form).getByLabelText(/^Штрихкод/), "4820000000011");
     await user.click(within(form).getByRole("button", { name: "Додати товар" }));
     expect(await within(form).findByRole("alert")).toHaveTextContent("Товар з таким штрихкодом уже є.");
@@ -298,6 +299,38 @@ describe("товари й постачальники", () => {
     await user.click(within(form).getByRole("button", { name: "Додати товар" }));
     await waitFor(() => expect(screen.queryByRole("form", { name: "Новий товар" })).not.toBeInTheDocument());
     expect(await screen.findByText("Тестовий товар")).toBeInTheDocument();
+  });
+
+  it("роздрібна ціна: показ за призначенням, очищення при salon_use, обов'язковість, список", async () => {
+    const user = userEvent.setup();
+    renderScreen(<InventoryProductsScreen />);
+    await screen.findByText("Шампунь професійний 500 мл");
+    expect(screen.getByRole("columnheader", { name: "Роздрібна ціна" })).toBeInTheDocument();
+    const shampooRow = screen.getByText("Шампунь професійний 500 мл").closest("tr")!;
+    expect(shampooRow).toHaveTextContent("450");
+    const dyeRow = screen.getByText("Фарба для волосся 60 мл").closest("tr")!;
+    expect(within(dyeRow).queryByText("не вказана")).not.toBeInTheDocument();
+    // «Знятий з виробництва крем» (sale) без ціни - у списку «не вказана».
+    await user.selectOptions(screen.getByLabelText(/^Статус/), "all");
+    expect(await screen.findByText("не вказана")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Додати товар" }));
+    const form = screen.getByRole("form", { name: "Новий товар" });
+    const price = () => within(form).queryByLabelText(/^Роздрібна ціна/);
+    expect(price()).toBeInTheDocument();
+    await user.type(within(form).getByLabelText(/^Назва/), "Крем");
+    await user.click(within(form).getByRole("button", { name: "Додати товар" }));
+    expect(price()).toHaveAttribute("aria-invalid", "true");
+    expect(price()).toHaveAccessibleDescription(/За одиницю виміру/);
+    await user.type(price()!, "-5");
+    await user.click(within(form).getByRole("button", { name: "Додати товар" }));
+    expect(price()).toHaveAttribute("aria-invalid", "true");
+    await user.clear(price()!);
+    await user.type(price()!, "12");
+    await user.selectOptions(within(form).getByLabelText(/^Призначення/), "salon_use");
+    expect(price()).not.toBeInTheDocument();
+    await user.selectOptions(within(form).getByLabelText(/^Призначення/), "sale");
+    expect(price()).toHaveValue("");
   });
 
   it("deputy: каталог редагує, але ціни не бачить і поля ціни немає; specialist - лише перегляд", async () => {

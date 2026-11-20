@@ -123,6 +123,12 @@ export function parsePrice(raw: string): { value: number | null; error?: string 
   return { value };
 }
 
+/** Роздрібна ціна: обов'язкова (для `sale`/`both`), 0..1 000 000, ≤ 2 знаків. */
+export function parseSalePrice(raw: string): { value: number | null; error?: string } {
+  if (raw.trim() === "") return { value: null, error: "Вкажіть роздрібну ціну." };
+  return parsePrice(raw);
+}
+
 /** Число в текст поля (десяткова кома). */
 export const numberToField = (n: number | null | undefined) => (n === null || n === undefined ? "" : String(n).replace(".", ","));
 
@@ -246,12 +252,13 @@ export interface ProductFormValues {
   purpose: ProductPurpose;
   supplierId: string;
   purchasePrice: string;
+  salePrice: string;
   minStock: string;
   trackExpiry: boolean;
   isActive: boolean;
   note: string;
 }
-export type ProductErrors = FieldErrors<"name" | "category" | "barcode" | "purchasePrice" | "minStock" | "note">;
+export type ProductErrors = FieldErrors<"name" | "category" | "barcode" | "purchasePrice" | "salePrice" | "minStock" | "note">;
 
 export function validateProduct(v: ProductFormValues, opts: { canEditCosts: boolean }): ProductErrors {
   const e: ProductErrors = {};
@@ -263,6 +270,10 @@ export function validateProduct(v: ProductFormValues, opts: { canEditCosts: bool
   if (opts.canEditCosts) {
     const p = parsePrice(v.purchasePrice);
     if (p.error) e.purchasePrice = p.error;
+  }
+  if (v.purpose !== "salon_use") {
+    const s = parseSalePrice(v.salePrice);
+    if (s.error) e.salePrice = s.error;
   }
   const m = parseOptionalMinStock(v.minStock, v.unit);
   if (m.error) e.minStock = m.error;
@@ -282,6 +293,8 @@ export function toProductRequest(v: ProductFormValues, opts: { canEditCosts: boo
     supplierId: v.supplierId || null,
     // PUT: відсутнє або null = без змін (очищення ціни не підтримується).
     ...(opts.canEditCosts && price !== null ? { purchasePrice: price } : {}),
+    // salon_use: роздрібної ціни немає - завжди null.
+    salePrice: v.purpose === "salon_use" ? null : parsePrice(v.salePrice).value,
     minStock: parseOptionalMinStock(v.minStock, v.unit).value,
     trackExpiry: v.trackExpiry,
     ...(opts.isEdit ? { isActive: v.isActive } : {}),
@@ -471,6 +484,7 @@ const INVENTORY_BY_CODE: Record<string, string> = {
   invalid_unit: "Оберіть одиницю виміру зі списку.",
   invalid_barcode: "Штрихкод: до 64 символів, літери, цифри та . _ -",
   invalid_purpose: "Оберіть призначення зі списку.",
+  sale_price_required: "Вкажіть роздрібну ціну для товару, призначеного на продаж.",
   invalid_price: "Ціна: від 0 до 1 000 000, до 2 знаків після коми.",
   invalid_min_stock: "Мінімальний залишок: від 0 до 1 000 000, до 3 знаків; для штук і упаковок - ціле.",
   invalid_quantity: "Кількість: більше нуля, до 1 000 000, до 3 знаків; для штук і упаковок - ціле.",
