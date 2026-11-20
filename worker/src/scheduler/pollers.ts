@@ -10,6 +10,7 @@ import { processWinback } from "../jobs/beauty-winback";
 import { processCampaign } from "../jobs/beauty-campaign";
 import type { BeautyDeps } from "../ports";
 import { DEFAULT_INVENTORY_CONFIG, type InventoryAlertConfig, type InventoryAlertStore } from "../inventory/alerts";
+import type { ProductOrdersExpireStore } from "../product-orders/expire";
 import { DEFAULT_TELEGRAM_CONFIG, type InventoryTelegramConfig, type InventoryTelegramStore } from "../inventory/telegram";
 
 export interface PollContext {
@@ -45,6 +46,9 @@ export interface PollContext {
   inventoryTelegramTenantAllowlist?: ReadonlySet<string>;
   inventoryTelegram?: InventoryTelegramStore;
   inventoryTelegramConfig?: InventoryTelegramConfig;
+  /** WORKER_PRODUCT_ORDERS_ENABLED (§33.17): ONLY `true` enables pollProductOrders; unset/false = idle. */
+  productOrdersEnabled?: boolean;
+  productOrders?: ProductOrdersExpireStore;
 }
 
 export interface PollResult { processed: number; errors: number }
@@ -194,6 +198,24 @@ export function pollInventory(ctx: PollContext): Promise<PollResult> {
     ctx.logger.info(`inventory_alerts tenant=${currentTenantId()} locations=${r.locations} created=${r.created} resolved=${r.resolved} capped=${r.capped}`);
     return { processed: r.created + r.resolved, errors: r.errors };
   }, "pollInventory");
+}
+
+/**
+ * Product orders (§33.17): every minute closes unpaid `pending_payment` orders past their reservation (-> `expired`) and counts
+ * payments stuck > 30 min (log only). Gated by WORKER_PRODUCT_ORDERS_ENABLED (literal `true`) and the tenant's `beauty_inventory`
+ * module. Logs carry the tenant id and counts only (no PII, tokens or amounts).
+ */
+export function pollProductOrders(ctx: PollContext): Promise<PollResult> {
+  if (ctx.productOrdersEnabled !== true || !ctx.productOrders) return Promise.resolve({ processed: 0, errors: 0 });
+  const store = ctx.productOrders;
+  return forEachTenant(ctx, async () => {
+    if (!(await ctx.deps.data.isInventoryEnabled())) return { processed: 0, errors: 0 }; // module off, silently idle
+    const r = await store.runForTenant(ctx.deps.now());
+    const line = `product_orders_expire tenant=${currentTenantId()} expired=${r.expired} stuck=${r.stuck}`;
+    if (r.stuck > 0) (ctx.logger.warn ?? ctx.logger.info).call(ctx.logger, line);
+    else ctx.logger.info(line);
+    return { processed: r.expired, errors: 0 };
+  }, "pollProductOrders");
 }
 
 /**

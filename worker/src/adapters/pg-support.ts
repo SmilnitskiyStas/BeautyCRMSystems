@@ -50,11 +50,14 @@ export class PgAdvisoryIdempotency implements IdempotencyPort {
 export interface Logger {
   info(msg: string, fields?: Record<string, unknown>): void;
   error(msg: string, fields?: Record<string, unknown>): void;
+  /** Optional: callers fall back to `info` when absent. */
+  warn?(msg: string, fields?: Record<string, unknown>): void;
 }
 
 export const consoleLogger: Logger = {
   info: (msg, f) => console.log(JSON.stringify({ level: "info", msg, ...f })),
   error: (msg, f) => console.error(JSON.stringify({ level: "error", msg, ...f })),
+  warn: (msg, f) => console.warn(JSON.stringify({ level: "warn", msg, ...f })),
 };
 
 /**
