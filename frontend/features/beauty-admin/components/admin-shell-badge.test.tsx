@@ -79,20 +79,24 @@ describe("групування меню (TASK-796)", () => {
     expect(book.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("згортання/розгортання зберігається в localStorage; активний блок не згортається", () => {
+  it("без збереженого вибору групи згорнуті, крім активної; вибір зберігається в localStorage", () => {
     renderNav("owner", 0);
     const sys = screen.getByRole("button", { name: "Система" });
-    expect(sys).toHaveAttribute("aria-expanded", "true");
-    fireEvent.click(sys);
     expect(sys).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "Каталог і продажі" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "Аналітика та AI" })).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("link", { name: "Канали" })).not.toBeInTheDocument();
-    expect(JSON.parse(window.localStorage.getItem("beauty-nav-collapsed")!)).toEqual(["system"]);
+    expect(window.localStorage.getItem("beauty-nav-collapsed")).toBeNull();
+    const daily = screen.getByRole("button", { name: "Щоденна робота" });
+    expect(daily).toHaveAttribute("aria-expanded", "true"); // активна сторінка «Огляд»
     fireEvent.click(sys);
     expect(sys).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("link", { name: "Канали" })).toBeInTheDocument();
-    const daily = screen.getByRole("button", { name: "Щоденна робота" });
+    expect(JSON.parse(window.localStorage.getItem("beauty-nav-collapsed")!)).toEqual(["daily", "catalog", "insights"]);
+    fireEvent.click(sys);
+    expect(sys).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(daily);
-    expect(daily).toHaveAttribute("aria-expanded", "true");
+    expect(daily).toHaveAttribute("aria-expanded", "true"); // активний блок не згортається
   });
 
   it("збережений згорнутий стан застосовується, але активний блок авторозгортається", async () => {
@@ -113,12 +117,14 @@ describe("групування меню (TASK-796)", () => {
   });
 
   it("marketing disabled: «Розсилки» прихована, решта блоку лишається", async () => {
+    window.localStorage.setItem("beauty-nav-collapsed", "[]");
     renderNav("owner", 0, { getMarketingSettings: vi.fn(async () => { throw Object.assign(new Error("x"), { status: 403, code: "marketing_disabled" }); }) });
     expect(screen.getByRole("button", { name: "Каталог і продажі" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Ціни та акції" })).toBeInTheDocument();
   });
 
   it("блок «Каталог і продажі» розставлено за послідовністю налаштування: заклади, спеціалісти, послуги", () => {
+    window.localStorage.setItem("beauty-nav-collapsed", "[]");
     renderNav("owner", 0);
     const nav = screen.getByRole("navigation", { name: "Головне меню" });
     const hrefs = within(nav).getAllByRole("link").map((a) => a.getAttribute("href"));
