@@ -23,6 +23,10 @@ function wrap(ui: React.ReactNode) {
   return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>{ui}</QueryClientProvider>);
 }
 
+async function openForm() {
+  await userEvent.click(await screen.findByRole("button", { name: "Додати акцію" }));
+}
+
 async function fillPromo() {
   await userEvent.type(await screen.findByLabelText("Назва"), "Тест");
   await userEvent.click(await screen.findByRole("button", { name: CATALOG[0].name }));
@@ -45,6 +49,7 @@ beforeEach(() => {
 describe("«Ціни та акції»: доступ і загальний код", () => {
   it("«Для всіх» за замовчуванням; після створення - кнопка «Розіслати клієнтам» з акцією", async () => {
     wrap(<PromosScreen />);
+    await openForm();
     expect(await screen.findByLabelText(/Для всіх/)).toBeChecked();
     await fillPromo();
     await userEvent.click(screen.getByRole("button", { name: "Запустити акцію" }));
@@ -56,6 +61,7 @@ describe("«Ціни та акції»: доступ і загальний ко�
 
   it("«Лише за кодом»: поля коду, валідація, після створення акції створюється код", async () => {
     wrap(<PromosScreen />);
+    await openForm();
     await userEvent.click(await screen.findByLabelText(/Лише за кодом/));
     const code = screen.getByLabelText(/Код \(4–20/);
     await userEvent.type(code, "ab");
@@ -75,6 +81,7 @@ describe("«Ціни та акції»: доступ і загальний ко�
   it("помилка коду після створення акції: пояснення і повтор без другої акції", async () => {
     h.api.createCoupon.mockRejectedValueOnce(new BeautyApiError(409, "coupon_code_taken", "SERVER"));
     wrap(<PromosScreen />);
+    await openForm();
     await userEvent.click(await screen.findByLabelText(/Лише за кодом/));
     await userEvent.type(screen.getByLabelText(/Код \(4–20/), "TAKEN1");
     await fillPromo();
@@ -91,6 +98,7 @@ describe("«Ціни та акції»: доступ і загальний ко�
     h.api.getCampaigns.mockRejectedValue(new BeautyApiError(403, "marketing_disabled", "x"));
     h.api.getPromotions.mockRejectedValue(new BeautyApiError(403, "marketing_disabled", "x"));
     wrap(<PromosScreen />);
+    await openForm();
     expect(await screen.findByTestId("code-only-unavailable")).toBeInTheDocument();
     expect(screen.queryByLabelText(/Лише за кодом/)).toBeNull();
     await fillPromo();
