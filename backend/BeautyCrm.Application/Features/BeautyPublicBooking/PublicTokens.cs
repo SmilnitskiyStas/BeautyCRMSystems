@@ -21,6 +21,14 @@ public sealed class PublicTokenService(PublicBookingOptions options)
         return Convert.ToBase64String(mac).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
 
+    /// <summary>ADR-026 §2.3: токен замовлення товарів = base64url(HMAC-SHA256(ключ, "product_order." + tenantId + "." + orderId)); контекст відрізняє від токена запису.</summary>
+    public string CreateForProductOrder(Guid tenantId, Guid orderId)
+    {
+        if (options.TokenKey.Length < 32) throw new InvalidOperationException("PublicBooking token key is not configured.");
+        var mac = HMACSHA256.HashData(options.TokenKey, Encoding.ASCII.GetBytes($"product_order.{tenantId:N}.{orderId:N}"));
+        return Convert.ToBase64String(mac).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
     public static bool IsWellFormed(string? token) =>
         token is { Length: TokenLength } && token.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
 
@@ -107,6 +115,11 @@ public sealed partial class PublicTenantResolver(IAuthStore store)
 
     public Guid? TenantId { get; private set; }
 
+    /// <summary>Модулі визначеного tenant (для функцій, що залежать від інших модулів, напр. beauty_inventory).</summary>
+    public IReadOnlyList<string> Modules { get; private set; } = [];
+
+    public bool HasModule(string module) => Modules.Contains(module, StringComparer.OrdinalIgnoreCase);
+
     /// <summary>true, якщо slug належить призупиненому tenant (ADR-018 D2: ResolveAsync = false, відповідь 403 tenant_suspended).</summary>
     public bool IsSuspended { get; private set; }
 
@@ -124,6 +137,7 @@ public sealed partial class PublicTenantResolver(IAuthStore store)
             return false;
         store.UseTenant(tenant.Id);
         TenantId = tenant.Id;
+        Modules = [.. tenant.Modules];
         return true;
     }
 }
