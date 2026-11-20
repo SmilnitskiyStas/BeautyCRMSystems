@@ -286,11 +286,9 @@ export function SideNav() {
       first.focus();
     }
   };
-  // Серверний знімок порожній (усе розгорнуто), збережений стан підхоплюється після гідрації.
+  // Без збереженого вибору (перший вхід) усі групи згорнуті; група з поточною сторінкою все одно розгорнута (hasActive).
   const collapsedRaw = useSyncExternalStore(subscribeCollapsed, readRaw, () => "");
   const collapsedIds = useMemo(() => parseCollapsed(collapsedRaw), [collapsedRaw]);
-  const toggle = (id: string) =>
-    writeCollapsed(collapsedIds.includes(id) ? collapsedIds.filter((x) => x !== id) : [...collapsedIds, id]);
   // §26.11.1: розсилки вимкнено (`marketing_disabled` / `module_disabled`) - пункт меню не показуємо.
   const marketing = useMarketingAvailability(canUseMarketing(user));
   // Меню за правами (§30.8); короткий перелік (майстер) показуємо плоским списком без заголовків груп.
@@ -303,6 +301,12 @@ export function SideNav() {
     : navGroupsFor(user)
         .map((g) => ({ ...g, items: g.items.filter(visible) }))
         .filter((g) => g.items.length > 0);
+  const noChoice = collapsedRaw === "";
+  const isCollapsed = (id: string) => noChoice || collapsedIds.includes(id);
+  const toggle = (id: string) => {
+    const base = noChoice ? groups.map((g) => g.id) : collapsedIds;
+    writeCollapsed(base.includes(id) ? base.filter((x) => x !== id) : [...base, id]);
+  };
   const Panel = drawer ? "div" : "nav";
   const panelProps = drawer
     ? ({ role: "dialog", "aria-modal": true } as const)
@@ -363,7 +367,7 @@ export function SideNav() {
           label={g.label}
           items={g.items}
           pathname={pathname}
-          collapsed={collapsedIds.includes(g.id)}
+          collapsed={isCollapsed(g.id)}
           onToggle={() => toggle(g.id)}
         />
       ))}
