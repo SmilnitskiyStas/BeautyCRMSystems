@@ -32,6 +32,8 @@ internal sealed class FakeInventoryStore : IInventoryStore
     public readonly Dictionary<Guid, List<Guid>> SpecLocations = [];
     public readonly Dictionary<Guid, ProductDto> Products = [];
     public readonly Dictionary<Guid, SupplierDto> Suppliers = [];
+    /// <summary>Дерево категорій (§32.27); товари посилаються через ProductDto.CategoryId.</summary>
+    public readonly Dictionary<Guid, CategoryRow> Categories = [];
     public readonly HashSet<(Guid Loc, Guid Prod)> Disabled = [];
     public readonly List<Batch> Batches = [];
     public readonly Dictionary<(Guid, Guid), decimal> Levels = [];
@@ -113,7 +115,15 @@ internal sealed class FakeInventoryStore : IInventoryStore
     public Task<ProductDetailDto?> GetProductAsync(Guid id, CancellationToken ct) => Task.FromResult(Products.TryGetValue(id, out var p) ? Detail(p) : null);
 
     private ProductDetailDto Detail(ProductDto p) => new(p.Id, p.Name, p.Category, p.Unit, p.Barcode, p.Purpose, p.Supplier, p.PurchasePrice, p.SalePrice, p.MinStock,
-        p.TrackExpiry, p.IsActive, p.Note, Ops.Any(o => o.Moves.Any(m => m.Prod == p.Id)), p.CreatedAt, p.UpdatedAt, []);
+        p.TrackExpiry, p.IsActive, p.Note, Ops.Any(o => o.Moves.Any(m => m.Prod == p.Id)), p.CreatedAt, p.UpdatedAt, [], p.CategoryId, PathOf(p.CategoryId));
+
+    public string? PathOf(Guid? id)
+    {
+        var names = new List<string>();
+        while (id is { } cur && Categories.TryGetValue(cur, out var c)) { names.Add(c.Name); id = c.ParentId; }
+        names.Reverse();
+        return names.Count == 0 ? null : string.Join(" › ", names);
+    }
 
     public Task<ProductDto?> GetProductByBarcodeAsync(string code, CancellationToken ct) => Task.FromResult(Products.Values.FirstOrDefault(p => p.Barcode == code));
 
@@ -123,11 +133,53 @@ internal sealed class FakeInventoryStore : IInventoryStore
     public Task<IReadOnlyList<string>> ListCategoriesAsync(CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<string>>([.. Products.Values.Select(p => p.Category).Where(c => !string.IsNullOrEmpty(c)).Distinct().Order(StringComparer.Ordinal)!]);
 
+    // ---------- дерево категорій ----------
+
+    public Task<IReadOnlyList<CategoryDto>> ListCategoryNodesAsync(CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<CategoryDto>>([.. Categories.Values.Select(Node)]);
+
+    private CategoryDto Node(CategoryRow c) => new(c.Id, c.ParentId, c.Name, c.SortOrder, c.IsArchived,
+        Products.Values.Count(p => p.CategoryId == c.Id), Categories.Values.Count(x => x.ParentId == c.Id));
+
+    public Task<CategoryRow?> GetCategoryRowAsync(Guid id, CancellationToken ct) => Task.FromResult(Categories.GetValueOrDefault(id));
+
+    public CategoryRow AddCategory(string name, Guid? parent = null, bool archived = false, int sort = 0)
+    {
+        var c = new CategoryRow(Guid.NewGuid(), parent, name, sort, archived);
+        Categories[c.Id] = c;
+        return c;
+    }
+
+    public Task<CategoryWriteResult> WriteCategoryAsync(Func<IReadOnlyList<CategoryRow>, CategoryPlan> decide, DateTimeOffset now, CancellationToken ct)
+    {
+        switch (decide([.. Categories.Values]))
+        {
+            case CategoryReject r: return Task.FromResult(new CategoryWriteResult(CategoryWriteOutcome.Rejected, Error: r.Error));
+            case CategoryInsert i:
+                var c = AddCategory(i.Name, i.ParentId, false, i.SortOrder);
+                return Task.FromResult(new CategoryWriteResult(CategoryWriteOutcome.Ok, Node(c)));
+            case CategoryUpdate u:
+                var upd = new CategoryRow(u.Id, u.ParentId, u.Name, u.SortOrder, u.IsArchived);
+                Categories[u.Id] = upd;
+                return Task.FromResult(new CategoryWriteResult(CategoryWriteOutcome.Ok, Node(upd)));
+            default: throw new InvalidOperationException();
+        }
+    }
+
+    public Task<CategoryWriteOutcome> DeleteCategoryAsync(Guid id, CancellationToken ct)
+    {
+        if (!Categories.ContainsKey(id)) return Task.FromResult(CategoryWriteOutcome.NotFound);
+        if (Categories.Values.Any(c => c.ParentId == id) || Products.Values.Any(p => p.CategoryId == id)) return Task.FromResult(CategoryWriteOutcome.NotEmpty);
+        Categories.Remove(id);
+        return Task.FromResult(CategoryWriteOutcome.Ok);
+    }
+
     public Task<ProductWriteResult> CreateProductAsync(ProductData d, Guid userId, DateTimeOffset now, CancellationToken ct)
     {
         if (d.Barcode is not null && Products.Values.Any(p => p.Barcode == d.Barcode)) return Task.FromResult(new ProductWriteResult(CatalogWriteOutcome.BarcodeTaken));
         var p = new ProductDto(Guid.NewGuid(), d.Name, d.Category, d.Unit, d.Barcode, d.Purpose,
-            d.SupplierId is { } s ? new InventoryNamedRef(s, Suppliers[s].Name) : null, d.PurchasePrice, d.SalePrice, d.MinStock, d.TrackExpiry, d.IsActive, d.Note, false, now, now);
+            d.SupplierId is { } s ? new InventoryNamedRef(s, Suppliers[s].Name) : null, d.PurchasePrice, d.SalePrice, d.MinStock, d.TrackExpiry, d.IsActive, d.Note, false, now, now,
+            d.CategoryId);
         Products[p.Id] = p;
         return Task.FromResult(new ProductWriteResult(CatalogWriteOutcome.Ok, Detail(p)));
     }
@@ -141,7 +193,7 @@ internal sealed class FakeInventoryStore : IInventoryStore
         var p = old with
         {
             Name = d.Name, Category = d.Category, Unit = d.Unit, Barcode = d.Barcode, Purpose = d.Purpose, PurchasePrice = d.PurchasePrice, SalePrice = d.SalePrice, MinStock = d.MinStock,
-            TrackExpiry = d.TrackExpiry, IsActive = d.IsActive, Note = d.Note, UpdatedAt = now,
+            TrackExpiry = d.TrackExpiry, IsActive = d.IsActive, Note = d.Note, UpdatedAt = now, CategoryId = d.CategoryId,
             Supplier = d.SupplierId is { } s ? new InventoryNamedRef(s, Suppliers[s].Name) : null,
         };
         Products[id] = p;

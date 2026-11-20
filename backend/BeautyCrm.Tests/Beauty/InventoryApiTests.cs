@@ -186,6 +186,8 @@ public sealed class InventoryApiTests(AuthApiFixture fx) : IClassFixture<AuthApi
             foreach (var (m, path) in new[]
                      {
                          (HttpMethod.Get, "/scope"), (HttpMethod.Get, "/products"), (HttpMethod.Get, $"/products/{id}"), (HttpMethod.Post, "/products"),
+                         (HttpMethod.Get, "/categories"), (HttpMethod.Post, "/categories"), (HttpMethod.Put, $"/categories/{id}"), (HttpMethod.Put, $"/categories/{id}/move"),
+                         (HttpMethod.Post, $"/categories/{id}/archive"), (HttpMethod.Post, $"/categories/{id}/unarchive"), (HttpMethod.Delete, $"/categories/{id}"),
                          (HttpMethod.Get, "/suppliers"), (HttpMethod.Get, "/stock?locationId=" + t.L1), (HttpMethod.Get, "/stock/summary"),
                          (HttpMethod.Get, "/batches"), (HttpMethod.Get, "/movements"), (HttpMethod.Get, "/operations"),
                          (HttpMethod.Post, "/receipts"), (HttpMethod.Post, "/write-offs"), (HttpMethod.Post, "/transfers"),
@@ -421,7 +423,7 @@ public sealed class InventoryApiTests(AuthApiFixture fx) : IClassFixture<AuthApi
         await Fails(await Call(c, HttpMethod.Post, "/products", t.Admin, new { name = "Bad", unit = "pcs", purpose = "sale", salePrice = 10, minStock = 1.5 }), HttpStatusCode.UnprocessableEntity, "invalid_min_stock");
         await Fails(await Call(c, HttpMethod.Post, "/products", t.Admin, new { name = "Bad", unit = "pcs", purpose = "sale", salePrice = 10, supplierId = Guid.NewGuid() }), HttpStatusCode.NotFound, "supplier_not_found");
 
-        Assert.Equal(["Hair"], (await Ok(await Get(c, "/categories", t.Spec))).GetProperty("items").EnumerateArray().Select(x => x.GetString()).ToArray());
+        Assert.Equal(["Hair"], (await Ok(await Get(c, "/products/categories", t.Spec))).GetProperty("items").EnumerateArray().Select(x => x.GetString()).ToArray());
         Assert.Equal(id, (await Ok(await Get(c, "/products/by-barcode?code=%204820-1%20", t.Spec))).GetProperty("id").GetGuid());
         await Fails(await Get(c, "/products/by-barcode?code=none", t.Spec), HttpStatusCode.NotFound, "product_not_found");
 

@@ -874,6 +874,10 @@ internal abstract class IInventoryStoreProxy(FakeInventoryStore inner) : IInvent
     public Task<ProductDto?> GetProductByBarcodeAsync(string code, CancellationToken ct) => inner.GetProductByBarcodeAsync(code, ct);
     public Task<IReadOnlyDictionary<Guid, ProductDto>> GetProductsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct) => inner.GetProductsAsync(ids, ct);
     public Task<IReadOnlyList<string>> ListCategoriesAsync(CancellationToken ct) => inner.ListCategoriesAsync(ct);
+    public Task<IReadOnlyList<CategoryDto>> ListCategoryNodesAsync(CancellationToken ct) => inner.ListCategoryNodesAsync(ct);
+    public Task<CategoryRow?> GetCategoryRowAsync(Guid id, CancellationToken ct) => inner.GetCategoryRowAsync(id, ct);
+    public Task<CategoryWriteResult> WriteCategoryAsync(Func<IReadOnlyList<CategoryRow>, CategoryPlan> decide, DateTimeOffset n, CancellationToken ct) => inner.WriteCategoryAsync(decide, n, ct);
+    public Task<CategoryWriteOutcome> DeleteCategoryAsync(Guid id, CancellationToken ct) => inner.DeleteCategoryAsync(id, ct);
     public Task<ProductWriteResult> CreateProductAsync(ProductData d, Guid u, DateTimeOffset n, CancellationToken ct) => inner.CreateProductAsync(d, u, n, ct);
     public Task<ProductWriteResult> UpdateProductAsync(Guid id, ProductData d, Guid u, DateTimeOffset n, CancellationToken ct) => inner.UpdateProductAsync(id, d, u, n, ct);
     public Task<LocationSettingDto?> UpsertSettingAsync(Guid p, Guid l, decimal? m, bool e, Guid u, DateTimeOffset n, CancellationToken ct) => inner.UpsertSettingAsync(p, l, m, e, u, n, ct);

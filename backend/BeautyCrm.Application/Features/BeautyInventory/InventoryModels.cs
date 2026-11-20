@@ -18,7 +18,8 @@ public record ProductDto(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? PurchasePrice,
     decimal? SalePrice,
     decimal? MinStock, bool TrackExpiry, bool IsActive, string? Note, bool HasMovements,
-    DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
+    DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt,
+    Guid? CategoryId = null, string? CategoryPath = null);
 
 public sealed record LocationSettingDto(Guid LocationId, decimal? MinStock, bool IsEnabled, DateTimeOffset UpdatedAt);
 
@@ -27,8 +28,13 @@ public sealed record ProductDetailDto(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? PurchasePrice,
     decimal? SalePrice,
     decimal? MinStock, bool TrackExpiry, bool IsActive, string? Note, bool HasMovements,
-    DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, IReadOnlyList<LocationSettingDto> LocationSettings)
-    : ProductDto(Id, Name, Category, Unit, Barcode, Purpose, Supplier, PurchasePrice, SalePrice, MinStock, TrackExpiry, IsActive, Note, HasMovements, CreatedAt, UpdatedAt);
+    DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, IReadOnlyList<LocationSettingDto> LocationSettings,
+    Guid? CategoryId = null, string? CategoryPath = null)
+    : ProductDto(Id, Name, Category, Unit, Barcode, Purpose, Supplier, PurchasePrice, SalePrice, MinStock, TrackExpiry, IsActive, Note, HasMovements, CreatedAt, UpdatedAt,
+        CategoryId, CategoryPath);
+
+/// <summary>Вузол дерева категорій (§32.27). ProductCount - прямі товари (усі, у т.ч. неактивні); ChildCount - прямі підкатегорії (усі, у т.ч. архівні).</summary>
+public sealed record CategoryDto(Guid Id, Guid? ParentId, string Name, int SortOrder, bool IsArchived, int ProductCount, int ChildCount);
 
 public sealed record SupplierDto(Guid Id, string Name, string? ContactName, string? Phone, string? Email, string? Note, bool IsActive, int ProductCount);
 
@@ -101,7 +107,12 @@ public sealed record OperationResult(OperationDto Operation, bool Replayed);
 // ---------- запити (§32.6) ----------
 
 public sealed record ProductRequest(string? Name, string? Category, string? Unit, string? Barcode, string? Purpose, Guid? SupplierId,
-    decimal? PurchasePrice, decimal? SalePrice, decimal? MinStock, bool? TrackExpiry, bool? IsActive, string? Note);
+    decimal? PurchasePrice, decimal? SalePrice, decimal? MinStock, bool? TrackExpiry, bool? IsActive, string? Note, Guid? CategoryId = null);
+
+/// <summary>POST /categories: Name, ParentId?, SortOrder?; PUT /categories/{id}: Name, SortOrder? (ParentId ігнорується - зміна батька лише через move).</summary>
+public sealed record CategoryRequest(string? Name, Guid? ParentId, int? SortOrder);
+
+public sealed record CategoryMoveRequest(Guid? ParentId, int? SortOrder);
 
 public sealed record SupplierRequest(string? Name, string? ContactName, string? Phone, string? Email, string? Note, bool? IsActive);
 

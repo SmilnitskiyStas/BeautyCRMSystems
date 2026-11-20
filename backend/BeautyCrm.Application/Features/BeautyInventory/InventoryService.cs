@@ -263,11 +263,19 @@ public sealed partial class InventoryService(IInventoryStore store, TimeProvider
         if (existing is not null && existing.HasMovements && !string.Equals(existing.Unit, unit, StringComparison.Ordinal))
             return UnitLocked;
         if (req.SupplierId is { } sid && await store.GetSupplierAsync(sid, ct) is null) return SupplierNotFound;
+        // Категорія з дерева (§32.27): має існувати в tenant; архівну не можна призначити, але товар, що вже в ній, редагується без зміни categoryId.
+        if (req.CategoryId is { } cid && cid != existing?.CategoryId)
+        {
+            if (await store.GetCategoryRowAsync(cid, ct) is not { } cat) return CategoryInvalid;
+            if (cat.IsArchived) return Error.Validation("category_archived", "The category is archived.");
+        }
 
         return new ProductData(name, category, unit, barcode, purpose, req.SupplierId,
             req.PurchasePrice ?? existing?.PurchasePrice, salePrice, req.MinStock,
-            req.TrackExpiry ?? existing?.TrackExpiry ?? false, existing is null ? true : req.IsActive ?? existing.IsActive, note);
+            req.TrackExpiry ?? existing?.TrackExpiry ?? false, existing is null ? true : req.IsActive ?? existing.IsActive, note, req.CategoryId);
     }
+
+    private static readonly Error CategoryInvalid = Error.Validation("category_not_found", "Category not found.");
 
     private static readonly Error UnitLocked = Error.Validation("unit_locked", "The unit cannot be changed: the product already has movements.");
 
@@ -278,6 +286,7 @@ public sealed partial class InventoryService(IInventoryStore store, TimeProvider
         CatalogWriteOutcome.BarcodeTaken => Error.Conflict("barcode_taken", "A product with this barcode already exists."),
         CatalogWriteOutcome.UnitLocked => UnitLocked,
         CatalogWriteOutcome.PurposeLocked => Error.Validation("purpose_locked", "The product is used in service materials: remove it from the norms first."),
+        CatalogWriteOutcome.CategoryNotFound => CategoryInvalid,
         _ => Error.Conflict("barcode_taken", "A product with this barcode already exists."),
     };
 

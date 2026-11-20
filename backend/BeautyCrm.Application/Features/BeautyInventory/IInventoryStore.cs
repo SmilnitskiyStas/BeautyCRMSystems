@@ -1,14 +1,29 @@
+using BeautyCrm.Application.Features.BeautyCommon;
+
 namespace BeautyCrm.Application.Features.BeautyInventory;
 
 public sealed record LocationRow(Guid Id, string Name, bool IsActive, string Timezone);
 
 /// <summary>Нормалізований вміст товару (після валідації й злиття PUT). Unit/Purpose - коди §32.3.</summary>
 public sealed record ProductData(string Name, string? Category, string Unit, string? Barcode, string Purpose, Guid? SupplierId,
-    decimal? PurchasePrice, decimal? SalePrice, decimal? MinStock, bool TrackExpiry, bool IsActive, string? Note);
+    decimal? PurchasePrice, decimal? SalePrice, decimal? MinStock, bool TrackExpiry, bool IsActive, string? Note, Guid? CategoryId = null);
 
 public sealed record SupplierData(string Name, string? ContactName, string? Phone, string? Email, string? Note, bool IsActive);
 
-public enum CatalogWriteOutcome { Ok, NotFound, BarcodeTaken, NameTaken, UnitLocked, PurposeLocked }
+public enum CatalogWriteOutcome { Ok, NotFound, BarcodeTaken, NameTaken, UnitLocked, PurposeLocked, CategoryNotFound }
+
+/// <summary>Вузол дерева для перевірок сервісу (глибина, цикл, дублікати).</summary>
+public sealed record CategoryRow(Guid Id, Guid? ParentId, string Name, int SortOrder, bool IsArchived);
+
+/// <summary>Рішення сервісу над знімком дерева (приймається під блокуванням дерева tenant): відмова або запис повного нового стану.</summary>
+public abstract record CategoryPlan;
+public sealed record CategoryReject(Error Error) : CategoryPlan;
+public sealed record CategoryInsert(Guid? ParentId, string Name, int SortOrder) : CategoryPlan;
+public sealed record CategoryUpdate(Guid Id, Guid? ParentId, string Name, int SortOrder, bool IsArchived) : CategoryPlan;
+
+public enum CategoryWriteOutcome { Ok, Rejected, NameTaken, NotFound, NotEmpty }
+
+public sealed record CategoryWriteResult(CategoryWriteOutcome Outcome, CategoryDto? Category = null, Error? Error = null);
 
 public sealed record ProductWriteResult(CatalogWriteOutcome Outcome, ProductDetailDto? Product = null);
 public sealed record SupplierWriteResult(CatalogWriteOutcome Outcome, SupplierDto? Supplier = null);
@@ -97,6 +112,18 @@ public interface IInventoryStore
     Task<bool> DeleteSettingAsync(Guid productId, Guid locationId, CancellationToken ct);
     /// <summary>Ефективні налаштування (productId, locationId) -> (isEnabled).</summary>
     Task<IReadOnlyDictionary<Guid, bool>> GetEnabledMapAsync(Guid locationId, IReadOnlyCollection<Guid> productIds, CancellationToken ct);
+
+    // ---- дерево категорій (§32.27) ----
+    /// <summary>Усі вузли tenant (включно з архівними) з лічильниками; порядок - на сервісі.</summary>
+    Task<IReadOnlyList<CategoryDto>> ListCategoryNodesAsync(CancellationToken ct);
+    Task<CategoryRow?> GetCategoryRowAsync(Guid id, CancellationToken ct);
+    /// <summary>
+    /// Під блокуванням дерева tenant (advisory lock у транзакції): знімок усіх вузлів -> <paramref name="decide"/> -> запис. Так глибина,
+    /// цикл і ліміт не обходяться гонкою. Дублікат імені, що пройшов перевірку, ловить унікальний індекс (NameTaken).
+    /// </summary>
+    Task<CategoryWriteResult> WriteCategoryAsync(Func<IReadOnlyList<CategoryRow>, CategoryPlan> decide, DateTimeOffset now, CancellationToken ct);
+    /// <summary>Фізичне видалення; NotFound, якщо немає; NotEmpty, якщо є підкатегорії або товари (у т.ч. неактивні).</summary>
+    Task<CategoryWriteOutcome> DeleteCategoryAsync(Guid id, CancellationToken ct);
 
     Task<IReadOnlyList<SupplierDto>> ListSuppliersAsync(CancellationToken ct);
     Task<SupplierDto?> GetSupplierAsync(Guid id, CancellationToken ct);
