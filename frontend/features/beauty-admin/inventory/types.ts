@@ -7,8 +7,8 @@ export type StockUnit = "pcs" | "ml" | "g" | "l" | "kg" | "pack";
 export type ProductPurpose = "sale" | "salon_use" | "both";
 export type BatchStatus = "active" | "expiring" | "expired" | "empty";
 export type StockState = "all" | "low" | "in_stock" | "out_of_stock";
-export type MovementType = "receipt" | "write_off" | "transfer_out" | "transfer_in" | "stocktake_adjust" | "service_consumption" | "sale";
-export type OperationKind = "receipt" | "write_off" | "transfer" | "stocktake" | "service_consumption" | "sale";
+export type MovementType = "receipt" | "write_off" | "transfer_out" | "transfer_in" | "stocktake_adjust" | "service_consumption" | "sale" | "sale_return";
+export type OperationKind = "receipt" | "write_off" | "transfer" | "stocktake" | "service_consumption" | "sale" | "sale_return";
 export type WriteOffReason = "expired" | "damaged" | "lost" | "internal_use" | "correction" | "other";
 export type StocktakeStatus = "draft" | "posted" | "cancelled";
 export type CostsAccess = "none" | "view" | "edit";
@@ -190,6 +190,8 @@ export interface Movement {
   counterpartLocationId: string | null;
   stocktakeId: string | null;
   createdBy: NamedRef | null;
+  /** §33.14: замовлення товару, з яким пов'язано рух (`sale|sale_return`); поле адитивне, старий сервер його не віддає. */
+  productOrderId?: string | null;
 }
 export interface OperationSummary {
   id: string;
@@ -203,6 +205,8 @@ export interface OperationSummary {
   productCount: number;
   /** §32.17: лише для `service_consumption` (id запису без ПД). */
   appointmentId: string | null;
+  /** §33.14: лише для `sale|sale_return`. */
+  productOrderId?: string | null;
   totalCost?: number | null;
 }
 export interface Operation extends OperationSummary {

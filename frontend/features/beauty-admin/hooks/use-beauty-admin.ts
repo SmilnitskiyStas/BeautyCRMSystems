@@ -79,6 +79,11 @@ export const beautyKeys = {
     materialsList: ["beauty", "inventory-materials", "list"] as const,
     alerts: (q: object) => ["beauty", "inventory-alerts", "list", q] as const,
     alertsUnread: ["beauty", "inventory-alerts", "unread"] as const,
+    // ADR-026: замовлення товарів - теж поза префіксом складу (з тієї ж причини, що й сповіщення).
+    ordersAll: ["beauty", "inventory-orders"] as const,
+    orders: (q: object) => ["beauty", "inventory-orders", "list", q] as const,
+    orderCounts: ["beauty", "inventory-orders", "counts"] as const,
+    order: (id: string) => ["beauty", "inventory-orders", "order", id] as const,
   },
 };
 

@@ -38,6 +38,7 @@ import type {
   StaffAlert,
 } from "../inventory/types";
 import type { TelegramLinkCreateRequest, TelegramLinkIssued, TelegramLinkStatus } from "../inventory/telegram-link";
+import type { CancelProductOrderResult, ProductOrder, ProductOrderCounts, ProductOrderQuery, ProductOrderSummary } from "../inventory/orders";
 import type {
   AccessSaveInput,
   AccessSaveResult,
@@ -518,6 +519,20 @@ export interface BeautyAdminApi {
   markInventoryAlertRead(id: string): Promise<StaffAlert>;
   /** POST /inventory/alerts/read-all?locationId: `{updated}`. */
   markAllInventoryAlertsRead(locationId?: string): Promise<number>;
+
+  // ---------- ADR-026 / §33.13: замовлення товарів клієнтами (адмін-API CRM) ----------
+  /** GET /inventory/product-orders: `status` за замовчуванням `open`; 404 location_not_found; 422 invalid_status|invalid_range|invalid_cursor. */
+  getProductOrders(q?: ProductOrderQuery): Promise<Page<ProductOrderSummary>>;
+  /** GET /inventory/product-orders/counts: `{paid}` - оплачені до видачі (бейдж, опитування). */
+  getProductOrderCounts(): Promise<ProductOrderCounts>;
+  /** GET /inventory/product-orders/{id}: 404 product_order_not_found. */
+  getProductOrder(id: string): Promise<ProductOrder>;
+  /** POST /inventory/product-orders/{id}/fulfill (`inventory.manage`): `paid` -> `fulfilled`; 409 order_not_paid|refund_in_progress. */
+  fulfillProductOrder(id: string): Promise<ProductOrder>;
+  /** POST /inventory/product-orders/{id}/cancel `{reason?}`: 409 order_fulfilled|order_closed|payment_in_progress|refund_in_progress; 402 refund_failed; 422 invalid_reason. */
+  cancelProductOrder(id: string, reason?: string): Promise<CancelProductOrderResult>;
+  /** POST /inventory/product-orders/{id}/reconcile-payment: 409 nothing_to_reconcile|payment_in_progress. */
+  reconcileProductOrderPayment(id: string): Promise<ProductOrder>;
 
   // ---------- етап 2b (ADR-025 §12, §32.24): Telegram-сповіщення власнику (лише owner; все `no-store`) ----------
   /** GET /inventory/telegram/link: стан прив'язки (без chat id і токена). */
