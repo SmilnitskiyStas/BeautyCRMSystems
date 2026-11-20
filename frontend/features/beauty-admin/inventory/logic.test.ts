@@ -141,7 +141,7 @@ describe("FEFO", () => {
 
 const product = (over: Partial<ProductFormValues> = {}): ProductFormValues => ({
   name: "Шампунь",
-  category: "",
+  categoryId: "",
   unit: "pcs",
   barcode: "",
   purpose: "both",
@@ -187,12 +187,13 @@ describe("валідація форми товару", () => {
     expect(humanizeInventoryError(new BeautyApiError(422, "sale_price_required", "x"))).toMatch(/роздрібну ціну/);
   });
   it("тіло запиту: без права ціна не передається; isActive лише в редагуванні; порожнє -> null", () => {
-    const withPrice = product({ purchasePrice: "12,5", category: " Гігієна ", minStock: "3" });
-    expect(toProductRequest(withPrice, { canEditCosts: true, isEdit: false })).toMatchObject({ purchasePrice: 12.5, category: "Гігієна", minStock: 3 });
+    const withPrice = product({ purchasePrice: "12,5", categoryId: "c7", minStock: "3" });
+    expect(toProductRequest(withPrice, { canEditCosts: true, isEdit: false })).toMatchObject({ purchasePrice: 12.5, categoryId: "c7", minStock: 3 });
+    expect("category" in toProductRequest(withPrice, { canEditCosts: true, isEdit: false })).toBe(false);
     const noRight = toProductRequest(withPrice, { canEditCosts: false, isEdit: false });
     expect("purchasePrice" in noRight).toBe(false);
     expect("isActive" in noRight).toBe(false);
-    expect(toProductRequest(product(), { canEditCosts: false, isEdit: true })).toMatchObject({ isActive: true, barcode: null, supplierId: null, category: null });
+    expect(toProductRequest(product(), { canEditCosts: false, isEdit: true })).toMatchObject({ isActive: true, barcode: null, supplierId: null, categoryId: null });
   });
   it("постачальник: телефон, пошта, довжини", () => {
     const ok = { name: "ТОВ", contactName: "", phone: "+380 (44) 123-45-67", email: "a@b.ua", note: "" };

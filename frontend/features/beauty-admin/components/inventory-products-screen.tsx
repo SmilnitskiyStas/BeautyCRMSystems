@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import { useInventoryCategories, useInventoryProducts } from "../hooks/use-inventory";
+import { filterProductsByCategory, productCategoryLabel } from "../inventory/categories";
 import { PURPOSE_LABEL, formatQuantity, formatMoney, unitShort } from "../inventory/logic";
 import type { Product, ProductPurpose } from "../inventory/types";
+import { CategoryPicker } from "./category-picker";
 import { InputField, InventoryPage, LoadMore, SelectField } from "./inventory-parts";
 import { ProductForm } from "./inventory-product-form";
 import { Badge, Card, EmptyState, PrimaryButton, QueryState, SecondaryButton, Table, TD } from "./ui";
@@ -18,12 +20,13 @@ export function InventoryProductsScreen() {
 
   const q = useInventoryProducts({
     ...(search.trim() ? { search: search.trim() } : {}),
-    ...(category ? { category } : {}),
     ...(purpose ? { purpose: purpose as ProductPurpose } : {}),
     active,
     take: 50,
   });
   const categories = useInventoryCategories();
+  // TODO: серверний фільтр `categoryId`, коли бекенд його підтримає; зараз фільтруємо вже завантажені товари.
+  const items = filterProductsByCategory(q.items, categories.data ?? [], category);
 
   return (
     <InventoryPage
@@ -38,7 +41,7 @@ export function InventoryProductsScreen() {
           ) : null}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <InputField label="Пошук за назвою чи штрихкодом" value={search} onChange={setSearch} />
-            <SelectField label="Категорія" value={category} onChange={setCategory} placeholder="Усі категорії" options={(categories.data ?? []).map((c) => ({ value: c, label: c }))} />
+            <CategoryPicker label="Категорія" categories={categories.data ?? []} value={category || null} onChange={(id) => setCategory(id ?? "")} noneLabel="Усі категорії" />
             <SelectField
               label="Призначення"
               value={purpose}
@@ -58,7 +61,7 @@ export function InventoryProductsScreen() {
             />
           </div>
           <QueryState isPending={q.isPending} isError={q.isError} onRetry={() => q.refetch()}>
-            {q.items.length === 0 ? (
+            {items.length === 0 ? (
               <Card>
                 <EmptyState>{scope.canEditCatalog ? "Товарів ще немає. Додайте перший." : "Товарів за цими умовами немає."}</EmptyState>
               </Card>
@@ -69,13 +72,25 @@ export function InventoryProductsScreen() {
                   headers={["Товар", "Категорія", "Од.", "Штрихкод", "Постачальник", "Призначення", "Роздрібна ціна", ...(scope.costs !== "none" ? ["Закупівельна ціна"] : []), "Мін. залишок", "Статус", "Дії"]}
                   minWidth={980}
                 >
-                  {q.items.map((p) => (
+                  {items.map((p) => (
                     <tr key={p.id} className="border-t border-(--line)">
                       <th scope="row" className={`${TD} text-left font-semibold`}>
                         {p.name}
                         {p.trackExpiry ? <span className="block text-[13px] font-normal text-(--muted)">Зі строком придатності</span> : null}
                       </th>
-                      <td className={TD}>{p.category ?? "—"}</td>
+                      <td className={TD}>
+                        {(() => {
+                          const l = productCategoryLabel(p);
+                          return l ? (
+                            <>
+                              {l.text}
+                              {l.legacy ? <span className="text-(--muted)"> (текст)</span> : null}
+                            </>
+                          ) : (
+                            "—"
+                          );
+                        })()}
+                      </td>
                       <td className={TD}>{unitShort(p.unit)}</td>
                       <td className={TD}>{p.barcode ?? "—"}</td>
                       <td className={TD}>{p.supplier?.name ?? "—"}</td>
@@ -101,7 +116,7 @@ export function InventoryProductsScreen() {
                   ))}
                 </Table>
                 <div className="mt-3">
-                  <LoadMore hasMore={q.hasNextPage} loading={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} shown={q.items.length} />
+                  <LoadMore hasMore={q.hasNextPage} loading={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} shown={items.length} />
                 </div>
               </Card>
             )}

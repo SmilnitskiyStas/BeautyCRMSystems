@@ -246,7 +246,8 @@ const PHONE = /^[0-9+()\-. ]+$/;
 
 export interface ProductFormValues {
   name: string;
-  category: string;
+  /** Вузол дерева категорій; `""` - без категорії. */
+  categoryId: string;
   unit: StockUnit;
   barcode: string;
   purpose: ProductPurpose;
@@ -258,13 +259,12 @@ export interface ProductFormValues {
   isActive: boolean;
   note: string;
 }
-export type ProductErrors = FieldErrors<"name" | "category" | "barcode" | "purchasePrice" | "salePrice" | "minStock" | "note">;
+export type ProductErrors = FieldErrors<"name" | "barcode" | "purchasePrice" | "salePrice" | "minStock" | "note">;
 
 export function validateProduct(v: ProductFormValues, opts: { canEditCosts: boolean }): ProductErrors {
   const e: ProductErrors = {};
   const name = v.name.trim();
   if (name.length < 1 || name.length > 200) e.name = "Назва: від 1 до 200 символів.";
-  if (v.category.trim().length > 100) e.category = "Категорія: до 100 символів.";
   const barcode = v.barcode.trim();
   if (barcode && !BARCODE.test(barcode)) e.barcode = "Штрихкод: до 64 символів, літери, цифри та . _ -";
   if (opts.canEditCosts) {
@@ -286,7 +286,8 @@ export function toProductRequest(v: ProductFormValues, opts: { canEditCosts: boo
   const price = opts.canEditCosts ? parsePrice(v.purchasePrice).value : null;
   return {
     name: v.name.trim(),
-    category: v.category.trim() || null,
+    // Старе текстове `category` з форми не надсилається - категорія обирається в дереві.
+    categoryId: v.categoryId || null,
     unit: v.unit,
     barcode: v.barcode.trim() || null,
     purpose: v.purpose,

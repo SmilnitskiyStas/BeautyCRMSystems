@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   useInventoryCategories,
   useInventoryProduct,
@@ -23,13 +23,14 @@ import {
   type ProductFormValues,
 } from "../inventory/logic";
 import type { InventoryScope, Product, ProductPurpose, StockUnit } from "../inventory/types";
+import { CategoryPicker } from "./category-picker";
 import { ErrorSummary, InputField, RequiredNote, SelectField, quantityInputMode, useFocusInvalid } from "./inventory-parts";
 import { CheckRow, ErrorBanner, SuccessBanner } from "./staff-parts";
 import { Card, PrimaryButton, SecondaryButton } from "./ui";
 
 const valuesOf = (p: Product | null): ProductFormValues => ({
   name: p?.name ?? "",
-  category: p?.category ?? "",
+  categoryId: p?.categoryId ?? "",
   unit: p?.unit ?? "pcs",
   barcode: p?.barcode ?? "",
   purpose: p?.purpose ?? "both",
@@ -155,7 +156,6 @@ export function ProductForm({ product, scope, onClose }: { product: Product | nu
   const save = useSaveProduct(product?.id ?? null);
   const categories = useInventoryCategories();
   const suppliers = useSuppliers({ active: "all", take: 200 });
-  const listId = useId();
   // Норми матеріалів (§32.16): деактивація товару з нормами дозволена, але у списанні він пропускається - попереджаємо.
   const norms = useServiceMaterialsList(isEdit);
   const usedIn = isEdit ? (norms.data ?? []).filter((m) => [m.network, ...m.locations].some((set) => set?.lines.some((l) => l.product.id === product.id))).map((m) => m.serviceName) : [];
@@ -174,6 +174,8 @@ export function ProductForm({ product, scope, onClose }: { product: Product | nu
     setSaved(null);
     if (k === "isActive") setConfirmingOff(false);
   };
+  // Старий текст категорії - лише підказка для перенесення товару в дерево.
+  const legacyCategory = !values.categoryId && product?.category ? product.category : null;
   const wasActive = product?.isActive ?? true;
   // Блок підтвердження з'являється на місці кнопки, що мала фокус: переносимо фокус на його текст.
   useEffect(() => {
@@ -217,14 +219,15 @@ export function ProductForm({ product, scope, onClose }: { product: Product | nu
       <ErrorSummary count={Object.keys(errors).length} />
       <div className="grid gap-4 sm:grid-cols-2">
         <InputField label="Назва" required maxLength={200} value={values.name} onChange={(v) => set("name", v)} error={errors.name} disabled={readOnly} />
-        <div>
-          <InputField label="Категорія" list={listId} maxLength={100} value={values.category} onChange={(v) => set("category", v)} error={errors.category} disabled={readOnly} hint="Вільний текст; можна обрати з підказок" />
-          <datalist id={listId}>
-            {(categories.data ?? []).map((c) => (
-              <option key={c} value={c} />
-            ))}
-          </datalist>
-        </div>
+        <CategoryPicker
+          label="Категорія"
+          categories={categories.data ?? []}
+          value={values.categoryId || null}
+          onChange={(id) => set("categoryId", id ?? "")}
+          fallbackPath={product?.categoryId === values.categoryId ? product?.categoryPath : null}
+          disabled={readOnly}
+          hint={legacyCategory ? `Стара категорія (текст): ${legacyCategory}. Оберіть категорію в дереві, щоб перенести товар.` : undefined}
+        />
         <SelectField
           label="Одиниця виміру"
           required

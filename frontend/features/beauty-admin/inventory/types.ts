@@ -42,10 +42,31 @@ export interface ProductRef {
   isActive: boolean;
 }
 
+/** Вузол дерева категорій (плоский список; `productCount` - лише прямі товари). */
+export interface Category {
+  id: string;
+  parentId: string | null;
+  name: string;
+  sortOrder: number;
+  isArchived: boolean;
+  productCount: number;
+  childCount: number;
+}
+export interface CategoryRequest {
+  name: string;
+  parentId?: string | null;
+  sortOrder?: number;
+}
+
 export interface Product {
   id: string;
   name: string;
+  /** Старе текстове поле (лише для читання; нове редагується через дерево `categoryId`). */
   category: string | null;
+  /** Вузол дерева категорій. */
+  categoryId: string | null;
+  /** Шлях у дереві, напр. «Волосся › Фарби». */
+  categoryPath: string | null;
   unit: StockUnit;
   barcode: string | null;
   purpose: ProductPurpose;
@@ -72,7 +93,8 @@ export interface ProductDetail extends Product {
 }
 export interface ProductRequest {
   name: string;
-  category?: string | null;
+  /** Вузол дерева категорій; `null` - без категорії. Старе текстове `category` з форми не надсилається. */
+  categoryId?: string | null;
   unit: StockUnit;
   barcode?: string | null;
   purpose: ProductPurpose;
