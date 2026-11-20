@@ -20,7 +20,7 @@ internal sealed class FakeNormsStore : IInventoryNormsStore
 
     public ProductDto AddProduct(string name = "Dye", string unit = "ml", string purpose = "both", bool active = true)
     {
-        var p = new ProductDto(Guid.NewGuid(), name, null, unit, null, purpose, null, null, null, false, active, null, false, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch);
+        var p = new ProductDto(Guid.NewGuid(), name, null, unit, null, purpose, null, null, null, null, false, active, null, false, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch);
         Products[p.Id] = p;
         return p;
     }

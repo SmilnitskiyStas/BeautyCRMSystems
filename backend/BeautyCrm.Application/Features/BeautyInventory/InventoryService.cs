@@ -249,6 +249,14 @@ public sealed partial class InventoryService(IInventoryStore store, TimeProvider
         var purpose = req.Purpose?.Trim();
         if (purpose is null || !Purposes.Contains(purpose, StringComparer.Ordinal)) return V("invalid_purpose", "Purpose must be sale, salon_use or both.");
         if (req.PurchasePrice is { } pp && !ValidMoney(pp)) return V("invalid_price", "Price must be 0..1000000 with at most 2 decimals.");
+        // Роздрібна ціна (ADR-025 §12.x): обов'язкова для sale/both, для salon_use ігнорується (NULL). Без злиття з існуючим: PUT - повна заміна.
+        decimal? salePrice = null;
+        if (purpose != "salon_use")
+        {
+            if (req.SalePrice is not { } sp) return V("sale_price_required", "Sale price is required for products intended for sale.");
+            if (!ValidMoney(sp)) return V("invalid_price", "Price must be 0..1000000 with at most 2 decimals.");
+            salePrice = sp;
+        }
         if (req.MinStock is { } ms && !ValidMinStock(ms, unit)) return V("invalid_min_stock", "Minimum stock is invalid for this unit.");
         var note = NullIfEmpty(req.Note);
         if (note is { Length: > 500 }) return V("invalid_note", "Note is too long (max 500).");
@@ -257,7 +265,7 @@ public sealed partial class InventoryService(IInventoryStore store, TimeProvider
         if (req.SupplierId is { } sid && await store.GetSupplierAsync(sid, ct) is null) return SupplierNotFound;
 
         return new ProductData(name, category, unit, barcode, purpose, req.SupplierId,
-            req.PurchasePrice ?? existing?.PurchasePrice, req.MinStock,
+            req.PurchasePrice ?? existing?.PurchasePrice, salePrice, req.MinStock,
             req.TrackExpiry ?? existing?.TrackExpiry ?? false, existing is null ? true : req.IsActive ?? existing.IsActive, note);
     }
 

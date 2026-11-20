@@ -7726,3 +7726,29 @@ BEGIN
 END $EF$;
 COMMIT;
 
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261120084056_beauty_inventory_sale_price') THEN
+    ALTER TABLE beauty_products ADD sale_price numeric(12,2);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261120084056_beauty_inventory_sale_price') THEN
+    ALTER TABLE beauty_products ADD CONSTRAINT ck_beauty_products_sale_price CHECK (sale_price IS NULL OR sale_price BETWEEN 0 AND 1000000);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261120084056_beauty_inventory_sale_price') THEN
+    INSERT INTO "__EFMigrationsHistory" (migration_id, product_version)
+    VALUES ('20261120084056_beauty_inventory_sale_price', '8.0.11');
+    END IF;
+END $EF$;
+COMMIT;
+

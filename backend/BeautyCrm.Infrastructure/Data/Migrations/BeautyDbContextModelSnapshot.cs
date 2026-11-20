@@ -3637,6 +3637,11 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(16)")
                         .HasColumnName("purpose");
 
+                    b.Property<decimal?>("SalePrice")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("sale_price");
+
                     b.Property<Guid?>("SupplierId")
                         .HasColumnType("uuid")
                         .HasColumnName("supplier_id");
@@ -3698,6 +3703,8 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                             t.HasCheckConstraint("ck_beauty_products_purchase_price", "purchase_price IS NULL OR purchase_price BETWEEN 0 AND 1000000");
 
                             t.HasCheckConstraint("ck_beauty_products_purpose", "purpose IN ('sale', 'salon_use', 'both')");
+
+                            t.HasCheckConstraint("ck_beauty_products_sale_price", "sale_price IS NULL OR sale_price BETWEEN 0 AND 1000000");
 
                             t.HasCheckConstraint("ck_beauty_products_unit", "unit IN ('pcs', 'ml', 'g', 'l', 'kg', 'pack')");
                         });

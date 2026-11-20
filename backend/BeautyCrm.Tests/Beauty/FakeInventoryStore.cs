@@ -51,7 +51,7 @@ internal sealed class FakeInventoryStore : IInventoryStore
         string? barcode = null, Guid? supplierId = null)
     {
         var s = supplierId is { } sid ? new InventoryNamedRef(sid, Suppliers[sid].Name) : null;
-        var p = new ProductDto(Guid.NewGuid(), name, null, unit, barcode, "both", s, price, null, trackExpiry, active, null, false, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch);
+        var p = new ProductDto(Guid.NewGuid(), name, null, unit, barcode, "both", s, price, null, null, trackExpiry, active, null, false, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch);
         Products[p.Id] = p;
         return p;
     }
@@ -112,7 +112,7 @@ internal sealed class FakeInventoryStore : IInventoryStore
 
     public Task<ProductDetailDto?> GetProductAsync(Guid id, CancellationToken ct) => Task.FromResult(Products.TryGetValue(id, out var p) ? Detail(p) : null);
 
-    private ProductDetailDto Detail(ProductDto p) => new(p.Id, p.Name, p.Category, p.Unit, p.Barcode, p.Purpose, p.Supplier, p.PurchasePrice, p.MinStock,
+    private ProductDetailDto Detail(ProductDto p) => new(p.Id, p.Name, p.Category, p.Unit, p.Barcode, p.Purpose, p.Supplier, p.PurchasePrice, p.SalePrice, p.MinStock,
         p.TrackExpiry, p.IsActive, p.Note, Ops.Any(o => o.Moves.Any(m => m.Prod == p.Id)), p.CreatedAt, p.UpdatedAt, []);
 
     public Task<ProductDto?> GetProductByBarcodeAsync(string code, CancellationToken ct) => Task.FromResult(Products.Values.FirstOrDefault(p => p.Barcode == code));
@@ -127,7 +127,7 @@ internal sealed class FakeInventoryStore : IInventoryStore
     {
         if (d.Barcode is not null && Products.Values.Any(p => p.Barcode == d.Barcode)) return Task.FromResult(new ProductWriteResult(CatalogWriteOutcome.BarcodeTaken));
         var p = new ProductDto(Guid.NewGuid(), d.Name, d.Category, d.Unit, d.Barcode, d.Purpose,
-            d.SupplierId is { } s ? new InventoryNamedRef(s, Suppliers[s].Name) : null, d.PurchasePrice, d.MinStock, d.TrackExpiry, d.IsActive, d.Note, false, now, now);
+            d.SupplierId is { } s ? new InventoryNamedRef(s, Suppliers[s].Name) : null, d.PurchasePrice, d.SalePrice, d.MinStock, d.TrackExpiry, d.IsActive, d.Note, false, now, now);
         Products[p.Id] = p;
         return Task.FromResult(new ProductWriteResult(CatalogWriteOutcome.Ok, Detail(p)));
     }
@@ -140,7 +140,7 @@ internal sealed class FakeInventoryStore : IInventoryStore
         if (d.Barcode is not null && Products.Values.Any(p => p.Id != id && p.Barcode == d.Barcode)) return Task.FromResult(new ProductWriteResult(CatalogWriteOutcome.BarcodeTaken));
         var p = old with
         {
-            Name = d.Name, Category = d.Category, Unit = d.Unit, Barcode = d.Barcode, Purpose = d.Purpose, PurchasePrice = d.PurchasePrice, MinStock = d.MinStock,
+            Name = d.Name, Category = d.Category, Unit = d.Unit, Barcode = d.Barcode, Purpose = d.Purpose, PurchasePrice = d.PurchasePrice, SalePrice = d.SalePrice, MinStock = d.MinStock,
             TrackExpiry = d.TrackExpiry, IsActive = d.IsActive, Note = d.Note, UpdatedAt = now,
             Supplier = d.SupplierId is { } s ? new InventoryNamedRef(s, Suppliers[s].Name) : null,
         };

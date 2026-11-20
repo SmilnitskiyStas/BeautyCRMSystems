@@ -90,7 +90,7 @@ public sealed class InventoryStage2aApiTests(AuthApiFixture fx) : IClassFixture<
 
     private static async Task<Guid> NewProduct(HttpClient c, string token, string name, string unit = "ml", string purpose = "both")
     {
-        var r = await Call(c, HttpMethod.Post, "/products", token, new { name, unit, purpose });
+        var r = await Call(c, HttpMethod.Post, "/products", token, new { name, unit, purpose, salePrice = 10 });
         return (await Ok(r, HttpStatusCode.Created)).GetProperty("id").GetGuid();
     }
 
@@ -218,7 +218,7 @@ public sealed class InventoryStage2aApiTests(AuthApiFixture fx) : IClassFixture<
         await Ok(await Call(c, HttpMethod.Put, P(svc), t.Admin, Body(null, Line(dye, 1))));
 
         // неактивний товар
-        await Ok(await Call(c, HttpMethod.Put, $"/products/{gloves}", t.Admin, new { name = "Gloves", unit = "pcs", purpose = "both", isActive = false }));
+        await Ok(await Call(c, HttpMethod.Put, $"/products/{gloves}", t.Admin, new { name = "Gloves", unit = "pcs", purpose = "both", salePrice = 10, isActive = false }));
         await Fails(await Call(c, HttpMethod.Put, P(svc), t.Admin, Body(null, Line(gloves, 1))), HttpStatusCode.UnprocessableEntity, "product_not_for_salon_use");
         // межа 50 рядків
         await Fails(await Call(c, HttpMethod.Put, P(svc), t.Admin, Body(null, [.. Enumerable.Range(0, 51).Select(_ => Line(Guid.NewGuid(), 1))])), HttpStatusCode.UnprocessableEntity, "too_many_lines");
@@ -234,16 +234,16 @@ public sealed class InventoryStage2aApiTests(AuthApiFixture fx) : IClassFixture<
         var free = await NewProduct(c, t.Admin, "Free");
         await Ok(await Call(c, HttpMethod.Put, $"/services/{t.Beauty.ServiceId}/materials", t.Admin, Body(null, Line(dye, 1))));
 
-        await Fails(await Call(c, HttpMethod.Put, $"/products/{dye}", t.Admin, new { name = "Dye", unit = "ml", purpose = "sale" }), HttpStatusCode.UnprocessableEntity, "purpose_locked");
-        await Fails(await Call(c, HttpMethod.Put, $"/products/{dye}", t.Admin, new { name = "Dye", unit = "g", purpose = "both" }), HttpStatusCode.UnprocessableEntity, "unit_locked");
+        await Fails(await Call(c, HttpMethod.Put, $"/products/{dye}", t.Admin, new { name = "Dye", unit = "ml", purpose = "sale", salePrice = 10 }), HttpStatusCode.UnprocessableEntity, "purpose_locked");
+        await Fails(await Call(c, HttpMethod.Put, $"/products/{dye}", t.Admin, new { name = "Dye", unit = "g", purpose = "both", salePrice = 10 }), HttpStatusCode.UnprocessableEntity, "unit_locked");
         // salon_use <-> both, назва, деактивація - дозволені
-        await Ok(await Call(c, HttpMethod.Put, $"/products/{dye}", t.Admin, new { name = "Dye 2", unit = "ml", purpose = "salon_use" }));
-        await Ok(await Call(c, HttpMethod.Put, $"/products/{dye}", t.Admin, new { name = "Dye 2", unit = "ml", purpose = "both", isActive = false }));
+        await Ok(await Call(c, HttpMethod.Put, $"/products/{dye}", t.Admin, new { name = "Dye 2", unit = "ml", purpose = "salon_use", salePrice = 10 }));
+        await Ok(await Call(c, HttpMethod.Put, $"/products/{dye}", t.Admin, new { name = "Dye 2", unit = "ml", purpose = "both", salePrice = 10, isActive = false }));
         // товар поза нормами - без обмежень
-        await Ok(await Call(c, HttpMethod.Put, $"/products/{free}", t.Admin, new { name = "Free", unit = "g", purpose = "sale" }));
+        await Ok(await Call(c, HttpMethod.Put, $"/products/{free}", t.Admin, new { name = "Free", unit = "g", purpose = "sale", salePrice = 10 }));
         // після видалення набору обмеження зникає
         Assert.Equal(HttpStatusCode.NoContent, (await Call(c, HttpMethod.Delete, $"/services/{t.Beauty.ServiceId}/materials", t.Admin)).StatusCode);
-        await Ok(await Call(c, HttpMethod.Put, $"/products/{dye}", t.Admin, new { name = "Dye 2", unit = "g", purpose = "sale" }));
+        await Ok(await Call(c, HttpMethod.Put, $"/products/{dye}", t.Admin, new { name = "Dye 2", unit = "g", purpose = "sale", salePrice = 10 }));
     }
 
     [SkippableFact]

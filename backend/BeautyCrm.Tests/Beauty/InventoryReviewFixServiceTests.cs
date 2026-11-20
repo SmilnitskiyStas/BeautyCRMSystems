@@ -113,7 +113,7 @@ public sealed class InventoryReviewFixServiceTests
     {
         var (store, svc, loc) = Env();
         var p = store.AddProduct("Race", "pcs");
-        var req = new ProductRequest("Race", null, "ml", null, "both", null, null, null, false, null, null);
+        var req = new ProductRequest("Race", null, "ml", null, "both", null, null, 10m, null, false, null, null);
         // сервіс бачить товар без рухів; між перевіркою й записом сховище вже має рух (перше надходження)
         store.BeforeProductUpdate = () =>
         {

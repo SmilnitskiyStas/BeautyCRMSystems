@@ -4,7 +4,7 @@ public sealed record LocationRow(Guid Id, string Name, bool IsActive, string Tim
 
 /// <summary>Нормалізований вміст товару (після валідації й злиття PUT). Unit/Purpose - коди §32.3.</summary>
 public sealed record ProductData(string Name, string? Category, string Unit, string? Barcode, string Purpose, Guid? SupplierId,
-    decimal? PurchasePrice, decimal? MinStock, bool TrackExpiry, bool IsActive, string? Note);
+    decimal? PurchasePrice, decimal? SalePrice, decimal? MinStock, bool TrackExpiry, bool IsActive, string? Note);
 
 public sealed record SupplierData(string Name, string? ContactName, string? Phone, string? Email, string? Note, bool IsActive);
 

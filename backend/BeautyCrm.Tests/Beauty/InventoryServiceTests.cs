@@ -464,7 +464,7 @@ public sealed class InventoryServiceTests
         AssertErr(denied, "forbidden_role", ErrorKind.Forbidden);
         Assert.Equal("inventory.manage", denied.Error!.Extras!["permission"]);
         Assert.Equal("own", denied.Error.Extras["required"]);
-        AssertErr(await e.Svc.CreateProductAsync(spec, new ProductRequest("X", null, "pcs", null, "both", null, null, null, null, null, null), default), "forbidden_role");
+        AssertErr(await e.Svc.CreateProductAsync(spec, new ProductRequest("X", null, "pcs", null, "both", null, null, null, null, null, null, null), default), "forbidden_role");
         AssertErr(await e.Svc.ListSuppliersAsync(spec, new SupplierListQuery(null, null, null, null), default), "forbidden_role");
     }
 
@@ -500,7 +500,7 @@ public sealed class InventoryServiceTests
         AssertErr(await e.Svc.TransferAsync(spec, Key(), Tr(e.Loc2.Id, e.Loc.Id, SL(p.Id, 1)), default), "location_not_found");
         Assert.Equal(5, e.Store.Level(e.Loc2.Id, p.Id));
         // каталог товарів: лише manage = all
-        AssertErr(await e.Svc.CreateProductAsync(spec, new ProductRequest("X", null, "pcs", null, "both", null, null, null, null, null, null), default), "forbidden_role");
+        AssertErr(await e.Svc.CreateProductAsync(spec, new ProductRequest("X", null, "pcs", null, "both", null, null, null, null, null, null, null), default), "forbidden_role");
     }
 
     [Fact]
@@ -577,7 +577,7 @@ public sealed class InventoryServiceTests
     // ---------- каталог ----------
 
     private static ProductRequest PR(string? name = "Gel", string? unit = "pcs", string? purpose = "sale") =>
-        new(name, null, unit, null, purpose, null, null, null, null, null, null);
+        new(name, null, unit, null, purpose, null, null, purpose == "salon_use" ? null : 10m, null, null, null, null);
 
     [Fact]
     public async Task Product_validation_codes()
@@ -642,6 +642,60 @@ public sealed class InventoryServiceTests
         Assert.True((await e.Svc.UpdateProductAsync(Admin(), id, PR(unit: "ml") with { IsActive = false }, default)).IsOk);
         Assert.False(e.Store.Products[id].IsActive);
         AssertErr(await e.Svc.UpdateProductAsync(Admin(), Guid.NewGuid(), PR(), default), "product_not_found", ErrorKind.NotFound);
+    }
+
+    [Fact]
+    public async Task Sale_price_is_required_for_sale_and_both_and_nulled_for_salon_use()
+    {
+        var e = new Env();
+        Task<Result<ProductDetailDto>> Create(ProductRequest r) => e.Svc.CreateProductAsync(Admin(), r, default);
+        AssertErr(await Create(PR() with { SalePrice = null }), "sale_price_required");
+        AssertErr(await Create(PR(purpose: "both") with { SalePrice = null }), "sale_price_required");
+        AssertErr(await Create(PR() with { SalePrice = -1m }), "invalid_price");
+        AssertErr(await Create(PR() with { SalePrice = 1.234m }), "invalid_price");
+        AssertErr(await Create(PR() with { SalePrice = 1000001m }), "invalid_price");
+        var ok = await Create(PR() with { SalePrice = 149.90m });
+        Assert.Equal(149.90m, ok.Value!.SalePrice);
+        Assert.Equal(0m, (await Create(PR() with { SalePrice = 0m })).Value!.SalePrice);
+        // salon_use: ціна ігнорується й зберігається NULL
+        var salon = await Create(PR(purpose: "salon_use") with { SalePrice = 50m });
+        Assert.Null(salon.Value!.SalePrice);
+        Assert.Null(e.Store.Products[salon.Value.Id].SalePrice);
+        Assert.True((await Create(PR(purpose: "salon_use") with { SalePrice = null })).IsOk);
+    }
+
+    [Fact]
+    public async Task Sale_price_update_rules_legacy_null_and_purpose_switch()
+    {
+        var e = new Env();
+        var salon = (await e.Svc.CreateProductAsync(Admin(), PR(purpose: "salon_use"), default)).Value!;
+        // salon_use -> sale без ціни: 422; з ціною: ок
+        AssertErr(await e.Svc.UpdateProductAsync(Admin(), salon.Id, PR(purpose: "sale") with { SalePrice = null }, default), "sale_price_required");
+        var up = await e.Svc.UpdateProductAsync(Admin(), salon.Id, PR(purpose: "sale") with { SalePrice = 20m }, default);
+        Assert.Equal(20m, up.Value!.SalePrice);
+        // sale -> salon_use: ціна обнуляється
+        var back = await e.Svc.UpdateProductAsync(Admin(), salon.Id, PR(purpose: "salon_use") with { SalePrice = 20m }, default);
+        Assert.Null(back.Value!.SalePrice);
+        // старий продажний товар без ціни читається (NULL), але перше редагування вимагає ціну
+        var legacy = e.Store.AddProduct("Legacy");
+        Assert.Null((await e.Svc.GetProductAsync(Admin(), legacy.Id, default)).Value!.SalePrice);
+        Assert.Contains(legacy.Id, (await e.Svc.ListProductsAsync(Admin(), new ProductListQuery(null, null, null, null, null, null, null), default)).Value!.Items.Select(x => x.Id));
+        AssertErr(await e.Svc.UpdateProductAsync(Admin(), legacy.Id, PR(name: "Legacy", purpose: "both") with { SalePrice = null }, default), "sale_price_required");
+        Assert.Equal(5m, (await e.Svc.UpdateProductAsync(Admin(), legacy.Id, PR(name: "Legacy", purpose: "both") with { SalePrice = 5m }, default)).Value!.SalePrice);
+    }
+
+    [Fact]
+    public async Task Sale_price_is_visible_without_costs_unlike_purchase_price()
+    {
+        var e = new Env();
+        var p = (await e.Svc.CreateProductAsync(Admin(), PR() with { SalePrice = 30m, PurchasePrice = 9m }, default)).Value!;
+        var noCosts = AdminWith(("revenue.view", "none"));
+        var d = (await e.Svc.GetProductAsync(noCosts, p.Id, default)).Value!;
+        Assert.Equal(30m, d.SalePrice);
+        Assert.Null(d.PurchasePrice);
+        var list = (await e.Svc.ListProductsAsync(noCosts, new ProductListQuery(null, null, null, null, null, null, null), default)).Value!.Items.Single();
+        Assert.Equal(30m, list.SalePrice);
+        Assert.Null(list.PurchasePrice);
     }
 
     [Fact]

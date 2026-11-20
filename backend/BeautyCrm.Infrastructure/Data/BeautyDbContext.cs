@@ -730,6 +730,7 @@ public class BeautyDbContext : DbContext
                 t.HasCheckConstraint("ck_beauty_products_name", "char_length(btrim(name)) BETWEEN 1 AND 200");
                 t.HasCheckConstraint("ck_beauty_products_barcode", "barcode IS NULL OR barcode ~ '^[0-9A-Za-z._-]{1,64}$'");
                 t.HasCheckConstraint("ck_beauty_products_purchase_price", string.Format(Money, "purchase_price"));
+                t.HasCheckConstraint("ck_beauty_products_sale_price", "sale_price IS NULL OR sale_price BETWEEN 0 AND 1000000");
                 t.HasCheckConstraint("ck_beauty_products_min_stock", "min_stock IS NULL OR min_stock >= 0");
             });
             b.Property(x => x.Name).HasMaxLength(200);
@@ -738,6 +739,7 @@ public class BeautyDbContext : DbContext
             b.Property(x => x.Barcode).HasMaxLength(64);
             Enum(b.Property(x => x.Purpose)).HasMaxLength(16);
             b.Property(x => x.PurchasePrice).HasPrecision(12, 2);
+            b.Property(x => x.SalePrice).HasPrecision(12, 2);
             b.Property(x => x.MinStock).HasPrecision(14, 3);
             b.Property(x => x.TrackExpiry).HasDefaultValue(false);
             b.Property(x => x.IsActive).HasDefaultValue(true);

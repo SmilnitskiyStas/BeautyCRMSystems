@@ -24,6 +24,8 @@ public class Product : TenantEntity
     public ProductPurpose Purpose { get; set; }
     public Guid? SupplierId { get; set; }
     public decimal? PurchasePrice { get; set; }
+    /// <summary>Роздрібна ціна (мережева, одна на tenant); NULL для salon_use і для старих продажних товарів.</summary>
+    public decimal? SalePrice { get; set; }
     public decimal? MinStock { get; set; }
     public bool TrackExpiry { get; set; }
     public bool IsActive { get; set; } = true;

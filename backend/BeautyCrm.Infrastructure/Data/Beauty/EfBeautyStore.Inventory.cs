@@ -36,7 +36,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
     private static ProductDto ToDto(Product p, IReadOnlyDictionary<Guid, string> suppliers, bool hasMovements) =>
         new(p.Id, p.Name, p.Category, EnumText<ProductUnit>.ToDb(p.Unit), p.Barcode, EnumText<ProductPurpose>.ToDb(p.Purpose),
             p.SupplierId is { } s && suppliers.TryGetValue(s, out var sn) ? new InventoryNamedRef(s, sn) : null,
-            p.PurchasePrice, p.MinStock, p.TrackExpiry, p.IsActive, p.Note, hasMovements, p.CreatedAt, p.UpdatedAt);
+            p.PurchasePrice, p.SalePrice, p.MinStock, p.TrackExpiry, p.IsActive, p.Note, hasMovements, p.CreatedAt, p.UpdatedAt);
 
     private async Task<Dictionary<Guid, string>> SupplierNamesAsync(CancellationToken ct) =>
         await db.Suppliers.AsNoTracking().ToDictionaryAsync(s => s.Id, s => s.Name, ct);
@@ -85,7 +85,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
         var settings = await db.ProductLocationSettings.AsNoTracking().Where(s => s.ProductId == id).OrderBy(s => s.LocationId)
             .Select(s => new LocationSettingDto(s.LocationId, s.MinStock, s.IsEnabled, s.UpdatedAt)).ToListAsync(ct);
         var d = ToDto(p, suppliers, moved);
-        return new ProductDetailDto(d.Id, d.Name, d.Category, d.Unit, d.Barcode, d.Purpose, d.Supplier, d.PurchasePrice, d.MinStock, d.TrackExpiry,
+        return new ProductDetailDto(d.Id, d.Name, d.Category, d.Unit, d.Barcode, d.Purpose, d.Supplier, d.PurchasePrice, d.SalePrice, d.MinStock, d.TrackExpiry,
             d.IsActive, d.Note, d.HasMovements, d.CreatedAt, d.UpdatedAt, settings);
     }
 
@@ -105,7 +105,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
     private static void Apply(Product p, ProductData d)
     {
         p.Name = d.Name; p.Category = d.Category; p.Unit = EnumText<ProductUnit>.FromDb(d.Unit); p.Barcode = d.Barcode;
-        p.Purpose = EnumText<ProductPurpose>.FromDb(d.Purpose); p.SupplierId = d.SupplierId; p.PurchasePrice = d.PurchasePrice;
+        p.Purpose = EnumText<ProductPurpose>.FromDb(d.Purpose); p.SupplierId = d.SupplierId; p.PurchasePrice = d.PurchasePrice; p.SalePrice = d.SalePrice;
         p.MinStock = d.MinStock; p.TrackExpiry = d.TrackExpiry; p.IsActive = d.IsActive; p.Note = d.Note;
     }
 

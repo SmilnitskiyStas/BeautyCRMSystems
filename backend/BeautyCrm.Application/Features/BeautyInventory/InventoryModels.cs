@@ -16,6 +16,7 @@ public sealed record ProductRef(Guid Id, string Name, string Unit, string Purpos
 public record ProductDto(
     Guid Id, string Name, string? Category, string Unit, string? Barcode, string Purpose, InventoryNamedRef? Supplier,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? PurchasePrice,
+    decimal? SalePrice,
     decimal? MinStock, bool TrackExpiry, bool IsActive, string? Note, bool HasMovements,
     DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
 
@@ -24,9 +25,10 @@ public sealed record LocationSettingDto(Guid LocationId, decimal? MinStock, bool
 public sealed record ProductDetailDto(
     Guid Id, string Name, string? Category, string Unit, string? Barcode, string Purpose, InventoryNamedRef? Supplier,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? PurchasePrice,
+    decimal? SalePrice,
     decimal? MinStock, bool TrackExpiry, bool IsActive, string? Note, bool HasMovements,
     DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, IReadOnlyList<LocationSettingDto> LocationSettings)
-    : ProductDto(Id, Name, Category, Unit, Barcode, Purpose, Supplier, PurchasePrice, MinStock, TrackExpiry, IsActive, Note, HasMovements, CreatedAt, UpdatedAt);
+    : ProductDto(Id, Name, Category, Unit, Barcode, Purpose, Supplier, PurchasePrice, SalePrice, MinStock, TrackExpiry, IsActive, Note, HasMovements, CreatedAt, UpdatedAt);
 
 public sealed record SupplierDto(Guid Id, string Name, string? ContactName, string? Phone, string? Email, string? Note, bool IsActive, int ProductCount);
 
@@ -99,7 +101,7 @@ public sealed record OperationResult(OperationDto Operation, bool Replayed);
 // ---------- запити (§32.6) ----------
 
 public sealed record ProductRequest(string? Name, string? Category, string? Unit, string? Barcode, string? Purpose, Guid? SupplierId,
-    decimal? PurchasePrice, decimal? MinStock, bool? TrackExpiry, bool? IsActive, string? Note);
+    decimal? PurchasePrice, decimal? SalePrice, decimal? MinStock, bool? TrackExpiry, bool? IsActive, string? Note);
 
 public sealed record SupplierRequest(string? Name, string? ContactName, string? Phone, string? Email, string? Note, bool? IsActive);
 

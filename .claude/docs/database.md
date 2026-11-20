@@ -998,3 +998,7 @@ pg_dump -U postgres beautycrm --blobs --roles > beautycrm.sql
 psql -U postgres < beautycrm.sql
 # Recreate roles: CREATE ROLE beautycrm_app NOSUPERUSER NOBYPASSRLS; GRANT ...
 ```
+
+### Склад: роздрібна ціна (ADR-025, контракт §32.26)
+
+- `beauty_products.sale_price numeric(12,2) NULL` + CHECK `ck_beauty_products_sale_price` (`IS NULL OR BETWEEN 0 AND 1000000`). NULL для `salon_use` і старих продажних товарів. Міграція `20261120084056_beauty_inventory_sale_price`: ADD COLUMN NULL без перезапису; Down = DROP COLUMN (ціни втрачаються). GRANT-и без змін (табличні покривають колонку; воркер читає колонково без `sale_price`).
