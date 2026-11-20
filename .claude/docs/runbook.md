@@ -200,6 +200,19 @@ docker exec beautycrm psql -U postgres -d beautycrm \
 
 ---
 
+### 2e. Замовлення товарів клієнтами, етап 3a (ADR-026, контракт §33)
+
+- **Міграція:** `20261120122321_beauty_product_orders` (від `beautycrm_owner`, Up). Після Up перевірити наявність `beauty_product_orders`, `beauty_product_order_lines`, колонки `beauty_payments.product_order_id` і значення `sale_return` у CHECK `beauty_stock_movements`/`beauty_stock_operations`. GRANT/REVOKE — синхронно в `scripts/dev/setup-db.ps1` і `deploy/staging/db/grants.sql` (воркер: колонкові права лише на `status`, `closed_at`, `close_reason`, `updated_at`). `Down` відмовляє, якщо є замовлення, платежі з `product_order_id` або рухи/операції `sale|sale_return`. Відкат схеми — лише на порожніх таблицях або з бекапом і рішенням людини.
+- **Вмикання функції (fail closed):** функція працює, лише коли одночасно: tenant `active` з модулем `beauty_booking`, модуль `beauty_inventory` увімкнено для tenant (`PATCH` tenant `{modules}`), і backend `ProductOrders:Enabled=true` (`ProductOrders__Enabled` у env). Лише литерал `true` без урахування регістру вмикає; порожнє, `1`, `on` або відсутнє значення — вимкнено. Вимкнено → публічні маршрути відповідають `404 product_orders_disabled`; `GET` замовлення за токеном і CRM-маршрути (видача, скасування, reconcile) від прапора не залежать.
+- **Воркер:** `WORKER_PRODUCT_ORDERS_ENABLED` (лише `true`, за замовчуванням вимкнено; у `deploy/staging/.env.worker.example` — `false`) + модуль `beauty_inventory` для tenant з `WORKER_TENANT_IDS`. Задача `beauty.product-orders-expire` раз на хвилину закриває прострочені неоплачені замовлення (`pending_payment` → `expired`). Лог: `product_orders_expire tenant=… expired=n stuck=n` (Warning при `stuck > 0`). Вимкнений воркер не порушує коректність: ефективний статус і резерв рахуються за часом; лише в БД лишаються `pending_payment`.
+- **Прод-запобіжник:** при старті backend у середовищі `Production` або невизначеному з `ProductOrders:Enabled=true` і зареєстрованим `MockPaymentService` старт завершується помилкою. У `Development` і `Staging` mock дозволено (dev/staging працюють з mock-оплатою).
+- **Блокери прод-вмикання (не знімаються прапором):** (1) реальний `IPaymentService`-провайдер (A3, окремий ADR; до того mock — єдина реалізація); (2) ПРРО (L1) і ПДВ (L2, ADR-025 §7.2); (3) юридичний текст оферти й повернення в застосунку (P3); (4) gate 5 (ADR-026 §7 п.5). Поки вони відкриті — у проді `ProductOrders:Enabled` **не** вмикати.
+- **Gates для staging:** міграція на staging (gate 3), увімкнення `ProductOrders:Enabled=true` для конкретних tenant на staging з mock (gate 4), `WORKER_PRODUCT_ORDERS_ENABLED=true` на staging — після першого ручного сценарію (`.13` → `402`, TTL, видача, повернення).
+- **Оплата «в процесі» і reconcile:** якщо оплата зависла понад `ProductOrders:PaymentStaleSeconds` (за замовч. 120 с), повтор `POST …/pay` від клієнта або дія CRM «Перевірити оплату» (`POST /api/beauty/inventory/product-orders/{id}/reconcile-payment`) доводить замовлення до `paid` або `refunded`. Відповіді reconcile — див. контракт §33.13 (v0.41 п. 5). Воркер лише логує зависі > 30 хв (`stuck`); фонового reconcile в backend немає.
+- **Відкат:** вимкнути `ProductOrders:Enabled` (і за потреби `WORKER_PRODUCT_ORDERS_ENABLED`). Публічний продаж зупиняється; оплачені замовлення видаються або повертаються з CRM, бо CRM від прапора не залежить. Код не відкочувати разом зі схемою.
+
+---
+
 ## 3. Секрети й змінні середовища
 Згенеруйте (`openssl rand`): `Auth__JwtSigningKey` (`-base64 48`), `Auth__PlatformKey` (`-base64 36`), `Channels__EncryptionKey` (`-base64 32`, base64 від 32 байт; при заміні ключа вже збережені секрети каналів перестануть розшифровуватись). Файл `.env` у `.gitignore`, комітити заборонено. Повний перелік змінних і коментарі: `.env.example`.
 
@@ -217,6 +230,8 @@ docker exec beautycrm psql -U postgres -d beautycrm \
 | `PublicBooking:MinAppVersion:Ios` / `:Android` | мінімальна версія мобільного застосунку (нижче — 426 `upgrade_required`), формат `1.2.3` |
 | `PublicBooking:Protection:Web` / `:Ios` / `:Android` | `none` / `monitor` / `enforce` (за замовч. `none`) |
 | `PublicBooking:RateLimit:NearbyPermit` / `SearchPermit` | ліміти `public-nearby` (10) і `public-search` (20) на хвилину на IP |
+| `ProductOrders:Enabled` (`ProductOrders__Enabled`) | замовлення товарів (ADR-026): лише `true` (без регістру) вмикає; за замовч. вимкнено; у `Production`/невизначеному середовищі з mock-оплатою — помилка старту (§2e) |
+| `WORKER_PRODUCT_ORDERS_ENABLED` | worker: закриття прострочених неоплачених замовлень (`beauty.product-orders-expire`); лише `true`, за замовч. `false` (§2e) |
 | `EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_WEB_DOMAIN` | мобільний застосунок, на етапі збірки (`mobile/README.md`) |
 | `WORKER_DATABASE_URL`, `WORKER_TENANT_IDS`, `WORKER_MARKETING_DAILY_LIMIT` | worker |
 | `NEXT_PUBLIC_API_URL`, `API_URL`, `NEXT_PUBLIC_TENANT_SLUG` | frontend (читаються під час **build**) |
