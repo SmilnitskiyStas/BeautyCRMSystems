@@ -75,6 +75,8 @@ public class BeautyDbContext : DbContext
     public DbSet<Product> Products => Set<Product>();
     public DbSet<ProductLocationSetting> ProductLocationSettings => Set<ProductLocationSetting>();
     public DbSet<StockLevel> StockLevels => Set<StockLevel>();
+    public DbSet<ProductOrder> ProductOrders => Set<ProductOrder>();
+    public DbSet<ProductOrderLine> ProductOrderLines => Set<ProductOrderLine>();
     public DbSet<StockOperation> StockOperations => Set<StockOperation>();
     public DbSet<StockBatch> StockBatches => Set<StockBatch>();
     public DbSet<StockMovement> StockMovements => Set<StockMovement>();
@@ -599,6 +601,7 @@ public class BeautyDbContext : DbContext
                 Check<PaymentMethod>(t, "beauty_payments", "method");
                 Check<PaymentStatus>(t, "beauty_payments", "status");
                 t.HasCheckConstraint("ck_beauty_payments_amount_positive", "amount > 0");
+                t.HasCheckConstraint("ck_beauty_payments_subject", "num_nonnulls(appointment_id, product_order_id) = 1");
             });
             Enum(b.Property(x => x.Method));
             Enum(b.Property(x => x.Status)).HasDefaultValue(PaymentStatus.Pending);
@@ -607,6 +610,10 @@ public class BeautyDbContext : DbContext
             b.Property(x => x.ProviderPaymentId).HasMaxLength(256);
             TenantFk(b, x => x.Appointment, x => new { x.TenantId, x.AppointmentId }, DeleteBehavior.Restrict);
             b.HasIndex(x => new { x.TenantId, x.Provider, x.ProviderPaymentId }).HasFilter("provider_payment_id IS NOT NULL");
+            // ADR-026: платіж замовлення товарів (кілька рядків на замовлення - спроби); композитний FK без навігації
+            FkTo<Payment, ProductOrder>(b, "ProductOrderId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.ProductOrderId }).HasDatabaseName("ix_beauty_payments_product_order")
+                .HasFilter("product_order_id IS NOT NULL");
         });
 
         mb.Entity<CancellationSettingsRow>(b =>
@@ -817,6 +824,8 @@ public class BeautyDbContext : DbContext
                     "(idempotency_key_hash IS NULL) = (idempotency_request_hash IS NULL)");
                 t.HasCheckConstraint("ck_beauty_stock_operations_appointment",
                     "(kind = 'service_consumption') = (appointment_id IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_stock_operations_product_order",
+                    "(kind IN ('sale', 'sale_return')) = (product_order_id IS NOT NULL)");
             });
             Enum(b.Property(x => x.Kind)).HasMaxLength(24);
             b.Property(x => x.Reason).HasConversion(new EnumMemberConverter<WriteOffReason>()).HasMaxLength(16);
@@ -832,6 +841,9 @@ public class BeautyDbContext : DbContext
             FkTo<StockOperation, Stocktake>(b, "StocktakeId", DeleteBehavior.Restrict);
             FkTo<StockOperation, User>(b, "CreatedByUserId", DeleteBehavior.Restrict);
             FkTo<StockOperation, Appointment>(b, "AppointmentId", DeleteBehavior.Restrict);
+            FkTo<StockOperation, ProductOrder>(b, "ProductOrderId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.ProductOrderId, x.Kind }).IsUnique().HasDatabaseName("ux_beauty_stock_operations_product_order")
+                .HasFilter("product_order_id IS NOT NULL");
             b.HasIndex(x => new { x.TenantId, x.AppointmentId }).IsUnique().HasDatabaseName("ux_beauty_stock_operations_appointment")
                 .HasFilter("appointment_id IS NOT NULL");
             b.HasIndex(x => new { x.TenantId, x.StocktakeId }).IsUnique().HasDatabaseName("ux_beauty_stock_operations_stocktake")
@@ -888,6 +900,7 @@ public class BeautyDbContext : DbContext
                 t.HasCheckConstraint("ck_beauty_stock_movements_quantity_sign",
                     "(type IN ('receipt', 'transfer_in') AND quantity > 0) " +
                     "OR (type IN ('write_off', 'transfer_out', 'service_consumption', 'sale') AND quantity < 0) " +
+                    "OR (type = 'sale_return' AND quantity > 0) " +
                     "OR (type = 'stocktake_adjust' AND quantity <> 0)");
             });
             Enum(b.Property(x => x.Type)).HasMaxLength(24);
@@ -984,6 +997,100 @@ public class BeautyDbContext : DbContext
             FkTo<ServiceMaterial, Product>(b, "ProductId", DeleteBehavior.Restrict);
             b.HasIndex(x => new { x.TenantId, x.SetId, x.ProductId }).IsUnique().HasDatabaseName("ux_beauty_service_materials_pair");
             b.HasIndex(x => new { x.TenantId, x.ProductId });
+        });
+
+        // ---- Замовлення товарів (ADR-026, §33.15, TASK-901; RLS FORCE і ручні частини - в міграції beauty_product_orders) ----
+        mb.Entity<ProductOrder>(b =>
+        {
+            Base(b, "beauty_product_orders", t =>
+            {
+                Check<ProductOrderStatus>(t, "beauty_product_orders", "status");
+                Check<ProductOrderSource>(t, "beauty_product_orders", "source");
+                Check<ProductOrderCloseReason>(t, "beauty_product_orders", "close_reason");
+                t.HasCheckConstraint("ck_beauty_product_orders_number", "order_number > 0");
+                t.HasCheckConstraint("ck_beauty_product_orders_guest_name", "char_length(btrim(guest_name)) BETWEEN 2 AND 100");
+                t.HasCheckConstraint("ck_beauty_product_orders_guest_phone", @"guest_phone ~ '^\+[1-9][0-9]{7,14}$'");
+                t.HasCheckConstraint("ck_beauty_product_orders_total", "total_amount > 0 AND total_amount <= 1000000");
+                t.HasCheckConstraint("ck_beauty_product_orders_currency", "currency = 'UAH'");
+                t.HasCheckConstraint("ck_beauty_product_orders_payment_attempts", "payment_attempts BETWEEN 0 AND 10");
+                t.HasCheckConstraint("ck_beauty_product_orders_closed",
+                    "(status IN ('cancelled', 'expired', 'refunded')) = (closed_at IS NOT NULL AND close_reason IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_product_orders_expired", "(status = 'expired') = (close_reason IS NOT DISTINCT FROM 'expired')");
+                t.HasCheckConstraint("ck_beauty_product_orders_cancelled", "status <> 'cancelled' OR close_reason IN ('client', 'staff')");
+                t.HasCheckConstraint("ck_beauty_product_orders_refunded",
+                    "status <> 'refunded' OR (close_reason IN ('staff', 'stock_unavailable') AND payment_id IS NOT NULL AND refund_amount = total_amount)");
+                t.HasCheckConstraint("ck_beauty_product_orders_refund_amount", "refund_amount IS NULL OR status = 'refunded'");
+                t.HasCheckConstraint("ck_beauty_product_orders_paid",
+                    "status NOT IN ('paid', 'fulfilled') OR (paid_at IS NOT NULL AND payment_id IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_product_orders_fulfilled",
+                    "(status = 'fulfilled') = (fulfilled_at IS NOT NULL AND fulfilled_by_user_id IS NOT NULL)");
+                t.HasCheckConstraint("ck_beauty_product_orders_payment_started", "payment_started_at IS NULL OR status = 'pending_payment'");
+                t.HasCheckConstraint("ck_beauty_product_orders_refund_started", "refund_started_at IS NULL OR status = 'paid'");
+            });
+            Enum(b.Property(x => x.Status)).HasMaxLength(16).HasDefaultValue(ProductOrderStatus.PendingPayment);
+            Enum(b.Property(x => x.Source)).HasMaxLength(8);
+            b.Property(x => x.CloseReason).HasConversion(new EnumMemberConverter<ProductOrderCloseReason>()).HasMaxLength(24);
+            b.Property(x => x.PublicTokenHash).HasMaxLength(64);
+            b.Property(x => x.IdempotencyKeyHash).HasMaxLength(64);
+            b.Property(x => x.IdempotencyRequestHash).HasMaxLength(64);
+            b.Property(x => x.GuestName).HasMaxLength(100);
+            b.Property(x => x.GuestPhone).HasMaxLength(16);
+            b.Property(x => x.TotalAmount).HasPrecision(12, 2);
+            b.Property(x => x.RefundAmount).HasPrecision(12, 2);
+            b.Property(x => x.Currency).HasMaxLength(3).IsFixedLength().HasDefaultValue("UAH");
+            b.Property(x => x.PaymentAttempts).HasDefaultValue((short)0);
+            b.Property(x => x.CancelNote).HasMaxLength(300);
+            FkTo<ProductOrder, Location>(b, "LocationId", DeleteBehavior.Restrict);
+            FkTo<ProductOrder, Client>(b, "ClientId", DeleteBehavior.Restrict);
+            FkTo<ProductOrder, Payment>(b, "PaymentId", DeleteBehavior.Restrict);
+            FkTo<ProductOrder, User>(b, "FulfilledByUserId", DeleteBehavior.Restrict);
+            FkTo<ProductOrder, User>(b, "CancelledByUserId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.OrderNumber }).IsUnique().HasDatabaseName("ux_beauty_product_orders_number");
+            b.HasIndex(x => new { x.TenantId, x.PublicTokenHash }).IsUnique().HasDatabaseName("ux_beauty_product_orders_token");
+            b.HasIndex(x => new { x.TenantId, x.IdempotencyKeyHash }).IsUnique().HasDatabaseName("ux_beauty_product_orders_idempotency");
+            b.HasIndex(x => new { x.TenantId, x.CreatedAt, x.Id }).IsDescending(false, true, true)
+                .HasDatabaseName("ix_beauty_product_orders_created");
+            b.HasIndex(x => new { x.TenantId, x.LocationId, x.CreatedAt, x.Id }).IsDescending(false, false, true, true)
+                .HasDatabaseName("ix_beauty_product_orders_location_created");
+            b.HasIndex(x => new { x.TenantId, x.LocationId }).HasDatabaseName("ix_beauty_product_orders_pending")
+                .HasFilter("status = 'pending_payment'");
+            b.HasIndex(x => new { x.TenantId, x.ReservationExpiresAt }).HasDatabaseName("ix_beauty_product_orders_expiry")
+                .HasFilter("status = 'pending_payment'");
+            // (tenant, location, created_at): EF зливає індекси з однаковим набором властивостей, тому суфікс created_at відрізняє його від ix_..._pending
+            b.HasIndex(x => new { x.TenantId, x.LocationId, x.CreatedAt }).HasDatabaseName("ix_beauty_product_orders_paid")
+                .HasFilter("status = 'paid'");
+            b.HasIndex(x => new { x.TenantId, x.GuestPhone, x.CreatedAt }).IsDescending(false, false, true)
+                .HasDatabaseName("ix_beauty_product_orders_phone_created");
+            b.HasIndex(x => new { x.TenantId, x.ClientId }).HasDatabaseName("ix_beauty_product_orders_client")
+                .HasFilter("client_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.PaymentId }).HasDatabaseName("ix_beauty_product_orders_payment")
+                .HasFilter("payment_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.FulfilledByUserId }).HasDatabaseName("ix_beauty_product_orders_fulfilled_by")
+                .HasFilter("fulfilled_by_user_id IS NOT NULL");
+            b.HasIndex(x => new { x.TenantId, x.CancelledByUserId }).HasDatabaseName("ix_beauty_product_orders_cancelled_by")
+                .HasFilter("cancelled_by_user_id IS NOT NULL");
+        });
+
+        mb.Entity<ProductOrderLine>(b =>
+        {
+            KeyOnly(b, "beauty_product_order_lines", t =>
+            {
+                Check<ProductUnit>(t, "beauty_product_order_lines", "unit");
+                t.HasCheckConstraint("ck_beauty_product_order_lines_line_no", "line_no BETWEEN 1 AND 20");
+                t.HasCheckConstraint("ck_beauty_product_order_lines_quantity", "quantity BETWEEN 1 AND 10");
+                t.HasCheckConstraint("ck_beauty_product_order_lines_unit_price", "unit_price > 0 AND unit_price <= 1000000");
+                t.HasCheckConstraint("ck_beauty_product_order_lines_line_total", "line_total = unit_price * quantity");
+            });
+            Enum(b.Property(x => x.Unit)).HasMaxLength(8);
+            b.Property(x => x.ProductName).HasMaxLength(200);
+            b.Property(x => x.UnitPrice).HasPrecision(12, 2);
+            b.Property(x => x.LineTotal).HasPrecision(12, 2);
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            FkTo<ProductOrderLine, ProductOrder>(b, "OrderId", DeleteBehavior.Restrict);
+            FkTo<ProductOrderLine, Product>(b, "ProductId", DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.OrderId, x.ProductId }).IsUnique().HasDatabaseName("ux_beauty_product_order_lines_product");
+            b.HasIndex(x => new { x.TenantId, x.OrderId, x.LineNo }).IsUnique().HasDatabaseName("ux_beauty_product_order_lines_line_no");
+            b.HasIndex(x => new { x.TenantId, x.ProductId }).HasDatabaseName("ix_beauty_product_order_lines_product");
         });
 
         mb.Entity<StaffAlert>(b =>

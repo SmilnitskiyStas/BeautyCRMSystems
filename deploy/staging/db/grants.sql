@@ -59,6 +59,12 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON beauty_staff_notifications TO beautycrm_
 GRANT SELECT, INSERT ON beauty_staff_notification_alerts TO beautycrm_worker;
 GRANT SELECT (is_active, state) ON users TO beautycrm_worker;
 GRANT SELECT (name, unit) ON beauty_products TO beautycrm_worker;
+-- Замовлення товарів (ADR-026, TASK-901): замовлення не видаляються; рядки замовлень append-only для app-ролі
+REVOKE DELETE ON beauty_product_orders FROM beautycrm_app;
+REVOKE UPDATE, DELETE ON beauty_product_order_lines FROM beautycrm_app;
+-- Воркер: лише косметичне закриття прострочених неоплачених (TTL) і підрахунок зависих оплат; без рядків, платежів, клієнтів і складу
+GRANT SELECT (id, tenant_id, status, reservation_expires_at, payment_started_at) ON beauty_product_orders TO beautycrm_worker;
+GRANT UPDATE (status, closed_at, close_reason, updated_at) ON beauty_product_orders TO beautycrm_worker;
 -- Публічний каталог закладів (ADR-022): функції належать beautycrm_catalog, EXECUTE лише для app-ролі, НЕ для PUBLIC і НЕ для воркера
 REVOKE ALL ON FUNCTION public.beauty_public_resolve_location(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.beauty_public_nearby_locations(double precision, double precision, double precision, integer) FROM PUBLIC;

@@ -132,6 +132,8 @@ public enum StockOperationKind
     [EnumMember(Value = "service_consumption")] ServiceConsumption,
     /// <summary>Етап 3 (продаж).</summary>
     [EnumMember(Value = "sale")] Sale,
+    /// <summary>ADR-026 §2.8: повернення оплаченого замовлення адміном (рухи sale_return у ті самі партії).</summary>
+    [EnumMember(Value = "sale_return")] SaleReturn,
 }
 
 public enum WriteOffReason
@@ -153,6 +155,8 @@ public enum StockMovementType
     [EnumMember(Value = "stocktake_adjust")] StocktakeAdjust,
     [EnumMember(Value = "service_consumption")] ServiceConsumption,
     [EnumMember(Value = "sale")] Sale,
+    /// <summary>ADR-026 §2.8: quantity &gt; 0, та сама партія, що в руху sale; дефіцит не погашає.</summary>
+    [EnumMember(Value = "sale_return")] SaleReturn,
 }
 
 public enum StocktakeStatus
@@ -160,4 +164,32 @@ public enum StocktakeStatus
     [EnumMember(Value = "draft")] Draft,
     [EnumMember(Value = "posted")] Posted,
     [EnumMember(Value = "cancelled")] Cancelled,
+}
+
+// ---------- Замовлення товарів клієнтами (ADR-026, контракт §33, TASK-901) ----------
+
+public enum ProductOrderStatus
+{
+    [EnumMember(Value = "pending_payment")] PendingPayment,
+    [EnumMember(Value = "paid")] Paid,
+    [EnumMember(Value = "fulfilled")] Fulfilled,
+    [EnumMember(Value = "cancelled")] Cancelled,
+    [EnumMember(Value = "expired")] Expired,
+    [EnumMember(Value = "refunded")] Refunded,
+}
+
+/// <summary>Мітка клієнта X-Booking-Client (лише метрика).</summary>
+public enum ProductOrderSource
+{
+    [EnumMember(Value = "web")] Web,
+    [EnumMember(Value = "ios")] Ios,
+    [EnumMember(Value = "android")] Android,
+}
+
+public enum ProductOrderCloseReason
+{
+    [EnumMember(Value = "client")] Client,
+    [EnumMember(Value = "staff")] Staff,
+    [EnumMember(Value = "expired")] Expired,
+    [EnumMember(Value = "stock_unavailable")] StockUnavailable,
 }
