@@ -5979,9 +5979,9 @@ DAG: 900 → [gate] → 901 → {902 ∥ 904} → 903 → 906 → 907 → 908; 9
 
 ADR-026 §9 (P1–P7). Дефолти цього контракту: P1 — без очищення ПД; P2 — повернення після видачі поза системою; P3 — блокує prod; P4 — лише бейдж; P5 — покупки не в картці клієнта; P6 — значення §33.3; P7 — потрібен `beauty_booking`. Зміна дефолту — правкою §33 до старту TASK-901/902.
 
-### 33.22 Зображення товарів (ADR-027, v0.42, 2026-11-21, `API-CONTRACT-PRODUCT-ORDERS-V1.1`; статус ADR — `proposed`, human gates G1–G7)
+### 33.22 Зображення товарів (ADR-027, v0.42, 2026-11-21, `API-CONTRACT-PRODUCT-ORDERS-V1.1`; статус ADR — `accepted`, реалізовано в гілці (TASK-911…916); human gates G3–G7 відкриті)
 
-Джерело рішень — **ADR-027** (`.claude/docs/adr/ADR-027-product-images-and-file-storage.md`). Якщо цей розділ розходиться з ADR, діє ADR. Розділ адитивний: наявні поля, коди й маршрути §32/§33 не змінюються.
+Джерело рішень — **ADR-027** (`.claude/docs/adr/ADR-027-product-images-and-file-storage.md`). Якщо цей розділ розходиться з ADR, діє ADR. Фактичні відхилення від реалізації (коди 413/415, семафори, таймаут, grace очищувача 7 днів для страй-варіантів, бюджет пам'яті) записані в ADR-027 §12 і в **§33.22.11**. Розділ адитивний: наявні поля, коди й маршрути §32/§33 не змінюються.
 
 #### 33.22.1 Обсяг і вмикання
 
@@ -6001,12 +6001,14 @@ ADR-026 §9 (P1–P7). Дефолти цього контракту: P1 — бе
 | `Media:MaxConcurrentProcessing` | `1` | 1..4 | паралельні обробки на процес |
 | `Media:UploadsPerUserPerMinute` | `20` | 1..120 | rate limit upload за користувачем |
 | `Media:SweepMode` | `off` | `off` \| `dry-run` \| `delete` | очищувач сиріт (§33.22.7) |
+| `Media:MaxConcurrentUploads` | `3` | 1..16 | глобальний неблокувальний ліміт одночасних upload на процес до читання тіла; перевищення → `503 media_busy` (§33.22.11) |
+| `Media:PublicPermitPerMinute` | `600` | 1..100000 | ліміт `public-media` на IP за хвилину (/64 для IPv6) |
 
-Невалідне значення дає помилку старту. Константи: варіанти `400` і `1600` (довша сторона, без збільшення), WebP lossy q80, мінімальна сторона джерела 200 px, максимальна 10 000 px, rate limit `public-media` 600/хв на IP (/64).
+Невалідне значення дає помилку старту. Старт також перевіряє бюджет пам'яті: `Media:MaxPixels × 8 × Media:MaxConcurrentProcessing ≤ 256 МБ`, інакше помилка старту. Константи: варіанти `400` і `1600` (довша сторона, без збільшення), WebP lossy q80, мінімальна сторона джерела 200 px, максимальна 10 000 px.
 
 #### 33.22.3 Публічний каталог (P1, дельта §33.5)
 
-`PublicProductDto` + `imageUrl: string | null` (= `thumbUrl` першого фото) і `images: PublicProductImageDto[]` (`{url, thumbUrl, width, height}`, порядок `sort_order, created_at, id`, не більше `MaxImagesPerProduct`). Обидва URL абсолютні: `{Media:PublicBaseUrl}/api/public/media/p/{key}-{400|1600}.webp`. Набір товарів, сортування, `truncated`, ліміт 500 і коди P1 не змінюються.
+`PublicProductDto` + `imageUrl: string | null` (= `thumbUrl` першого фото) і `images: PublicProductImageDto[]` (`{url, thumbUrl, width, height}`, порядок `sort_order, created_at, id`, не більше `MaxImagesPerProduct`). Сервер завжди віддає `width` і `height`; мобільний клієнт приймає їх як опціональні (`width?`, `height?`) і відкидає елементи з не-https URL. Обидва URL абсолютні: `{Media:PublicBaseUrl}/api/public/media/p/{key}-{400|1600}.webp`. Набір товарів, сортування, `truncated`, ліміт 500 і коди P1 не змінюються.
 
 **Вимоги до клієнта (мобільний):** поле відсутнє або `null` → «немає фото» (плейсхолдер); у списку показувати `imageUrl`, у деталі — галерею `images[].url`, а `thumbUrl` використовувати для мініатюр. Кешувати на диску без обмеження строку (`immutable`). Додаткових заголовків (`X-Booking-Client`, `X-App-Version`) запит зображення **не потребує**. Помилку `404` на зображенні показувати як плейсхолдер, без повторів. URL не будувати самостійно, брати лише з DTO.
 
@@ -6084,7 +6086,7 @@ EF: `ProductImage : TenantEntity` (`ProductId`, `StorageKey`, `Mime`, `SizeBytes
 #### 33.22.7 Алгоритми (backend)
 
 - **Ключ:** 16 байт `RandomNumberGenerator.GetBytes` → lowercase hex (32 символи). Не `Guid.NewGuid` (не гарантує CSPRNG за специфікацією).
-- **Обробка (`IImageProcessor`, ImageSharp 3.1.x; ліцензія — gate G2):** конфігурація лише з JPEG/PNG/WebP; тип за сигнатурою; `Identify` → перевірка розмірів; `DecoderOptions { MaxFrames = 1 }`; `MemoryAllocator` з `AllocationLimitMegabytes = 256`; `AutoOrient()`; зняття EXIF/XMP/IPTC/ICC; ресайз `ResizeMode.Max` до 1600 і 400 без збільшення; `WebpEncoder { FileFormat = Lossy, Quality = 80, SkipMetadata = true }`; `SemaphoreSlim(MaxConcurrentProcessing)` з очікуванням ≤ 10 с.
+- **Обробка (`IImageProcessor`, ImageSharp 3.1.x; ліцензія — gate G2):** конфігурація лише з JPEG/PNG/WebP; тип за сигнатурою; `Identify` → перевірка розмірів; `DecoderOptions { MaxFrames = 1 }`; `MemoryAllocator` з `AllocationLimitMegabytes = 256` (ліміт однієї алокації) і `MaximumPoolSizeMegabytes = 64`; піксель `Rgba32`; `AutoOrient()`; зняття EXIF/XMP/IPTC/ICC/CICP; ресайз `ResizeMode.Max` до 1600 і 400 без збільшення; `WebpEncoder { FileFormat = Lossy, Quality = 80, SkipMetadata = true }`; `SemaphoreSlim(MaxConcurrentProcessing)` з очікуванням ≤ 10 с (`503 media_busy`); таймаут обробки 20 с (`422 image_decode_failed`, §33.22.11).
 - **Upload — «файл, потім транзакція»:** маркер `{root}/t/{tenantId}/{key}` → варіанти `*.webp.tmp` (`CreateNew`, `Flush(true)`) → `File.Move(tmp, final, overwrite: false)` → транзакція: `SELECT … FROM beauty_products WHERE id = $1 FOR NO KEY UPDATE` → `count(product) < MaxImagesPerProduct` і `count(tenant) < MaxImagesPerTenant` → `sort_order = COALESCE(max, -1) + 1` → `INSERT` → commit. Збій після запису: варіанти й маркер видаляються (best effort). Рядок ніколи не з'являється раніше за файли.
 - **Delete:** транзакція `FOR NO KEY UPDATE` товару → `DELETE … WHERE id = $imageId AND product_id = $id` → commit → **потім** видалення варіантів і маркера (best effort; збій → Warning, залишки прибирає очищувач).
 - **Reorder:** транзакція `FOR NO KEY UPDATE` товару → поточний набір id → перевірка перестановки → один `UPDATE … SET sort_order = v.ord FROM (VALUES …) v` (deferrable UNIQUE перевіряється при commit).
@@ -6093,8 +6095,8 @@ EF: `ProductImage : TenantEntity` (`ProductId`, `StorageKey`, `Mime`, `SizeBytes
 - **Очищувач `MediaOrphanSweeper`** (`BackgroundService` в API; кожні 6 год, перший запуск через 10 хв після старту; `pg_try_advisory_lock` простору `media_sweep`; працює лише за `SweepMode ≠ off`):
   1. tenant-и — валідні uuid серед імен тек `{root}/t/*`;
   2. на tenant: tenant-контекст як у запиті (`app.tenant_id`) → tenant невидимий (`SELECT EXISTS … tenants WHERE id = <tenant>` → `false`) → **пропуск** (Warning). Реалізатор має перевірити, що app-роль бачить свій рядок `tenants` у цьому контексті; якщо ні — використати наявний механізм перевірки статусу tenant-а → `SELECT storage_key FROM beauty_product_images` → `live`;
-  3. кандидати: маркери з `mtime < now − 24 год` і ключем `∉ live`; `*.tmp` старші за 1 год; файли `p/**` з валідним ім'ям, але без маркера в жодному tenant-і, старші за 24 год; файли з невалідними іменами не видаляються (Warning);
-  4. запобіжники: помилка БД або ФС → tenant пропускається; кандидатів > 50% маркерів tenant-а (за > 20 маркерів) або > 500 за запуск → **нічого не видаляється** (Error `media_sweep_aborted`); `dry-run` лише логує кількості;
+  3. кандидати: маркери з `mtime < now − 24 год` і ключем `∉ live`; `*.tmp` старші за 1 год; файли `p/**` з валідним ім'ям, але без маркера в жодному tenant-і, старші за **7 днів** (`StrayGrace`, було 24 год; §33.22.11); файли з невалідними іменами не видаляються (Warning);
+  4. запобіжники: помилка БД або ФС → tenant пропускається; кандидатів > 50% маркерів tenant-а (за > 20 маркерів) або > 500 за запуск → **нічого не видаляється** (Error `media_sweep_aborted`); для страй-варіантів додатково: відсутня `t/`, жодного маркера при наявних варіантах, або страй > 50% валідних (за > 20) → `media_sweep_aborted` без видалення страй; `dry-run` лише логує кількості;
   5. видалення: варіанти → маркер; лог `media_sweep tenant={id} mode={m} markers={n} candidates={n} deleted={n}`; `live ∖ маркери ≠ ∅` → Warning `media_missing_files tenant={id} count={n}`.
   Час — `TimeProvider` (тести — `FakeTimeProvider`, `mtime` задається явно).
 
@@ -6118,3 +6120,19 @@ EF: `ProductImage : TenantEntity` (`ProductId`, `StorageKey`, `Mime`, `SizeBytes
 #### 33.22.10 Задачі й відкриті питання
 
 Задачі TASK-910…917 і DAG — ADR-027 §10. Human gates — ADR-027 §6 (G1 схема, G2 ліцензія ImageSharp, G3 міграція, G4 інфраструктура, G5 бекап, G6 `SweepMode=delete`, G7 мердж). Відкриті питання — ADR-027 §7 (Q1 basic auth для `/api/public/media/` на staging, Q2 ліміти, Q3 фото в рядках замовлення, Q4 фото майстрів, Q5 розміри/якість). Дефолти діють до відповіді людини.
+
+#### 33.22.11 Фактичні відхилення реалізації (уточнення, без зміни API)
+
+Клієнти не змінюються: HTTP-коди, поля й маршрути §33.22.3–§33.22.5 збігаються з кодом. Це деталі поведінки, які впливають на тлумачення помилок і налаштування.
+
+1. **413 і 415** — через `ErrorKind.PayloadTooLarge` / `UnsupportedMediaType` (`ResultMapping`). Тіло `413` від nginx може бути HTML; клієнт обробляє за статусом.
+2. **Вхідний семафор upload** — `Media:MaxConcurrentUploads` (3, 1..16). Перевіряється **до** читання тіла. Відмова → `503 media_busy` + `Retry-After: 5`. Далі файл буферизується в пам'ять з лімітом `MaxUploadBytes` (до 3 одночасних буферів за замовчуванням).
+3. **Черга обробки** — `Media:MaxConcurrentProcessing`, очікування 10 с → `503 media_busy` + `Retry-After: 5`.
+4. **Таймаут обробки 20 с** — `422 image_decode_failed` (не 503). Рядок і файли не створюються.
+5. **Пам'ять** — `AllocationLimitMegabytes = 256` це ліміт однієї алокації; пул 64 МБ; піксель `Rgba32`; JPEG `TargetSize` не застосовується (декодування на повний розмір). Старт перевіряє `MaxPixels × 8 × MaxConcurrentProcessing ≤ 256 МБ`. Сирий буфер тіла в цей бюджет не входить.
+6. **Очищувач** — grace страй-варіантів (файли без маркера) **7 днів**, а не 24 год; маркери — 24 год. Додаткові запобіжники: відсутня або порожня `t/` при наявних варіантах; страй > 50%. Лог `media_sweep_aborted reason=markers_root_missing | no_markers | stray_ratio | run_limit | tenant_ratio`.
+7. **`PublicPermitPerMinute`** — налаштовується (`Media:PublicPermitPerMinute`, 600 за замовчуванням).
+8. **Після commit** — `CancellationToken.None`: скасування запиту не залишає файли живого рядка без відповіді.
+9. **Mobile** — `width`/`height` опціональні на клієнті; URL мають бути `https`; невалідний елемент відкидається.
+
+Повний перелік і причини — ADR-027 §12.

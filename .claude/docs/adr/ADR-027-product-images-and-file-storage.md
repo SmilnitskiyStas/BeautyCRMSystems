@@ -1,7 +1,7 @@
 # ADR-027: Зображення товарів і зберігання файлів (диск сервера, публічна роздача за випадковим ключем)
 
 **Date:** 2026-11-21
-**Status:** accepted (G1 схема+ADR і G2 ліцензія ImageSharp затверджені людиною 2026-11-21; G3–G7 — міграція на сервері, інфраструктура, бекап, sweep=delete, merge — ще за людиною)
+**Status:** accepted; **реалізовано в гілці** (TASK-911…916, стан на 2026-11-21, §12). G1 схема+ADR і G2 ліцензія ImageSharp затверджені людиною 2026-11-21. G3–G7 (міграція на сервері, інфраструктура, бекап, sweep=delete, merge) ще за людиною. Фактичні відхилення від тексту §2 записані в §12; сам текст §2–§9 лишено як рішення.
 **Author:** project-architect
 **Deciders:** продуктові рішення (1)–(5) §1.2 ухвалив користувач 2026-11-21. Рішення архітектора позначено «[А]», вони чекають затвердження.
 **Уточнює (після `accepted`):** ADR-026 / контракт §33.5 (у `PublicProductDto` адитивно додаються nullable-поля, контракт стає `API-CONTRACT-PRODUCT-ORDERS-V1.1`), ADR-025 / §32.6 (адитивні поля `ProductDto`/`ProductDetailDto`), ADR-016 (новий docker volume, точка монтування в `api`, правило nginx для тіла upload, бекап тому).
@@ -337,3 +337,51 @@ DAG: 910 → [G1, G2] → 911 → 912 → {914, 915} → 916 → 917; 913 — mo
 - `deploy/staging/docker-compose.staging.yml`, `deploy/staging/README.md` §5 (бекап), §6.3 (nginx), `deploy/staging/db/grants.sql`, `scripts/dev/setup-db.ps1`
 - `worker/src/db/tenants.ts` (статичний список tenant-ів, причина відмови від очищувача у воркері)
 - ADR-002, ADR-016 (Q5), ADR-022, ADR-023, ADR-025, ADR-026; контракт §29, §32.6, §33.5
+
+---
+
+## 12. Статус реалізації і фактичні відхилення (оновлено 2026-11-21)
+
+Код у гілці є фактичним станом. Рішення §1–§9 не переписано; відхилення нижче зафіксовано тут. Зміна, яка змінює семантику (наприклад, grace очищувача), має стати окремим ADR, якщо команда так вирішить. Зараз вона записана як уточнення в межах ADR-027 після security-рев'ю.
+
+### 12.1 Статус задач
+
+| Задача | Стан |
+|---|---|
+| TASK-910 ADR-027 і §33.22 | виконано (цей документ; §33.22 оновлено) |
+| G1 схема, G2 ліцензія ImageSharp | затверджено людиною 2026-11-21 |
+| TASK-911 міграція `20261121110933_beauty_product_images` | реалізовано: таблиця, RLS FORCE, CHECK, глобальний UNIQUE ключа, deferrable UNIQUE порядку, GRANT синхронно в `scripts/dev/setup-db.ps1` і `deploy/staging/db/grants.sql`, `worker/src/testing/schema.sql` перегенеровано |
+| TASK-912 backend | реалізовано: `IImageProcessor` (ImageSharp 3.1.x), `IProductImageStorage` (файлова реалізація), `MediaOptions` з валідацією старту, CRM-маршрути, публічна роздача, поля DTO (§32.6, §33.5 V1.1), `MediaOrphanSweeper` |
+| TASK-913 frontend CRM | реалізовано: галерея в картці товару, зменшення в браузері до довшої сторони ≤ 2560, прев'ю в списку |
+| Mobile (V1.1) | реалізовано: показ `imageUrl` і `images[]` з валідацією https; невалідне поле = немає фото |
+| TASK-914 QA | тести є: `ProductImagesApiTests`, `ProductImageProcessorTests`, `MediaOrphanSweeperTests`, `MediaSetupLimitsTests`, `ProductImagesMigrationTests`. Таблиця відповідності ADR → тести і ручний чекліст у цій сесії не перевірялись |
+| TASK-915 deploy-артефакти | готово в репозиторії: том у `docker-compose.staging.yml`, `mem_limit` api 768m, nginx-приклад (`client_max_body_size 11m`), `.env.compose.example`, `deploy/staging/README.md` §5.1. **Застосування на сервері — G4/G5, не виконано** |
+| TASK-916 security-review | звіт `docs/reviews/security-review-product-images.md`, blockers немає. M1 і M2 виправлено; minor m1–m4, m6–m9 і m11 виправлено (m11 — тут, §12.2 п.5); m5 прийнято; m10 відкрито (див. §12.3) |
+| G3–G7 | відкриті (§6), операційний порядок — `runbook.md` §2f |
+
+### 12.2 Фактичні відхилення від §2 і §33.22
+
+1. **Коди помилок 413 і 415.** `413 file_too_large` і `415 unsupported_image_type` реалізовано через нові значення `ErrorKind.PayloadTooLarge` і `ErrorKind.UnsupportedMediaType` (`Result.cs`), які `ResultMapping` переводить у HTTP-статус. ADR цього механізму не називав.
+2. **Глобальний ліміт upload (security M1).** Перед читанням тіла стоїть неблокувальний семафор `Media:MaxConcurrentUploads` (за замовчуванням 3, діапазон 1..16). Якщо слотів немає, відповідь `503 media_busy` з `Retry-After: 5`. Це окремий шар від семафора обробки (п.3).
+3. **Черга обробки.** `Media:MaxConcurrentProcessing` (за замовчуванням 1) з очікуванням 10 с (`WaitTimeout`). Перевищення дає `503 media_busy` з `Retry-After: 5`, як у §2.5 п.8.
+4. **Таймаут обробки 20 с (`ProcessingTimeout`, security m1).** Таймаут декодування або кодування дає **`422 image_decode_failed`**, а не 503. Зображення не віддається частково, сховище не чіпається, рядок не створюється.
+5. **Пам'ять ImageSharp.** Пул `MaximumPoolSizeMegabytes = 64`. `AllocationLimitMegabytes = 256` обмежує **одну алокацію**, а не сумарну пам'ять (m11, уточнення ADR §2.5 п.4). Піксель фіксовано `Rgba32` (4 байти), 16-бітні PNG не розгортаються в `Rgba64`. JPEG `TargetSize` не застосовано: декодування йде на повний розмір.
+6. **Перевірка бюджету пам'яті при старті.** `Media:MaxPixels × 8 байтів × Media:MaxConcurrentProcessing` має бути ≤ 256 МБ, інакше помилка старту. Сирий буфер тіла (до `MaxUploadBytes` на запит, до `MaxConcurrentUploads` запитів одночасно, тобто за замовчуванням до 30 МБ) у цей бюджет **не входить**. Це залишковий ризик, див. §12.3.
+7. **Публічна роздача.** Ліміт `public-media` тепер налаштовується: `Media:PublicPermitPerMinute` (за замовчуванням 600, діапазон 1..100 000, валідація при старті, m6). Ключ — IP з агрегацією IPv6 /64.
+8. **Очищувач — grace і запобіжники (security M2).**
+   - Маркери-кандидати: grace 24 год (як у §2.9). `*.tmp` старші за 1 год.
+   - **Варіанти без маркера (strays): grace 7 днів** (`MediaOrphanSweeper.StrayGrace`), а не 24 год. Це свідома зміна після M2: часткове відновлення бекапу або ручне прибирання `t/` не повинні миттєво зробити живі файли сиротами.
+   - Запобіжники варіантів-страй: відсутня тека `t/` → `media_sweep_aborted reason=markers_root_missing`; жодного маркера при наявних варіантах → `no_markers`; страй-варіантів більше 50% валідних (за > 20) → `stray_ratio`. У всіх трьох випадках страй-варіанти не видаляються.
+   - Загальні: за запуск кандидатів більше 500 → `run_limit`, нічого не видаляється. За tenant-ом: кандидатів більше 50% маркерів (за > 20) → tenant пропускається з `media_sweep_aborted reason=tenant_ratio`. Невидимий tenant або помилка БД/ФС → пропуск tenant-а.
+   - `dry-run` лише логує кількості; `off` — не реєструє сервіс взагалі.
+9. **Після commit — без скасування.** Фіксація транзакції в Create, Delete і Reorder виконується з `CancellationToken.None` (security m2). Скасування запиту після commit не повинно лишити файли живого рядка без відповіді.
+10. **Помилки файлової системи.** `IOException` і `UnauthorizedAccessException` обгорнуто в `MediaStorageException` без шляху й `storage_key`, щоб у логи не потрапляв шлях (m3).
+11. **Форма `images[]` у mobile.** Клієнт приймає `{url, thumbUrl, width?, height?}`. Кожен URL має бути `https` (`z.string().url()`). Невалідний елемент відкидається, а невалідний `imageUrl` трактується як `null`. Сервер завжди віддає `width` і `height`, тож опціональність — захист клієнта, а не реальна поведінка сервера.
+12. **Зменшення в браузері.** Довша сторона ≤ 2560 перед відправкою (m9, §2.5 «Frontend CRM»). CSP `img-src` додає `apiOrigin()` (не wildcard).
+
+### 12.3 Відкрито після реалізації
+
+- **m10 (deploy):** образ `alpine:3` без digest у кроці tar тома (`deploy/staging/README.md` §5.1) і tar медіа без шифрування, на відміну від дампів БД (`age`). Виправлення — до G4/G5, не в коді.
+- **Залишковий ризик пам'яті:** сирий буфер тіла (до ~30 МБ за замовчуванням) не входить у бюджет §12.2 п.6. Розмір `mem_limit` api 768m рахується з цим запасом. Якщо підняти `MaxUploadBytes` або `MaxConcurrentUploads`, перерахувати.
+- **Q1 (basic auth для `/api/public/media/`)** — відкрите, дефолт не змінено.
+- **Перевірка `dotnet list package --vulnerable`** — рекомендація security-рев'ю для CI, у пайплайні не підтверджено.

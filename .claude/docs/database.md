@@ -978,6 +978,21 @@ Tests: `TenantIsolationTests.cs`, `CancellationHistoryRlsTests.cs`, `StaffHarden
 
 ---
 
+### Зображення товарів (`beauty_product_images`, ADR-027, контракт §33.22)
+
+Міграція `20261121110933_beauty_product_images` (TASK-911, адитивна). Одна таблиця: байти зберігаються на диску (том), у БД лише метадані варіантів.
+
+- Колонки: `id`, `tenant_id` (FK `tenants` RESTRICT), `product_id` (композитний FK `(tenant_id, product_id)` → `beauty_products` **ON DELETE CASCADE**), `storage_key char(32)`, `mime` (CHECK `= 'image/webp'`), `size_bytes` (CHECK `1..10485760`, сума варіантів), `width`/`height` (CHECK `1..1600`, варіант 1600), `sort_order` (CHECK `0..99`), `created_by_user_id` (FK `users` RESTRICT), `created_at`.
+- **Ключі:** `ck_beauty_product_images_storage_key` — `^[0-9a-f]{32}$`; `ux_beauty_product_images_storage_key` UNIQUE **глобально** (простір URL спільний для всіх tenant-ів, без tenant-id в URL).
+- **Порядок:** `ux_beauty_product_images_order (tenant_id, product_id, sort_order)` **DEFERRABLE INITIALLY DEFERRED**, щоб переставлення йшло одним `UPDATE`. Сирий SQL: EF цього не створює.
+- **Індекс:** `ix_beauty_product_images_product (tenant_id, product_id, sort_order)`. Додатково `ix_beauty_product_images_created_by` (аудит).
+- **RLS:** ENABLE + FORCE + `tenant_isolation` (патерн `20261120122321`), `DO`-блок перевірки FORCE. Нових політик і `SECURITY DEFINER`-функцій немає. Публічна роздача файлів не читає БД.
+- **GRANT (синхронно `scripts/dev/setup-db.ps1` і `deploy/staging/db/grants.sql`):** app-роль — `SELECT, INSERT, DELETE` і `UPDATE (sort_order)`; `REVOKE UPDATE` на таблицю. Воркер і `beautycrm_catalog` — нічого.
+- **Down:** `RAISE EXCEPTION`, якщо є хоч один рядок; інакше `DROP TABLE`. Файли на томі Down не чіпає.
+- `worker/src/testing/schema.sql` перегенеровано з цією міграцією.
+
+---
+
 ## 9. Known Constraints
 
 - No composite primary keys across tenants (all PKs include tenant_id as first column or via UNIQUE constraint).
