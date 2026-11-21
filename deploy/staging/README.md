@@ -130,6 +130,27 @@ ls -l /opt/beauty_staging/backups        # файл має бути ненуль
 ```
 Мінімум для staging: щоденний дамп (cron/systemd timer), шифрування публічним ключем (`age`/gpg), копія **поза сервером**, збереження 14 щоденних і 4 тижневих (ADR-016 §2.9, Q3). Раз на місяць і перед першою міграцією перевіряйте відновлення у **тимчасовий** контейнер (не в `beauty_staging_db`): `pg_restore` у чистий `postgres:16.x`-контейнер без публікації портів і перевірка рядків.
 
+### 5.1 Том медіа товарів (ADR-027 §8; human gate G4/G5)
+
+> **Human gate G4 (інфраструктура: том, `chown`, nginx, `mem_limit`) і G5 (застосування на сервері). Це робить лише людина; агенти не виконують.** До цього функція фото вимкнена. У compose `Media__RootPath` задано, тож **перед `up -d api` з новим compose** потрібні том із правами і `MEDIA_PUBLIC_BASE_URL` в `.env.compose`.
+
+Одноразово, **до першого `up` api** (api працює від UID 1654 з `read_only: true`; без `chown` запис фото дасть помилку прав):
+```bash
+docker volume create beauty_staging_media
+docker run --rm -v beauty_staging_media:/data/media alpine:3 sh -c 'chown 1654:1654 /data/media && chmod 0750 /data/media'
+```
+Том монтується лише в `api` (`/data/media`), інші контейнери його не бачать. Змінні: `Media__RootPath=/data/media`, `Media__PublicBaseUrl` з `MEDIA_PUBLIC_BASE_URL`. `mem_limit` api піднято до 768m. Режим очищувача `Media__SweepMode=dry-run` додайте в `api.env` (після перевірки логів можна `delete`).
+
+Бекап: **спершу `pg_dump` (розділ 5), потім tar тома**. Порядок важливий: файл без рядка БД очищувач прибере, а рядок без файлу дає биту картинку; дамп, знятий раніше за tar, не посилається на файли, яких у архіві немає.
+```bash
+docker run --rm -v beauty_staging_media:/data/media:ro -v /opt/beauty_staging/backups:/backup alpine:3 \
+  tar czf /backup/media-$(date +%Y%m%d-%H%M%S).tar.gz -C /data/media .
+ls -l /opt/beauty_staging/backups
+```
+Відновлення: у порожній том, потім `chown -R 1654:1654` і `chmod` (теки 0750, файли 0640) тим самим одноразовим контейнером. Копію тримайте разом із дампом, поза сервером, з тією ж ротацією.
+
+Nginx: окремий `location` для upload з `client_max_body_size 11m` і закоментований `auth_basic off` для `/api/public/media/` (ADR-027 Q1): див. 6.3.
+
 ## 6. Публікація назовні через nginx
 
 Топологія (ADR-016 §2.1.2): зовнішній 443 → провайдер → внутрішній **8443** системного nginx; зовнішній 80 відкритий. Публічна адреса — `https://beauty.<DOMAIN>` без порту. Зовнішній 8443 закритий, так і має бути. Порт назовні додавати не треба.
@@ -230,6 +251,21 @@ server {
         add_header Content-Type application/json always;
         include /etc/nginx/beauty-staging-proxy.conf;
     }
+    # ADR-027 §8 (G4): upload фото товару. Окремий location з 11m (решта сайту лишається 2m); regex має пріоритет над префіксом /api/.
+    # Маршрут за ADR-027: POST /api/beauty/inventory/products/{guid}/images. Basic auth успадковується від server-блоку.
+    location ~ ^/api/beauty/inventory/products/[0-9a-fA-F-]{36}/images$ {
+        client_max_body_size 11m;
+        proxy_pass http://127.0.0.1:<BEAUTY_API_PORT>;
+        include /etc/nginx/beauty-staging-proxy.conf;
+    }
+    # ADR-027 Q1 (рішення людини, ЗАКОМЕНТОВАНО за замовчуванням). Публічна роздача фото йде під basic auth, як увесь /api/public/.
+    # Розкоментуйте, лише якщо мобільні тестери / завантажувач зображень не передають basic auth: тоді лише роздача
+    # фото (GET, без секретів, ключі непередбачувані) стає відкритою, решта /api/public/ лишається під basic auth.
+    # location ^~ /api/public/media/ {
+    #     auth_basic off;
+    #     proxy_pass http://127.0.0.1:<BEAUTY_API_PORT>;
+    #     include /etc/nginx/beauty-staging-proxy.conf;
+    # }
     # решта API -> api
     location /api/ {
         proxy_pass http://127.0.0.1:<BEAUTY_API_PORT>;
