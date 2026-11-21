@@ -253,3 +253,26 @@ public class ProductOrderLine : ITenantEntity
     public decimal LineTotal { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }
+
+// ---- Зображення товарів (ADR-027, контракт §33.22, human gate G1 пройдено). RLS ENABLE+FORCE, deferrable UNIQUE порядку - в міграції beauty_product_images ----
+
+/// <summary>Фото товару: метадані файлів на томі. Рядок незмінний, крім SortOrder (GRANT UPDATE (sort_order)); воркер доступу не має.</summary>
+public class ProductImage : ITenantEntity
+{
+    public Guid Id { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid ProductId { get; set; }
+    /// <summary>32 hex (16 випадкових байт); глобально унікальний, простір URL спільний для всіх tenant-ів.</summary>
+    public string StorageKey { get; set; } = null!;
+    /// <summary>Лише image/webp (CHECK).</summary>
+    public string Mime { get; set; } = "image/webp";
+    /// <summary>Сума варіантів, 1..10485760.</summary>
+    public int SizeBytes { get; set; }
+    /// <summary>Розміри найбільшого варіанта, 1..1600.</summary>
+    public short Width { get; set; }
+    public short Height { get; set; }
+    /// <summary>0..99; UNIQUE (tenant, product, sort_order) DEFERRABLE INITIALLY DEFERRED (лише в SQL міграції).</summary>
+    public short SortOrder { get; set; }
+    public Guid CreatedByUserId { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
