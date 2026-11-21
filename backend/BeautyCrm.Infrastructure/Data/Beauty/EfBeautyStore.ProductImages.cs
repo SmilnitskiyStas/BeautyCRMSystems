@@ -60,7 +60,7 @@ public sealed partial class EfBeautyStore : IProductImageStore
         };
         db.ProductImages.Add(entity);
         await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
+        await tx.CommitAsync(CancellationToken.None); // після commit скасування не повинне лишити файли живого рядка без відповіді
         return new(ImageWriteStatus.Ok, ToRow(entity));
     }
 
@@ -72,7 +72,7 @@ public sealed partial class EfBeautyStore : IProductImageStore
         if (img is null) return new(ImageWriteStatus.ImageNotFound);
         db.ProductImages.Remove(img);
         await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
+        await tx.CommitAsync(CancellationToken.None); // після commit скасування не повинне лишити файли живого рядка без відповіді
         return new(ImageWriteStatus.Ok, Key: img.StorageKey);
     }
 
@@ -85,7 +85,7 @@ public sealed partial class EfBeautyStore : IProductImageStore
             return new(ImageWriteStatus.InvalidOrder);
         await ApplyOrderAsync(productId, imageIds, ct);
         var rows = await db.ProductImages.AsNoTracking().Where(i => i.ProductId == productId).OrderBy(i => i.SortOrder).ThenBy(i => i.CreatedAt).ThenBy(i => i.Id).ToListAsync(ct);
-        await tx.CommitAsync(ct);
+        await tx.CommitAsync(CancellationToken.None); // після commit скасування не повинне лишити файли живого рядка без відповіді
         return new(ImageWriteStatus.Ok, Rows: [.. rows.Select(ToRow)]);
     }
 

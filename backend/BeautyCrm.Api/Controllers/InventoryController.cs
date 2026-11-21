@@ -211,7 +211,16 @@ public sealed class InventoryController(InventoryService inventory, InventoryThr
         if (!throttle.TryAcquire(actor.TenantId, actor.UserId) || !uploads.TryAcquire(actor.TenantId, actor.UserId)) return RateLimited();
         // ліміт тіла для цього маршруту: файл + службові частини (глобальні ліміти форм не застосовуються: тіло читається потоково нижче)
         if (HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } f) f.MaxRequestBodySize = media.MaxUploadBytes + MultipartOverhead;
-        var result = await images.UploadAsync(actor, id, ReadFilePartAsync, ct);
+        // глобальний ліміт одночасних upload на процес - ДО читання тіла в пам'ять (security M1)
+        if (!uploads.TryEnter())
+        {
+            Response.Headers.RetryAfter = "5";
+            Result<ProductImageDto> busy = Err.Unavailable("media_busy", "Image processing is busy. Try again shortly.");
+            return this.ToResult(busy, Created);
+        }
+        Result<ProductImageDto> result;
+        try { result = await images.UploadAsync(actor, id, ReadFilePartAsync, ct); }
+        finally { uploads.Exit(); }
         if (!result.IsOk && result.Error!.Code == "media_busy") Response.Headers.RetryAfter = "5";
         return this.ToResult(result, Created);
     }

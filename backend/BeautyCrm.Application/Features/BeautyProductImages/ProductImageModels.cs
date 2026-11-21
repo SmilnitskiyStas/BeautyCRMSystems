@@ -8,6 +8,9 @@ public enum MediaSweepMode { Off, DryRun, Delete }
 /// Зображення товарів (ADR-027, §33.22). Без <see cref="RootPath"/> функцію вимкнено: CRM-маршрути 404 product_images_disabled,
 /// DTO віддають null/[]. Значення валідує Api (<c>MediaSetup</c>), тут лише дані й побудова URL.
 /// </summary>
+/// <summary>Збій файлового сховища; повідомлення без шляхів (storage_key) - безпечне для логів.</summary>
+public sealed class MediaStorageException() : Exception("Media storage operation failed.");
+
 public sealed class MediaOptions
 {
     public const int ThumbSize = 400, FullSize = 1600, MinSide = 200, MaxSide = 10_000, PublicPermitPerMinute = 600;

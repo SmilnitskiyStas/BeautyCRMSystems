@@ -9,9 +9,9 @@ namespace BeautyCrm.Infrastructure.Media;
 /// </summary>
 public sealed class FileProductImageStorage(MediaOptions options) : IProductImageStorage
 {
-    private static readonly Regex FileName = new(@"^(?<key>[0-9a-f]{32})-(?<size>400|1600)\.webp$",
+    private static readonly Regex FileName = new(@"^(?<key>[0-9a-f]{32})-(?<size>400|1600)\.webp\z",
         RegexOptions.CultureInvariant | RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
-    private static readonly Regex KeyName = new(@"^[0-9a-f]{32}$", RegexOptions.CultureInvariant | RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
+    private static readonly Regex KeyName = new(@"^[0-9a-f]{32}\z", RegexOptions.CultureInvariant | RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
     private static readonly int[] Sizes = [MediaOptions.ThumbSize, MediaOptions.FullSize];
 
     private const UnixFileMode DirMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupExecute; // 0750
@@ -97,6 +97,11 @@ public sealed class FileProductImageStorage(MediaOptions options) : IProductImag
                 created[^1] = final;
             }
             return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            foreach (var p in created) TryDelete(p);
+            throw new MediaStorageException(); // без шляху (§33.22.8)
         }
         catch
         {

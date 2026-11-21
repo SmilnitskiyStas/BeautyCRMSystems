@@ -9,8 +9,14 @@ using Microsoft.Net.Http.Headers;
 namespace BeautyCrm.Api.Infrastructure;
 
 /// <summary>Ліміт upload зображень на користувача (<c>Media:UploadsPerUserPerMinute</c>, 1..120): перевіряється в контролері після автентифікації.</summary>
-public sealed class UploadThrottle(int permitPerMinute)
+public sealed class UploadThrottle(int permitPerMinute, int maxConcurrent = 3)
 {
+    private readonly SemaphoreSlim _slots = new(maxConcurrent, maxConcurrent);
+
+    /// <summary>Глобальний ліміт одночасних upload (без очікування): тіло файлу буферизується в пам'ять.</summary>
+    public bool TryEnter() => _slots.Wait(0);
+    public void Exit() => _slots.Release();
+
     private readonly PartitionedRateLimiter<string> _perUser = PartitionedRateLimiter.Create<string, string>(key => RateLimitPartition.GetFixedWindowLimiter(key,
         _ => new FixedWindowRateLimiterOptions { PermitLimit = permitPerMinute, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 
@@ -43,6 +49,7 @@ public sealed class DisableFormValueModelBindingAttribute : Attribute, Microsoft
 public static class MediaSetup
 {
     public const string PublicMediaPolicy = "public-media";
+    private const long MemoryBudgetBytes = 256L * 1024 * 1024;
 
     /// <summary>Невалідне значення = помилка старту. Без <c>Media:RootPath</c> функцію вимкнено.</summary>
     public static IServiceCollection AddBeautyMediaApi(this IServiceCollection services, IConfiguration config, IHostEnvironment env)
@@ -57,6 +64,9 @@ public static class MediaSetup
             UploadsPerUserPerMinute = Range(config, "UploadsPerUserPerMinute", 20, 1, 120),
             SweepMode = ParseSweep(config["Media:SweepMode"]),
         };
+        // найгірше декодування: піксель Rgba32 (4 Б) x 2 копії (AutoOrient) на кожну паралельну обробку мусить вміщатися в бюджет пам'яті
+        if ((long)o.MaxPixels * 8 * o.MaxConcurrentProcessing > MemoryBudgetBytes)
+            throw new InvalidOperationException("Media:MaxPixels x Media:MaxConcurrentProcessing exceeds the image memory budget (256 MB at 8 bytes per pixel).");
         var root = config["Media:RootPath"];
         if (!string.IsNullOrWhiteSpace(root))
         {
@@ -70,10 +80,10 @@ public static class MediaSetup
         services.AddSingleton<IProductImageStorage>(sp => sp.GetRequiredService<FileProductImageStorage>());
         services.AddSingleton<IImageProcessor, ImageSharpProcessor>();
         services.AddScoped<ProductImageService>(); // порти сховища/обробки реєструються тут, тож і сервіс тут
-        services.AddSingleton(new UploadThrottle(o.UploadsPerUserPerMinute));
+        services.AddSingleton(new UploadThrottle(o.UploadsPerUserPerMinute, Range(config, "MaxConcurrentUploads", 3, 1, 16)));
         if (o.Enabled && o.SweepMode != MediaSweepMode.Off) services.AddHostedService<MediaOrphanSweeper>();
 
-        var permit = config.GetValue("Media:PublicPermitPerMinute", MediaOptions.PublicPermitPerMinute);
+        var permit = Range(config, "PublicPermitPerMinute", MediaOptions.PublicPermitPerMinute, 1, 100_000);
         services.AddRateLimiter(rl => rl.AddPolicy(PublicMediaPolicy, http => RateLimitPartition.GetFixedWindowLimiter(
             PublicRateLimit.KeyFor(http.Connection.RemoteIpAddress),
             _ => new FixedWindowRateLimiterOptions { PermitLimit = permit, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 })));

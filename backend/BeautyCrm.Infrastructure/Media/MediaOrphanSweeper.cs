@@ -17,7 +17,7 @@ namespace BeautyCrm.Infrastructure.Media;
 public sealed class MediaOrphanSweeper(IServiceScopeFactory scopes, FileProductImageStorage storage, MediaOptions options, TimeProvider clock,
     ILogger<MediaOrphanSweeper> log) : BackgroundService
 {
-    public static readonly TimeSpan Grace = TimeSpan.FromHours(24), TmpGrace = TimeSpan.FromHours(1), Interval = TimeSpan.FromHours(6), FirstDelay = TimeSpan.FromMinutes(10);
+    public static readonly TimeSpan Grace = TimeSpan.FromHours(24), StrayGrace = TimeSpan.FromDays(7), TmpGrace = TimeSpan.FromHours(1), Interval = TimeSpan.FromHours(6), FirstDelay = TimeSpan.FromMinutes(10);
     public const int MaxPerRun = 500, RatioMinMarkers = 20;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -93,16 +93,20 @@ public sealed class MediaOrphanSweeper(IServiceScopeFactory scopes, FileProductI
 
         // 2. файли без власника: *.tmp > 1 год; валідні варіанти без маркера (і не живі) > 24 год; решта не чіпається
         var strays = new List<FileInfo>();
+        var variantStrays = new List<FileInfo>();
+        var validVariants = 0;
+        var allMarkers = new HashSet<string>();
         var invalid = 0;
         try
         {
-            var allMarkers = storage.AllMarkerKeys();
+            allMarkers = storage.AllMarkerKeys();
             foreach (var f in storage.VariantFiles())
             {
                 if (f.Name.EndsWith(".tmp", StringComparison.Ordinal)) { if (now - f.LastWriteTimeUtc > TmpGrace) strays.Add(f); }
                 else if (FileProductImageStorage.IsVariantName(f.Name, out var key))
                 {
-                    if (!allMarkers.Contains(key) && !live.Contains(key) && now - f.LastWriteTimeUtc > Grace) strays.Add(f);
+                    validVariants++;
+                    if (!allMarkers.Contains(key) && !live.Contains(key) && now - f.LastWriteTimeUtc > StrayGrace) variantStrays.Add(f);
                 }
                 else invalid++;
             }
@@ -111,7 +115,22 @@ public sealed class MediaOrphanSweeper(IServiceScopeFactory scopes, FileProductI
         {
             log.LogWarning(ex, "media_sweep stray scan failed; stray files skipped");
             strays.Clear();
+            variantStrays.Clear();
         }
+        // fail-safe: неповний/відсутній t/ (часткове відновлення, ручне прибирання) не повинен робити «сиротами» всі живі файли
+        string? abort = null;
+        if (variantStrays.Count > 0)
+        {
+            if (!Directory.Exists(storage.MarkersRoot)) abort = "markers_root_missing";
+            else if (allMarkers.Count == 0) abort = "no_markers";
+            else if (validVariants > RatioMinMarkers && variantStrays.Count > validVariants * 0.5) abort = "stray_ratio";
+        }
+        if (abort is not null)
+        {
+            log.LogError("media_sweep_aborted reason={Reason} variants={Variants} strays={Strays}", abort, validVariants, variantStrays.Count);
+            variantStrays.Clear();
+        }
+        strays.AddRange(variantStrays);
         if (invalid > 0) log.LogWarning("media_sweep found {Count} files with unexpected names (left untouched)", invalid);
 
         // 3. загальний запобіжник

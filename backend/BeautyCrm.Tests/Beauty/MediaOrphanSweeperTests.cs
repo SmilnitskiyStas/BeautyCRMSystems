@@ -92,7 +92,7 @@ public sealed class MediaOrphanSweeperTests(AuthApiFixture fx) : IClassFixture<A
         var tmpNew = Path.Combine(r.Dir, "p", "ab", "y.webp.tmp"); File.WriteAllText(tmpNew, "x");
         var odd = Path.Combine(r.Dir, "p", "ab", "README.txt"); File.WriteAllText(odd, "x"); File.SetLastWriteTimeUtc(odd, DateTime.UtcNow.AddDays(-5));
         var markerless = Key(); Directory.CreateDirectory(Path.Combine(r.Dir, "p", markerless[..2]));
-        var ml = Path.Combine(r.Dir, "p", markerless[..2], markerless + "-400.webp"); File.WriteAllText(ml, "x"); File.SetLastWriteTimeUtc(ml, DateTime.UtcNow.AddDays(-2));
+        var ml = Path.Combine(r.Dir, "p", markerless[..2], markerless + "-400.webp"); File.WriteAllText(ml, "x"); File.SetLastWriteTimeUtc(ml, DateTime.UtcNow.AddDays(-8)); // grace strays 7 днів
 
         await r.Sweeper.RunOnceAsync(default);
         Assert.False(Exists(r, t.TenantId, oldOrphan));
@@ -122,6 +122,64 @@ public sealed class MediaOrphanSweeperTests(AuthApiFixture fx) : IClassFixture<A
         await AddRowAsync(t, product, Key()); // рядок без файлів
         await r.Sweeper.RunOnceAsync(default);
         Assert.Contains(r.Logs, l => l.Contains("media_missing_files"));
+    }
+
+    private static string PutStray(Rig r, TimeSpan age)
+    {
+        var k = Key();
+        Directory.CreateDirectory(Path.Combine(r.Dir, "p", k[..2]));
+        var f = Path.Combine(r.Dir, "p", k[..2], k + "-400.webp");
+        File.WriteAllText(f, "x"); File.SetLastWriteTimeUtc(f, DateTime.UtcNow - age);
+        return f;
+    }
+
+    [SkippableFact]
+    public async Task Strays_younger_than_7_days_are_kept()
+    {
+        Skip.If(fx.SkipReason is not null, fx.SkipReason);
+        var (t, _) = await TenantWithProductAsync();
+        var r = NewRig(MediaSweepMode.Delete);
+        await PutAsync(r, t.TenantId, TimeSpan.FromHours(1)); // t/ існує, маркери є
+        var young = PutStray(r, TimeSpan.FromDays(3));
+        await r.Sweeper.RunOnceAsync(default);
+        Assert.True(File.Exists(young));
+    }
+
+    [SkippableFact]
+    public async Task Missing_markers_dir_skips_strays_phase_and_logs_error()
+    {
+        Skip.If(fx.SkipReason is not null, fx.SkipReason);
+        var r = NewRig(MediaSweepMode.Delete);
+        var f = PutStray(r, TimeSpan.FromDays(30));
+        await r.Sweeper.RunOnceAsync(default);
+        Assert.True(File.Exists(f));
+        Assert.Contains(r.Logs, l => l.Contains("media_sweep_aborted") && l.Contains("markers_root_missing"));
+    }
+
+    [SkippableFact]
+    public async Task Zero_markers_with_existing_variants_skips_strays_phase()
+    {
+        Skip.If(fx.SkipReason is not null, fx.SkipReason);
+        var r = NewRig(MediaSweepMode.Delete);
+        Directory.CreateDirectory(Path.Combine(r.Dir, "t", Guid.NewGuid().ToString("D"))); // t/ є, маркерів немає
+        var f = PutStray(r, TimeSpan.FromDays(30));
+        await r.Sweeper.RunOnceAsync(default);
+        Assert.True(File.Exists(f));
+        Assert.Contains(r.Logs, l => l.Contains("media_sweep_aborted") && l.Contains("no_markers"));
+    }
+
+    [SkippableFact]
+    public async Task Strays_exceeding_half_of_variants_are_not_deleted()
+    {
+        Skip.If(fx.SkipReason is not null, fx.SkipReason);
+        var (t, product) = await TenantWithProductAsync();
+        var r = NewRig(MediaSweepMode.Delete);
+        var live = await PutAsync(r, t.TenantId, TimeSpan.FromDays(30));
+        await AddRowAsync(t, product, live);
+        var strays = Enumerable.Range(0, 25).Select(_ => PutStray(r, TimeSpan.FromDays(30))).ToList();
+        await r.Sweeper.RunOnceAsync(default);
+        Assert.All(strays, f => Assert.True(File.Exists(f)));
+        Assert.Contains(r.Logs, l => l.Contains("media_sweep_aborted") && l.Contains("stray_ratio"));
     }
 
     [SkippableFact]

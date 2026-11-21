@@ -194,14 +194,20 @@ public sealed class ProductImageProcessorTests
             Assert.Equal("image_dimensions_invalid", (await Rejected(bytes)).Code);
 
         var sw = Stopwatch.StartNew();
-        var before = GC.GetTotalAllocatedBytes(true);
         var e = await Rejected(Images.Bomb());
         Assert.Equal("image_dimensions_invalid", e.Code);
-        Assert.True(sw.ElapsedMilliseconds < 2000);
-        Assert.True(GC.GetTotalAllocatedBytes(true) - before < 50_000_000, "bomb must not be decoded into pixels");
+        Assert.True(sw.ElapsedMilliseconds < 2000, "bomb must be rejected by Identify, not decoded"); // час, не GC: unmanaged-пам'ять невидима для GC
         // ліміт мегапікселів з конфігурації
         var tooMany = await Processor(maxPixels: 1_000_000).ProcessAsync(new MemoryStream(Images.Jpeg(1200, 1000)), default);
         Assert.Equal("image_dimensions_invalid", tooMany.Error?.Code);
+    }
+
+    [Fact]
+    public async Task Processing_timeout_gives_422_decode_failed_not_a_hang()
+    {
+        var p = new ImageSharpProcessor(new MediaOptions()) { ProcessingTimeout = TimeSpan.Zero };
+        var r = await p.ProcessAsync(new MemoryStream(Images.Jpeg(800, 800)), default);
+        Assert.Equal("image_decode_failed", r.Error?.Code);
     }
 
     [Fact]

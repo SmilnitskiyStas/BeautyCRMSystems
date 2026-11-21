@@ -286,10 +286,20 @@ public sealed class ProductImagesApiTests(AuthApiFixture fx) : IClassFixture<Aut
         var t = await NewTenantAsync(h.Client);
         var img = await Ok(await Upload(h.Client, t.Owner, t.P1, Images.Jpeg(400, 400)), HttpStatusCode.Created);
         var key = KeyOf(img.GetProperty("url").GetString()!);
-        var link = Path.Combine(h.Dir, "p", key[..2], new string('d', 32) + "-400.webp");
-        try { File.CreateSymbolicLink(link, Path.Combine(h.Dir, "p", key[..2], $"{key}-400.webp")); }
+        // лінк у реальному префіксі p/{key[..2]}/, який роздача справді розв'язує (ключ починається з того ж префікса)
+        var linkKey = key[..2] + new string('d', 30);
+        var link = Path.Combine(h.Dir, "p", key[..2], linkKey + "-400.webp");
+        // symlink-тека: префікс p/ee/ -> p/{key[..2]}/ (ключ eeee... розв'язується через теку-лінк)
+        var dirKey = "ee" + key[2..];
+        var dirLink = Path.Combine(h.Dir, "p", "ee");
+        try
+        {
+            File.CreateSymbolicLink(link, Path.Combine(h.Dir, "p", key[..2], $"{key}-400.webp"));
+            if (key[..2] != "ee") Directory.CreateSymbolicLink(dirLink, Path.Combine(h.Dir, "p", key[..2]));
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Skip.If(true, "symlinks are not permitted in this environment"); }
-        Assert.Equal(HttpStatusCode.NotFound, (await h.Client.GetAsync($"/api/public/media/p/{new string('d', 32)}-400.webp")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await h.Client.GetAsync($"/api/public/media/p/{linkKey}-400.webp")).StatusCode);
+        if (key[..2] != "ee") Assert.Equal(HttpStatusCode.NotFound, (await h.Client.GetAsync($"/api/public/media/p/{dirKey}-400.webp")).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await h.Client.GetAsync($"/api/public/media/p/{key}-400.webp")).StatusCode);
     }
 
@@ -437,7 +447,7 @@ public sealed class ProductImagesApiTests(AuthApiFixture fx) : IClassFixture<Aut
     public async Task Limits_per_product_and_per_tenant_and_parallel_last_slot_has_exactly_one_winner()
     {
         NeedDb();
-        var h = NewHost(new() { ["Media:MaxImagesPerProduct"] = "2", ["Media:MaxImagesPerTenant"] = "3" });
+        var h = NewHost(new() { ["Media:MaxImagesPerProduct"] = "2", ["Media:MaxImagesPerTenant"] = "3", ["Media:MaxConcurrentUploads"] = "8" });
         var t = await NewTenantAsync(h.Client);
         var bytes = Images.Jpeg(300, 300);
         await Ok(await Upload(h.Client, t.Owner, t.P1, bytes), HttpStatusCode.Created);

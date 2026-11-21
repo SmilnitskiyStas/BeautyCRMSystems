@@ -6,6 +6,7 @@ using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.Formats.Webp;
 using SixLabors.ImageSharp.Memory;
+using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
 
 namespace BeautyCrm.Infrastructure.Media;
@@ -26,13 +27,16 @@ public sealed class ImageSharpProcessor : IImageProcessor, IDisposable
     /// <summary>Очікування черги обробки (ADR-027: 10 с).</summary>
     public TimeSpan WaitTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
+    /// <summary>Ліміт часу декодування + кодування одного зображення (security-рев'ю m1).</summary>
+    public TimeSpan ProcessingTimeout { get; init; } = TimeSpan.FromSeconds(20);
+
     public ImageSharpProcessor(MediaOptions options)
     {
         _options = options;
         _gate = new SemaphoreSlim(Math.Max(1, options.MaxConcurrentProcessing));
         _config = new Configuration(new JpegConfigurationModule(), new PngConfigurationModule(), new WebpConfigurationModule())
         {
-            MemoryAllocator = MemoryAllocator.Create(new MemoryAllocatorOptions { AllocationLimitMegabytes = 256 }),
+            MemoryAllocator = MemoryAllocator.Create(new MemoryAllocatorOptions { AllocationLimitMegabytes = 256, MaximumPoolSizeMegabytes = 64 }),
         };
     }
 
@@ -74,26 +78,31 @@ public sealed class ImageSharpProcessor : IImageProcessor, IDisposable
         try
         {
             input.Position = 0;
-            using var image = await Image.LoadAsync(new DecoderOptions { Configuration = _config, MaxFrames = 1 }, input, ct);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(ProcessingTimeout);
+            var t = cts.Token;
+            // фіксований Rgba32 (4 Б/піксель; 16-бітні PNG не розгортаються в Rgba64); JPEG TargetSize не застосовано: декодер масштабує до цільового розміру (в т.ч. збільшує)
+            using var image = await Image.LoadAsync<Rgba32>(new DecoderOptions { Configuration = _config, MaxFrames = 1 }, input, t);
             image.Mutate(x => x.AutoOrient()); // EXIF-орієнтація - у пікселі, далі метадані знімаються повністю
             var meta = image.Metadata;
             meta.ExifProfile = null; meta.XmpProfile = null; meta.IptcProfile = null; meta.IccProfile = null; meta.CicpProfile = null;
 
-            var variants = new List<ImageVariantData> { Variant(image, MediaOptions.FullSize), Variant(image, MediaOptions.ThumbSize) };
+            var variants = new List<ImageVariantData> { await Variant(image, MediaOptions.FullSize, t), await Variant(image, MediaOptions.ThumbSize, t) };
             return new ProcessedImage(variants, variants[0].Width, variants[0].Height);
         }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return DecodeFailed; } // таймаут обробки
         catch (Exception ex) when (ex is not OperationCanceledException) { return DecodeFailed; }
         finally { _gate.Release(); }
     }
 
-    private static ImageVariantData Variant(Image image, int size)
+    private static async Task<ImageVariantData> Variant(Image image, int size, CancellationToken ct)
     {
         // без збільшення: ResizeMode.Max збільшив би менше зображення
         using var v = Math.Max(image.Width, image.Height) > size
             ? image.Clone(c => c.Resize(new ResizeOptions { Size = new Size(size, size), Mode = ResizeMode.Max, Sampler = KnownResamplers.Lanczos3 }))
             : image.Clone(_ => { });
         using var ms = new MemoryStream();
-        v.SaveAsWebp(ms, Encoder);
+        await v.SaveAsWebpAsync(ms, Encoder, ct);
         return new ImageVariantData(size, v.Width, v.Height, ms.ToArray());
     }
 }
