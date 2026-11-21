@@ -82,11 +82,13 @@ public sealed partial class EfBeautyStore : IProductOrderStore
             .OrderBy(p => p.Name).ThenBy(p => p.Id).Take(ProductOrdersOptions.MaxCatalogItems + 1).ToListAsync(ct);
         var paths = await CategoryPathsAsync(ct);
         var avail = await AvailabilityAsync(locationId, [.. products.Select(p => p.Id)], SlotCalculator.LocalDate(now, loc.Timezone), now, ct);
+        var images = await ImagesByProductAsync([.. products.Select(p => p.Id)], ct); // ADR-027 §33.22.7: один запит на всі товари
 
         var rows = products.Select(p => new CatalogRow(
                 p.Id, p.Name, EnumText<ProductUnit>.ToDb(p.Unit), p.SalePrice!.Value,
                 p.CategoryId is { } cid && paths.TryGetValue(cid, out var path) ? path : string.IsNullOrWhiteSpace(p.Category) ? null : p.Category.Trim(),
-                avail.GetValueOrDefault(p.Id) >= 1m))
+                avail.GetValueOrDefault(p.Id) >= 1m,
+                images.TryGetValue(p.Id, out var imgs) ? imgs.Take(media!.MaxImagesPerProduct).ToList() : null))
             .OrderBy(r => r.CategoryPath is null).ThenBy(r => r.CategoryPath?.ToLowerInvariant(), StringComparer.Ordinal)
             .ThenBy(r => r.Name.ToLowerInvariant(), StringComparer.Ordinal).ThenBy(r => r.Id).ToList();
         var truncated = rows.Count > ProductOrdersOptions.MaxCatalogItems;

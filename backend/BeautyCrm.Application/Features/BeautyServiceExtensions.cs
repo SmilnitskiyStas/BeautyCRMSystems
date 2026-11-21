@@ -38,6 +38,7 @@ public static class BeautyServiceExtensions
         services.AddScoped<LocationService>();
         services.TryAddSingleton(new BeautyCrm.Application.Features.BeautyInventory.InventoryOptions()); // ADR-025: склад
         services.AddScoped<BeautyCrm.Application.Features.BeautyInventory.InventoryService>();
+        services.TryAddSingleton(new BeautyCrm.Application.Features.BeautyProductImages.MediaOptions()); // ADR-027: без RootPath функцію вимкнено; Api підміняє з конфігу
         services.AddScoped<BeautyCrm.Application.Features.BeautyInventory.InventoryNormsService>(); // етап 2a: норми матеріалів (§32.16)
         services.AddScoped<BeautyCrm.Application.Features.BeautyInventory.InventoryAlertsService>(); // етап 2a: сповіщення персоналу (§32.19)
         return services;

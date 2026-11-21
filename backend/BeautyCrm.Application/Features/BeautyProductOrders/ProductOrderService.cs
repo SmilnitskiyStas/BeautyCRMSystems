@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using BeautyCrm.Application.Features.BeautyAuth;
 using BeautyCrm.Application.Features.BeautyBooking;
 using BeautyCrm.Application.Features.BeautyCommon;
+using BeautyCrm.Application.Features.BeautyProductImages;
 using BeautyCrm.Application.Features.BeautyPublicBooking;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -18,7 +19,7 @@ namespace BeautyCrm.Application.Features.BeautyProductOrders;
 public sealed partial class ProductOrderService(
     IProductOrderStore store, IPaymentService payments, ProductOrdersOptions options, PublicTenantResolver tenant,
     PublicTokenService tokens, PublicBookingOptions publicOptions, IClientIntegrityVerifier integrity, TimeProvider clock,
-    ILogger<ProductOrderService> log)
+    ILogger<ProductOrderService> log, BeautyProductImages.MediaOptions media)
 {
     public const string Disabled = "product_orders_disabled";
     public const string Currency = "UAH";
@@ -87,7 +88,14 @@ public sealed partial class ProductOrderService(
         return new PublicProductCatalogDto(
             new PublicOrderLocationDto(data.Location.Id, data.Location.Name, data.Location.Address), Currency, options.ReservationMinutes,
             ProductOrdersOptions.MaxLines, ProductOrdersOptions.MaxQuantityPerLine,
-            [.. data.Items.Select(i => new PublicProductDto(i.Id, i.Name, i.Unit, i.Price, i.CategoryPath, i.InStock))], data.Truncated);
+            [.. data.Items.Select(i => ToPublic(i))], data.Truncated);
+    }
+
+    /// <summary>V1.1 (ADR-027): без фото або з вимкненою функцією imageUrl = null, images = [].</summary>
+    private PublicProductDto ToPublic(CatalogRow i)
+    {
+        var images = media.Enabled && i.Images is { Count: > 0 } rows ? rows.Select(r => r.ToPublic(media)).ToList() : new List<PublicProductImageDto>();
+        return new PublicProductDto(i.Id, i.Name, i.Unit, i.Price, i.CategoryPath, i.InStock, images.Count > 0 ? images[0].ThumbUrl : null, images);
     }
 
     // ---------- P3: перегляд (працює завжди, навіть коли функцію вимкнено) ----------

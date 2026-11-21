@@ -19,7 +19,8 @@ public record ProductDto(
     decimal? SalePrice,
     decimal? MinStock, bool TrackExpiry, bool IsActive, string? Note, bool HasMovements,
     DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt,
-    Guid? CategoryId = null, string? CategoryPath = null);
+    Guid? CategoryId = null, string? CategoryPath = null,
+    string? ImageUrl = null); // ADR-027: thumbUrl першого фото; null = немає або функцію вимкнено
 
 public sealed record LocationSettingDto(Guid LocationId, decimal? MinStock, bool IsEnabled, DateTimeOffset UpdatedAt);
 
@@ -29,9 +30,10 @@ public sealed record ProductDetailDto(
     decimal? SalePrice,
     decimal? MinStock, bool TrackExpiry, bool IsActive, string? Note, bool HasMovements,
     DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, IReadOnlyList<LocationSettingDto> LocationSettings,
-    Guid? CategoryId = null, string? CategoryPath = null)
+    Guid? CategoryId = null, string? CategoryPath = null, string? ImageUrl = null,
+    IReadOnlyList<BeautyProductImages.ProductImageDto>? Images = null) // ADR-027: уся галерея; сховище завжди віддає масив
     : ProductDto(Id, Name, Category, Unit, Barcode, Purpose, Supplier, PurchasePrice, SalePrice, MinStock, TrackExpiry, IsActive, Note, HasMovements, CreatedAt, UpdatedAt,
-        CategoryId, CategoryPath);
+        CategoryId, CategoryPath, ImageUrl);
 
 /// <summary>Вузол дерева категорій (§32.27). ProductCount - прямі товари (усі, у т.ч. неактивні); ChildCount - прямі підкатегорії (усі, у т.ч. архівні).</summary>
 public sealed record CategoryDto(Guid Id, Guid? ParentId, string Name, int SortOrder, bool IsArchived, int ProductCount, int ChildCount);

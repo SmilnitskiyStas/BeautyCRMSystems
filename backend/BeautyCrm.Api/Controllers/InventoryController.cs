@@ -4,6 +4,11 @@ using BeautyCrm.Api.Tenancy;
 using BeautyCrm.Application.Features.BeautyAuth;
 using BeautyCrm.Application.Features.BeautyCommon;
 using BeautyCrm.Application.Features.BeautyInventory;
+using BeautyCrm.Application.Features.BeautyProductImages;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Net.Http.Headers;
+using Err = BeautyCrm.Application.Features.BeautyCommon.Error;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -23,7 +28,7 @@ namespace BeautyCrm.Api.Controllers;
 [InboxNoStore]
 [ProducesResponseType(StatusCodes.Status401Unauthorized)]
 [ProducesResponseType(StatusCodes.Status403Forbidden)]
-public sealed class InventoryController(InventoryService inventory, InventoryThrottle throttle) : ControllerBase
+public sealed class InventoryController(InventoryService inventory, InventoryThrottle throttle, ProductImageService images, MediaOptions media, UploadThrottle uploads) : ControllerBase
 {
     private const int SmallBody = 8 * 1024, BigBody = 64 * 1024;
     public const string IdempotencyHeader = "Idempotency-Key";
@@ -184,6 +189,84 @@ public sealed class InventoryController(InventoryService inventory, InventoryThr
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public Task<IActionResult> DeleteSetting(Guid id, Guid locationId, CancellationToken ct) =>
         Run(a => inventory.DeleteLocationSettingAsync(a, id, locationId, ct), _ => NoContent(), write: true);
+
+    // ---------- фото товарів (ADR-027, §33.22.5): мережевий каталог -> inventory.manage = all ----------
+
+    private const int MultipartOverhead = 64 * 1024;
+
+    /// <summary>201 ProductImageDto. Порядок перевірок §33.22.5: права -> функція ввімкнена -> товар -> файл (422/413) -> ліміти -> формат -> розміри -> обробка -> запис.</summary>
+    [HttpPost("products/{id:guid}/images")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.All)]
+    [DisableFormValueModelBinding]
+    [ProducesResponseType<ProductImageDto>(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status413PayloadTooLarge)]
+    [ProducesResponseType(StatusCodes.Status415UnsupportedMediaType)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> UploadImage(Guid id, CancellationToken ct)
+    {
+        if (User.ToActor() is not { } actor) return Unauthorized();
+        if (!throttle.TryAcquire(actor.TenantId, actor.UserId) || !uploads.TryAcquire(actor.TenantId, actor.UserId)) return RateLimited();
+        // ліміт тіла для цього маршруту: файл + службові частини (глобальні ліміти форм не застосовуються: тіло читається потоково нижче)
+        if (HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } f) f.MaxRequestBodySize = media.MaxUploadBytes + MultipartOverhead;
+        var result = await images.UploadAsync(actor, id, ReadFilePartAsync, ct);
+        if (!result.IsOk && result.Error!.Code == "media_busy") Response.Headers.RetryAfter = "5";
+        return this.ToResult(result, Created);
+    }
+
+    /// <summary>Перша частина multipart з іменем <c>file</c> (решта ігнорується) у пам'ять з лімітом <c>MaxUploadBytes</c>.</summary>
+    private async Task<Result<Stream>> ReadFilePartAsync(CancellationToken ct)
+    {
+        var tooLarge = Err.TooLarge("file_too_large", "The file is too large.");
+        var required = Err.Validation("file_required", "A multipart part named 'file' is required.");
+        if (Request.ContentLength > media.MaxUploadBytes + MultipartOverhead) return tooLarge;
+        if (!MediaTypeHeaderValue.TryParse(Request.ContentType, out var mt) || !mt.MediaType.Equals("multipart/form-data", StringComparison.OrdinalIgnoreCase)
+            || HeaderUtilities.RemoveQuotes(mt.Boundary).Length is 0 or > 200)
+            return required;
+        try
+        {
+            var reader = new MultipartReader(HeaderUtilities.RemoveQuotes(mt.Boundary).Value!, Request.Body) { HeadersLengthLimit = 16 * 1024 };
+            while (await reader.ReadNextSectionAsync(ct) is { } section)
+            {
+                if (!ContentDispositionHeaderValue.TryParse(section.ContentDisposition, out var cd) || !cd.DispositionType.Equals("form-data", StringComparison.OrdinalIgnoreCase)
+                    || HeaderUtilities.RemoveQuotes(cd.Name).Value != "file")
+                    continue;
+                var ms = new MemoryStream();
+                var buffer = new byte[81920];
+                int n;
+                while ((n = await section.Body.ReadAsync(buffer, ct)) > 0)
+                {
+                    if (ms.Length + n > media.MaxUploadBytes) { await ms.DisposeAsync(); return tooLarge; }
+                    ms.Write(buffer, 0, n);
+                }
+                if (ms.Length == 0) return required;
+                return ms;
+            }
+        }
+        catch (BadHttpRequestException ex) when (ex.StatusCode == StatusCodes.Status413PayloadTooLarge) { return tooLarge; }
+        catch (Exception ex) when (ex is InvalidDataException or IOException) { return required; }
+        return required;
+    }
+
+    [HttpDelete("products/{id:guid}/images/{imageId:guid}")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.All)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> DeleteImage(Guid id, Guid imageId, CancellationToken ct) =>
+        Run(a => images.DeleteAsync(a, id, imageId, ct), _ => NoContent(), write: true);
+
+    [HttpPatch("products/{id:guid}/images/order")]
+    [RequirePermission(PermissionKeys.InventoryManage, PermissionLevels.All)]
+    [RequestSizeLimit(4 * 1024)]
+    [ProducesResponseType<ProductImageListDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public Task<IActionResult> ReorderImages(Guid id, [FromBody] ProductImageOrderRequest? request, CancellationToken ct) =>
+        Run(a => images.ReorderAsync(a, id, request, ct), write: true);
 
     // ---------- постачальники ----------
 

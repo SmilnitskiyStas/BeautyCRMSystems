@@ -748,7 +748,10 @@ public sealed class ProductOrdersApiTests(AuthApiFixture fx) : IClassFixture<Aut
         Assert.True(items["Both"].GetProperty("inStock").GetBoolean());
         Assert.False(items["No stock"].GetProperty("inStock").GetBoolean());
         Assert.False(items["Expired only"].GetProperty("inStock").GetBoolean());
-        Assert.Equal(["categoryPath", "id", "inStock", "name", "price", "unit"], items["Visible"].EnumerateObject().Select(x => x.Name).OrderBy(x => x).ToArray());
+        // V1.1 (ADR-027): адитивні nullable-поля imageUrl/images; без Media:RootPath - null і []
+        Assert.Equal(["categoryPath", "id", "images", "imageUrl", "inStock", "name", "price", "unit"], items["Visible"].EnumerateObject().Select(x => x.Name).OrderBy(x => x).ToArray());
+        Assert.Equal(JsonValueKind.Null, items["Visible"].GetProperty("imageUrl").ValueKind);
+        Assert.Empty(items["Visible"].GetProperty("images").EnumerateArray());
         Assert.DoesNotContain("purchase", j.GetRawText(), StringComparison.OrdinalIgnoreCase);
         Assert.Equal(["currency", "items", "location", "maxLines", "maxQuantityPerLine", "reservationMinutes", "truncated"],
             j.EnumerateObject().Select(x => x.Name).OrderBy(x => x).ToArray());
