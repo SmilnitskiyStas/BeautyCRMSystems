@@ -458,6 +458,7 @@ export const mockBeautyApi: BeautyAdminApi = {
       isActive: true,
       closedWeekdays: [],
       workingHours: null,
+      isDiscoverable: input.isDiscoverable === true,
       ...mockCoordinates(input, null),
     };
     locations.push(created);
@@ -474,7 +475,7 @@ export const mockBeautyApi: BeautyAdminApi = {
     if (loc.isActive !== false && !input.isActive && hasFutureAt(id)) throw new BeautyApiError(409, "has_future_appointments", "future");
     if (input.timezone.trim() !== loc.timezone && hasFutureAt(id)) throw new BeautyApiError(409, "timezone_locked", "locked");
     const coords = mockCoordinates(input, loc);
-    Object.assign(loc, { name, address: input.address.trim() || null, phone: input.phone.trim() || null, timezone: input.timezone.trim(), isActive: input.isActive, ...coords });
+    Object.assign(loc, { name, address: input.address.trim() || null, phone: input.phone.trim() || null, timezone: input.timezone.trim(), isActive: input.isActive, isDiscoverable: input.isDiscoverable ?? loc.isDiscoverable ?? false, ...coords });
     return wait(loc);
   },
 

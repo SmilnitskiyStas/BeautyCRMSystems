@@ -144,7 +144,7 @@ describe("додавання закладу (мінімальна форма)", 
     await user.type(screen.getByLabelText(/Адреса/), "вул. Нова, 1");
     await user.click(screen.getByRole("button", { name: "Додати заклад" }));
     await waitFor(() =>
-      expect(createLocation).toHaveBeenCalledWith({ name: "Нова філія", address: "вул. Нова, 1", phone: "", timezone: "Europe/Kyiv", isActive: true }),
+      expect(createLocation).toHaveBeenCalledWith({ name: "Нова філія", address: "вул. Нова, 1", phone: "", timezone: "Europe/Kyiv", isActive: true, isDiscoverable: false }),
     );
     await waitFor(() => expect(push).toHaveBeenCalledWith("/beauty/locations/n"));
   });

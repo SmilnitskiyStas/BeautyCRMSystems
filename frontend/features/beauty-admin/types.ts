@@ -72,6 +72,8 @@ export interface LocationInput {
   phone: string;
   timezone: string;
   isActive: boolean;
+  /** ADR-022: opt-in до публічного пошуку застосунку; `undefined` = не передавати (PUT без змін, POST = false). */
+  isDiscoverable?: boolean;
   /** §28.11: `undefined` = не передавати; `null` пара = очистити (PUT); числа = задати. */
   latitude?: number | null;
   longitude?: number | null;
