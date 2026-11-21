@@ -62,6 +62,11 @@ public sealed class InventoryStage2bMigrationTests
                 await Exec(admin, $"GRANT beautycrm_catalog TO {owner} WITH INHERIT FALSE, SET TRUE");
                 await Exec(admin, "DO $$ BEGIN CREATE ROLE beautycrm_audit_purge NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; EXCEPTION WHEN duplicate_object THEN NULL; END $$");
                 await Exec(admin, $"GRANT beautycrm_audit_purge TO {owner} WITH INHERIT FALSE, SET TRUE");
+                // ADR-024 (TASK-862): ops заздалегідь створює ролі глобальної ідентичності (CREATEROLE у мігратора немає)
+                await Exec(admin, "DO $$ BEGIN CREATE ROLE beautycrm_identity NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; EXCEPTION WHEN duplicate_object THEN NULL; END $$");
+                await Exec(admin, $"GRANT beautycrm_identity TO {owner} WITH INHERIT FALSE, SET TRUE");
+                await Exec(admin, "DO $$ BEGIN CREATE ROLE beautycrm_identity_release NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; EXCEPTION WHEN duplicate_object THEN NULL; END $$");
+                await Exec(admin, $"GRANT beautycrm_identity_release TO {owner} WITH INHERIT FALSE, SET TRUE");
                 await Exec(admin, $"CREATE DATABASE {db} OWNER {owner}");
             }
             string Cs(string user) => new NpgsqlConnectionStringBuilder(adminCs) { Database = db, Username = user, Password = password }.ConnectionString;
@@ -86,7 +91,13 @@ public sealed class InventoryStage2bMigrationTests
             async Task<Guid> User(Guid t, string tag, string role = "owner")
             {
                 await Ctx(conn, t);
-                return await Id(conn, $"INSERT INTO users (tenant_id, email, full_name, password_hash, role) VALUES ('{t}', '{tag}@{t:N}.test', 'U', 'x', '{role}') RETURNING id");
+                var uid = Guid.NewGuid();
+                await using (var sc = new NpgsqlConnection(new NpgsqlConnectionStringBuilder(adminCs) { Database = db }.ConnectionString))
+                {
+                    await sc.OpenAsync();
+                    await Exec(sc, IdentitySeed.UserSql(t, $"{tag}@{t:N}.test", "U", "x", role, uid)); // ADR-024: users.identity_id NOT NULL; ідентичність створює суперкористувач
+                }
+                return uid;
             }
             async Task<Guid> Channel(Guid t)
             {

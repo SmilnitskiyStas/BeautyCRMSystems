@@ -589,6 +589,8 @@ specialist_id   UUID (nullable, FK beauty_specialists, composite FK (tenant_id, 
 is_active       BOOLEAN DEFAULT true
 password_hash   VARCHAR NULL (bcrypt, workfactor 12; NULL only while state='invited')
 state           VARCHAR NOT NULL DEFAULT 'active' (CHECK IN ('active','invited'))
+identity_id     UUID NOT NULL (FK identities(id) ON DELETE RESTRICT; ADR-024; UNIQUE (tenant_id, identity_id) — одне членство на людину в бізнесі)
+sessions_valid_after TIMESTAMPTZ NULL (ADR-024 E-5: токени з iat раніше за цей момент → 401 session_revoked; ставлять скидання пароля, злиття, звільнення пошти)
 created_at      TIMESTAMPTZ NOT NULL
 updated_at      TIMESTAMPTZ NOT NULL
 
@@ -676,6 +678,42 @@ created_at      TIMESTAMPTZ NOT NULL
 **RLS Policy:** `tenant_isolation` (user_id FK to users already filtered).
 
 ---
+
+### Global identity (ADR-024, міграція `20261117140201_auth_global_identities`, TASK-862)
+
+Перша глобальна (не-tenant) група таблиць з ПІІ й хешами. Виняток з ADR-002, компенсований deny-all RLS і функціями `SECURITY DEFINER`. Ідентичність — людина; членство — рядок `users` (без змін, `users.id` і 30 FK лишаються).
+
+#### identities
+```sql
+id                  UUID PRIMARY KEY DEFAULT gen_random_uuid()
+email               VARCHAR(320) NOT NULL  -- нормалізована lower(btrim()); CHECK (email = lower(email)); UNIQUE (ux_identities_email)
+password_hash       VARCHAR(255) NULL      -- bcrypt; NULL лише у pending
+state               VARCHAR(16) NOT NULL   -- 'pending' (запрошений власник без пароля) | 'active'
+last_login_at       TIMESTAMPTZ NULL
+password_changed_at TIMESTAMPTZ NULL
+created_at, updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+CHECK ((state = 'active') = (password_hash IS NOT NULL))
+```
+Лічильники блокування тут **немає** (E-2): блокування в `auth_login_attempts`.
+
+#### auth_login_attempts (E-2)
+Ключ `login_key = HMAC-SHA256(Auth:LoginAttemptKeyPepper, email_norm)` (сира пошта не зберігається). Лічильник невдач у вікні `Auth:LoginAttemptWindowSeconds` (900), блокування `Auth:LockoutMinutes`. Однаково для наявної, невідомої і pending пошти. Спливлі рядки видаляє `auth_identity_purge_expired`.
+
+#### auth_login_tickets
+`token_hash` (sha256 від 32 байтів; UNIQUE), `identity_id`, `expires_at` (TTL 180 с), `consumed_at`. Одноразовий, нова видача гасить попередній квиток ідентичності.
+
+#### auth_password_resets
+`token_hash` (sha256, NULL до першої спроби доставки), `identity_id`, `login_key`, `expires_at` (30 хв), `consumed_at`, `superseded_at`; черга доставки: `delivery_status`, `attempts`, `next_attempt_at`, `last_error` (код без токена й пошти); `notice_status` (`none | pending | sent | failed`) для листа «Пароль змінено» (TASK-872). **Сирого токена немає ніде** (E-4): його генерує воркер.
+
+**Гранти й RLS (чекліст E-8, §31.16):**
+- Роль `beautycrm_identity` (NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT) — власник функцій. Роль `beautycrm_identity_release` (NOLOGIN, та сама конфігурація) — лише для `auth_identity_release`. Мігратор має бути членом обох `WITH INHERIT FALSE, SET TRUE`.
+- Чотири таблиці: `ENABLE + FORCE RLS`, політики лише `TO beautycrm_identity` (і `TO beautycrm_identity_release` для звільнення). Для `beautycrm_app` і воркера — deny-all. `REVOKE ALL` на цих таблицях робить `deploy/staging/db/grants.sql` і `scripts/dev/setup-db.ps1` **після** `GRANT ON ALL TABLES` (порядок важливий).
+- Колонкові гранти власнику функцій: `users` (SELECT `id, tenant_id, identity_id, role, is_active, state, access_version`; UPDATE `password_hash` — до фази 3), `tenants` (SELECT `id, name, slug, status`), `refresh_tokens` (SELECT `tenant_id, user_id, revoked_at`; UPDATE `revoked_at`).
+- Функції `public.auth_*` (20 шт., `SECURITY DEFINER`, `search_path = pg_catalog, pg_temp`, `REVOKE ALL FROM PUBLIC`, явний `GRANT EXECUTE` лише `beautycrm_app`, воркеру — `claim/attach_token/mark/purge`, `auth_identity_release` — лише `beautycrm_identity_release`/ops). Жодна не повертає список пошт чи хеші інакше, ніж за точною поштою.
+- Тригер узгодженості: `users.email` = `identities.email` для того самого `identity_id` (SECURITY DEFINER, `23514`). Зміна пошти — лише разом в обох таблицях.
+- Стартова перевірка ізоляції API: `DbRoleGuard` (фейлить, якщо app-роль має доступ до глобальних таблиць).
+
+**Міграція:** `auth_global_identities` — backfill однієї ідентичності на `lower(btrim(email))`; групи з кількома членствами зливаються **лише** за allowlist `beautycrm.identity_merge_allowlist` (8-hex `email_key` з preflight; синонім `beautycrm.identity_merge_allow`; різні значення → помилка). Без allowlist при дублікатах — `RAISE EXCEPTION`. Групи з invited-власником або без активного членства з паролем — `RAISE` (вручну до міграції). `users.password_hash` не змінює. У злитій групі в тій самій транзакції відкликаються refresh-токени всіх членств і ставиться `sessions_valid_after = now`. `Down` відмовляє, якщо є активне членство з `users.password_hash IS NULL`. Процедура — runbook §2b.
 
 ## 3. Row-Level Security (RLS)
 
@@ -833,6 +871,17 @@ Adds beauty_specialists.practice_start_year, bio (+ CHECKs). Creates beauty_spec
 
 ---
 
+### 17. `20261117140201_auth_global_identities` (TASK-862, ADR-024; написана вручну, Designer прибрано)
+- Ролі `beautycrm_identity`, `beautycrm_identity_release` (створюються або падають з інструкцією для ops; `init-catalog-role.sql`).
+- Таблиці `identities`, `auth_login_attempts`, `auth_login_tickets`, `auth_password_resets` (deny-all RLS); `users.identity_id` (NULL → backfill → NOT NULL, UNIQUE (tenant_id, identity_id), FK RESTRICT), `users.sessions_valid_after`; тригер пошти; CHECK `platform_audit_log` (дії `identity.*`, `actor_type = identity`).
+- 20 функцій `auth_*` за матрицею §31.16; backfill за allowlist злиття (див. розділ «Global identity» вище).
+- **Down (human gate):** `RAISE`, якщо є активні членства з `users.password_hash IS NULL`; інакше прибирає колонки, таблиці, функції, політики, гранти (роль не видаляє).
+- **Застосування на staging/prod:** runbook §2b.
+
+### 18. `20261118080034_auth_users_identity_id_immutable` (TASK-874, review R-3; Up написано вручну, Designer прибрано)
+- Тригер `users_identity_id_immutable` (BEFORE UPDATE OF identity_id ON users) + функція `users_identity_id_immutable_guard()` (SECURITY INVOKER, без звернень до таблиць, `search_path` зафіксовано, REVOKE FROM PUBLIC): зміна `users.identity_id` на інше значення → `23514`. Роль runtime має UPDATE на users, а тригер пошти перевіряє лише пошту. Окрема функція, бо `users_identity_email_guard` належить `beautycrm_identity`.
+- Down: прибирає тригер і функцію, даних не змінює. Нових прав і ролей немає.
+
 ## 5. Runtime Roles & GRANTs
 
 **Design:** App runs under non-superuser role (e.g. `beautycrm_app`).
@@ -901,6 +950,14 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO beautycrm_app;
 - Створюється до міграції `20261115120000`: staging — `deploy/staging/db/init-catalog-role.sql` від superuser (ідемпотентний, також видає членство); локально — `scripts/dev/setup-db.ps1`.
 - GRANT-и: `grants.sql` / `setup-db.ps1`: `REVOKE UPDATE, DELETE ON user_access_audit FROM beautycrm_app`; `REVOKE ALL ON FUNCTION public.purge_user_access_audit(timestamptz) FROM PUBLIC`; `GRANT EXECUTE ... TO beautycrm_worker`. `user_permissions` для app: повний набір DML. Воркер і control plane до `user_permissions` і `user_access_audit` доступу не мають.
 - Тригер append-only, а не лише GRANT, захищає журнал (defense in depth).
+
+### Roles `beautycrm_identity` і `beautycrm_identity_release` (ADR-024)
+
+- Обидві: `NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT`, кластерні (створює ops, не застосунок). Мігратор має бути членом `WITH INHERIT FALSE, SET TRUE`.
+- `beautycrm_identity` — власник `auth_*`-функцій (без `EXECUTE` для app до `GRANT`); `beautycrm_identity_release` — лише `auth_identity_release`.
+- `beautycrm_app` і `beautycrm_worker`: `REVOKE ALL` на `identities`, `auth_login_attempts`, `auth_login_tickets`, `auth_password_resets`; `EXECUTE` на `auth_*` — явно за матрицею. Права на `auth_identity_release` немає в app і worker.
+- `REVOKE CREATE ON SCHEMA public` для нових ролей (без `CREATE` на `public`, E-8).
+- Тестова схема воркера (`worker/src/testing/schema.sql`) перегенерована; тести БД перевіряють deny-all і вихід функцій (`AuthGlobalIdentitiesMigrationTests`, `IdentityIsolationGuardTests`).
 
 ## 6. Local Setup
 

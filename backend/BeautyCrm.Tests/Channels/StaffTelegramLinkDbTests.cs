@@ -89,8 +89,7 @@ public sealed class StaffTelegramLinkDbTests : IClassFixture<PostgresRlsFixture>
     {
         var t = new Tn { TenantId = Guid.NewGuid(), OwnerId = Guid.NewGuid() };
         await Admin($@"INSERT INTO tenants (id, name, slug, modules) VALUES ('{t.TenantId}', 'T', 'stg-{t.TenantId:N}', '{(module ? "{beauty_inventory}" : "{}")}');
-                       INSERT INTO users (id, tenant_id, email, full_name, password_hash, role)
-                       VALUES ('{t.OwnerId}', '{t.TenantId}', 'o@{t.TenantId:N}.test', 'Owner', 'x', 'owner');");
+                       {IdentitySeed.UserSql(t.TenantId, $"o@{t.TenantId:N}.test", "Owner", "x", "owner", t.OwnerId)}");
         t.ChannelId = await AddChannelAsync(t.TenantId);
         return t;
     }

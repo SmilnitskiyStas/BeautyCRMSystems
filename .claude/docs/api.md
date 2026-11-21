@@ -26,20 +26,21 @@ HTTP codes: `200`, `201`, `204`, `400`, `401`, `402`, `403`, `404`, `409`, `422`
 ## Authentication (`/auth`)
 
 ### POST /auth/login
-**Access:** Public (rate limited: 10/min per IP)
+**Access:** Public (IP-ліміт `auth` 10/min; ADR-024: ліміт за поштою 20/900 с на `sha256(email)`, `429 rate_limited` + `Retry-After`)
 
-Create access & refresh tokens.
+ADR-024 (§31.2): вхід **без коду бізнесу**. Ідентичність (пошта + пароль) глобальна, членства (`users`) — по бізнесах.
 
 **Body:**
 ```json
 {
-  "tenant": "acme-salon",
   "email": "owner@example.com",
   "password": "..."
 }
 ```
+`tenant` — **deprecated** (legacy-форма): якщо передано, сервер після перевірки пароля обирає членство з цим slug і завжди повертає `TokenResponse`. Відповідь несе `Deprecation: @<unix>` (RFC 9745) і `Sunset: <HTTP-date>` (RFC 8594); дати з `Auth:LegacyTenantLogin:DeprecatedAt` / `SunsetAt`, обов'язкові поза Development. Членства в цьому slug немає → `401 invalid_credentials` і лічильник збільшується (E-1).
 
-**Response:** `200`
+**Response:** `200`, одна з двох форм:
+- 1 активне членство (або legacy `tenant`) → `TokenResponse`:
 ```json
 {
   "accessToken": "eyJ...",
@@ -48,10 +49,77 @@ Create access & refresh tokens.
   "user": { "id": "uuid", "email", "fullName", "role", "specialistId": "uuid|null" }
 }
 ```
+- ≥ 2 членства → вибір бізнесу (квиток у httpOnly cookie BFF, у JSON його немає у фінальному BFF-відгуку):
+```json
+{
+  "selectionRequired": true,
+  "loginTicket": "opaque... (32 байти, у БД лише sha256)",
+  "ticketExpiresInSeconds": 180,
+  "businesses": [ { "tenantId": "uuid", "name": "…", "role": "owner|admin|deputy|specialist" } ]
+}
+```
+Список `businesses` сортується за `name`. Дискримінатор `selectionRequired` перевіряється раніше за `accessToken` (frontend).
 
-**Errors:** `401 invalid_credentials`, `423 account_locked`, `422 validation_failed`, `429 rate_limited`.
+**Errors:** `401 invalid_credentials` (немає пошти, невірний пароль, немає активних членств, однакове тіло, §31.10), `423 account_locked` (5 невдалих спроб за 900 с → 15 хв, блокування на **ідентичність**, діє на всі бізнеси), `422 validation_failed`, `429 rate_limited` (+ `Retry-After`).
 
-**Notes:** 5 failed attempts → 15 min lockout (same error for unknown email).
+**Notes:** блокування — таблиця `auth_login_attempts` з ключем `HMAC-SHA256(Auth:LoginAttemptKeyPepper, email_norm)`; однакова для наявної, невідомої і `pending` пошти (не є оракулом існування). Перевірка блокування до пошуку ідентичності. Список членств не впливає на час відповіді до перевірки пароля.
+
+### POST /auth/login/select
+**Access:** Public (IP-ліміт `auth`)
+
+Вибір бізнесу після `login` з `selectionRequired: true`. Квиток гаситься першою ж спробою (E-13).
+
+**Body:**
+```json
+{ "loginTicket": "opaque...", "tenantId": "uuid" }
+```
+
+**Response:** `200` `TokenResponse` (як у login).
+
+**Errors:** `401 login_ticket_invalid` — невідомий, прострочений (TTL `Auth:LoginTicketSeconds`, 180 с), використаний квиток, `tenantId` не зі списку квитка або членство зникло (одна відповідь на всі причини). BFF без cookie квитка також дає `401 login_ticket_invalid` без виклику backend.
+
+### GET /auth/memberships
+**Access:** Staff (`[AllowInactiveSpecialist]`), `Cache-Control: no-store`
+
+Бізнеси поточної ідентичності для перемикача в шапці (показується при ≥ 2 членствах).
+
+**Response:** `200`
+```json
+[ { "tenantId": "uuid", "name": "…", "role": "owner|admin|deputy|specialist", "current": true } ]
+```
+
+### POST /auth/switch
+**Access:** Staff (`[AllowInactiveSpecialist]`, IP-ліміт `auth`)
+
+Перемикання бізнесу. Видає **нову пару токенів** для цільового tenant; refresh поточної сесії відкликається (одна бізнес-сесія на браузер). Видача — в окремому DI-scope з `UseTenant(target)`; членство цілі перечитується під RLS (E-9).
+
+**Body:**
+```json
+{ "tenantId": "uuid" }
+```
+Refresh-токен поточної сесії обов'язковий, але бере його BFF з cookie `beauty_rt`; відсутній/чужий/відкликаний → `401 invalid_token` (не 422, §31.15 п.10).
+
+**Response:** `200` `TokenResponse` для нового tenant.
+
+**Errors:** `401 invalid_token` (refresh непридатний), `404 membership_not_found` (немає членства, вимкнене або призупинений tenant; однакова відповідь), `422 same_tenant` (поточний tenant), `422 validation_failed` (відсутній/негідний `tenantId`), `429 rate_limited`.
+
+### POST /auth/password/forgot
+**Access:** Public (IP-ліміт `password-forgot` 5 / 900 с)
+
+**Body:** `{ "email": "a@salon.ua" }`
+
+**Response:** `202` **без тіла** — для наявної, невідомої, `pending` пошти, при перевищенні ліміту пошти (3 / год на `sha256(email)`, тихо) і при переповненій черзі (`Auth:PasswordForgot:QueueCapacity`, метрика `dropped`). `202` віддається до роботи з БД; лист ставить воркер.
+
+**Errors:** `422 invalid_email` (синтаксично невалідна або > 320 символів), `429 rate_limited` + `Retry-After` (лише IP).
+
+### POST /auth/password/reset
+**Access:** Public (IP-ліміт `auth`)
+
+**Body:** `{ "token": "<43 символи base64url>", "password": "…" }`
+
+**Response:** `204` (пароль змінено; автоматичного входу немає). Побічні дії: відкликання всіх refresh-токенів ідентичності, `sessions_valid_after = now` (access-токени перестають діяти на наступному запиті, `session_revoked`), зняття блокування, dual-write `users.password_hash`, аудит `identity.password_reset_completed`, черга листа «Пароль змінено».
+
+**Errors:** `410 reset_invalid` (невідомий, прострочений, використаний, погашений новою видачею, невірний формат, ідентичність не `active`; одна відповідь), `422 weak_password` (токен не споживається), `429 rate_limited`.
 
 ### POST /auth/refresh
 **Access:** Public (rate limited: 120/min per IP, 5/min per token, 600/min per tenant)
@@ -96,7 +164,7 @@ Accept invitation and set password (first login).
 { "id": "uuid", "email", "fullName", "role", "specialistId": "uuid|null", "isActive": true }
 ```
 
-**Errors:** `404 invite_invalid`, `409 user_exists|specialist_linked`, `422 weak_password`.
+**Errors:** `404 invite_invalid`, `409 user_exists|specialist_linked`, `409 email_in_use` (ADR-024: пошта вже є ідентичністю іншого бізнесу; запрошення лишається pending, наявний акаунт до бізнесу не приєднується), `422 weak_password`, `429 rate_limited` + `Retry-After` (квота нових ідентичностей через запрошення: `Auth:IdentityCreate:PerTenantPerDay`, за замовчуванням 20 на 24 год, ковзне вікно; `Retry-After` 60..86400 с).
 
 ### GET /auth/me
 **Access:** будь-який автентифікований співробітник (політика `Staff`: owner, admin, deputy, specialist). Доступний і з неактивним профілем майстра (`AllowInactiveSpecialist`).
@@ -301,7 +369,9 @@ Create tenant + owner user.
 }
 ```
 
-**Errors:** `409 tenant_slug_taken`, `422 validation_failed`.
+**Errors:** `409 tenant_slug_taken` (tenant не створюється), `409 owner_email_in_use` (ADR-024: `owner.email` вже є ідентичністю; tenant і власник не створюються), `422 validation_failed`.
+
+**ADR-024 (§31.8.3):** порядок перевірок — tenant (`tenant_slug_taken`) → ідентичність (`owner_email_in_use`). Власник задає пароль одразу, ідентичність створюється `active` (`via = platform`). Квота запрошень на цей шлях не діє.
 
 ### PATCH /platform/tenants/{id}
 **Access:** X-Platform-Key header only
@@ -1632,8 +1702,16 @@ Cancel appointment (refund per policy).
 | `user_not_found` | 404 | `/users/{id}/...` (зокрема чужий tenant) |
 | `invite_invalid` | 404 | ADR-023: прострочене/використане/відкликане запрошення, або запрошувач утратив права |
 | `specialist_inactive` | 403 | Specialist profile deactivated |
-| `account_locked` | 423 | Too many failed attempts (15 min) |
-| `rate_limited` | 429 | Too many requests |
+| `account_locked` | 423 | Too many failed attempts (15 min); ADR-024: блокування на ідентичність, однакове для наявної, невідомої і pending пошти |
+| `rate_limited` | 429 | Too many requests; ADR-024: `Retry-After` для login за поштою, forgot, перевірки пошти запрошення, квоти ідентичностей |
+| `login_ticket_invalid` | 401 | ADR-024: квиток вибору бізнесу невідомий/прострочений/використаний або tenant не з його списку |
+| `membership_not_found` | 404 | ADR-024: `switch` у бізнес без активного членства (або призупинений) |
+| `email_in_use` | 409 | ADR-024: пошта вже є ідентичністю (створення/прийняття запрошення персоналу). Текст без назви бізнесу |
+| `owner_email_in_use` | 409 | ADR-024: `POST /api/control/v1/tenants` і `POST /api/platform/tenants` |
+| `reset_invalid` | 410 | ADR-024: токен скидання непридатний (одна відповідь на всі причини) |
+| `same_tenant` | 422 | ADR-024: `switch` у поточний tenant |
+| `invalid_email` | 422 | ADR-024: `password/forgot` з невалідною поштою |
+| `weak_password` | 422 | Слабкий пароль (прийняття запрошення, `password/reset`; токен не споживається) |
 | `appointment_not_found` | 404 | Appointment not found |
 | `client_not_found` | 404 | Client not found |
 | `location_not_found` | 404 | Location not found |
@@ -1646,7 +1724,8 @@ Cancel appointment (refund per policy).
 | `absence_overlap` | 409 | Absence overlaps with existing |
 | `absence_closed` | 409 | Absence already cancelled |
 | `absence_not_pending` | 409 | Absence not in requested state |
-| `invite_invalid` | 404 | Token expired or invalid |
+| `invite_invalid` | 404 | Token expired or invalid. ADR-024: `POST /api/auth/invite/accept` (власник) → `410`, якщо ідентичність уже активна (§31.8.3) |
+| `session_revoked` (ADR-024) | 401 | Додатково: `iat` < `users.sessions_valid_after` (скидання пароля, звільнення пошти, злиття) |
 | `user_exists` | 409 | Email already registered in tenant |
 | `specialist_linked` | 409 | User already linked to another specialist |
 | `specialist_inactive` | 409 | Specialist profile deactivated (can't invite) |
@@ -1683,6 +1762,7 @@ Cancel appointment (refund per policy).
 - `404 Not Found` — Resource not found.
 - `409 Conflict` — Slot occupied, email exists, etc.
 - `422 Unprocessable Entity` — Validation failed.
+- `410 Gone` — ADR-024: `reset_invalid` (скидання пароля), `invite_invalid` (запрошення власника, ідентичність уже активна).
 - `423 Locked` — Account locked.
 - `426 Upgrade Required` — Public client app version too old (`upgrade_required`).
 - `429 Too Many Requests` — Rate limited.

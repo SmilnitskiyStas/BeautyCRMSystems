@@ -295,6 +295,56 @@ public sealed class HardeningTests(AuthApiFixture fx) : IClassFixture<AuthApiFix
         Assert.Equal(HttpStatusCode.TooManyRequests, (await Login(c, "192.0.2.50", "3.3.3.3")).StatusCode);
     }
 
+    /// <summary>Вхід за новою формою (без коду бізнесу, ADR-024): пошта випадкова, тож лічильник за поштою не заважає IP-ліміту.</summary>
+    private static Task<HttpResponseMessage> GlobalLogin(HttpClient c, string remote, string? xff)
+    {
+        var body = JsonSerializer.Serialize(new { email = Guid.NewGuid().ToString("N")[..8] + "@x.test", password = "Pw-123456789012" });
+        var req = new HttpRequestMessage(HttpMethod.Post, "/api/auth/login") { Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json") };
+        req.Headers.Add(TestRemoteIpFilter.Header, remote);
+        if (xff is not null) req.Headers.Add("X-Forwarded-For", xff);
+        return c.SendAsync(req);
+    }
+
+    /// <summary>
+    /// §31.15 п.19 (F-1, TASK-871): ланцюг client -> nginx -> web -> api. TrustedProxies = шлюз (nginx) + адреса web; на API з'єднання
+    /// приходить від web, а X-Forwarded-For = "client, nginx". Різні клієнтські IP мають незалежні ліміти auth; той самий клієнт - спільний.
+    /// </summary>
+    [SkippableFact]
+    public async Task auth_rate_limit_counts_per_client_ip_behind_nginx_and_web_trusted_chain()
+    {
+        NeedDb();
+        const string nginx = "172.18.0.1", web = "172.18.0.5";
+        var c = RateLimited($"{nginx}, {web}");
+        // клієнт A: два дозволені, третій - 429
+        Assert.Equal(HttpStatusCode.Unauthorized, (await GlobalLogin(c, web, $"198.51.100.1, {nginx}")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await GlobalLogin(c, web, $"198.51.100.1, {nginx}")).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await GlobalLogin(c, web, $"198.51.100.1, {nginx}")).StatusCode);
+        // клієнт B за тим самим web/nginx має власний кошик (інакше всі клієнти ділили б один ліміт з адресою шлюзу)
+        Assert.Equal(HttpStatusCode.Unauthorized, (await GlobalLogin(c, web, $"198.51.100.2, {nginx}")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await GlobalLogin(c, web, $"198.51.100.2, {nginx}")).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await GlobalLogin(c, web, $"198.51.100.2, {nginx}")).StatusCode);
+        // підробка ліворуч не обходить ліміт A: береться перший недовірений справа
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await GlobalLogin(c, web, $"9.9.9.9, 198.51.100.1, {nginx}")).StatusCode);
+    }
+
+    [SkippableFact]
+    public async Task auth_rate_limit_ignores_forwarded_for_from_an_untrusted_source_in_the_bff_chain()
+    {
+        NeedDb();
+        const string nginx = "172.18.0.1", web = "172.18.0.5";
+        var c = RateLimited($"{nginx}, {web}");
+        // з'єднання від недовіреної адреси (наприклад, процес на хості поза списком): XFF не змінює ключ - рахується адреса з'єднання
+        const string attacker = "192.0.2.77";
+        Assert.Equal(HttpStatusCode.Unauthorized, (await GlobalLogin(c, attacker, $"1.1.1.1, {nginx}")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await GlobalLogin(c, attacker, $"2.2.2.2, {nginx}")).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await GlobalLogin(c, attacker, $"3.3.3.3, {nginx}")).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await GlobalLogin(c, attacker, null)).StatusCode);
+        // довірений web, але ланцюг не веде до клієнта нижче довірених адрес: ключ - перший недовірений справа, а не підроблений зліва
+        Assert.Equal(HttpStatusCode.Unauthorized, (await GlobalLogin(c, web, "203.0.113.9")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await GlobalLogin(c, web, "6.6.6.6, 203.0.113.9")).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await GlobalLogin(c, web, "7.7.7.7, 203.0.113.9")).StatusCode);
+    }
+
     [SkippableFact]
     public async Task trustedProxies_accepts_single_ip_entries_and_ipv6_and_rejects_garbage()
     {
@@ -475,9 +525,10 @@ public sealed class HardeningTests(AuthApiFixture fx) : IClassFixture<AuthApiFix
         Assert.Equal(real.Body.GetProperty("message").GetString(), unknown.Body.GetProperty("message").GetString());
         Assert.Equal(real.Body.ToString(), unknown.Body.ToString());
 
-        // лічильник за ключем slug+email: інший email і інший slug не заблоковані
+        // ADR-024 (§31.2.1): лічильник за ключем пошти (не slug+email): інший email не заблокований, а той самий email заблокований
+        // незалежно від slug (блокування діє на всі бізнеси людини)
         Assert.Equal(HttpStatusCode.Unauthorized, (await TryLogin(t.Slug, $"other-{Guid.NewGuid():N}@x.test", wrong)).Status);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await TryLogin("no-such-tenant", ghost, wrong)).Status);
+        Assert.Equal(HttpStatusCode.Locked, (await TryLogin("no-such-tenant", ghost, wrong)).Status);
     }
 
     [SkippableFact]

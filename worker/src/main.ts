@@ -19,6 +19,7 @@ import type { BeautyDeps } from "./ports";
 import { loadFeedbackConfig } from "./feedback/delivery";
 import { PgFeedbackStore } from "./feedback/feedback-store";
 import { pollFeedback } from "./feedback/poller";
+import { POLL_EVERY_MS, PURGE_EVERY_MS, PgPasswordResetStore, createPasswordMailer, loadPublicAppUrl, pollPasswordResets } from "./auth/password-reset";
 import { NONCE_CLEANUP_EVERY_MS, purgeControlPlaneNonces } from "./maintenance/nonce-cleanup";
 import { Scheduler } from "./scheduler/scheduler";
 import { isProductOrdersFlagOn, PgProductOrdersExpire } from "./product-orders/expire";
@@ -93,8 +94,15 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
       }]
     : [];
   if (!fb.enabled && fb.reason === "misconfigured") consoleLogger.error("feedback delivery disabled: invalid SHELFGUARD_* configuration");
+  // TASK-865: password reset mail (ADR-024). Link only from PUBLIC_APP_URL; sender = EMAIL_FROM (ops); mock mode sends nothing.
+  const resetStore = new PgPasswordResetStore(db.pool);
+  const publicAppUrl = loadPublicAppUrl(env);
+  if (!publicAppUrl) consoleLogger.error("password reset mail disabled: PUBLIC_APP_URL is missing or invalid");
+  const resetCtx = { store: resetStore, mailer: createPasswordMailer(emailConfig, env, consoleLogger), publicAppUrl, logger: consoleLogger };
   const scheduler = new Scheduler([
     ...feedbackTasks,
+    { name: "auth.password-reset", everyMs: POLL_EVERY_MS, run: () => pollPasswordResets(resetCtx) },
+    { name: "auth.identity-purge", everyMs: PURGE_EVERY_MS, run: async () => ({ deleted: await resetStore.purgeExpired(now()) }) },
     // TASK-826 (L1): replay-protection nonces older than 15 min are useless (signature window 300 s).
     { name: "platform.nonce-cleanup", everyMs: NONCE_CLEANUP_EVERY_MS, run: () => purgeControlPlaneNonces(db.pool, now()) },
     { name: "beauty.reminders", everyMs: 1 * MIN, run: () => pollReminders(ctx) },

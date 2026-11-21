@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import pg from "pg";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { seedUser } from "../testing/seed-user";
 import { ChannelSendError } from "../adapters/channel-sender";
 import { writeCredentials } from "../adapters/channel-crypto";
 import { PgBeautyData } from "../adapters/pg-data";
@@ -47,6 +48,7 @@ beforeAll(async () => {
   await admin.query(readFileSync(new URL("../testing/schema.sql", import.meta.url), "utf8"));
   await admin.query(`CREATE ROLE ${WORKER} LOGIN PASSWORD 'pw' NOSUPERUSER NOBYPASSRLS`);
   await admin.query(`CREATE ROLE ${APP} LOGIN PASSWORD 'pw' NOSUPERUSER NOBYPASSRLS`);
+  await admin.query("CREATE ROLE beautycrm_owner NOLOGIN"); // блок $grants (ADR-024, auth_identity_release) видає EXECUTE ops-ролі
   await admin.query(`GRANT USAGE ON SCHEMA public TO ${APP}, ${WORKER}`);
   await admin.query(scriptGrants("app"));
   await admin.query(scriptGrants("worker"));
@@ -73,7 +75,7 @@ async function seed(o: { type?: "promo" | "news"; coupon?: "none" | "personal"; 
   const tenantId = randomUUID();
   const [loc, spec, svc, promo, campaignId, userId, channelId] = Array.from({ length: 7 }, () => randomUUID());
   await q("INSERT INTO tenants (id, name, slug, modules) VALUES ($1,'T',$2,$3::text[])", [tenantId, `t-${tenantId.slice(0, 8)}`, o.modules ?? "{beauty_marketing}"]);
-  await q("INSERT INTO users (id, tenant_id, email, full_name, password_hash, role) VALUES ($1,$2,$3,'U','x','owner')", [userId, tenantId, `${userId}@x.test`]);
+  await seedUser(admin, { id: userId, tenantId, email: `${userId}@x.test` });
   await q("INSERT INTO beauty_locations (id, tenant_id, name, timezone, is_active) VALUES ($1,$2,'L',$3,true)", [loc, tenantId, o.tz ?? "Europe/Kyiv"]);
   await q("INSERT INTO beauty_specialists (id, tenant_id, full_name, is_active) VALUES ($1,$2,'S',true)", [spec, tenantId]);
   await q("INSERT INTO beauty_services (id, tenant_id, name, duration_minutes, is_active) VALUES ($1,$2,'Манікюр',60,true)", [svc, tenantId]);

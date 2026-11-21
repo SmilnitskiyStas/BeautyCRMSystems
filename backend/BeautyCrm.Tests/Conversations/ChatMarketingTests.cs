@@ -159,7 +159,7 @@ public sealed class ChatMarketingPipelineTests : IClassFixture<PostgresRlsFixtur
         var e = new Env { H = h, S = s, Conv = conv };
         await using var ctx = _db.CreateContext(e.Tenant);
         await ctx.Messages.Where(m => m.ConversationId == conv).ExecuteUpdateAsync(u => u.SetProperty(m => m.Status, "processed"));
-        var user = new User { Id = Guid.NewGuid(), Email = $"{Guid.NewGuid():N}@t.test", FullName = "Олена", PasswordHash = "x", Role = Roles.Admin };
+        var user = await IdentitySeed.NewUserAsync(ctx, Roles.Admin, "Олена");
         ctx.Add(user);
         e.UserId = user.Id;
         if (withClient)

@@ -58,6 +58,11 @@ public sealed class InventoryPermissionsMigrationTests
                 await Exec(admin, $"GRANT beautycrm_catalog TO {owner} WITH INHERIT FALSE, SET TRUE");
                 await Exec(admin, "DO $$ BEGIN CREATE ROLE beautycrm_audit_purge NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; EXCEPTION WHEN duplicate_object THEN NULL; END $$");
                 await Exec(admin, $"GRANT beautycrm_audit_purge TO {owner} WITH INHERIT FALSE, SET TRUE");
+                // ADR-024 (TASK-862): ops заздалегідь створює ролі глобальної ідентичності (CREATEROLE у мігратора немає)
+                await Exec(admin, "DO $$ BEGIN CREATE ROLE beautycrm_identity NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; EXCEPTION WHEN duplicate_object THEN NULL; END $$");
+                await Exec(admin, $"GRANT beautycrm_identity TO {owner} WITH INHERIT FALSE, SET TRUE");
+                await Exec(admin, "DO $$ BEGIN CREATE ROLE beautycrm_identity_release NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; EXCEPTION WHEN duplicate_object THEN NULL; END $$");
+                await Exec(admin, $"GRANT beautycrm_identity_release TO {owner} WITH INHERIT FALSE, SET TRUE");
                 await Exec(admin, $"CREATE DATABASE {db} OWNER {owner}");
             }
             var ownerCs = new NpgsqlConnectionStringBuilder(adminCs) { Database = db, Username = owner, Password = password }.ConnectionString;
@@ -78,7 +83,7 @@ public sealed class InventoryPermissionsMigrationTests
             await Exec(sc, $"INSERT INTO tenants (id, name, slug) VALUES ('{tA}', 'T', 'ip-{tA:N}')");
             var (ownerU, adminAll, adminNone, deputy, spec) = (Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
             Task User(Guid id, string role) => Exec(sc,
-                $"INSERT INTO users (id, tenant_id, email, full_name, password_hash, role) VALUES ('{id}', '{tA}', '{id:N}@x.test', '{role}', 'x', '{role}')");
+                IdentitySeed.UserSql(tA, $"{id:N}@x.test", role, "x", role, id));
             await User(ownerU, "owner"); await User(adminAll, "admin"); await User(adminNone, "admin"); await User(deputy, "deputy"); await User(spec, "specialist");
             Task Perm(Guid u, string key, string level) => Exec(sc,
                 $"INSERT INTO user_permissions (tenant_id, user_id, permission, level) VALUES ('{tA}', '{u}', '{key}', '{level}')");

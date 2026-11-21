@@ -26,6 +26,8 @@ public static class AuthPolicies
     public const string RefreshRateLimit = "auth-refresh";
     /// <summary>Публічні inspect/accept запрошення власника (§27.8): 10/хв на IP, окремий лічильник від логіну.</summary>
     public const string InviteRateLimit = "auth-invite";
+    /// <summary>§31.9: password/forgot за IP (5 / 900 с за замовчуванням).</summary>
+    public const string PasswordForgotRateLimit = "auth-password-forgot";
 }
 
 public static class AuthSetup
@@ -37,12 +39,44 @@ public static class AuthSetup
         return o;
     }
 
+    /// <summary>
+    /// ADR-024 / §31.1-31.2.3: pepper блокування (≥ 32 байти) і дати Deprecation/Sunset обов'язкові поза Development (без них API не
+    /// стартує, як Marketing:LegalGateApproved). У Development без pepper береться випадковий на процес (лічильники не переживають рестарт).
+    /// Короткий pepper відхиляється в усіх середовищах.
+    /// </summary>
+    public static AuthOptions ValidateIdentityOptions(AuthOptions o, bool isDevelopment)
+    {
+        if (string.IsNullOrWhiteSpace(o.LoginAttemptKeyPepper))
+        {
+            if (!isDevelopment)
+                throw new InvalidOperationException(
+                    "Auth:LoginAttemptKeyPepper (env Auth__LoginAttemptKeyPepper) must be a secret of at least 32 bytes outside Development (contract section 31.1).");
+            o.LoginAttemptKeyPepper = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+        }
+        else if (!LoginKey.IsValidPepper(o.LoginAttemptKeyPepper))
+        {
+            throw new InvalidOperationException("Auth:LoginAttemptKeyPepper must be at least 32 bytes.");
+        }
+
+        // R-4: purge auth_login_attempts розрахований на вікно <= 86400 с; нижня межа не дає зробити лічильник беззмістовним
+        if (o.LoginAttemptWindowSeconds is < 60 or > 86400)
+            throw new InvalidOperationException("Auth:LoginAttemptWindowSeconds must be between 60 and 86400 (contract section 31.1).");
+        if (o.MaxFailedAttempts < 1)
+            throw new InvalidOperationException("Auth:MaxFailedAttempts must be at least 1 (contract section 31.1).");
+
+        if (!isDevelopment && (o.LegacyTenantLogin.DeprecatedAt is null || o.LegacyTenantLogin.SunsetAt is null))
+            throw new InvalidOperationException(
+                "Auth:LegacyTenantLogin:DeprecatedAt and Auth:LegacyTenantLogin:SunsetAt are required outside Development (contract section 31.2.3).");
+        return o;
+    }
+
     /// <summary>JwtBearer + політики за ролями + fallback "автентифікація за замовчуванням" + rate limit на auth-ендпоінти.</summary>
-    public static IServiceCollection AddBeautyAuthApi(this IServiceCollection services, IConfiguration config)
+    public static IServiceCollection AddBeautyAuthApi(this IServiceCollection services, IConfiguration config, IHostEnvironment? env = null)
     {
         var jwt = JwtSettings.From(config);
         services.AddSingleton(jwt);
-        services.AddBeautyAuthApplication(BindAuthOptions(config));
+        var authOptions = ValidateIdentityOptions(BindAuthOptions(config), env?.IsDevelopment() == true);
+        services.AddBeautyAuthApplication(authOptions);
         services.AddSingleton<ITokenIssuer, JwtTokenIssuer>();
 
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -95,6 +129,8 @@ public static class AuthSetup
             o.OnRejected = async (ctx, ct) =>
             {
                 ctx.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+                if (ctx.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+                    ctx.HttpContext.Response.Headers.RetryAfter = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
                 await ctx.HttpContext.Response.WriteAsJsonAsync(new ApiError("rate_limited", "Too many requests. Try again later."), ct);
             };
             // Ключ — IP клієнта: Connection.RemoteIpAddress уже перезаписано UseForwardedHeaders лише для довірених проксі
@@ -108,7 +144,19 @@ public static class AuthSetup
             o.AddPolicy(AuthPolicies.InviteRateLimit, http => RateLimitPartition.GetFixedWindowLimiter(
                 "invite:" + (http.Connection.RemoteIpAddress?.ToString() ?? "unknown"),
                 _ => new FixedWindowRateLimiterOptions { PermitLimit = invitePermit, Window = window, QueueLimit = 0 }));
+            o.AddPolicy(AuthPolicies.PasswordForgotRateLimit, http => RateLimitPartition.GetFixedWindowLimiter(
+                "forgot:" + (http.Connection.RemoteIpAddress?.ToString() ?? "unknown"),
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = Math.Max(1, authOptions.PasswordForgot.PerIpPermit),
+                    Window = TimeSpan.FromSeconds(Math.Max(1, authOptions.PasswordForgot.PerIpWindowSeconds)),
+                    QueueLimit = 0,
+                }));
         });
+        services.AddHostedService<PasswordForgotWorker>(); // §31.7.1: фонова видача запитів скидання
+        services.AddSingleton(new LoginEmailThrottle(
+            config.GetValue("Auth:LoginEmailThrottle:PermitLimit", 20),
+            TimeSpan.FromSeconds(config.GetValue("Auth:LoginEmailThrottle:WindowSeconds", 900))));
         services.AddSingleton(new OwnerInviteThrottle(config.GetValue("Auth:RateLimit:InvitePerTokenPermit", 5), window));
         services.AddSingleton(new RefreshThrottle(
             config.GetValue("Auth:RateLimit:RefreshPerTokenPermit", 5),

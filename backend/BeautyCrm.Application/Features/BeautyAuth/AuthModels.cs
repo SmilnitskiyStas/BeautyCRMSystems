@@ -65,15 +65,63 @@ public sealed class AuthOptions
     public int RefreshTokenDays { get; set; } = 14;
     public int InviteDays { get; set; } = 7;
     public int MinPasswordLength { get; set; } = 12;
+
+    // ---- ADR-024 / §31.9 ----
+    /// <summary>Вікно підрахунку невдалих входів (с); якщо воно спливло, лічильник починається з 1.</summary>
+    public int LoginAttemptWindowSeconds { get; set; } = 900;
+    /// <summary>Секрет HMAC для <c>login_key</c> (§31.1), ≥ 32 байти (UTF-8). Поза Development обов'язковий (перевіряє AuthSetup).</summary>
+    public string? LoginAttemptKeyPepper { get; set; }
+    /// <summary>TTL квитка вибору бізнесу, 60..600 с.</summary>
+    public int LoginTicketSeconds { get; set; } = 180;
+    public LegacyTenantLoginOptions LegacyTenantLogin { get; set; } = new();
+    public IdentityCreateOptions IdentityCreate { get; set; } = new();
+    public InviteEmailCheckOptions InviteEmailCheck { get; set; } = new();
+    public PasswordForgotOptions PasswordForgot { get; set; } = new();
+    /// <summary>TTL токена скидання пароля (хв, 10..120; §31.9).</summary>
+    public int PasswordResetMinutes { get; set; } = 30;
+}
+
+/// <summary>§31.9: <c>password/forgot</c>. Ліміти in-memory на інстанс; пошта в лімітері лише як sha256.</summary>
+public sealed class PasswordForgotOptions
+{
+    public int PerIpPermit { get; set; } = 5;
+    public int PerIpWindowSeconds { get; set; } = 900;
+    public int PerEmailPermit { get; set; } = 3;
+    public int PerEmailWindowSeconds { get; set; } = 3600;
+    public int QueueCapacity { get; set; } = 1000;
+}
+
+public sealed class InviteEmailCheckOptions
+{
+    /// <summary>Перевірок зайнятості пошти при створенні запрошень на tenant за годину (§31.9, in-memory, на інстанс).</summary>
+    public int PerTenantPerHour { get; set; } = 30;
+}
+
+/// <summary>§31.2.3: заголовки Deprecation/Sunset для запитів входу з необов'язковим полем <c>tenant</c>.</summary>
+public sealed class LegacyTenantLoginOptions
+{
+    public DateTimeOffset? DeprecatedAt { get; set; }
+    public DateTimeOffset? SunsetAt { get; set; }
+}
+
+public sealed class IdentityCreateOptions
+{
+    /// <summary>Квота нових ідентичностей через запрошення персоналу на tenant за 24 год (§31.9, 1..200).</summary>
+    public int PerTenantPerDay { get; set; } = 20;
 }
 
 // ---------- помилки ----------
 
-public enum AuthErrorKind { Validation, Unauthorized, Forbidden, NotFound, Conflict, Locked, Gone }
+public enum AuthErrorKind { Validation, Unauthorized, Forbidden, NotFound, Conflict, Locked, Gone, TooManyRequests }
 
 /// <param name="Extras">Додаткові поля тіла помилки (§30.11): permission, required, currentVersion, permissions[], violations[] тощо.</param>
-public sealed record AuthError(AuthErrorKind Kind, string Code, string Message, IReadOnlyDictionary<string, object?>? Extras = null)
+/// <param name="RetryAfterSeconds">Для <see cref="AuthErrorKind.TooManyRequests"/>: значення заголовка Retry-After.</param>
+public sealed record AuthError(AuthErrorKind Kind, string Code, string Message, IReadOnlyDictionary<string, object?>? Extras = null, int? RetryAfterSeconds = null)
 {
+    /// <summary>429 rate_limited + Retry-After (§31.9).</summary>
+    public static AuthError RateLimited(int retryAfterSeconds) =>
+        new(AuthErrorKind.TooManyRequests, "rate_limited", "Too many requests. Try again later.", null, Math.Max(1, retryAfterSeconds));
+
     public static AuthError Validation(string code, string message) => new(AuthErrorKind.Validation, code, message);
     public static AuthError Unauthorized(string code, string message) => new(AuthErrorKind.Unauthorized, code, message);
     public static AuthError Forbidden(string code, string message) => new(AuthErrorKind.Forbidden, code, message);
@@ -100,10 +148,42 @@ public sealed record AuthResult<T>(T? Value, AuthError? Error)
 
 // ---------- запити / відповіді (API-контракт) ----------
 
+/// <summary>§31.2: <c>Tenant</c> необов'язкове й deprecated (null/порожнє після Trim = нова форма входу без коду бізнесу).</summary>
 public sealed record LoginRequest(
-    [Required, StringLength(64)] string Tenant,
     [Required, EmailAddress, StringLength(320)] string Email,
-    [Required, StringLength(128)] string Password);
+    [Required, StringLength(128)] string Password,
+    [StringLength(64)] string? Tenant = null);
+
+public sealed record LoginSelectRequest(
+    [Required, StringLength(200)] string LoginTicket,
+    [Required] Guid? TenantId);
+
+/// <summary>
+/// <c>RefreshToken</c> необов'язковий на рівні ModelState: його відсутність - це <c>401 invalid_token</c> (§31.5 крок 4, §31.15 п.10),
+/// а не 422; без чинного refresh-токена поточної сесії переключитися неможливо.
+/// </summary>
+public sealed record SwitchRequest(
+    [Required] Guid? TenantId,
+    [StringLength(200)] string? RefreshToken = null);
+
+/// <summary>Бізнес у відповіді варіанта B: лише id, назва й роль (без slug, userId, модулів, прав).</summary>
+public sealed record BusinessOption(Guid TenantId, string Name, string Role);
+
+/// <summary>Відповідь <c>login</c>, варіант B (≥ 2 активних членств). Дискримінатор — <c>selectionRequired === true</c>.</summary>
+public sealed record LoginSelectionResponse(
+    bool SelectionRequired, string LoginTicket, int TicketExpiresInSeconds, IReadOnlyList<BusinessOption> Businesses);
+
+/// <summary><c>GET /api/auth/memberships</c> (§31.4).</summary>
+public sealed record MembershipDto(Guid TenantId, string Name, string Role, bool Current);
+
+/// <summary>Результат входу: рівно одне з полів не null (A — токени, B — вибір бізнесу).</summary>
+public sealed record LoginOutcome(TokenResponse? Tokens, LoginSelectionResponse? Selection);
+
+/// <summary>§31.7.1: <c>Email</c> без атрибутів валідації: синтаксична помилка = <c>422 invalid_email</c> (а не загальний validation_failed).</summary>
+public sealed record ForgotPasswordRequest(string? Email);
+
+/// <summary>§31.7.2: без атрибутів; порядок перевірок (weak_password до токена) задає сервіс.</summary>
+public sealed record ResetPasswordRequest(string? Token, string? Password);
 
 public sealed record RefreshRequest([Required, StringLength(200)] string RefreshToken);
 
@@ -186,13 +266,13 @@ public sealed record TenantInfo(Guid Id, string Name, string Slug, IReadOnlyList
 public sealed record UserRecord(
     Guid Id, Guid TenantId, string Email, string FullName, string? PasswordHash, string Role, Guid? SpecialistId,
     bool IsActive, int FailedLoginCount, DateTimeOffset? LockoutUntil, DateTimeOffset? LastLoginAt, string State = UserStates.Active,
-    int AccessVersion = 1);
+    int AccessVersion = 1, Guid IdentityId = default, DateTimeOffset? SessionsValidAfter = null);
 
 public sealed record InviteRecord(
     Guid Id, string Email, string Role, Guid? SpecialistId, DateTimeOffset ExpiresAt,
     DateTimeOffset? AcceptedAt, DateTimeOffset? RevokedAt, string PermissionsJson = "{}", Guid? InvitedByUserId = null);
 
-public sealed record RefreshRecord(Guid Id, Guid UserId, DateTimeOffset ExpiresAt, DateTimeOffset? RevokedAt);
+public sealed record RefreshRecord(Guid Id, Guid UserId, DateTimeOffset ExpiresAt, DateTimeOffset? RevokedAt, DateTimeOffset CreatedAt = default);
 
 /// <summary>ADR-018: PasswordHash = null лише для <see cref="UserStates.Invited"/> (власник, створений control plane).</summary>
 public sealed record NewUser(string Email, string FullName, string? PasswordHash, string Role, Guid? SpecialistId, string State = UserStates.Active);
@@ -205,7 +285,11 @@ public sealed record NewInvite(
 
 public sealed record NewTenant(Guid Id, string Name, string Slug, IReadOnlyList<string> Modules);
 
-public enum WriteOutcome { Ok, Conflict, Unavailable }
+/// <summary>
+/// Conflict - slug / пошта вже член цього tenant / профіль майстра зайнятий (залежно від операції); EmailInUse - пошта зайнята
+/// глобальною ідентичністю (§31.8); QuotaExceeded - квота нових ідентичностей tenant (§31.8.2, F-4).
+/// </summary>
+public enum WriteOutcome { Ok, Conflict, Unavailable, EmailInUse, QuotaExceeded }
 
 /// <summary>
 /// Порт даних автентифікації. Усе, крім <see cref="FindTenantBySlugAsync"/>, працює під RLS поточного tenant:
@@ -218,13 +302,10 @@ public interface IAuthStore
     void UseTenant(Guid tenantId);
     Task<TenantInfo?> GetTenantAsync(CancellationToken ct);
 
-    Task<UserRecord?> FindUserByEmailAsync(string normalizedEmail, CancellationToken ct);
     Task<UserRecord?> GetUserAsync(Guid id, CancellationToken ct);
     Task<IReadOnlyList<UserRecord>> ListUsersAsync(CancellationToken ct);
-    /// <summary>Атомарно: лічильник +1; досягнення maxAttempts -> блокування до lockUntil.</summary>
-    Task RegisterFailedLoginAsync(Guid userId, int maxAttempts, DateTimeOffset lockUntil, CancellationToken ct);
-    Task RegisterSuccessfulLoginAsync(Guid userId, DateTimeOffset now, CancellationToken ct);
-    Task ResetLockoutAsync(Guid userId, CancellationToken ct);
+    /// <summary>Лише <c>users.last_login_at</c> членства. Блокування й лічильник входів живуть в <see cref="IIdentityStore"/> (ADR-024); застарілі users.failed_login_count/lockout_until не читаються й не пишуться.</summary>
+    Task SetLastLoginAsync(Guid userId, DateTimeOffset now, CancellationToken ct);
 
     Task AddRefreshTokenAsync(Guid userId, string tokenHash, DateTimeOffset expiresAt, CancellationToken ct);
     Task<RefreshRecord?> FindRefreshTokenAsync(string tokenHash, CancellationToken ct);
@@ -251,7 +332,46 @@ public interface IAuthStore
     /// </summary>
     Task<(WriteOutcome Outcome, UserRecord? User)> AcceptInviteAsync(InviteRecord invite, NewUser user, DateTimeOffset now, CancellationToken ct);
 
-    /// <summary>Створення tenant + власника однією транзакцією. Conflict = slug уже зайнятий.</summary>
+    /// <summary>
+    /// Секунди до звільнення місця в квоті нових ідентичностей поточного tenant (ковзне вікно 24 год, до хвилини вгору; 60..86400).
+    /// Викликається після <see cref="WriteOutcome.QuotaExceeded"/> (транзакція прийняття вже відкочена).
+    /// </summary>
+    Task<int> IdentityQuotaRetryAfterSecondsAsync(CancellationToken ct);
+
+    /// <summary>Створення tenant + власника однією транзакцією. Conflict = slug уже зайнятий; EmailInUse = пошта власника зайнята (§31.8.3).</summary>
     Task<(WriteOutcome Outcome, Guid OwnerUserId)> CreateTenantWithOwnerAsync(NewTenant tenant, NewUser owner, CancellationToken ct);
     Task<WriteOutcome> UpdateTenantAsync(Guid tenantId, IReadOnlyList<string>? modules, string? status, DateTimeOffset now, CancellationToken ct);
+}
+
+
+// ---------- ADR-024: глобальна ідентичність (порт функцій auth_*) ----------
+
+public sealed record IdentityRecord(Guid Id, string? PasswordHash, string State)
+{
+    public bool IsActive => State == "active" && PasswordHash is not null;
+}
+
+/// <summary>Активне членство ідентичності (<c>auth_identity_memberships</c>).</summary>
+public sealed record MembershipRow(Guid TenantId, Guid UserId, string TenantName, string TenantSlug, string Role);
+
+/// <summary>
+/// Порт глобальної ідентичності: тонкі виклики SECURITY DEFINER-функцій <c>auth_*</c> (§31.16). Прямого доступу до таблиць
+/// identities / auth_* застосунок не має. Працює поза RLS tenant (власне з'єднання), тому не залежить від <see cref="IAuthStore.UseTenant"/>.
+/// Жоден метод не приймає <c>identity_id</c> від клієнта: його дають лише результати <see cref="FindAsync"/> / членства.
+/// </summary>
+public interface IIdentityStore
+{
+    Task<IdentityRecord?> FindAsync(string normalizedEmail, CancellationToken ct);
+    Task<bool> IsLockedAsync(byte[] loginKey, DateTimeOffset now, CancellationToken ct);
+    /// <returns>true, якщо ця спроба досягла порогу (блокування).</returns>
+    Task<bool> RegisterFailedAsync(byte[] loginKey, Guid? identityId, int max, int windowSeconds, int lockoutSeconds, DateTimeOffset now, CancellationToken ct);
+    Task ResetAttemptsAsync(byte[] loginKey, CancellationToken ct);
+    Task LoginSucceededAsync(Guid identityId, DateTimeOffset now, CancellationToken ct);
+    Task<IReadOnlyList<MembershipRow>> MembershipsAsync(Guid identityId, CancellationToken ct);
+    Task<bool> IsActiveAsync(Guid identityId, CancellationToken ct);
+    /// <summary><c>auth_identity_email_in_use</c>: пошта зайнята активною або pending ідентичністю (§31.8.1).</summary>
+    Task<bool> EmailInUseAsync(string normalizedEmail, CancellationToken ct);
+    Task IssueTicketAsync(Guid identityId, byte[] tokenHash, DateTimeOffset expiresAt, CancellationToken ct);
+    /// <summary>users.id членства або null (одна відповідь на всі причини, §31.3). Гасить квиток завжди.</summary>
+    Task<Guid?> ConsumeTicketAsync(byte[] tokenHash, Guid tenantId, DateTimeOffset now, CancellationToken ct);
 }

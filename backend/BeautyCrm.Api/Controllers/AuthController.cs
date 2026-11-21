@@ -13,15 +13,95 @@ namespace BeautyCrm.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/auth")]
-public sealed class AuthController(AuthService auth, RefreshThrottle refreshThrottle, IAccessContext access) : ControllerBase
+public sealed class AuthController(AuthService auth, RefreshThrottle refreshThrottle, LoginEmailThrottle loginThrottle, IAccessContext access) : ControllerBase
 {
-    /// <summary>200 токени; 401 invalid_credentials; 423 account_locked; 422 валідація; 429 rate limit.</summary>
+    /// <summary>
+    /// Вхід без коду бізнесу (ADR-024, §31.2). 200 <see cref="TokenResponse"/> (одне активне членство або legacy <c>tenant</c>) або
+    /// <see cref="LoginSelectionResponse"/> (≥ 2 членств, <c>selectionRequired: true</c>); 401 invalid_credentials; 423 account_locked;
+    /// 422 валідація; 429 rate_limited. Поле <c>tenant</c> deprecated: відповіді з ним несуть Deprecation/Sunset (§31.2.3).
+    /// </summary>
     [HttpPost("login")]
     [AllowAnonymous]
     [EnableRateLimiting(AuthPolicies.RateLimit)]
+    [LegacyTenantHeaders]
     [ProducesResponseType<TokenResponse>(StatusCodes.Status200OK)]
-    public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken ct) =>
-        this.ToResult(await auth.LoginAsync(request, ct));
+    [ProducesResponseType<LoginSelectionResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken ct)
+    {
+        Response.Headers.CacheControl = "no-store";
+        // 2. ліміт за поштою (in-memory, sha256 ключ) - незалежно від існування пошти
+        var (acquired, retryAfter) = loginThrottle.TryAcquire(request.Email.Trim().ToLowerInvariant());
+        if (!acquired)
+        {
+            AuthMetrics.LoginOutcome("throttled");
+            Response.Headers.RetryAfter = retryAfter.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return StatusCode(StatusCodes.Status429TooManyRequests, new ApiError("rate_limited", "Too many requests. Try again later."));
+        }
+        return this.ToResult(await auth.LoginAsync(request, ct), o => Ok(o.Tokens is not null ? o.Tokens : (object)o.Selection!));
+    }
+
+    /// <summary>Вибір бізнесу за квитком (§31.3). 200 TokenResponse; 401 login_ticket_invalid (усі причини); 422 ModelState.</summary>
+    [HttpPost("login/select")]
+    [AllowAnonymous]
+    [EnableRateLimiting(AuthPolicies.RateLimit)]
+    [ProducesResponseType<TokenResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> LoginSelect([FromBody] LoginSelectRequest request, CancellationToken ct)
+    {
+        Response.Headers.CacheControl = "no-store";
+        return this.ToResult(await auth.SelectAsync(request, ct));
+    }
+
+    /// <summary>Активні членства ідентичності поточного користувача (§31.4). Доступний і з неактивним профілем майстра.</summary>
+    [HttpGet("memberships")]
+    [Authorize(Policy = AuthPolicies.Staff)]
+    [AllowInactiveSpecialist]
+    [ProducesResponseType<IReadOnlyList<MembershipDto>>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> Memberships(CancellationToken ct)
+    {
+        Response.Headers.CacheControl = "no-store";
+        return User.ToActor() is { } actor ? this.ToResult(await auth.MembershipsAsync(actor.UserId, actor.TenantId, ct)) : Unauthorized();
+    }
+
+    /// <summary>
+    /// Перемикання бізнесу (§31.5): потрібен refresh-токен поточної сесії. 200 TokenResponse цілі; 401 invalid_token;
+    /// 404 membership_not_found (одна відповідь на всі причини); 422 same_tenant.
+    /// </summary>
+    [HttpPost("switch")]
+    [Authorize(Policy = AuthPolicies.Staff)]
+    [AllowInactiveSpecialist]
+    [EnableRateLimiting(AuthPolicies.RateLimit)]
+    [ProducesResponseType<TokenResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> Switch([FromBody] SwitchRequest request, CancellationToken ct)
+    {
+        Response.Headers.CacheControl = "no-store";
+        return User.ToActor() is { } actor ? this.ToResult(await auth.SwitchAsync(actor.UserId, actor.TenantId, request, ct)) : Unauthorized();
+    }
+
+    /// <summary>
+    /// Запит скидання пароля (§31.7.1). 202 без тіла для будь-якої пошти (наявної, невідомої, pending, ліміт пошти, переповнена черга),
+    /// до будь-якої роботи з БД; 422 invalid_email; 429 лише IP-ліміт.
+    /// </summary>
+    [HttpPost("password/forgot")]
+    [AllowAnonymous]
+    [EnableRateLimiting(AuthPolicies.PasswordForgotRateLimit)]
+    [ProducesResponseType(StatusCodes.Status202Accepted)]
+    public IActionResult PasswordForgot([FromBody] ForgotPasswordRequest request, [FromServices] PasswordResetService reset)
+    {
+        Response.Headers.CacheControl = "no-store";
+        var r = reset.Forgot(request.Email);
+        return r.IsOk ? StatusCode(StatusCodes.Status202Accepted) : this.ToAuthError(r.Error!);
+    }
+
+    /// <summary>Нова парольна фраза за токеном (§31.7.2). 204; 410 reset_invalid; 422 weak_password (токен не споживається).</summary>
+    [HttpPost("password/reset")]
+    [AllowAnonymous]
+    [EnableRateLimiting(AuthPolicies.RateLimit)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> PasswordReset([FromBody] ResetPasswordRequest request, [FromServices] PasswordResetService reset, CancellationToken ct)
+    {
+        Response.Headers.CacheControl = "no-store";
+        return this.ToResult(await reset.ResetAsync(request, ct), _ => NoContent());
+    }
 
     /// <summary>Ротація: старий refresh-токен перестає діяти; повторне використання закриває всі сесії користувача.</summary>
     [HttpPost("refresh")]

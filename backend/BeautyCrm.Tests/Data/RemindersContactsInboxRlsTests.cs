@@ -33,8 +33,7 @@ public sealed class RemindersContactsInboxRlsTests : IClassFixture<PostgresRlsFi
             var slug = "rem-" + tenantId.ToString("N")[..20];
             await using var cmd = new NpgsqlCommand($@"
                 INSERT INTO tenants (id, name, slug) VALUES ('{tenantId}', 'T', '{slug}');
-                INSERT INTO users (id, tenant_id, email, full_name, password_hash, role)
-                VALUES ('{userId}', '{tenantId}', 'a-{userId:N}@example.test', 'Admin', 'x', 'admin');", admin);
+                {IdentitySeed.UserSql(tenantId, $"a-{userId:N}@example.test", "Admin", "x", "admin", userId)}", admin);
             await cmd.ExecuteNonQueryAsync();
         }
 

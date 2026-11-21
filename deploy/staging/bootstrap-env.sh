@@ -13,6 +13,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 AI_KID="k1"   # id майстер-ключа ШІ = Ai__Secrets__ActiveKeyId у шаблоні api.env
 S="${SECRETS_DIR:-/opt/beauty_staging/secrets}"
 GATEWAY="${BEAUTY_GATEWAY:-172.29.200.1}"
+WEB_IP="${BEAUTY_WEB_IP:-172.29.200.10}"   # статична адреса web (F-1): довірений проксі поряд зі шлюзом
 
 for f in db api worker migrator; do
   [ ! -e "$S/$f.env" ] || { echo "Вже існує $S/$f.env: нічого не змінюю" >&2; exit 1; }
@@ -60,9 +61,10 @@ subst "$HERE/.env.migrator.example" "$S/migrator.env" \
   ConnectionStrings__Migrator=OWNER_PW
 
 # Нессекретні значення: origin і шлюз
-sed -i "s#^Beauty__AllowedOrigins=.*#Beauty__AllowedOrigins=${ORIGIN}#; s#^Beauty__TrustedProxies=.*#Beauty__TrustedProxies=${GATEWAY}#" "$S/api.env"
+sed -i "s#^Beauty__AllowedOrigins=.*#Beauty__AllowedOrigins=${ORIGIN}#; s#^Beauty__TrustedProxies=.*#Beauty__TrustedProxies=${GATEWAY},${WEB_IP}#" "$S/api.env"
 
 cp "$HERE/.env.compose.example" "$HERE/.env.compose"
+sed -i "s#^BEAUTY_WEB_IP=.*#BEAUTY_WEB_IP=${WEB_IP}#" "$HERE/.env.compose"
 chmod 600 "$HERE/.env.compose"
 
 unset PG_PW OWNER_PW APP_PW WORKER_PW JWT PLATFORM ENC AIKEY

@@ -24,6 +24,7 @@ public sealed class EfAccessStore(BeautyDbContext db, TenantContext tenant) : IA
                 u.State,
                 u.SpecialistId,
                 u.AccessVersion,
+                u.SessionsValidAfter,
                 SpecialistActive = u.Specialist == null ? (bool?)null : u.Specialist.IsActive,
                 Permissions = db.UserPermissions
                     .Where(p => p.TenantId == tenantId && p.UserId == u.Id)
@@ -45,6 +46,6 @@ public sealed class EfAccessStore(BeautyDbContext db, TenantContext tenant) : IA
         // SpecialistId задано, а профіль не видно (SpecialistActive = null попри FK) = неактивний (fail-closed).
         var specialistActive = user.SpecialistId is null ? (bool?)null : user.SpecialistActive ?? false;
         return new AccessSnapshot(user.Role, user.IsActive, user.State, user.SpecialistId, user.AccessVersion,
-            specialistActive, permissions, modules);
+            specialistActive, permissions, modules, user.SessionsValidAfter);
     }
 }

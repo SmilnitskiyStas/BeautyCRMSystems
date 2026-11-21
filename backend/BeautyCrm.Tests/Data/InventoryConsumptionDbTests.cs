@@ -68,8 +68,7 @@ public sealed class InventoryConsumptionDbTests : IClassFixture<PostgresRlsFixtu
         var tenantId = Guid.NewGuid();
         var userId = Guid.NewGuid();
         await AdminAsync($@"INSERT INTO tenants (id, name, slug, modules) VALUES ('{tenantId}', 'T', 'cons-{tenantId:N}', '{(moduleOn ? "{beauty_inventory}" : "{}")}');
-                            INSERT INTO users (id, tenant_id, email, full_name, password_hash, role)
-                            VALUES ('{userId}', '{tenantId}', 'u@{tenantId:N}.test', 'Owner', 'x', 'owner');");
+                            {IdentitySeed.UserSql(tenantId, $"u@{tenantId:N}.test", "Owner", "x", "owner", userId)}");
         await using var ctx = _db.CreateContext(tenantId);
         var a = new Location { Name = "A", Timezone = "Europe/Kyiv" };
         var b = new Location { Name = "B", Timezone = "Europe/Kyiv" };

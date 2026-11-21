@@ -593,7 +593,7 @@ public sealed class ReminderChatTests : IClassFixture<PostgresRlsFixture>
     private async Task<Actor> AdminAsync(ChatSeed s)
     {
         await using var ctx = _db.CreateContext(s.TenantId);
-        var user = new User { Id = Guid.NewGuid(), Email = $"{Guid.NewGuid():N}@t.test", FullName = "Олена Адмін", PasswordHash = "x", Role = Roles.Admin };
+        var user = await IdentitySeed.NewUserAsync(ctx, Roles.Admin, "Олена Адмін");
         ctx.Add(user);
         await ctx.SaveChangesAsync();
         return Actor.ForTest(Roles.Admin, null, user.Id, s.TenantId);

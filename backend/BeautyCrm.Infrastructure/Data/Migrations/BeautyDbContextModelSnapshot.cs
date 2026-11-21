@@ -764,6 +764,278 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.AuthIdentity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)")
+                        .HasColumnName("email");
+
+                    b.Property<DateTimeOffset?>("LastLoginAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_login_at");
+
+                    b.Property<DateTimeOffset?>("PasswordChangedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("password_changed_at");
+
+                    b.Property<string>("PasswordHash")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)")
+                        .HasColumnName("password_hash");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("state");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.HasKey("Id")
+                        .HasName("pk_identities");
+
+                    b.HasIndex("Email")
+                        .IsUnique()
+                        .HasDatabaseName("ux_identities_email");
+
+                    b.ToTable("identities", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_identities_email_normalized", "email = lower(btrim(email)) AND email <> ''");
+
+                            t.HasCheckConstraint("ck_identities_password_or_pending", "(state = 'active') = (password_hash IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_identities_state", "state IN ('pending', 'active')");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.AuthLoginAttempt", b =>
+                {
+                    b.Property<byte[]>("LoginKey")
+                        .HasColumnType("bytea")
+                        .HasColumnName("login_key");
+
+                    b.Property<int>("FailedCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("failed_count");
+
+                    b.Property<DateTimeOffset?>("LockedUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("locked_until");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<DateTimeOffset>("WindowStartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("window_started_at");
+
+                    b.HasKey("LoginKey")
+                        .HasName("pk_auth_login_attempts");
+
+                    b.HasIndex("UpdatedAt")
+                        .HasDatabaseName("ix_auth_login_attempts_updated_at");
+
+                    b.ToTable("auth_login_attempts", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_auth_login_attempts_failed_count", "failed_count >= 0");
+
+                            t.HasCheckConstraint("ck_auth_login_attempts_login_key", "octet_length(login_key) = 32");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.AuthLoginTicket", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateTimeOffset?>("ConsumedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("consumed_at");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<Guid>("IdentityId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("identity_id");
+
+                    b.Property<byte[]>("TokenHash")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("token_hash");
+
+                    b.HasKey("Id")
+                        .HasName("pk_auth_login_tickets");
+
+                    b.HasIndex("ExpiresAt")
+                        .HasDatabaseName("ix_auth_login_tickets_expires_at");
+
+                    b.HasIndex("IdentityId")
+                        .HasDatabaseName("ix_auth_login_tickets_identity_id");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique()
+                        .HasDatabaseName("ix_auth_login_tickets_token_hash");
+
+                    b.ToTable("auth_login_tickets", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_auth_login_tickets_token_hash", "octet_length(token_hash) = 32");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.AuthPasswordReset", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<int>("Attempts")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0)
+                        .HasColumnName("attempts");
+
+                    b.Property<DateTimeOffset?>("ConsumedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("consumed_at");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("DeliveryStatus")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("pending")
+                        .HasColumnName("delivery_status");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<Guid>("IdentityId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("identity_id");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("last_error");
+
+                    b.Property<byte[]>("LoginKey")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("login_key");
+
+                    b.Property<DateTimeOffset>("NextAttemptAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("next_attempt_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<int>("NoticeAttempts")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0)
+                        .HasColumnName("notice_attempts");
+
+                    b.Property<DateTimeOffset?>("NoticeNextAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("notice_next_attempt_at");
+
+                    b.Property<string>("NoticeStatus")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("none")
+                        .HasColumnName("notice_status");
+
+                    b.Property<DateTimeOffset?>("SupersededAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("superseded_at");
+
+                    b.Property<byte[]>("TokenHash")
+                        .HasColumnType("bytea")
+                        .HasColumnName("token_hash");
+
+                    b.HasKey("Id")
+                        .HasName("pk_auth_password_resets");
+
+                    b.HasIndex("ExpiresAt")
+                        .HasDatabaseName("ix_auth_password_resets_expires_at");
+
+                    b.HasIndex("IdentityId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_auth_password_resets_identity_id")
+                        .HasFilter("consumed_at IS NULL AND superseded_at IS NULL");
+
+                    b.HasIndex("NextAttemptAt")
+                        .HasDatabaseName("ix_auth_password_resets_delivery_queue")
+                        .HasFilter("delivery_status = 'pending' AND consumed_at IS NULL AND superseded_at IS NULL");
+
+                    b.HasIndex("NoticeNextAttemptAt")
+                        .HasDatabaseName("ix_auth_password_resets_notice_queue")
+                        .HasFilter("notice_status = 'pending'");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique()
+                        .HasDatabaseName("ux_auth_password_resets_token_hash")
+                        .HasFilter("token_hash IS NOT NULL");
+
+                    b.ToTable("auth_password_resets", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_auth_password_resets_attempts", "attempts >= 0 AND notice_attempts >= 0");
+
+                            t.HasCheckConstraint("ck_auth_password_resets_consumed_or_superseded", "consumed_at IS NULL OR superseded_at IS NULL");
+
+                            t.HasCheckConstraint("ck_auth_password_resets_delivery_status", "delivery_status IN ('pending', 'sent', 'failed')");
+
+                            t.HasCheckConstraint("ck_auth_password_resets_login_key", "octet_length(login_key) = 32");
+
+                            t.HasCheckConstraint("ck_auth_password_resets_notice_status", "notice_status IN ('none', 'pending', 'sent', 'failed')");
+
+                            t.HasCheckConstraint("ck_auth_password_resets_token_hash", "token_hash IS NULL OR octet_length(token_hash) = 32");
+                        });
+                });
+
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.CallTask", b =>
                 {
                     b.Property<Guid>("Id")
@@ -3394,9 +3666,9 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
 
                     b.ToTable("platform_audit_log", null, t =>
                         {
-                            t.HasCheckConstraint("ck_platform_audit_log_action", "action IN ('tenant.created', 'tenant.create_replayed', 'tenant.suspended', 'tenant.resumed', 'tenant.modules_changed', 'owner_invite.issued', 'owner_invite.revoked', 'owner_invite.accepted', 'control_auth.failed')");
+                            t.HasCheckConstraint("ck_platform_audit_log_action", "action IN ('tenant.created', 'tenant.create_replayed', 'tenant.suspended', 'tenant.resumed', 'tenant.modules_changed', 'owner_invite.issued', 'owner_invite.revoked', 'owner_invite.accepted', 'control_auth.failed', 'identity.password_reset_completed', 'identity.locked', 'identity.created', 'identity.released')");
 
-                            t.HasCheckConstraint("ck_platform_audit_log_actor_type", "actor_type IN ('shelfguard_admin', 'platform_key', 'owner', 'system')");
+                            t.HasCheckConstraint("ck_platform_audit_log_actor_type", "actor_type IN ('shelfguard_admin', 'platform_key', 'owner', 'system', 'identity')");
 
                             t.HasCheckConstraint("ck_platform_audit_log_details", "jsonb_typeof(details) = 'object'");
                         });
@@ -6560,6 +6832,10 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("full_name");
 
+                    b.Property<Guid>("IdentityId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("identity_id");
+
                     b.Property<bool>("IsActive")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
@@ -6584,6 +6860,10 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)")
                         .HasColumnName("role");
+
+                    b.Property<DateTimeOffset?>("SessionsValidAfter")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sessions_valid_after");
 
                     b.Property<Guid?>("SpecialistId")
                         .HasColumnType("uuid")
@@ -6613,9 +6893,16 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.HasAlternateKey("TenantId", "Id")
                         .HasName("ak_users_tenant_id_id");
 
+                    b.HasIndex("IdentityId")
+                        .HasDatabaseName("ix_users_identity_id");
+
                     b.HasIndex("TenantId", "Email")
                         .IsUnique()
                         .HasDatabaseName("ix_users_tenant_id_email");
+
+                    b.HasIndex("TenantId", "IdentityId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_users_tenant_id_identity_id");
 
                     b.HasIndex("TenantId", "SpecialistId")
                         .IsUnique()
@@ -6887,6 +7174,26 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.Navigation("Service");
 
                     b.Navigation("Specialist");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.AuthLoginTicket", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.AuthIdentity", null)
+                        .WithMany()
+                        .HasForeignKey("IdentityId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_auth_login_tickets_identities_identity_id");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.AuthPasswordReset", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.AuthIdentity", null)
+                        .WithMany()
+                        .HasForeignKey("IdentityId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_auth_password_resets_identities_identity_id");
                 });
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.CallTask", b =>
@@ -8445,6 +8752,13 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.User", b =>
                 {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.AuthIdentity", null)
+                        .WithMany()
+                        .HasForeignKey("IdentityId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_users_auth_identity_identity_id");
+
                     b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Tenant", null)
                         .WithMany()
                         .HasForeignKey("TenantId")

@@ -29,6 +29,26 @@ export interface SessionResponse {
   user: SessionUser;
 }
 
+/** Бізнес зі списку вибору (§31.2 варіант B): без slug, userId, прав. */
+export interface Business {
+  tenantId: string;
+  name: string;
+  role: Role;
+}
+
+/** Членство поточної ідентичності (§31.4). */
+export interface Membership extends Business {
+  current: boolean;
+}
+
+/**
+ * Результат входу (§31.2): одне членство → сесія; ≥ 2 → вибір бізнесу.
+ * Квиток входу в JS не потрапляє: він лише в httpOnly-cookie `beauty_lt` (BFF, §31.11).
+ */
+export type LoginResult =
+  | { kind: "session"; user: SessionUser }
+  | { kind: "selection"; businesses: Business[]; ticketExpiresInSeconds: number };
+
 export const ROLE_LABEL: Record<Role, string> = {
   owner: "Директор",
   admin: "Адміністратор",

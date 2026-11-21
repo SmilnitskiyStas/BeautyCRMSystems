@@ -8,6 +8,7 @@ import { TenantDb, withTenant } from "../db/tenant-db";
 import { StaticTenantDirectory } from "../db/tenants";
 import { DEFAULT_INVENTORY_CONFIG, PgInventoryAlerts, type InventoryAlertConfig } from "../inventory/alerts";
 import type { BeautyDeps } from "../ports";
+import { seedUser } from "../testing/seed-user";
 import { pollInventory, type PollContext } from "../scheduler/pollers";
 
 /** TASK-887: pollInventory against real PostgreSQL as a role with ONLY the worker GRANTs of scripts/dev/setup-db.ps1. */
@@ -33,6 +34,7 @@ beforeAll(async () => {
   container = await new PostgreSqlContainer("postgres:16-alpine").start();
   admin = new pg.Pool({ connectionString: container.getConnectionUri() });
   await admin.query(readFileSync(new URL("../testing/schema.sql", import.meta.url), "utf8"));
+  await admin.query("CREATE ROLE beautycrm_owner NOLOGIN"); // блок $grants (ADR-024, auth_identity_release) видає EXECUTE ops-ролі
   await admin.query(`CREATE ROLE ${WORKER} LOGIN PASSWORD 'pw' NOSUPERUSER NOBYPASSRLS`);
   await admin.query(`CREATE ROLE ${APP} LOGIN PASSWORD 'pw' NOSUPERUSER NOBYPASSRLS`);
   await admin.query(`GRANT USAGE ON SCHEMA public TO ${APP}, ${WORKER}`);
@@ -51,7 +53,7 @@ interface T { id: string; user: string; loc: string }
 async function tenant(o: { modules?: string; tz?: string } = {}): Promise<T> {
   const id = randomUUID(), user = randomUUID(), loc = randomUUID();
   await q("INSERT INTO tenants (id, name, slug, modules) VALUES ($1,'T',$2,$3::text[])", [id, `t-${id.slice(0, 8)}`, o.modules ?? "{beauty_inventory}"]);
-  await q("INSERT INTO users (id, tenant_id, email, full_name, password_hash, role) VALUES ($1,$2,$3,'U','x','owner')", [user, id, `${user}@x.test`]);
+  await seedUser({ query: (s, p) => q(s, p) }, { id: user, tenantId: id, email: `${user}@x.test` });
   await q("INSERT INTO beauty_locations (id, tenant_id, name, timezone, is_active) VALUES ($1,$2,'L',$3,true)", [loc, id, o.tz ?? "Europe/Kyiv"]);
   return { id, user, loc };
 }

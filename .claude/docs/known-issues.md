@@ -1,7 +1,7 @@
 # Known Issues
 
 **Owner:** qa-engineer (підтримує структуру файлу) — **записує будь-який агент**, що знайшов чи виправив проблему
-**Updated:** 2026-11-18
+**Updated:** 2026-11-18 (TASK-869: ADR-024)
 
 Два різні розділи нижче — не плутати:
 - **Active Issues** — те, що зараз зламано й ще не виправлено (звичайний баг-трекер).
@@ -33,7 +33,7 @@ Area: security, backend
 
 Description: після зміни пароля або виходу з усіх пристроїв уже видані access-токени діють до закінчення TTL (15 хв). Права й активність перевіряються з БД на кожен запит (ADR-023 §2.5), тож вимкнення користувача і зміна прав діють одразу (`401 session_revoked` / `403`). Недостатньо покрито саме сценарій пароля й logout-all: їхній відкат не інвалідує access-токен миттєво.
 
-Resolution: планується — перевірка `sessions_valid_from`/версії сесії в `AccessContextMiddleware` (окрема задача, потребує рішення щодо TTL і навантаження на БД).
+Resolution: частково закрито ADR-024 E-5 (TASK-863/865): `users.sessions_valid_after` перевіряє `AccessContextMiddleware` (той самий запит, без другого SELECT); скидання пароля, звільнення пошти й злиття миттєво гасять access-токени (`401 session_revoked`). Лишається «вийти з усіх пристроїв» (logout-all): ендпоінта ще немає, окрема задача.
 
 ### KI-002: ChatFlowLlmTests — нестабільний тест (передує ADR-023)
 Severity: low
@@ -124,6 +124,61 @@ Area: backend, api
 Description: `GET /operations/{id}` повертає рухи, відсортовані за `occurred_at, id`. Рухи однієї операції мають однаковий час, тому порядок їх списання з партій за FEFO у відповіді не відображається.
 
 Resolution: окрема задача: або зберігати порядок списання (наприклад, колонка порядку рядка), або явно задокументувати в §32.6 як не FEFO. Клієнти не повинні покладатися на порядок.
+
+
+### KI-I1: Приклади env не містять обов'язкових змінних ADR-024 (API не стартує на staging)
+Severity: high
+Status: open
+Discovered in: TASK-869 (перевірка env після TASK-863/865)
+Area: infra, backend
+
+Description: `deploy/staging/.env.api.example` і корневий `.env.example` не містять `Auth__LoginAttemptKeyPepper` (≥ 32 байти) і `Auth__LegacyTenantLogin__DeprecatedAt` / `__SunsetAt`. Поза Development `AuthSetup` кидає виняток на старті. Скопійований приклад дає падіння API.
+Resolution: додати змінні з коментарями в обидва приклади (людина задає значення на сервері); до того — runbook §2b.4 як попередження. Код не змінювався.
+
+### KI-I2: Нормалізація пошти в preflight (SQL) і в застосунку (C#) може розходитися
+Severity: medium
+Status: open
+Discovered in: TASK-861
+Area: database, backend
+
+Description: preflight і міграція нормалізують `lower(btrim(email))` (SQL), застосунок — `Trim().ToLowerInvariant()`. Для Unicode-регістру й не-пробільних whitespace результати можуть різнитися. Частина таких адрес у звіті preflight (розділ 4) видна лише як аномалія. Пошта, яку застосунок не знайде через SQL-нормалізацію (або навпаки), може дати дубль або хибне `email_in_use`.
+Resolution: до застосування міграції на staging переглянути розділ 4 звіту preflight; аномалії виправити вручну. Вирівнювання правил нормалізації — окреме рішення (ADR-024: без Unicode-нормалізації).
+
+### KI-I3: Лист «Пароль змінено» без часу зміни
+Severity: low
+Status: accepted-risk
+Discovered in: TASK-872
+Area: worker, database
+
+Description: контракт §31.7.3 вимагає час зміни (UTC) у листі. `auth_password_reset_claim_delivery` не повертає timestamp, тому лист без часу. Бюджет повторів (24 год) рахується в пам'яті процесу воркера.
+Accepted-risk: плейсхолдер погоджується людиною. Зміна потребує claim-функції з timestamp і міграції (окрема задача).
+
+### KI-I4: Воркер без метрик; бюджети повторів і троттли процес-локальні
+Severity: low
+Status: accepted-risk
+Discovered in: TASK-865, TASK-872
+Area: worker, infra, backend
+
+Description: у воркері немає метрик (лише логи без пошти й токенів). Backoff і 24-годинний бюджет листів зберігаються в пам'яті; після рестарту відлік починається знову. У API `LoginEmailThrottle`, ліміти `password/forgot`, `InviteEmailCheckThrottle` — in-memory на інстанс (кожен інстанс рахує окремо).
+Accepted-risk: однаково з `OwnerInviteThrottle`; один інстанс API і воркера на staging. Перед масштабуванням — спільний лічильник (окрема задача). Квоти ідентичностей і блокування в БД і від рестарту не залежать.
+
+### KI-I5: Алерти ADR-024 ще не налаштовані
+Severity: medium
+Status: open
+Discovered in: TASK-864, TASK-860 (§31.9, §31.12)
+Area: infra
+
+Description: передбачено алерти (`identity_created{via="staff_invite"}` > 10 / добу на tenant; сплеск `invite_email_in_use`; частка `invalid_credentials`). Метрики в API є, алертів у devops немає.
+Resolution: devops налаштовує алерти (окрема задача). До того — перегляд метрик вручну при релізі.
+
+### KI-I6: Вимога релізу F-1 (IP клієнта за BFF) ще не перевірена на сервері
+Severity: high
+Status: open
+Discovered in: TASK-871 (ADR-024 E-14)
+Area: infra, security
+
+Description: без правильного `Beauty__TrustedProxies` + статичної адреси `web` (`BEAUTY_WEB_IP`) + nginx `X-Forwarded-For $remote_addr` ліміт `auth` (10/хв) спільний для всіх користувачів, тобто будь-хто без автентифікації блокує вхід усім. Код і конфіг у репозиторії готові; на сервері нічого не застосовано, smoke §6.6 не виконано.
+Resolution: людина застосовує конфіг, виконує smoke (`deploy/staging/README.md` §6.6), результат — у `.claude/logs/tasks/TASK-871.md`. Реліз TASK-866 і фази 2 заблоковано до цього.
 
 ### KI-019: Guard службових повідомлень пропускає неканонічну форму команди
 Severity: medium
@@ -264,6 +319,54 @@ Resolution: файл перегенеровано без BOM, LF; `schema-drift.
 
 Prevention: після генерації схеми перевіряти, що файл починається з `CREATE`/`--`, а не з BOM; генерувати без BOM і LF (правило §32.3).
 
+
+### KI-R1 (з TASK-862): тестові сиди ламаються від `users.identity_id NOT NULL`
+Severity: medium
+Status: resolved
+Discovered in: TASK-862
+Resolved in: TASK-863
+Area: backend, tests, database
+
+Description: після `users.identity_id NOT NULL` кожен INSERT у `users` без ідентичності падав (сотні тестів, worker-інтеграційні тести).
+Root cause: зміна інваріанту БД без оновлення всіх місць вставки членств (~25 сидів у тестах, `EfAuthStore`, `EfControlPlaneStore`).
+Resolution: спільний хелпер `backend/BeautyCrm.Tests/Data/IdentitySeed.cs` (UserSql/InsertUserAsync/EnsureAsync/NewUserAsync) і `worker/src/testing/seed-user.ts`; прод-код створює ідентичність у тій самій транзакції.
+Prevention: будь-який INSERT у `users` (тести, сиди, воркер) іде лише через хелпер, що створює `identities`. Прямий `INSERT INTO users` без `identity_id` у код не додавати.
+
+### KI-R2 (з TASK-864): квота й дубль пошти мапилися на `invite_invalid` / `user_exists`
+Severity: medium
+Status: resolved
+Discovered in: TASK-864 (самоперевірка до мерджу)
+Resolved in: TASK-864
+Area: backend
+
+Description: `429`-квота нових ідентичностей і `unique_violation` при прийнятті запрошення повертали `invite_invalid` або `user_exists`, а не `429 rate_limited` / `409 email_in_use`.
+Root cause: загальний обробник винятків прийняття запрошення не розрізняв `SQLSTATE` `P0001` (квота) і `23505` (унікальність).
+Resolution: явне мапування: `unique_violation` → `email_in_use`, `P0001 identity_quota` → `429 rate_limited` + `Retry-After`; тести на кожен код.
+Prevention: винятки БД мапити за `SQLSTATE` у одному місці з тестом на кожен код. Загальний код помилки (`invite_invalid`) для збоїв БД не використовувати.
+
+### KI-R3 (з TASK-864): лічильник SQL-команд не бачить інтерсептор із DI
+Severity: low
+Status: resolved
+Discovered in: TASK-864
+Resolved in: TASK-864
+Area: backend, tests
+
+Description: тест `AccessContextQueryCountTests` не фіксував команди: EF 8 не підхоплює `IInterceptor` з DI.
+Root cause: інтерсептори EF 8 реєструються через `DbContextOptions`, а не через DI-сервіс.
+Resolution: тест перереєстровує `BeautyDbContext` з інтерсептором.
+Prevention: тести лічильника запитів перереєстровують контекст з інтерсептором явно; не покладатися на DI-інтерсептор.
+
+### KI-R4 (з TASK-863): `switch` без refresh повертав 422 замість 401
+Severity: low
+Status: resolved
+Discovered in: TASK-863 / TASK-864
+Resolved in: TASK-864
+Area: backend, api
+
+Description: `POST /auth/switch` без `refreshToken` відповідав `422 validation_failed`.
+Root cause: `[Required]` на полі секрету сесії; контракт §31.15 п.10 вимагає `401 invalid_token`.
+Resolution: прибрано `[Required]` з `SwitchRequest.RefreshToken`; `422` лишився для відсутнього `tenantId` і `same_tenant`.
+Prevention: відсутність секрету сесії = `401`, а не `422`. `[Required]` лише для несекретних полів.
 ### KI-015: SAVEPOINT узято після читань кроку; ChangeTracker.Clear у catch відкидав незбережене
 Severity: high
 Status: resolved

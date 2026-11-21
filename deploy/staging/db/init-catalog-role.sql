@@ -15,8 +15,18 @@ SELECT 'CREATE ROLE beautycrm_audit_purge NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHE
  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'beautycrm_audit_purge') \gexec
 GRANT beautycrm_audit_purge TO beautycrm_owner WITH INHERIT FALSE, SET TRUE;
 
--- Перевірка: рівно один рядок, rolcanlogin=f, rolsuper=f, rolbypassrls=f, rolinherit=f
-SELECT rolname, rolcanlogin, rolsuper, rolbypassrls, rolinherit FROM pg_roles WHERE rolname = 'beautycrm_catalog';
+-- ADR-024 (TASK-862): глобальна ідентичність. beautycrm_identity - власник SECURITY DEFINER-функцій auth_* (крім release);
+-- beautycrm_identity_release - власник лише auth_identity_release (окрема роль, щоб не розширювати права першої). Такі самі роль і членство;
+-- виконати ДО міграції 20261117140201_auth_global_identities (owner не має CREATEROLE).
+SELECT 'CREATE ROLE beautycrm_identity NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'beautycrm_identity') \gexec
+GRANT beautycrm_identity TO beautycrm_owner WITH INHERIT FALSE, SET TRUE;
+SELECT 'CREATE ROLE beautycrm_identity_release NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'beautycrm_identity_release') \gexec
+GRANT beautycrm_identity_release TO beautycrm_owner WITH INHERIT FALSE, SET TRUE;
+
+-- Перевірка: по одному рядку на роль, rolcanlogin=f, rolsuper=f, rolbypassrls=f, rolinherit=f
+SELECT rolname, rolcanlogin, rolsuper, rolbypassrls, rolinherit FROM pg_roles WHERE rolname IN ('beautycrm_catalog', 'beautycrm_identity', 'beautycrm_identity_release') ORDER BY rolname;
 -- Перевірка членства: inherit_option=f, set_option=t
 SELECT m.inherit_option, m.set_option
   FROM pg_auth_members m
