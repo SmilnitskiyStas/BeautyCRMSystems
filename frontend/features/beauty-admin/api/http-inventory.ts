@@ -1,4 +1,5 @@
 import { apiJson } from "@/features/beauty-auth/session";
+import { downscaleImage } from "../inventory/images";
 import type { BeautyAdminApi } from "./client";
 import type {
   AlertKind,
@@ -9,6 +10,7 @@ import type {
   StaffAlert,
   Batch,
   BatchStatus,
+  Category,
   CostsAccess,
   InventoryScope,
   LocationSetting,
@@ -20,6 +22,7 @@ import type {
   OperationSummary,
   Page,
   Product,
+  ProductImage,
   ProductPurpose,
   ProductRef,
   StockRow,
@@ -55,8 +58,8 @@ const optNum = <K extends string>(o: Raw, key: K): Partial<Record<K, number | nu
 const UNITS = ["pcs", "ml", "g", "l", "kg", "pack"] as const satisfies readonly StockUnit[];
 const PURPOSES = ["sale", "salon_use", "both"] as const satisfies readonly ProductPurpose[];
 const BATCH_STATUSES = ["active", "expiring", "expired", "empty"] as const satisfies readonly BatchStatus[];
-const MOVEMENT_TYPES = ["receipt", "write_off", "transfer_out", "transfer_in", "stocktake_adjust", "service_consumption", "sale"] as const satisfies readonly MovementType[];
-const KINDS = ["receipt", "write_off", "transfer", "stocktake", "service_consumption", "sale"] as const satisfies readonly OperationKind[];
+const MOVEMENT_TYPES = ["receipt", "write_off", "transfer_out", "transfer_in", "stocktake_adjust", "service_consumption", "sale", "sale_return"] as const satisfies readonly MovementType[];
+const KINDS = ["receipt", "write_off", "transfer", "stocktake", "service_consumption", "sale", "sale_return"] as const satisfies readonly OperationKind[];
 const REASONS = ["expired", "damaged", "lost", "internal_use", "correction", "other"] as const satisfies readonly WriteOffReason[];
 const STOCKTAKE_STATUSES = ["draft", "posted", "cancelled"] as const satisfies readonly StocktakeStatus[];
 const ALERT_KINDS = ["low_stock", "expiring", "shortage"] as const satisfies readonly AlertKind[];
@@ -90,18 +93,49 @@ export function toProduct(v: unknown): Product {
     id: str(o.id) ?? "",
     name: str(o.name) ?? "",
     category: str(o.category),
+    categoryId: str(o.categoryId),
+    categoryPath: str(o.categoryPath),
     unit: oneOf<StockUnit>(o.unit, UNITS, "pcs"),
     barcode: str(o.barcode),
     purpose: oneOf<ProductPurpose>(o.purpose, PURPOSES, "both"),
     supplier: ref(o.supplier),
     ...optNum(o, "purchasePrice"),
+    salePrice: num(o.salePrice),
     minStock: num(o.minStock),
     trackExpiry: o.trackExpiry === true,
     isActive: o.isActive !== false,
     note: str(o.note),
     hasMovements: o.hasMovements === true,
+    imageUrl: str(o.imageUrl),
     createdAt: str(o.createdAt) ?? "",
     updatedAt: str(o.updatedAt) ?? "",
+  };
+}
+
+export function toProductImage(v: unknown): ProductImage {
+  const o = obj(v);
+  return {
+    id: str(o.id) ?? "",
+    url: str(o.url) ?? "",
+    thumbUrl: str(o.thumbUrl) ?? str(o.url) ?? "",
+    width: num0(o.width),
+    height: num0(o.height),
+    sizeBytes: num0(o.sizeBytes),
+    sortOrder: num0(o.sortOrder),
+    createdAt: str(o.createdAt) ?? "",
+  };
+}
+
+export function toCategory(v: unknown): Category {
+  const o = obj(v);
+  return {
+    id: str(o.id) ?? "",
+    parentId: str(o.parentId),
+    name: str(o.name) ?? "",
+    sortOrder: num0(o.sortOrder),
+    isArchived: o.isArchived === true,
+    productCount: num0(o.productCount),
+    childCount: num0(o.childCount),
   };
 }
 
@@ -203,6 +237,7 @@ function toMovement(v: unknown): Movement {
     counterpartLocationId: str(o.counterpartLocationId),
     stocktakeId: str(o.stocktakeId),
     createdBy: ref(o.createdBy),
+    ...(str(o.productOrderId) ? { productOrderId: str(o.productOrderId) } : {}),
   };
 }
 
@@ -219,6 +254,7 @@ function toOperationSummary(v: unknown): OperationSummary {
     createdBy: ref(o.createdBy),
     productCount: num0(o.productCount),
     appointmentId: str(o.appointmentId),
+    ...(str(o.productOrderId) ? { productOrderId: str(o.productOrderId) } : {}),
     ...optNum(o, "totalCost"),
   };
 }
@@ -358,8 +394,17 @@ type InventoryApi = Pick<
   | "getInventoryProducts"
   | "getInventoryProduct"
   | "getInventoryCategories"
+  | "createInventoryCategory"
+  | "updateInventoryCategory"
+  | "moveInventoryCategory"
+  | "archiveInventoryCategory"
+  | "unarchiveInventoryCategory"
+  | "deleteInventoryCategory"
   | "createInventoryProduct"
   | "updateInventoryProduct"
+  | "addProductImage"
+  | "deleteProductImage"
+  | "reorderProductImages"
   | "setProductLocationSetting"
   | "deleteProductLocationSetting"
   | "getSuppliers"
@@ -416,11 +461,35 @@ export const httpInventoryApi: InventoryApi = {
   getInventoryProducts: async (q = {}) => toPage(await get("/products", { ...q, take: take(q.take) }), toProduct),
   getInventoryProduct: async (id) => {
     const raw = await get<unknown>(`/products/${enc(id)}`);
-    return { ...toProduct(raw), locationSettings: list(obj(raw).locationSettings).map(toSetting) };
+    return { ...toProduct(raw), locationSettings: list(obj(raw).locationSettings).map(toSetting), images: list(obj(raw).images).map(toProductImage) };
   },
-  getInventoryCategories: async () => list(obj(await get("/categories")).items).filter((x): x is string => typeof x === "string"),
+  // Контракт: плоский масив вузлів (на випадок обгортки `{ items }` приймаємо і її).
+  getInventoryCategories: async (includeArchived = false) => {
+    const raw = await get<unknown>("/categories", { includeArchived });
+    return (Array.isArray(raw) ? raw : list(obj(raw).items)).map(toCategory);
+  },
+  createInventoryCategory: async (r) => toCategory(await send("POST", "/categories", r)),
+  updateInventoryCategory: async (id, r) => toCategory(await send("PUT", `/categories/${enc(id)}`, r)),
+  moveInventoryCategory: async (id, r) => toCategory(await send("PUT", `/categories/${enc(id)}/move`, r)),
+  archiveInventoryCategory: async (id) => toCategory(await send("POST", `/categories/${enc(id)}/archive`)),
+  unarchiveInventoryCategory: async (id) => toCategory(await send("POST", `/categories/${enc(id)}/unarchive`)),
+  deleteInventoryCategory: async (id) => {
+    await apiJson<void>(`${B}/categories/${enc(id)}`, { method: "DELETE", cache: "no-store" });
+  },
   createInventoryProduct: async (r) => toProduct(await send("POST", "/products", r)),
   updateInventoryProduct: async (id, r) => toProduct(await send("PUT", `/products/${enc(id)}`, r)),
+  addProductImage: async (productId, file) => {
+    const body = new FormData();
+    body.append("file", await downscaleImage(file));
+    return toProductImage(await apiJson(`${B}/products/${enc(productId)}/images`, { method: "POST", body, cache: "no-store" }));
+  },
+  deleteProductImage: async (productId, imageId) => {
+    await apiJson<void>(`${B}/products/${enc(productId)}/images/${enc(imageId)}`, { method: "DELETE", cache: "no-store" });
+  },
+  reorderProductImages: async (productId, imageIds) => {
+    const raw = await apiJson<unknown>(`${B}/products/${enc(productId)}/images/order`, { method: "PATCH", body: JSON.stringify({ imageIds }), cache: "no-store" });
+    return list(obj(raw).images).map(toProductImage);
+  },
   setProductLocationSetting: async (productId, locationId, input) => toSetting(await send("PUT", `/products/${enc(productId)}/locations/${enc(locationId)}`, input)),
   deleteProductLocationSetting: async (productId, locationId) => {
     await apiJson<void>(`${B}/products/${enc(productId)}/locations/${enc(locationId)}`, { method: "DELETE", cache: "no-store" });

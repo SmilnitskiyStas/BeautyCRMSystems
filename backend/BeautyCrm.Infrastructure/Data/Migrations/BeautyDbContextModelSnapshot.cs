@@ -3510,7 +3510,7 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnType("numeric(12,2)")
                         .HasColumnName("amount");
 
-                    b.Property<Guid>("AppointmentId")
+                    b.Property<Guid?>("AppointmentId")
                         .HasColumnType("uuid")
                         .HasColumnName("appointment_id");
 
@@ -3529,6 +3529,10 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.Property<DateTimeOffset?>("PaidAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("paid_at");
+
+                    b.Property<Guid?>("ProductOrderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("product_order_id");
 
                     b.Property<string>("Provider")
                         .HasMaxLength(64)
@@ -3567,6 +3571,10 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.HasIndex("TenantId", "AppointmentId")
                         .HasDatabaseName("ix_beauty_payments_tenant_id_appointment_id");
 
+                    b.HasIndex("TenantId", "ProductOrderId")
+                        .HasDatabaseName("ix_beauty_payments_product_order")
+                        .HasFilter("product_order_id IS NOT NULL");
+
                     b.HasIndex("TenantId", "Provider", "ProviderPaymentId")
                         .HasDatabaseName("ix_beauty_payments_tenant_id_provider_provider_payment_id")
                         .HasFilter("provider_payment_id IS NOT NULL");
@@ -3578,6 +3586,8 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                             t.HasCheckConstraint("ck_beauty_payments_method", "method IN ('card', 'cash')");
 
                             t.HasCheckConstraint("ck_beauty_payments_status", "status IN ('pending', 'paid', 'failed', 'refunded')");
+
+                            t.HasCheckConstraint("ck_beauty_payments_subject", "num_nonnulls(appointment_id, product_order_id) = 1");
                         });
                 });
 
@@ -3870,6 +3880,10 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(100)")
                         .HasColumnName("category");
 
+                    b.Property<Guid?>("CategoryId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("category_id");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("timestamp with time zone")
@@ -3908,6 +3922,11 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)")
                         .HasColumnName("purpose");
+
+                    b.Property<decimal?>("SalePrice")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("sale_price");
 
                     b.Property<Guid?>("SupplierId")
                         .HasColumnType("uuid")
@@ -3950,6 +3969,10 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasDatabaseName("ux_beauty_products_barcode")
                         .HasFilter("barcode IS NOT NULL");
 
+                    b.HasIndex("TenantId", "CategoryId")
+                        .HasDatabaseName("ix_beauty_products_category")
+                        .HasFilter("category_id IS NOT NULL");
+
                     b.HasIndex("TenantId", "SupplierId")
                         .HasDatabaseName("ix_beauty_products_supplier");
 
@@ -3971,7 +3994,159 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
 
                             t.HasCheckConstraint("ck_beauty_products_purpose", "purpose IN ('sale', 'salon_use', 'both')");
 
+                            t.HasCheckConstraint("ck_beauty_products_sale_price", "sale_price IS NULL OR sale_price BETWEEN 0 AND 1000000");
+
                             t.HasCheckConstraint("ck_beauty_products_unit", "unit IN ('pcs', 'ml', 'g', 'l', 'kg', 'pack')");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductCategory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<bool>("IsArchived")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("is_archived");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("name");
+
+                    b.Property<Guid?>("ParentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("parent_id");
+
+                    b.Property<int>("SortOrder")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0)
+                        .HasColumnName("sort_order");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_product_categories");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_product_categories_tenant_id_id");
+
+                    b.HasIndex("TenantId", "ParentId")
+                        .HasDatabaseName("ix_beauty_product_categories_parent");
+
+                    b.ToTable("beauty_product_categories", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_product_categories_name", "char_length(btrim(name)) BETWEEN 1 AND 100");
+
+                            t.HasCheckConstraint("ck_beauty_product_categories_no_self_parent", "parent_id IS NULL OR parent_id <> id");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductImage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by_user_id");
+
+                    b.Property<short>("Height")
+                        .HasColumnType("smallint")
+                        .HasColumnName("height");
+
+                    b.Property<string>("Mime")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("mime");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("product_id");
+
+                    b.Property<int>("SizeBytes")
+                        .HasColumnType("integer")
+                        .HasColumnName("size_bytes");
+
+                    b.Property<short>("SortOrder")
+                        .HasColumnType("smallint")
+                        .HasColumnName("sort_order");
+
+                    b.Property<string>("StorageKey")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character(32)")
+                        .HasColumnName("storage_key")
+                        .IsFixedLength();
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<short>("Width")
+                        .HasColumnType("smallint")
+                        .HasColumnName("width");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_product_images");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_product_images_tenant_id_id");
+
+                    b.HasIndex("StorageKey")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_product_images_storage_key");
+
+                    b.HasIndex("TenantId", "CreatedByUserId")
+                        .HasDatabaseName("ix_beauty_product_images_created_by");
+
+                    b.HasIndex("TenantId", "ProductId", "SortOrder")
+                        .HasDatabaseName("ix_beauty_product_images_product");
+
+                    b.ToTable("beauty_product_images", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_product_images_height", "height BETWEEN 1 AND 1600");
+
+                            t.HasCheckConstraint("ck_beauty_product_images_mime", "mime = 'image/webp'");
+
+                            t.HasCheckConstraint("ck_beauty_product_images_size", "size_bytes > 0 AND size_bytes <= 10485760");
+
+                            t.HasCheckConstraint("ck_beauty_product_images_sort_order", "sort_order BETWEEN 0 AND 99");
+
+                            t.HasCheckConstraint("ck_beauty_product_images_storage_key", "storage_key ~ '^[0-9a-f]{32}$'");
+
+                            t.HasCheckConstraint("ck_beauty_product_images_width", "width BETWEEN 1 AND 1600");
                         });
                 });
 
@@ -4041,6 +4216,342 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                     b.ToTable("beauty_product_location_settings", null, t =>
                         {
                             t.HasCheckConstraint("ck_beauty_product_location_settings_min_stock", "min_stock IS NULL OR min_stock >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductOrder", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<string>("CancelNote")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("cancel_note");
+
+                    b.Property<Guid?>("CancelledByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("cancelled_by_user_id");
+
+                    b.Property<Guid?>("ClientId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("client_id");
+
+                    b.Property<string>("CloseReason")
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("close_reason");
+
+                    b.Property<DateTimeOffset?>("ClosedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("closed_at");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(3)
+                        .HasColumnType("character(3)")
+                        .HasDefaultValue("UAH")
+                        .HasColumnName("currency")
+                        .IsFixedLength();
+
+                    b.Property<DateTimeOffset?>("FulfilledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("fulfilled_at");
+
+                    b.Property<Guid?>("FulfilledByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("fulfilled_by_user_id");
+
+                    b.Property<string>("GuestName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("guest_name");
+
+                    b.Property<string>("GuestPhone")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("guest_phone");
+
+                    b.Property<string>("IdempotencyKeyHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("idempotency_key_hash");
+
+                    b.Property<string>("IdempotencyRequestHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("idempotency_request_hash");
+
+                    b.Property<Guid>("LocationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("location_id");
+
+                    b.Property<int>("OrderNumber")
+                        .HasColumnType("integer")
+                        .HasColumnName("order_number");
+
+                    b.Property<DateTimeOffset?>("PaidAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("paid_at");
+
+                    b.Property<short>("PaymentAttempts")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("smallint")
+                        .HasDefaultValue((short)0)
+                        .HasColumnName("payment_attempts");
+
+                    b.Property<Guid?>("PaymentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("payment_id");
+
+                    b.Property<DateTimeOffset?>("PaymentStartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("payment_started_at");
+
+                    b.Property<string>("PublicTokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("public_token_hash");
+
+                    b.Property<decimal?>("RefundAmount")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("refund_amount");
+
+                    b.Property<DateTimeOffset?>("RefundStartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("refund_started_at");
+
+                    b.Property<DateTimeOffset>("ReservationExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reservation_expires_at");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)")
+                        .HasColumnName("source");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("pending_payment")
+                        .HasColumnName("status");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<decimal>("TotalAmount")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("total_amount");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_product_orders");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_product_orders_tenant_id_id");
+
+                    b.HasIndex("TenantId", "CancelledByUserId")
+                        .HasDatabaseName("ix_beauty_product_orders_cancelled_by")
+                        .HasFilter("cancelled_by_user_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "ClientId")
+                        .HasDatabaseName("ix_beauty_product_orders_client")
+                        .HasFilter("client_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "FulfilledByUserId")
+                        .HasDatabaseName("ix_beauty_product_orders_fulfilled_by")
+                        .HasFilter("fulfilled_by_user_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "IdempotencyKeyHash")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_product_orders_idempotency");
+
+                    b.HasIndex("TenantId", "LocationId")
+                        .HasDatabaseName("ix_beauty_product_orders_pending")
+                        .HasFilter("status = 'pending_payment'");
+
+                    b.HasIndex("TenantId", "OrderNumber")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_product_orders_number");
+
+                    b.HasIndex("TenantId", "PaymentId")
+                        .HasDatabaseName("ix_beauty_product_orders_payment")
+                        .HasFilter("payment_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "PublicTokenHash")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_product_orders_token");
+
+                    b.HasIndex("TenantId", "ReservationExpiresAt")
+                        .HasDatabaseName("ix_beauty_product_orders_expiry")
+                        .HasFilter("status = 'pending_payment'");
+
+                    b.HasIndex("TenantId", "CreatedAt", "Id")
+                        .IsDescending(false, true, true)
+                        .HasDatabaseName("ix_beauty_product_orders_created");
+
+                    b.HasIndex("TenantId", "GuestPhone", "CreatedAt")
+                        .IsDescending(false, false, true)
+                        .HasDatabaseName("ix_beauty_product_orders_phone_created");
+
+                    b.HasIndex("TenantId", "LocationId", "CreatedAt")
+                        .HasDatabaseName("ix_beauty_product_orders_paid")
+                        .HasFilter("status = 'paid'");
+
+                    b.HasIndex("TenantId", "LocationId", "CreatedAt", "Id")
+                        .IsDescending(false, false, true, true)
+                        .HasDatabaseName("ix_beauty_product_orders_location_created");
+
+                    b.ToTable("beauty_product_orders", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_product_orders_cancelled", "status <> 'cancelled' OR close_reason IN ('client', 'staff')");
+
+                            t.HasCheckConstraint("ck_beauty_product_orders_close_reason", "close_reason IN ('client', 'staff', 'expired', 'stock_unavailable')");
+
+                            t.HasCheckConstraint("ck_beauty_product_orders_closed", "(status IN ('cancelled', 'expired', 'refunded')) = (closed_at IS NOT NULL AND close_reason IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_beauty_product_orders_currency", "currency = 'UAH'");
+
+                            t.HasCheckConstraint("ck_beauty_product_orders_expired", "(status = 'expired') = (close_reason IS NOT DISTINCT FROM 'expired')");
+
+                            t.HasCheckConstraint("ck_beauty_product_orders_fulfilled", "(status = 'fulfilled') = (fulfilled_at IS NOT NULL AND fulfilled_by_user_id IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_beauty_product_orders_guest_name", "char_length(btrim(guest_name)) BETWEEN 2 AND 100");
+
+                            t.HasCheckConstraint("ck_beauty_product_orders_guest_phone", "guest_phone ~ '^\\+[1-9][0-9]{7,14}$'");
+
+                            t.HasCheckConstraint("ck_beauty_product_orders_number", "order_number > 0");
+
+                            t.HasCheckConstraint("ck_beauty_product_orders_paid", "status NOT IN ('paid', 'fulfilled') OR (paid_at IS NOT NULL AND payment_id IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_beauty_product_orders_payment_attempts", "payment_attempts BETWEEN 0 AND 10");
+
+                            t.HasCheckConstraint("ck_beauty_product_orders_payment_started", "payment_started_at IS NULL OR status = 'pending_payment'");
+
+                            t.HasCheckConstraint("ck_beauty_product_orders_refund_amount", "refund_amount IS NULL OR status = 'refunded'");
+
+                            t.HasCheckConstraint("ck_beauty_product_orders_refund_started", "refund_started_at IS NULL OR status = 'paid'");
+
+                            t.HasCheckConstraint("ck_beauty_product_orders_refunded", "status <> 'refunded' OR (close_reason IN ('staff', 'stock_unavailable') AND payment_id IS NOT NULL AND refund_amount = total_amount)");
+
+                            t.HasCheckConstraint("ck_beauty_product_orders_source", "source IN ('web', 'ios', 'android')");
+
+                            t.HasCheckConstraint("ck_beauty_product_orders_status", "status IN ('pending_payment', 'paid', 'fulfilled', 'cancelled', 'expired', 'refunded')");
+
+                            t.HasCheckConstraint("ck_beauty_product_orders_total", "total_amount > 0 AND total_amount <= 1000000");
+                        });
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductOrderLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<short>("LineNo")
+                        .HasColumnType("smallint")
+                        .HasColumnName("line_no");
+
+                    b.Property<decimal>("LineTotal")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("line_total");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("order_id");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("product_id");
+
+                    b.Property<string>("ProductName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("product_name");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer")
+                        .HasColumnName("quantity");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("Unit")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)")
+                        .HasColumnName("unit");
+
+                    b.Property<decimal>("UnitPrice")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("unit_price");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_product_order_lines");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_product_order_lines_tenant_id_id");
+
+                    b.HasIndex("TenantId", "ProductId")
+                        .HasDatabaseName("ix_beauty_product_order_lines_product");
+
+                    b.HasIndex("TenantId", "OrderId", "LineNo")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_product_order_lines_line_no");
+
+                    b.HasIndex("TenantId", "OrderId", "ProductId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_product_order_lines_product");
+
+                    b.ToTable("beauty_product_order_lines", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_product_order_lines_line_no", "line_no BETWEEN 1 AND 20");
+
+                            t.HasCheckConstraint("ck_beauty_product_order_lines_line_total", "line_total = unit_price * quantity");
+
+                            t.HasCheckConstraint("ck_beauty_product_order_lines_quantity", "quantity BETWEEN 1 AND 10");
+
+                            t.HasCheckConstraint("ck_beauty_product_order_lines_unit", "unit IN ('pcs', 'ml', 'g', 'l', 'kg', 'pack')");
+
+                            t.HasCheckConstraint("ck_beauty_product_order_lines_unit_price", "unit_price > 0 AND unit_price <= 1000000");
                         });
                 });
 
@@ -5870,11 +6381,11 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         {
                             t.HasCheckConstraint("ck_beauty_stock_movements_batch", "(batch_id IS NULL) = is_shortage");
 
-                            t.HasCheckConstraint("ck_beauty_stock_movements_quantity_sign", "(type IN ('receipt', 'transfer_in') AND quantity > 0) OR (type IN ('write_off', 'transfer_out', 'service_consumption', 'sale') AND quantity < 0) OR (type = 'stocktake_adjust' AND quantity <> 0)");
+                            t.HasCheckConstraint("ck_beauty_stock_movements_quantity_sign", "(type IN ('receipt', 'transfer_in') AND quantity > 0) OR (type IN ('write_off', 'transfer_out', 'service_consumption', 'sale') AND quantity < 0) OR (type = 'sale_return' AND quantity > 0) OR (type = 'stocktake_adjust' AND quantity <> 0)");
 
                             t.HasCheckConstraint("ck_beauty_stock_movements_shortage", "NOT is_shortage OR type = 'service_consumption' OR (type IN ('receipt', 'transfer_in', 'stocktake_adjust') AND quantity > 0)");
 
-                            t.HasCheckConstraint("ck_beauty_stock_movements_type", "type IN ('receipt', 'write_off', 'transfer_out', 'transfer_in', 'stocktake_adjust', 'service_consumption', 'sale')");
+                            t.HasCheckConstraint("ck_beauty_stock_movements_type", "type IN ('receipt', 'write_off', 'transfer_out', 'transfer_in', 'stocktake_adjust', 'service_consumption', 'sale', 'sale_return')");
                         });
                 });
 
@@ -5930,6 +6441,10 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(500)")
                         .HasColumnName("note");
 
+                    b.Property<Guid?>("ProductOrderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("product_order_id");
+
                     b.Property<string>("Reason")
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)")
@@ -5984,6 +6499,11 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasDatabaseName("ix_beauty_stock_operations_tenant_id_supplier_id")
                         .HasFilter("supplier_id IS NOT NULL");
 
+                    b.HasIndex("TenantId", "ProductOrderId", "Kind")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_stock_operations_product_order")
+                        .HasFilter("product_order_id IS NOT NULL");
+
                     b.HasIndex("TenantId", "ToLocationId", "CreatedAt")
                         .IsDescending(false, false, true)
                         .HasDatabaseName("ix_beauty_stock_operations_to_location_created")
@@ -5999,7 +6519,9 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
 
                             t.HasCheckConstraint("ck_beauty_stock_operations_idempotency", "(idempotency_key_hash IS NULL) = (idempotency_request_hash IS NULL)");
 
-                            t.HasCheckConstraint("ck_beauty_stock_operations_kind", "kind IN ('receipt', 'write_off', 'transfer', 'stocktake', 'service_consumption', 'sale')");
+                            t.HasCheckConstraint("ck_beauty_stock_operations_kind", "kind IN ('receipt', 'write_off', 'transfer', 'stocktake', 'service_consumption', 'sale', 'sale_return')");
+
+                            t.HasCheckConstraint("ck_beauty_stock_operations_product_order", "(kind IN ('sale', 'sale_return')) = (product_order_id IS NOT NULL)");
 
                             t.HasCheckConstraint("ck_beauty_stock_operations_reason", "reason IS NULL OR reason IN ('expired', 'damaged', 'lost', 'internal_use', 'correction', 'other')");
 
@@ -7482,8 +8004,14 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasForeignKey("TenantId", "AppointmentId")
                         .HasPrincipalKey("TenantId", "Id")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
                         .HasConstraintName("fk_beauty_payments_beauty_appointments_tenant_id_appointment_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.ProductOrder", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ProductOrderId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_payments_product_orders_tenant_id_product_order_id");
 
                     b.Navigation("Appointment");
                 });
@@ -7528,6 +8056,13 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.Product", b =>
                 {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.ProductCategory", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CategoryId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_products_beauty_product_categories_tenant_id_categor");
+
                     b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Supplier", null)
                         .WithMany()
                         .HasForeignKey("TenantId", "SupplierId")
@@ -7542,6 +8077,42 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_beauty_products_users_tenant_id_updated_by_user_id");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductCategory", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.ProductCategory", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ParentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_product_categories_beauty_product_categories_tenant_");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductImage", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_product_images_tenants_tenant_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CreatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_product_images_users_tenant_id_created_by_user_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Product", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ProductId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_product_images_beauty_products_tenant_id_product_id");
                 });
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductLocationSetting", b =>
@@ -7569,6 +8140,64 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_beauty_product_location_settings_users_tenant_id_updated_by");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductOrder", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CancelledByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_product_orders_users_tenant_id_cancelled_by_user_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Client", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ClientId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_product_orders_beauty_clients_tenant_id_client_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "FulfilledByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_product_orders_users_tenant_id_fulfilled_by_user_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Location", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LocationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_product_orders_beauty_locations_tenant_id_location_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Payment", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PaymentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_product_orders_beauty_payments_tenant_id_payment_id");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductOrderLine", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.ProductOrder", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "OrderId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_product_order_lines_beauty_product_orders_tenant_id_");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Product", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ProductId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_product_order_lines_beauty_products_tenant_id_produc");
                 });
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.PromotionLocation", b =>
@@ -8145,6 +8774,13 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_beauty_stock_operations_beauty_locations_tenant_id_location");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.ProductOrder", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ProductOrderId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_beauty_stock_operations_product_orders_tenant_id_product_or");
 
                     b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Stocktake", null)
                         .WithMany()

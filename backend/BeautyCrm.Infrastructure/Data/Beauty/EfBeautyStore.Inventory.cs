@@ -1,4 +1,5 @@
 using BeautyCrm.Application.Features.BeautyInventory;
+using BeautyCrm.Application.Features.BeautyProductImages;
 using BeautyCrm.Infrastructure.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -33,10 +34,11 @@ public sealed partial class EfBeautyStore : IInventoryStore
     private static ProductRef ToRef(Product p) =>
         new(p.Id, p.Name, EnumText<ProductUnit>.ToDb(p.Unit), EnumText<ProductPurpose>.ToDb(p.Purpose), p.Category, p.Barcode, p.IsActive);
 
-    private static ProductDto ToDto(Product p, IReadOnlyDictionary<Guid, string> suppliers, bool hasMovements) =>
+    private static ProductDto ToDto(Product p, IReadOnlyDictionary<Guid, string> suppliers, bool hasMovements, IReadOnlyDictionary<Guid, string> categoryPaths, string? imageUrl = null) =>
         new(p.Id, p.Name, p.Category, EnumText<ProductUnit>.ToDb(p.Unit), p.Barcode, EnumText<ProductPurpose>.ToDb(p.Purpose),
             p.SupplierId is { } s && suppliers.TryGetValue(s, out var sn) ? new InventoryNamedRef(s, sn) : null,
-            p.PurchasePrice, p.MinStock, p.TrackExpiry, p.IsActive, p.Note, hasMovements, p.CreatedAt, p.UpdatedAt);
+            p.PurchasePrice, p.SalePrice, p.MinStock, p.TrackExpiry, p.IsActive, p.Note, hasMovements, p.CreatedAt, p.UpdatedAt,
+            p.CategoryId, p.CategoryId is { } c && categoryPaths.TryGetValue(c, out var path) ? path : null, imageUrl);
 
     private async Task<Dictionary<Guid, string>> SupplierNamesAsync(CancellationToken ct) =>
         await db.Suppliers.AsNoTracking().ToDictionaryAsync(s => s.Id, s => s.Name, ct);
@@ -56,7 +58,9 @@ public sealed partial class EfBeautyStore : IInventoryStore
     {
         var products = await db.Products.AsNoTracking().ToListAsync(ct);
         var suppliers = await SupplierNamesAsync(ct);
-        return [.. products.Select(p => ToDto(p, suppliers, false))];
+        var paths = await CategoryPathsAsync(ct);
+        var images = await ImagesByProductAsync(null, ct); // ADR-027: прев'ю першого фото, один запит
+        return [.. products.Select(p => ToDto(p, suppliers, false, paths, FirstThumb(images, p.Id)))];
     }
 
     /// <summary>EXISTS по індексу (tenant, product, occurred_at) лише для переданих id (сторінка), без сканування всього журналу.</summary>
@@ -73,7 +77,8 @@ public sealed partial class EfBeautyStore : IInventoryStore
         var list = ids.ToList();
         var products = await db.Products.AsNoTracking().Where(p => list.Contains(p.Id)).ToListAsync(ct);
         var suppliers = await SupplierNamesAsync(ct);
-        return products.ToDictionary(p => p.Id, p => ToDto(p, suppliers, false));
+        var paths = await CategoryPathsAsync(ct);
+        return products.ToDictionary(p => p.Id, p => ToDto(p, suppliers, false, paths));
     }
 
     public async Task<ProductDetailDto?> GetProductAsync(Guid id, CancellationToken ct)
@@ -84,9 +89,11 @@ public sealed partial class EfBeautyStore : IInventoryStore
         var moved = await db.StockMovements.AsNoTracking().AnyAsync(m => m.ProductId == id, ct);
         var settings = await db.ProductLocationSettings.AsNoTracking().Where(s => s.ProductId == id).OrderBy(s => s.LocationId)
             .Select(s => new LocationSettingDto(s.LocationId, s.MinStock, s.IsEnabled, s.UpdatedAt)).ToListAsync(ct);
-        var d = ToDto(p, suppliers, moved);
-        return new ProductDetailDto(d.Id, d.Name, d.Category, d.Unit, d.Barcode, d.Purpose, d.Supplier, d.PurchasePrice, d.MinStock, d.TrackExpiry,
-            d.IsActive, d.Note, d.HasMovements, d.CreatedAt, d.UpdatedAt, settings);
+        var images = await ImagesByProductAsync([id], ct);
+        var d = ToDto(p, suppliers, moved, await CategoryPathsAsync(ct), FirstThumb(images, id));
+        return new ProductDetailDto(d.Id, d.Name, d.Category, d.Unit, d.Barcode, d.Purpose, d.Supplier, d.PurchasePrice, d.SalePrice, d.MinStock, d.TrackExpiry,
+            d.IsActive, d.Note, d.HasMovements, d.CreatedAt, d.UpdatedAt, settings, d.CategoryId, d.CategoryPath, d.ImageUrl,
+            [.. images.GetValueOrDefault(id, []).Select(r => r.ToDto(media!))]);
     }
 
     public async Task<ProductDto?> GetProductByBarcodeAsync(string code, CancellationToken ct)
@@ -96,7 +103,8 @@ public sealed partial class EfBeautyStore : IInventoryStore
     }
 
     private async Task<ProductDto> ListProductsDtoAsync(Product p, CancellationToken ct) =>
-        ToDto(p, await SupplierNamesAsync(ct), await db.StockMovements.AsNoTracking().AnyAsync(m => m.ProductId == p.Id, ct));
+        ToDto(p, await SupplierNamesAsync(ct), await db.StockMovements.AsNoTracking().AnyAsync(m => m.ProductId == p.Id, ct), await CategoryPathsAsync(ct),
+            FirstThumb(await ImagesByProductAsync([p.Id], ct), p.Id));
 
     public async Task<IReadOnlyList<string>> ListCategoriesAsync(CancellationToken ct) =>
         [.. (await db.Products.AsNoTracking().Where(p => p.Category != null && p.Category != "").Select(p => p.Category!).Distinct().ToListAsync(ct))
@@ -105,7 +113,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
     private static void Apply(Product p, ProductData d)
     {
         p.Name = d.Name; p.Category = d.Category; p.Unit = EnumText<ProductUnit>.FromDb(d.Unit); p.Barcode = d.Barcode;
-        p.Purpose = EnumText<ProductPurpose>.FromDb(d.Purpose); p.SupplierId = d.SupplierId; p.PurchasePrice = d.PurchasePrice;
+        p.Purpose = EnumText<ProductPurpose>.FromDb(d.Purpose); p.SupplierId = d.SupplierId; p.PurchasePrice = d.PurchasePrice; p.SalePrice = d.SalePrice; p.CategoryId = d.CategoryId;
         p.MinStock = d.MinStock; p.TrackExpiry = d.TrackExpiry; p.IsActive = d.IsActive; p.Note = d.Note;
     }
 
@@ -116,6 +124,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
         db.Products.Add(p);
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateException ex) when (IsUnique(ex, BarcodeIndex)) { db.ChangeTracker.Clear(); return new(CatalogWriteOutcome.BarcodeTaken); }
+        catch (DbUpdateException ex) when (IsCategoryFk(ex)) { db.ChangeTracker.Clear(); return new(CatalogWriteOutcome.CategoryNotFound); }
         return new(CatalogWriteOutcome.Ok, await GetProductAsync(p.Id, ct));
     }
 
@@ -145,6 +154,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
         p.UpdatedByUserId = userId;
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateException ex) when (IsUnique(ex, BarcodeIndex)) { db.ChangeTracker.Clear(); return new(CatalogWriteOutcome.BarcodeTaken); }
+        catch (DbUpdateException ex) when (IsCategoryFk(ex)) { db.ChangeTracker.Clear(); return new(CatalogWriteOutcome.CategoryNotFound); }
         await tx.CommitAsync(ct);
         db.ChangeTracker.Clear();
         return new(CatalogWriteOutcome.Ok, await GetProductAsync(id, ct));
@@ -488,7 +498,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
         var users = await UserNamesAsync(ops.Where(o => o.CreatedByUserId != null).Select(o => o.CreatedByUserId!.Value), ct);
         return [.. ops.Select(o => new OperationSummaryDto(o.Id, EnumText<StockOperationKind>.ToDb(o.Kind), o.LocationId, o.ToLocationId,
             o.Reason is { } r ? EnumText<WriteOffReason>.ToDb(r) : null, o.DocumentNumber, o.CreatedAt, Named(o.CreatedByUserId, users),
-            moves[o.Id].Select(m => m.ProductId).Distinct().Count(), TotalCost(moves[o.Id], o.Kind), o.AppointmentId))];
+            moves[o.Id].Select(m => m.ProductId).Distinct().Count(), TotalCost(moves[o.Id], o.Kind), o.AppointmentId, o.ProductOrderId))];
     }
 
     public async Task<OperationDto?> GetOperationAsync(Guid id, CancellationToken ct)
@@ -501,7 +511,7 @@ public sealed partial class EfBeautyStore : IInventoryStore
         return new OperationDto(o.Id, EnumText<StockOperationKind>.ToDb(o.Kind), o.LocationId, o.ToLocationId,
             o.Reason is { } r ? EnumText<WriteOffReason>.ToDb(r) : null, o.DocumentNumber, o.CreatedAt, Named(o.CreatedByUserId, users),
             moves.Select(m => m.ProductId).Distinct().Count(), TotalCost(moves, o.Kind), Named(o.SupplierId, suppliers), o.ReceivedOn, o.Note, o.StocktakeId,
-            await MapMovementsAsync(moves, ct), o.AppointmentId);
+            await MapMovementsAsync(moves, ct), o.AppointmentId, o.ProductOrderId);
     }
 
     public async Task<KeyedOperation?> FindOperationByKeyAsync(string keyHash, CancellationToken ct)

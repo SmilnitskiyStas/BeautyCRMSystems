@@ -92,3 +92,54 @@ describe("форма закладу: координати (§28.11)", () => {
     expect(document.body.textContent).not.toMatch(/raw english/);
   });
 });
+
+describe("форма закладу: показ у пошуку застосунку (ADR-022)", () => {
+  const LABEL = "Показувати в пошуку застосунку";
+
+  it("новий заклад: вимкнено, payload isDiscoverable=false", async () => {
+    const user = userEvent.setup();
+    renderForm(null);
+    expect(screen.getByLabelText(LABEL)).not.toBeChecked();
+    await user.type(screen.getByLabelText(/^Назва/), "Новий");
+    await user.click(screen.getByRole("button", { name: "Додати заклад" }));
+    await waitFor(() => expect(createLocation).toHaveBeenCalled());
+    expect(createLocation.mock.calls[0][0].isDiscoverable).toBe(false);
+  });
+
+  it("існуючий заклад підтягує значення, зняття відправляє false", async () => {
+    const user = userEvent.setup();
+    renderForm({ ...loc, isDiscoverable: true });
+    const box = screen.getByLabelText(LABEL);
+    expect(box).toBeChecked();
+    expect(box).toHaveAccessibleDescription(/геолокацією/);
+    await user.click(box);
+    await user.click(screen.getByRole("button", { name: "Зберегти" }));
+    await waitFor(() => expect(updateLocation).toHaveBeenCalled());
+    expect(updateLocation.mock.calls[0][1].isDiscoverable).toBe(false);
+  });
+
+  it("увімкнення з координатами відправляє true", async () => {
+    const user = userEvent.setup();
+    renderForm(loc);
+    await user.click(screen.getByLabelText(LABEL));
+    await user.click(screen.getByRole("button", { name: "Зберегти" }));
+    await waitFor(() => expect(updateLocation).toHaveBeenCalled());
+    expect(updateLocation.mock.calls[0][1].isDiscoverable).toBe(true);
+  });
+
+  it("без координат: попередження й збереження заблоковано", async () => {
+    const user = userEvent.setup();
+    renderForm(null);
+    await user.type(screen.getByLabelText(/^Назва/), "Новий");
+    await user.click(screen.getByLabelText(LABEL));
+    expect(screen.getByRole("alert")).toHaveTextContent(/вкажіть координати/);
+    await user.click(screen.getByRole("button", { name: "Додати заклад" }));
+    expect(createLocation).not.toHaveBeenCalled();
+    await user.type(screen.getByLabelText("Широта"), "50.45");
+    await user.type(screen.getByLabelText("Довгота"), "30.52");
+    await user.click(screen.getByRole("button", { name: "Додати заклад" }));
+    await waitFor(() => expect(createLocation).toHaveBeenCalled());
+    expect(createLocation.mock.calls[0][0]).toMatchObject({ isDiscoverable: true, latitude: 50.45 });
+  });
+});
+

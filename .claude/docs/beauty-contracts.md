@@ -5053,7 +5053,7 @@ POST /reset { "expectedVersion": 4, "dryRun": false }
 
 Артефакт `API-CONTRACT-INVENTORY-V1` (TASK-875). Джерело рішень: **ADR-025** (статус `accepted` 2026-11-18; етап 1 реалізовано, див. ADR-025 §10). При розбіжності діє ADR, а зміна семантики потребує нового ADR. Позначка *(дефолт Qn)* — рекомендований дефолт відкритого питання ADR-025 §7; його змінюють правкою цього розділу.
 - **Нумерація:** §31 і версія v0.34 зайняті гілкою mobile (ADR-024, global identity, не злито в цю гілку), тому цей розділ — §32, v0.35. §29–§31 цей розділ не змінює.
-- **Версії §32:** v0.35 (2026-11-18, TASK-875) — етап 1, §32.1–§32.14. **v0.36** (2026-11-19, TASK-882, `API-CONTRACT-INVENTORY-V2`) — етап 2a, §32.15–§32.25: норми матеріалів, дефіцит, автосписання, сповіщення персоналу, воркер. Адитивно змінює §32.3, §32.4, §32.6 (дефіцит, позначено «з v0.36»). Етап 2b (Telegram власнику) — лише заглушка §32.24. **v0.37** (2026-11-19, TASK-889, `API-CONTRACT-INVENTORY-V3`, proposed) — етап 2b: §32.24 замінено повною специфікацією (прив'язка чату owner, guard вхідних, службова черга, прапори, приватність, API, UI, задачі); інші підрозділи §32 не змінено.
+- **Версії §32:** v0.35 (2026-11-18, TASK-875) — етап 1, §32.1–§32.14. **v0.36** (2026-11-19, TASK-882, `API-CONTRACT-INVENTORY-V2`) — етап 2a, §32.15–§32.25: норми матеріалів, дефіцит, автосписання, сповіщення персоналу, воркер. Адитивно змінює §32.3, §32.4, §32.6 (дефіцит, позначено «з v0.36»). Етап 2b (Telegram власнику) — лише заглушка §32.24. **v0.37** (2026-11-19, TASK-889, `API-CONTRACT-INVENTORY-V3`, proposed) — етап 2b: §32.24 замінено повною специфікацією (прив'язка чату owner, guard вхідних, службова черга, прапори, приватність, API, UI, задачі); інші підрозділи §32 не змінено. **v0.38** (2026-11-20, `API-CONTRACT-INVENTORY-V4`) — роздрібна ціна товару `salePrice` (§32.26): поле в `ProductDto`/`ProductRequest`, обов'язкове для `purpose` = `sale|both`, код `sale_price_required`; нових маршрутів немає.
 - **Обсяг цієї версії:** **етап 1** (каталог товарів, постачальники, залишки по закладах і зведено, партії й терміни, надходження, списання, переміщення, інвентаризація) — детально. **Етапи 2–3** — лише орієнтовно в §32.13, позначено «не специфіковано в цій версії».
 - **Розширює** §30.2/§30.3 (блок `inventory` у каталозі прав, `catalogVersion = 2`; §32.2) і §30.6 (карта «ендпоінт → право» для `/api/beauty/inventory/*` — у §32.5). Інші розділи не змінюються.
 
@@ -5221,7 +5221,8 @@ POST /reset { "expectedVersion": 4, "dryRun": false }
 | GET | `/products?search&category&purpose&supplierId&active=true\|false\|all&cursor&take` | `inventory.view ≥ own` | `{items: ProductDto[], hasMore, nextCursor?}`; `active` за замовч. `true`; сортування `lower(name), id` |
 | GET | `/products/{id}` | `inventory.view ≥ own` | `ProductDetailDto` |
 | GET | `/products/by-barcode?code=` | `inventory.view ≥ own` | `ProductDto` або `404 product_not_found` (точний збіг після `trim`) |
-| GET | `/categories` | `inventory.view ≥ own` | `{items: string[]}` — різні непорожні категорії, ordinal-сортування |
+| GET | `/products/categories` | `inventory.view ≥ own` | `{items: string[]}` — різні непорожні **текстові** категорії товарів, ordinal-сортування (застарілий список; **раніше `GET /categories`** — шлях віддано дереву, §32.27) |
+| — | `/categories…` (дерево) | див. §32.27 | GET/POST/PUT/PUT move/POST archive/unarchive/DELETE |
 | POST | `/products` | `inventory.manage = all` | `ProductRequest` → `201 ProductDto`; Лім. |
 | PUT | `/products/{id}` | `inventory.manage = all` | `ProductRequest` → `200 ProductDto`; Лім. |
 | PUT | `/products/{id}/locations/{locationId}` | `inventory.manage ≥ own` + заклад у scope | `{minStock: number\|null, isEnabled: boolean}` → `200 LocationSettingDto`; Лім. |
@@ -5258,11 +5259,11 @@ InventoryScopeDto   { locations: [{id, name, isActive, timezone, canManage: bool
                       canEditCatalog: boolean, expiringSoonDays }
 ProductRef          { id, name, unit, purpose, category: string|null, barcode: string|null, isActive }
 ProductDto          { id, name, category|null, unit, barcode|null, purpose, supplier: {id, name}|null,
-                      purchasePrice†: number|null, minStock: number|null, trackExpiry, isActive, note|null,
+                      purchasePrice†: number|null, salePrice: number|null (роздрібна, §32.26; видима для всіх з inventory.view), minStock: number|null, trackExpiry, isActive, note|null,
                       hasMovements: boolean, createdAt, updatedAt }
 ProductDetailDto    = ProductDto & { locationSettings: LocationSettingDto[] }   // лише заклади scope
 LocationSettingDto  { locationId, minStock: number|null, isEnabled, updatedAt }
-ProductRequest      { name, category?, unit, barcode?, purpose, supplierId?, purchasePrice?, minStock?,
+ProductRequest      { name, category?, unit, barcode?, purpose, supplierId?, purchasePrice?, salePrice? (обов'язкове для purpose sale|both; для salon_use ігнорується → null; PUT = повна заміна, без злиття), minStock?,
                       trackExpiry?: boolean (POST за замовч. false; PUT null = без змін),
                       isActive?: boolean (PUT null = без змін; POST ігнорується), note? }
                     // PUT: purchasePrice відсутнє або null = без змін (очищення ціни не підтримується);
@@ -5308,7 +5309,8 @@ StocktakeDto        = StocktakeSummaryDto & { note|null, version, postedBy: {id,
 | зміна `unit` товару, що має рухи | `unit_locked` |
 | `barcode` після `trim` (порожнє → `null`) не відповідає `^[0-9A-Za-z._-]{1,64}$` | `invalid_barcode` |
 | `purpose` ∉ `sale\|salon_use\|both` | `invalid_purpose` |
-| `purchasePrice`, `unitCost`: < 0, > 1 000 000, > 2 знаків | `invalid_price` |
+| `purchasePrice`, `salePrice`, `unitCost`: < 0, > 1 000 000, > 2 знаків | `invalid_price` |
+| `salePrice` відсутнє/`null` за `purpose` = `sale\|both` (на POST і PUT, у т.ч. перше редагування старого товару без ціни) | `sale_price_required` |
 | `minStock`: < 0, > 1 000 000, > 3 знаків; не ціле для `pcs\|pack` (*дефолт Q4*) | `invalid_min_stock` |
 | `quantity`, `countedQuantity`: ≤ 0 (для `countedQuantity` — < 0), > 1 000 000, > 3 знаків; не ціле для `pcs\|pack` | `invalid_quantity` |
 | `lines` порожній / > 100 (операції) / > 500 (PUT інвентаризації) / > 2000 (усього в інвентаризації) | `invalid_lines` / `too_many_lines` |
@@ -5365,7 +5367,7 @@ StocktakeDto        = StocktakeSummaryDto & { note|null, version, postedBy: {id,
 | 422 | `stocktake_empty` | — | Внесіть хоча б один підрахунок |
 | 422 | `idempotency_key_required`, `invalid_idempotency_key` | — | Технічна помилка запиту. Спробуйте ще раз |
 | 422 | `idempotency_key_reused` | — | Цю операцію вже надіслано з іншими даними. Оновіть сторінку |
-| 422 | `invalid_name`, `invalid_category`, `invalid_unit`, `invalid_barcode`, `invalid_purpose`, `invalid_price`, `invalid_min_stock`, `invalid_quantity`, `invalid_lines`, `too_many_lines`, `duplicate_line`, `invalid_date`, `invalid_reason`, `invalid_note`, `invalid_document_number`, `invalid_lot_number`, `invalid_contact_name`, `invalid_phone`, `invalid_email`, `location_required`, `invalid_range`, `invalid_cursor`, `expected_version_required` | `line` (де застосовно) | тексти полів форми |
+| 422 | `invalid_name`, `invalid_category`, `invalid_unit`, `invalid_barcode`, `invalid_purpose`, `invalid_price`, `sale_price_required`, `invalid_min_stock`, `invalid_quantity`, `category_not_found`, `category_archived`, `category_depth`, `category_cycle`, `category_limit`, `invalid_sort_order`, `invalid_lines`, `too_many_lines`, `duplicate_line`, `invalid_date`, `invalid_reason`, `invalid_note`, `invalid_document_number`, `invalid_lot_number`, `invalid_contact_name`, `invalid_phone`, `invalid_email`, `location_required`, `invalid_range`, `invalid_cursor`, `expected_version_required` | `line` (де застосовно) | тексти полів форми |
 | 429 | `rate_limited` | `Retry-After` | Забагато дій. Зачекайте хвилину |
 
 ### 32.9 Frontend (TASK-878)
@@ -5941,3 +5943,690 @@ DAG: 889 → [G1] → 895 → {890 ∥ 896}; 891 — mock після G1, http п
 **Вирівнювання з рішенням «тихе пропускання»:** технічний збій складового кроку не блокує візит (2a-Q1, прийнятий ризик, I3). Компенсація — лог `inventory_consumption_failed` (Error) і процедура в runbook (інвентаризація, §2b runbook).
 
 **Виправлено в TASK-893 (раніше відкладені):** L3 — воркер ковтав помилки закладу без логу; тепер лог `inventory_alerts_location_failed tenant={id} location={id} errorCode={code}` (без ПД) і `tenant=` у підсумковому логу. L4 — GRANT воркера звужено: `GRANT UPDATE (status, resolved_at, updated_at) ON beauty_staff_alerts` і колонковий `SELECT (id, tenant_id, is_active, min_stock)` на `beauty_products` (без `purchase_price`); обидва файли (`deploy/staging/db/grants.sql`, `scripts/dev/setup-db.ps1`) синхронно.
+
+### 32.26 Роздрібна ціна товару (v0.38, 2026-11-20, `API-CONTRACT-INVENTORY-V4`)
+
+Рішення користувача (human gate G1 схеми): роздрібна ціна винесена з етапу 3 в етап 1.x; **перевизначення ціни по закладах — етап 3** (тут не робиться).
+
+- **Схема:** `beauty_products.sale_price numeric(12,2) NULL`, CHECK `ck_beauty_products_sale_price` (`sale_price IS NULL OR sale_price BETWEEN 0 AND 1000000`, як `purchase_price`). Одна мережева ціна на tenant. Міграція `20261120084056_beauty_inventory_sale_price` (ADD COLUMN NULL; Down = DROP COLUMN, дані цін втрачаються — прийнято). Воркер колонку не читає (колонковий GRANT без змін).
+- **DTO:** `salePrice: number|null` у `ProductDto`/`ProductDetailDto` (список, деталі, by-barcode; завжди присутнє в JSON, `null` для `salon_use` і старих продажних товарів без ціни). Запит: `salePrice?: number` у `ProductRequest` (POST/PUT `/products`).
+- **Видимість і права:** `salePrice` бачать усі з `inventory.view` (це не собівартість), змінює `inventory.manage = all` (як решта каталогу). `purchasePrice` лишається за `inventory.costs` — права не змішуються. Нових маршрутів немає.
+- **Обов'язковість:** `purpose` = `sale|both` → `salePrice` обов'язкове (не `null`), `0..1000000`, ≤ 2 знаків (`0` допустимо — узгоджено з `purchasePrice`); відсутнє → `422 sale_price_required`, поза діапазоном/точністю → `422 invalid_price`. `purpose` = `salon_use` → значення ігнорується, зберігається `NULL` (зміна `sale|both` → `salon_use` обнуляє ціну). PUT — повна заміна (на відміну від `purchasePrice`, злиття з наявним немає).
+- **Існуючі дані:** продажні товари без ціни лишаються `NULL` і читаються без помилок; при першому PUT такого товару ціну треба вказати (інакше `sale_price_required`). Зміна `isActive` через повний PUT теж вимагає ціни.
+- Ідемпотентність, журнал операцій, залишки (`ProductRef`) і воркер не змінено.
+
+### 32.27 Дерево категорій товарів (v0.39, 2026-11-20, `API-CONTRACT-INVENTORY-V5`)
+
+Рішення користувача (human gate G1 схеми). Раніше `beauty_products.category` — вільний текст (≤ 100) із datalist на фронті. Тепер додається дерево категорій (до 3 рівнів); **стара текстова `category` лишається без змін** (не мігрується й не видаляється; прибирання — окремою задачею), дерево стартує **порожнім**.
+
+- **Схема:** `beauty_product_categories` (`id`, `tenant_id`, `parent_id NULL` = корінь, `name varchar(100)`, `sort_order int` за замовч. 0, `is_archived bool` за замовч. false, `created_at`, `updated_at`; RLS ENABLE+FORCE+`tenant_isolation`). Композитний FK `(tenant_id, parent_id)` → та сама таблиця, `ON DELETE RESTRICT`; CHECK імені (`btrim` 1..100) і `parent_id <> id`. Унікальний індекс `ux_beauty_product_categories_name (tenant_id, COALESCE(parent_id, nil-uuid), lower(name))` (корінь теж унікальний). `beauty_products.category_id uuid NULL` + композитний FK `(tenant_id, category_id)` → категорії, `RESTRICT`, частковий індекс. Міграція `20261120085617_beauty_inventory_product_categories` (ADD TABLE + ADD COLUMN NULL; Down = DROP — дані дерева втрачаються, **Down відмовляє** `RAISE EXCEPTION 'product categories exist'`, якщо в таблиці є рядки). GRANT: app-роль покрита `ALL TABLES`; воркеру доступ не потрібен.
+- **Права/доступ:** клас `[RequireModule beauty_inventory]` (вимкнено → `403 module_disabled`); читання `inventory.view ≥ own`; усі зміни `inventory.manage = all` (як каталог товарів; specialist-пресет → `403 forbidden_role`, deputy/admin/owner можуть). Записи під throttle `Inventory:WritePerUserPerMinute` (`429 rate_limited`), `Cache-Control: no-store`. Чужий/неіснуючий id (інший tenant) → `404 category_not_found` (IDOR). Зміни логуються як `inventory_catalog_changed entity=category` (окремого журналу змін довідники складу не мають).
+- **Маршрути** (`/api/beauty/inventory`):
+
+| Метод | Шлях | Тіло | Відповідь |
+|---|---|---|---|
+| GET | `/categories?includeArchived=false` | — | `200 {items: CategoryDto[]}` — плоский список усіх вузлів, порядок: `parentId` (корені першими), `sortOrder`, `name`; за замовч. без архівних |
+| POST | `/categories` | `{name, parentId?, sortOrder?}` | `201 CategoryDto` |
+| PUT | `/categories/{id}` | `{name, sortOrder?}` | `200 CategoryDto` — перейменування (+порядок); `parentId` у тілі ігнорується; без `sortOrder` порядок лишається |
+| PUT | `/categories/{id}/move` | `{parentId?, sortOrder?}` | `200 CategoryDto` — `parentId` = `null`/відсутній → у корінь; без `sortOrder` лишається |
+| POST | `/categories/{id}/archive` · `/unarchive` | — | `200 CategoryDto` (ідемпотентно) |
+| DELETE | `/categories/{id}` | — | `204`; `409 category_not_empty`, якщо є підкатегорії (у т.ч. архівні) або товари (у т.ч. архівні/неактивні); інакше фізичне видалення |
+
+- **`CategoryDto`:** `{id, parentId: guid|null, name, sortOrder, isArchived, productCount, childCount}`; `productCount` — прямі товари (усі), `childCount` — прямі підкатегорії (усі, у т.ч. архівні). Списки без архівних (`includeArchived=false`) **можуть містити вузли, чий батько архівний і тому не повернутий** — клієнт трактує такі як корені (або бере `includeArchived=true` для керування деревом).
+- **Валідація/коди:** `name` після `trim` 1..100 → інакше `422 invalid_name`; `sortOrder` ∈ −1 000 000..1 000 000 → `422 invalid_sort_order`; глибина ≤ 3 (корінь = 1; для move враховується висота всього піддерева) → `422 category_depth`; нащадок/сам вузол як новий батько → `422 category_cycle`; дубль імені під тим самим батьком без регістру (у межах tenant, корінь — окрема група) → `409 category_name_taken`; > 500 категорій на tenant → `422 category_limit`; батько для POST/move не знайдений (у т.ч. чужий) → `404 category_not_found`; **створення/переміщення під архівного батька → `422 category_archived`** (залишити вузол у тому ж архівному батьку, змінивши лише `sortOrder`, можна). Порядок перевірок для маршрутів з `{id}`: права → існування `{id}` (404) → валідація тіла → правила дерева. Зміни дерева серіалізуються advisory-блокуванням tenant (гонки не обходять глибину/цикл/ліміт).
+- **Архівування:** ховає категорію з вибору у формі (за замовч. список без архівних); товари зберігаються; **каскаду немає** — діти лишаються (видимі) під архівним батьком, їх архівують окремо.
+- **Товар:** `ProductDto`/`ProductDetailDto` + `categoryId: guid|null` і `categoryPath: string|null` (`"Волосся › Фарби"`, корінь → лист, роздільник ` › `; обчислюється на читанні, для архівних категорій теж повертається); старе `category` (текст) — як було. `ProductRequest.categoryId?`: `null`/відсутній → без категорії (PUT — повна заміна, як `salePrice`); не знайдена в tenant → `422 category_not_found`; архівна → `422 category_archived` (**але** товар, що вже в архівній категорії, редагується з тим самим `categoryId`). Текстове `category` у запиті підтримується як раніше. Фільтра списку товарів за `categoryId` поки немає.
+- **Зворотна сумісність:** `GET /categories` раніше повертав `{items: string[]}` (текстові категорії); тепер повертає вузли дерева. Старий список перенесено на `GET /products/categories` (та сама відповідь і права).
+- Нові коди помилок: `category_not_found` (404; 422 у запиті товару), `category_archived`, `category_depth`, `category_cycle`, `category_limit`, `invalid_sort_order` (422), `category_name_taken`, `category_not_empty` (409).
+
+## §33. Замовлення товарів клієнтами (ADR-026) (v0.41, 2026-11-20, `API-CONTRACT-PRODUCT-ORDERS-V1`, реалізовано етап 3a: TASK-901…905; QA/security і прод-вмикання — відкриті)
+
+Джерело рішень — **ADR-026** (`.claude/docs/adr/ADR-026-product-orders-mobile.md`, статус `proposed`; схема §33.15 чекає human gate). При розбіжності діє ADR; зміна семантики — новим ADR. Розділ **самодостатній для мобільного клієнта**: §33.1–§33.12 описують усе, що потрібно для реалізації застосунку, без читання інших розділів. §33.13+ — CRM, схема, склад, воркер, тести.
+
+- **Обсяг:** етап 3a складу — каталог товарів закладу для клієнта, замовлення гостем, резерв 15 хв, онлайн-оплата карткою (mock), самовивіз, видача й повернення в CRM. Не входить: доставка, касовий продаж, override цін по закладах, ПРРО, ПДВ, знижки, повернення після видачі (ADR-026 §2.1).
+- **Адитивно змінює:** §32.3 (CHECK типів руху/операції + `sale_return`, колонка `product_order_id`), §32.6 (`OperationSummaryDto.productOrderId`), §5/§9 (`beauty_payments` і `IPaymentService`, §33.16). Інші розділи не змінюються; нових ключів прав (§30.2) немає.
+- **Споживачі:** мобільний застосунок (`mobile/`, окрема команда), TASK-901…908 (§33.20).
+- **Дельта v0.42 (2026-11-21, ADR-027, `proposed`):** зображення товарів. `PublicProductDto` отримує адитивні поля `imageUrl` і `images` (§33.5), версія контракту — **`API-CONTRACT-PRODUCT-ORDERS-V1.1`** (minor, `MinAppVersion` без змін). CRM-маршрути фото, роздача файлів, схема `beauty_product_images` і поля `ProductDto`/`ProductDetailDto` (§32.6) описані в **§33.22**.
+- **Статус (v0.41):** реалізовано бекенд (міграція `20261120122321_beauty_product_orders`, `IPaymentService.ChargeAsync(PaymentCharge)` + `MockPaymentService`, P1–P5, CRM-маршрути), воркер `beauty.product-orders-expire`, CRM-екран (mock і http). Відкрито: TASK-906 (QA), TASK-907 (security-review), TASK-908 (цей документ, runbook — виконано частково на v0.41). Прод-вмикання — окремий gate (ADR-026 §7 п.5).
+
+**Уточнення реалізації (v0.41).** Код — джерело істини для відхилень нижче; вони доповнюють і, де сказано, замінюють текст §33.1–§33.17 та §33.19–§33.20 (зміна семантики — ADR, тут лише уточнення):
+
+1. **CRM-список (§33.13):** `number` приймається лише як ціле > 0, інакше `422 invalid_number` (не `invalid_range`). Якщо задано `number` без `from`/`to`, дата-фільтр за замовчуванням (30 діб) **не застосовується**.
+2. **Скасування оплаченого (CRM, §33.16):** збій повернення → `402 refund_failed`, claim `refund_started_at` знімається, замовлення лишається `paid`, склад без змін. Якщо повернення успішне, а транзакція БД зірвалася — замовлення лишається з `refund_started_at` (відображається як `refundInProgress = true`); повторний cancel після `PaymentStaleSeconds` доводить операцію до кінця (повтор `RefundAsync` з тим самим `paymentId` не списує вдруге).
+3. **Скасування неоплаченого:** (а) заявлена оплата (`paymentInProgress`) → `409 payment_in_progress` (для завислої оплати — `reconcile-payment`); (б) CRM-cancel закритого або простроченого замовлення → `409 order_closed`; публічний P5 на простроченому лишається `409 order_expired` (§33.8); (в) P5 на замовленні, скасованому персоналом, → `409 cannot_cancel` (як і для оплаченого).
+4. **Scope (CRM):** замовлення поза manage-scope, але в межах view-scope → `404 product_order_not_found` (не `403`); поза view-scope — теж `404`.
+5. **reconcile-payment (§33.13):** при виконанні спроби відповідь — `200 ProductOrderDto` з поточним станом. Коди `409 nothing_to_reconcile` (немає оплати в процесі) і `409 payment_in_progress` (оплата свіжіша за `PaymentStaleSeconds`) зберігаються як у коді; клієнт не повинен трактувати reconcile як завжди-`200`.
+6. **Порядок P2 (§33.6):** формат `Idempotency-Key`, honeypot і перевірка форми (п. 2–5) виконуються **до** пошуку повтору за ключем; captcha/integrity (п. 6) — після пошуку повтору, як і раніше; кроки 7–11 виконуються під advisory-lock tenant.
+7. **Оплата (§33.16, п. 4):** перехід платежу `pending → paid` фіксується **окремою короткою транзакцією** до фіналізації (`sale`, рівні, замовлення). Якщо фіналізація не відбулася, reconcile дозавершує її без повторного списання.
+8. **Воркер (§33.17):** `closed_at = reservation_expires_at`; час — `ctx.now()`; закриття пачками ≤ 500, до 20 пачок за один запуск; лог `product_orders_expire tenant=… expired=n stuck=n` (рівень Warning при `stuck > 0`); задача `beauty.product-orders-expire`.
+9. **ПД у CRM (§33.13):** `phone` (повний) — лише за `clients.contacts = full`, інакше `phoneMasked`; `clientId` — лише за `clients.view = all` і якщо клієнта прив'язано.
+10. **Frontend CRM (§33.13) і журнал складу (§33.14):** чипи статусу: `open` (за замовч.), `усі`, `видані`, `скасовані`, `повернені`, `прострочені`; журнал руху показує операції `sale` і `sale_return` (з посиланням на замовлення).
+
+**Прод-запобіжник і вмикання (уточнення §33.2–§33.3).** Запобіжник спрацьовує **лише** в середовищі `Production` або невизначеному: `ProductOrders:Enabled=true` + зареєстрований `MockPaymentService` → помилка старту. У `Development` і `Staging` mock дозволено. Блокери прод-вмикання: реальний провайдер (A3, ADR окремо), ПРРО (L1), ПДВ (L2), оферта (P3), gate 5 (ADR-026 §7).
+
+### 33.1 Загальне (публічний API)
+
+- **База:** `{API}/api/public/{tenantSlug}`; `tenantSlug` і `locationId` клієнт отримує з каталогу закладів (`GET /api/public/resolve/{publicCode}`, `POST /api/public/locations/nearby|search` → `PublicLocationRefDto`, §29.2).
+- **Без автентифікації** (без JWT, без cookie). JSON camelCase, `Content-Type: application/json; charset=utf-8`. Ліміт тіла запиту — 8 КБ (`[RequestSizeLimit]`; коректний клієнт його не досягає: 20 рядків ≈ 2 КБ).
+- **Помилка:** `{ "code": "snake_case", "message": "англ. текст для логів", ...extras }`. Клієнт показує текст **за `code`** (§33.11), а не `message`. Невідомий `code` → загальний текст «Щось пішло не так. Спробуйте пізніше».
+- **Типи:** `uuid` — рядок; гроші — JSON number, ≤ 2 знаки після коми, у гривнях **з ПДВ** (не покладатися на кількість знаків у серіалізації: `420`, `420.0` і `420.00` — те саме); кількість — ціле число; моменти — ISO-8601 UTC (`2026-11-20T10:15:00Z`); показувати в часовій зоні закладу (`timezone` з `PublicLocationRefDto`).
+- **Заголовки запиту** (кожен запит):
+
+| Заголовок | Значення | Обов'язковий |
+|---|---|---|
+| `Accept` | `application/json` | так |
+| `X-Booking-Client` | `ios` \| `android` (web — `web` або без заголовка) | так для застосунку (§29.4) |
+| `X-App-Version` | версія застосунку, `1.4.0` | так для застосунку |
+| `Idempotency-Key` | 16..128 символів `A-Za-z0-9._:-` (рекомендовано UUID v4) | лише `POST /product-orders` (§33.6) |
+| `X-Client-Integrity` | токен Play Integrity / App Attest | лише `POST /product-orders`, коли сервер у режимі `enforce` для ios/android (§29.5); в MVP режим `none` — заголовок можна не слати |
+| `X-Captcha-Token` | токен captcha (або поле `captchaToken` у тілі) | лише web, коли увімкнено (§29.5) |
+
+- **Заголовки відповіді:** усі маршрути §33 — `Cache-Control: no-store`; маршрути з токеном — ще `Referrer-Policy: no-referrer`; повтор ідемпотентного запиту — `Idempotent-Replayed: true`; `429` — `Retry-After: <секунди>`.
+- **Порядок перевірок** (детермінований): rate limit (`429`) → версія застосунку (`426`) → tenant (`404 not_found` / `403 tenant_suspended`) → вмикання (`404 product_orders_disabled`, §33.2) → тіло й заголовки (`422`) → бізнес-правила (`404/409/402/422`).
+- **Токен замовлення** `publicToken` — 43 символи base64url. Це **єдиний ключ доступу** до замовлення: зберігати в захищеному сховищі (Keychain / EncryptedSharedPreferences), не логувати, не відправляти в аналітику/краш-репорти, не вставляти в URL інших сервісів. У шляху передається як є (символи base64url URL-безпечні).
+
+### 33.2 Доступність функції (вмикання)
+
+Замовлення доступні, лише коли для tenant увімкнено модуль `beauty_inventory` **і** на сервері `ProductOrders:Enabled=true` (у prod — вимкнено до вибору платіжного провайдера й ПРРО; ADR-026 §2.2).
+
+| Відповідь | Коли | Що робить застосунок |
+|---|---|---|
+| `404 product_orders_disabled` | функцію вимкнено (модуль або прапор) — на каталозі, створенні, оплаті, скасуванні | **сховати** розділ «Товари» закладу (кешувати відповідь на 10 хв на `tenantSlug`); для створеного замовлення — показати «Замовлення товарів тимчасово недоступні» |
+| `404 not_found` | невідомий slug, у tenant вимкнено онлайн-запис, зіпсований slug; **для маршрутів з токеном — також невідомий/чужий/зіпсований токен** | заклад недоступний; для токена — прибрати замовлення з локального списку |
+| `403 tenant_suspended` | tenant призупинено | «Заклад тимчасово не приймає замовлення», без технічних деталей |
+| `426 upgrade_required` | ios/android з `X-App-Version` нижче мінімальної (§29.4) — на **будь-якому** публічному маршруті | блокуючий екран «Оновіть застосунок» з кнопкою в магазин |
+
+`GET /product-orders/{publicToken}` працює **навіть коли функцію вимкнено** (лише читання): клієнт бачить свої замовлення.
+
+### 33.3 Конфігурація (сервер; клієнт отримує потрібні значення з каталогу)
+
+| Ключ | За замовч. | Діапазон | Призначення |
+|---|---|---|---|
+| `ProductOrders:Enabled` | відсутній = **вимкнено** | лише `true` (без регістру) вмикає; будь-що інше вимикає | загальний вимикач; у `Production` з `MockPaymentService` значення `true` → **помилка старту** |
+| `ProductOrders:ReservationMinutes` | `15` | 5..60 | TTL резерву від створення |
+| `ProductOrders:PaymentStaleSeconds` | `120` | 30..900 | після цього оплата «в процесі» вважається завислою й може бути перевірена повторно (§33.7) |
+| `ProductOrders:MaxPaymentAttempts` | `5` | 1..10 | спроб оплати на замовлення |
+| `ProductOrders:MaxPendingPerPhone` | `2` | 1..10 | активних неоплачених замовлень на телефон у tenant |
+| `ProductOrders:MaxCreatesPerPhonePerHour` | `5` | 1..50 | створень на телефон за годину (будь-який статус) |
+| `ProductOrders:MaxCreatesPerLocationPerHour` | `60` | 0..1000 (`0` = вимкнено) | створень у заклад за годину |
+| `ProductOrders:MaxOrderTotal` | `50000` | 1..1000000 | максимальна сума замовлення, грн |
+
+Константи: ≤ 20 рядків; кількість у рядку — ціле 1..10; ≤ 500 товарів у каталозі закладу. Невалідне значення ключа → помилка старту. Rate limit і захист — спільні з публічним записом (`PublicBooking:RateLimit:*`, `PublicBooking:Protection:*`, `PublicBooking:MinAppVersion:*`, §29.5–§29.7).
+
+### 33.4 Публічні маршрути (`/api/public/{tenantSlug}`)
+
+| # | Метод | Шлях | Rate-limit (на IP, хв) | Тіло | Успіх |
+|---|---|---|---|---|---|
+| P1 | GET | `/locations/{locationId}/products` | `public-read` 120 | — | `200 PublicProductCatalogDto` |
+| P2 | POST | `/product-orders` | `public-write` 10 | `CreateProductOrderRequest` + `Idempotency-Key` | `201 {publicToken, order}`; повтор → `200` + `Idempotent-Replayed: true` |
+| P3 | GET | `/product-orders/{publicToken}` | `public-token` 30 | — | `200 PublicProductOrderDto` |
+| P4 | POST | `/product-orders/{publicToken}/pay` | `public-write` 10 | `{}` | `200 {order}` |
+| P5 | POST | `/product-orders/{publicToken}/cancel` | `public-write` 10 | `{}` | `200 {order}` |
+
+Ліміти IP **спільні** з публічним записом (той самий лічильник `public-write` для записів і замовлень). Перевищення → `429 rate_limited` + `Retry-After`.
+
+### 33.5 DTO (публічні)
+
+```ts
+type Unit = "pcs" | "ml" | "g" | "l" | "kg" | "pack";          // шт, мл, г, л, кг, уп
+type OrderStatus = "pending_payment" | "paid" | "fulfilled" | "cancelled" | "expired" | "refunded";
+type CloseReason = "client" | "staff" | "expired" | "stock_unavailable";
+
+interface PublicProductDto {
+  id: string;                 // uuid товару
+  name: string;               // 1..200
+  unit: Unit;
+  price: number;              // роздрібна ціна за одиницю, грн, з ПДВ, > 0
+  categoryPath: string | null;// "Волосся › Догляд" (корінь → лист, роздільник " › "), null = без категорії
+  inStock: boolean;           // у цьому закладі можна замовити щонайменше 1 одиницю зараз
+  // V1.1 (ADR-027, §33.22), адитивно. Сервер до V1.1 цих полів не віддає: відсутнє поле / null трактувати як «немає фото» / [].
+  imageUrl?: string | null;   // абсолютний URL прев'ю (400 px) першого фото галереї; null = фото немає
+  images?: PublicProductImageDto[]; // уся галерея за порядком CRM; сервер V1.1 завжди віддає масив (можливо порожній)
+}
+
+interface PublicProductImageDto {  // V1.1
+  url: string;                // абсолютний URL, довша сторона ≤ 1600 px, image/webp
+  thumbUrl: string;           // абсолютний URL, довша сторона ≤ 400 px, image/webp
+  width: number; height: number; // розмір варіанта url (для пропорцій плейсхолдера)
+}
+
+interface PublicProductCatalogDto {
+  location: { id: string; name: string; address: string | null };
+  currency: "UAH";
+  reservationMinutes: number; // 15
+  maxLines: number;           // 20
+  maxQuantityPerLine: number; // 10
+  items: PublicProductDto[];  // сортування: categoryPath (null в кінці, без регістру), name (без регістру), id
+  truncated: boolean;         // true, якщо товарів > 500 (віддано перші 500)
+}
+
+interface CreateProductOrderRequest {
+  locationId: string;
+  customer: { name: string; phone: string };     // name 2..100 після trim; phone — див. §33.6
+  lines: { productId: string; quantity: number }[]; // 1..20 рядків, productId без повторів, quantity — ціле 1..10
+  expectedTotal?: number;     // сума, яку бачив клієнт; розбіжність → 409 price_changed
+  captchaToken?: string;      // лише web
+  website?: string;           // honeypot для web-форм: має бути відсутнім або ""
+}
+
+interface PublicProductOrderLineDto {
+  productId: string; name: string; unit: Unit;    // знімок на момент замовлення
+  quantity: number; unitPrice: number; lineTotal: number;
+}
+
+interface PublicProductOrderDto {
+  number: number;             // №1042 — показати клієнту для видачі
+  status: OrderStatus;        // ЕФЕКТИВНИЙ статус (§33.9)
+  location: { id: string; name: string; address: string | null };
+  lines: PublicProductOrderLineDto[];
+  total: number; currency: "UAH";
+  createdAt: string;
+  reservationExpiresAt: string | null; // лише для pending_payment
+  paidAt: string | null; fulfilledAt: string | null;
+  closedAt: string | null;             // для cancelled | expired | refunded
+  closeReason: CloseReason | null;     // для cancelled | expired | refunded
+  refundAmount: number | null;         // лише refunded (= total у V1)
+  paymentInProgress: boolean;          // оплату розпочато, результат ще не зафіксовано
+  paymentAttemptsLeft: number;
+  canPay: boolean;                     // показувати кнопку «Оплатити»
+  canCancel: boolean;                  // показувати кнопку «Скасувати»
+}
+```
+
+У відповідях **немає** імені й телефону клієнта, id клієнта, внутрішніх id замовлення/платежу, кількостей на складі, закупівельних цін. Нових полів у V1 не додається без підвищення версії контракту; клієнт має **ігнорувати невідомі поля** (сумісність уперед). **V1.1** (ADR-027) додає лише `PublicProductDto.imageUrl` і `images` (§33.22.3): адитивно й nullable, клієнт V1 працює без змін.
+
+**Приклад P1:**
+```http
+GET /api/public/salon-x/locations/7d1c5a9e-3b0f-4c55-9a51-0b8c2d3e4f10/products
+X-Booking-Client: ios
+X-App-Version: 1.4.0
+```
+```json
+{
+  "location": { "id": "7d1c5a9e-3b0f-4c55-9a51-0b8c2d3e4f10", "name": "Salon X Поділ", "address": "вул. Сагайдачного, 10" },
+  "currency": "UAH", "reservationMinutes": 15, "maxLines": 20, "maxQuantityPerLine": 10,
+  "items": [
+    { "id": "b3f0a1c2-1111-4a6b-8c9d-0e1f2a3b4c5d", "name": "Шампунь відновлювальний 250 мл", "unit": "pcs", "price": 420.00, "categoryPath": "Волосся › Догляд", "inStock": true },
+    { "id": "c4a1b2d3-2222-4b7c-9d0e-1f2a3b4c5d6e", "name": "Маска для волосся 200 мл", "unit": "pcs", "price": 650.50, "categoryPath": "Волосся › Догляд", "inStock": false },
+    { "id": "d5b2c3e4-3333-4c8d-0e1f-2a3b4c5d6e7f", "name": "Крем для рук", "unit": "pcs", "price": 199.00, "categoryPath": null, "inStock": true }
+  ],
+  "truncated": false
+}
+```
+Помилки P1: `404 location_not_found` (заклад не існує в tenant, неактивний, або `locationId` не uuid), §33.2.
+
+**Приклад P2:**
+```http
+POST /api/public/salon-x/product-orders
+Idempotency-Key: 6f1c2f7e-8b4a-4e3d-9c21-5a7b8c9d0e1f
+X-Booking-Client: ios
+X-App-Version: 1.4.0
+Content-Type: application/json
+```
+```json
+{ "locationId": "7d1c5a9e-3b0f-4c55-9a51-0b8c2d3e4f10",
+  "customer": { "name": "Олена", "phone": "067 123 45 67" },
+  "lines": [ { "productId": "b3f0a1c2-1111-4a6b-8c9d-0e1f2a3b4c5d", "quantity": 2 },
+             { "productId": "d5b2c3e4-3333-4c8d-0e1f-2a3b4c5d6e7f", "quantity": 1 } ],
+  "expectedTotal": 1039.00 }
+```
+`201`:
+```json
+{ "publicToken": "Qm9vS3Rva2VuRXhhbXBsZU9ubHlOb3RSZWFsMDEyMzQ1Ng",
+  "order": {
+    "number": 1042, "status": "pending_payment",
+    "location": { "id": "7d1c5a9e-3b0f-4c55-9a51-0b8c2d3e4f10", "name": "Salon X Поділ", "address": "вул. Сагайдачного, 10" },
+    "lines": [
+      { "productId": "b3f0a1c2-1111-4a6b-8c9d-0e1f2a3b4c5d", "name": "Шампунь відновлювальний 250 мл", "unit": "pcs", "quantity": 2, "unitPrice": 420.00, "lineTotal": 840.00 },
+      { "productId": "d5b2c3e4-3333-4c8d-0e1f-2a3b4c5d6e7f", "name": "Крем для рук", "unit": "pcs", "quantity": 1, "unitPrice": 199.00, "lineTotal": 199.00 } ],
+    "total": 1039.00, "currency": "UAH",
+    "createdAt": "2026-11-20T10:00:00Z", "reservationExpiresAt": "2026-11-20T10:15:00Z",
+    "paidAt": null, "fulfilledAt": null, "closedAt": null, "closeReason": null, "refundAmount": null,
+    "paymentInProgress": false, "paymentAttemptsLeft": 5, "canPay": true, "canCancel": true } }
+```
+
+**Приклад P4 (успіх):** `POST /api/public/salon-x/product-orders/{publicToken}/pay`, тіло `{}` → `200 { "order": { ..., "status": "paid", "paidAt": "2026-11-20T10:02:11Z", "reservationExpiresAt": null, "canPay": false, "canCancel": false } }`.
+
+**Приклад P4 (відмова картки):** `402`
+```json
+{ "code": "payment_failed", "message": "Card payment failed.",
+  "order": { "number": 1042, "status": "pending_payment", "reservationExpiresAt": "2026-11-20T10:15:00Z", "paymentAttemptsLeft": 4, "canPay": true, "canCancel": true, "...": "..." } }
+```
+
+### 33.6 Створення замовлення (P2)
+
+**Порядок перевірок:**
+1. §33.1 (429 → 426 → tenant → `product_orders_disabled`).
+2. Тіло розбирається (`422 invalid_request` — не JSON, не той тип полів).
+3. `Idempotency-Key`: відсутній → `422 idempotency_key_required`; не відповідає формату → `422 invalid_idempotency_key`. Ключ уже є в tenant: те саме канонічне тіло → **`200`** з тим самим `{publicToken, order}` (поточний стан замовлення) і `Idempotent-Replayed: true`; інше тіло → `422 idempotency_key_reused`. Паралельні запити з одним ключем → одне замовлення, решта `200`. Ключ діє без строку в межах tenant. Канонічне тіло: `locationId`, `customer.name` (trim), нормалізований телефон, рядки, відсортовані за `productId`, `expectedTotal`.
+4. Honeypot: непорожнє `website` → `422 invalid_request` (нічого не створюється).
+5. Форма: `customer.name` 2..100 після trim, без керівних символів → `422 invalid_name`; телефон → `422 invalid_phone`; `lines` порожній → `422 invalid_lines`, > 20 → `422 too_many_lines`; повтор `productId` → `422 duplicate_line`; `quantity` не ціле або поза 1..10 → `422 invalid_quantity`; `expectedTotal` < 0 або > 2 знаків → `422 invalid_expected_total`. Помилки рядків мають `line` (0-based індекс).
+6. Captcha (web) / integrity (ios/android) за режимом §29.5 → `422 captcha_failed` / `422 integrity_failed`. Повтор з тим самим `Idempotency-Key` їх не повторює (п.3 раніше).
+7. Заклад: не існує в tenant / неактивний → `404 location_not_found`.
+8. Товари: кожен має існувати в tenant, бути активним, `purpose ∈ sale|both`, мати ціну > 0 і не бути вимкненим у закладі; інакше `422 product_unavailable` з `productIds: string[]` (усі непридатні разом).
+9. Сума рядків за поточними цінами > `MaxOrderTotal` → `422 order_total_too_large`.
+10. `expectedTotal` передано і ≠ поточній сумі → `409 price_changed` з `total` (актуальна сума).
+11. Транзакція: advisory-блокування tenant → ліміти (на заклад за годину, активні неоплачені на телефон, створення на телефон за годину; перевищення → `422 order_limit_reached`) → `FOR UPDATE` рівнів складу пар (заклад, товар) за зростанням `product_id` → наявність `available ≥ quantity` для кожного рядка; нестача → `422 insufficient_stock` з `productIds: string[]` (**без** кількостей; клієнт показує «немає потрібної кількості») → номер, токен, вставка замовлення й рядків → `201`.
+
+**Телефон** нормалізується до E.164 (як публічний запис): приймаються `+CC…`, `00CC…`, `0XXXXXXXXX` (10 цифр → `+38…`), `CC…` (11..15 цифр); пробіли, дужки, дефіси ігноруються; решта → `422 invalid_phone`.
+
+**Сервер ігнорує** в тілі будь-які поля статусу, ціни, клієнта, джерела. Ціна рядка = поточна роздрібна ціна (знімок), сума рахується сервером. Email і згода на маркетинг не приймаються. Картка клієнта в CRM створюється/знаходиться за телефоном **лише після успішної оплати**.
+
+**Резерв:** від створення до `reservationExpiresAt` (= `createdAt + reservationMinutes`) обрані кількості недоступні іншим клієнтам. Після цього неоплачене замовлення стає `expired`, резерв знімається автоматично.
+
+### 33.7 Оплата (P4)
+
+Тіло V1 — `{}` (у dev/staging оплата — **mock**: дані картки не вводяться; реальний провайдер змінить крок оплати новою версією контракту, і стара версія застосунку отримає `426`, ADR-026 §4). **Mock для QA:** якщо сума замовлення має копійки `.13` (напр. `100.13`), mock відхиляє оплату → `402 payment_failed`.
+
+| Результат | Відповідь | Стан замовлення |
+|---|---|---|
+| оплачено | `200 {order}` | `paid` |
+| уже оплачено раніше (повтор після втраченої відповіді) | `200 {order}` + `Idempotent-Replayed: true` | `paid` / `fulfilled` |
+| картку відхилено | `402 {code: "payment_failed", order}` | `pending_payment`, спробу витрачено; повтор — поки `canPay` |
+| товар зник під час оплати (заклад списав) | `409 {code: "stock_unavailable", order}` | `refunded` (`closeReason = stock_unavailable`, `refundAmount = total`) **або**, якщо повернення ще не підтверджене, `pending_payment` з `paymentInProgress = true` |
+| оплата вже йде (паралельний запит, < 120 с) | `409 {code: "payment_in_progress", order}` | без змін |
+| час резерву минув | `409 {code: "order_expired", order}` | `expired` |
+| спроби вичерпано | `422 {code: "payment_attempts_exceeded", order}` | `pending_payment` до закінчення резерву |
+| замовлення закрите (скасоване тощо) | `409 {code: "order_closed", order}` | без змін |
+| невідомий токен | `404 not_found` | — |
+
+Гарантії сервера: не більше одного списання грошей на замовлення; якщо гроші списано, замовлення гарантовано стане `paid` або `refunded` (повтор `POST /pay` після `PaymentStaleSeconds` або дія адміністратора завершує завислу оплату). **Застосунок не повторює `/pay` наосліп** після мережевої помилки — спершу `GET` (§33.10, крок D).
+
+### 33.8 Скасування клієнтом (P5)
+
+Лише неоплачене замовлення (`pending_payment`, без оплати в процесі). Тіло `{}`.
+- успіх → `200 {order}` зі статусом `cancelled`, `closeReason = "client"`; резерв знято;
+- уже скасоване клієнтом → `200 {order}` + `Idempotent-Replayed: true`;
+- оплачене / видане / повернуте → `409 {code: "cannot_cancel", order}` (скасувати оплачене може лише заклад);
+- оплата в процесі → `409 payment_in_progress`; минув час → `409 order_expired`; функцію вимкнено → `404 product_orders_disabled`.
+
+### 33.9 Статуси й що показувати
+
+**Ефективний статус:** сервер віддає `expired`, щойно минув `reservationExpiresAt` неоплаченого замовлення без оплати в процесі (навіть якщо фонове закриття ще не відпрацювало). Час для відображення — з відповіді сервера; не порівнювати з годинником пристрою для зміни статусу, лише для підказки «до HH:MM».
+
+| `status` | Умова | Текст (uk, пропозиція; остаточний — у content-шарі застосунку) | Дії |
+|---|---|---|---|
+| `pending_payment` | `paymentInProgress = false` | «Очікує оплати. Товар зарезервовано до {HH:MM}» | «Оплатити» (`canPay`), «Скасувати» (`canCancel`) |
+| `pending_payment` | `paymentInProgress = true` | «Оплата обробляється…» | «Оновити» |
+| `paid` | — | «Оплачено. Заберіть у закладі {name}, {address}. Покажіть номер №{number}» | — |
+| `fulfilled` | — | «Видано {дата}» | — |
+| `cancelled` | `closeReason = client` | «Ви скасували замовлення» | «Замовити знову» |
+| `cancelled` | `closeReason = staff` | «Заклад скасував замовлення» | «Замовити знову» |
+| `expired` | — | «Час на оплату минув, резерв знято» | «Замовити знову» (заново з каталогу) |
+| `refunded` | `closeReason = staff` | «Заклад скасував замовлення. {refundAmount} ₴ повернуто на картку (зарахування залежить від банку)» | — |
+| `refunded` | `closeReason = stock_unavailable` | «Товар закінчився під час оплати. {refundAmount} ₴ повернуто на картку» | «Замовити знову» |
+
+«Замовити знову» = перейти в каталог закладу з попередніми товарами в кошику (наявність перевіряється заново).
+
+### 33.10 Послідовність екранів і викликів (мобільний клієнт)
+
+**A. Заклад → розділ «Товари».** Після вибору закладу (`resolve`/`nearby`/`search`) застосунок викликає P1.
+- `200` → показати розділ; згрупувати за `categoryPath` (null → «Інше»); `inStock = false` → «Немає в наявності», кнопка «Додати» неактивна. Кількість залишку не показується (її немає в API).
+- `404 product_orders_disabled` → розділ **не показувати** (кеш 10 хв); інші коди — §33.2.
+
+**B. Кошик** (локально, лише один заклад; зміна закладу — підтвердження й очищення). Обмеження з P1: ≤ `maxLines` позицій, кількість 1..`maxQuantityPerLine`. Ціни в кошику — з останньої відповіді P1; при відкритті кошика старше 10 хв — повторити P1.
+
+**C. Оформлення.** Поля: ім'я, телефон (маска `+380`). Показати суму, заклад з адресою й текст «Оплата карткою онлайн. Самовивіз із закладу. Товар резервується на {reservationMinutes} хв після оформлення». Кнопка «Оформити і оплатити».
+- `Idempotency-Key` = новий UUID v4 **при відкритті екрана оформлення**; повтор після мережевої помилки / `5xx` / тайм-ауту — **з тим самим ключем і тим самим тілом**; будь-яка зміна полів чи кошика → новий ключ.
+- `201`/`200` → **одразу** зберегти `{tenantSlug, publicToken, number, createdAt, locationName}` у захищене сховище («Мої замовлення»), очистити кошик → крок D (автоматично викликати P4).
+- `422 insufficient_stock` → позначити `productIds` у кошику «Немає потрібної кількості», оновити P1, повернути в кошик.
+- `422 product_unavailable` → прибрати `productIds` з кошика з поясненням, оновити P1.
+- `409 price_changed` → оновити P1, показати нову суму (`total`), попросити підтвердити (новий ключ).
+- `422 order_limit_reached` → «Забагато незавершених замовлень. Оплатіть або скасуйте попередні в "Мої замовлення"».
+- `422 invalid_name|invalid_phone` → помилка під полем; `422 captcha_failed|integrity_failed` → «Не вдалося перевірити застосунок. Спробуйте пізніше»; `429` → «Забагато спроб, зачекайте {Retry-After} с».
+
+**D. Оплата.** P4 з `{}`; тайм-аут клієнта 30 с.
+- `200` → екран «Оплачено» (§33.9 `paid`).
+- `402 payment_failed` → «Оплата не пройшла. Спробуйте ще раз» + «Оплатити ще раз» (поки `canPay`), показати «Резерв до {HH:MM}».
+- `409 stock_unavailable` → екран статусу (`refunded` або «Оплата обробляється»).
+- `409 order_expired` → «Час на оплату минув» + «Замовити знову».
+- `409 payment_in_progress` → опитування P3 (нижче).
+- `422 payment_attempts_exceeded` → «Вичерпано спроби оплати. Оформіть нове замовлення».
+- **Мережева помилка / тайм-аут / `5xx`:** **не** повторювати P4 одразу. Викликати P3: `paid` → успіх; `paymentInProgress = true` → опитувати P3 через 5, 10, 20, 40 с; якщо через 2 хв досі в процесі — **один** раз викликати P4 (сервер сам завершить завислу оплату); `canPay = true` → показати «Оплатити ще раз».
+
+**E. «Мої замовлення».** Список із захищеного сховища; деталь — P3 при відкритті й pull-to-refresh (фонового опитування немає, крім кроку D). `404 not_found` → прибрати з локального списку. Замовлення в термінальному статусі старше 90 днів застосунок може видалити локально.
+
+### 33.11 Коди помилок (публічні)
+
+| HTTP | `code` | Маршрути | Extras | Текст для UI (uk, пропозиція) |
+|---|---|---|---|---|
+| 402 | `payment_failed` | P4 | `order` | Оплата не пройшла. Спробуйте ще раз |
+| 403 | `tenant_suspended` | усі | — | Заклад тимчасово не приймає замовлення |
+| 404 | `not_found` | усі (slug), P3–P5 (токен) | — | Не знайдено |
+| 404 | `product_orders_disabled` | P1, P2, P4, P5 | — | (сховати розділ) / Замовлення товарів тимчасово недоступні |
+| 404 | `location_not_found` | P1, P2 | — | Заклад недоступний |
+| 409 | `price_changed` | P2 | `total` | Ціни змінилися. Перевірте суму |
+| 409 | `stock_unavailable` | P4 | `order` | Товар закінчився під час оплати. Кошти повертаються |
+| 409 | `payment_in_progress` | P4, P5 | `order` | Оплата обробляється… |
+| 409 | `order_expired` | P4, P5 | `order` | Час на оплату минув |
+| 409 | `order_closed` | P4 | `order` | Замовлення вже закрите |
+| 409 | `cannot_cancel` | P5 | `order` | Оплачене замовлення може скасувати лише заклад |
+| 422 | `insufficient_stock` | P2 | `productIds` | Немає потрібної кількості деяких товарів |
+| 422 | `product_unavailable` | P2 | `productIds` | Деякі товари більше недоступні |
+| 422 | `order_limit_reached` | P2 | — | Забагато незавершених замовлень |
+| 422 | `order_total_too_large` | P2 | — | Сума замовлення завелика |
+| 422 | `payment_attempts_exceeded` | P4 | `order` | Вичерпано спроби оплати |
+| 422 | `captcha_failed`, `integrity_failed` | P2 | — | Не вдалося перевірити застосунок |
+| 422 | `idempotency_key_required`, `invalid_idempotency_key` | P2 | — | Технічна помилка. Спробуйте ще раз |
+| 422 | `idempotency_key_reused` | P2 | — | Замовлення вже надіслано з іншими даними. Оновіть екран |
+| 422 | `invalid_request`, `invalid_name`, `invalid_phone`, `invalid_lines`, `too_many_lines`, `duplicate_line`, `invalid_quantity`, `invalid_expected_total` | P2 | `line` (де застосовно) | тексти полів форми |
+| 426 | `upgrade_required` | усі | — | Оновіть застосунок |
+| 429 | `rate_limited` | усі | заголовок `Retry-After` | Забагато запитів. Зачекайте |
+| 5xx | — | усі | — | Сервіс тимчасово недоступний (повтор за правилами §33.10) |
+
+### 33.12 Ліміти й захист (зведення для клієнта)
+
+Rate limit за IP (IPv6 — /64): P1 120/хв, P3 30/хв, P2/P4/P5 разом 10/хв (спільно з публічним записом). Замовлення: ≤ 20 рядків, ≤ 10 шт у рядку, сума ≤ 50 000 грн, ≤ 2 неоплачених замовлення на телефон, ≤ 5 створень на телефон за годину, ≤ 60 на заклад за годину, ≤ 5 спроб оплати на замовлення, резерв 15 хв. Значення можуть змінюватися конфігурацією сервера — застосунок бере `maxLines`, `maxQuantityPerLine`, `reservationMinutes` з P1, а решту сприймає через коди помилок.
+
+### 33.13 Адмін-API CRM (`/api/beauty/inventory/product-orders`)
+
+Клас-рівень §32.5: `[Authorize(Staff)]` + `[RequireModule("beauty_inventory")]` + `inventory.view ≥ own`; `Cache-Control: no-store`; порядок фільтрів §30.5. Scope закладу — §32.2 (поза scope → `404 product_order_not_found`, `locationId` у query поза scope → `404 location_not_found`). «Лім.» — `Inventory:WritePerUserPerMinute`. **Від `ProductOrders:Enabled` CRM-маршрути не залежать** (вимкнення функції не блокує видачу й повернення вже оплачених).
+
+| Метод | Шлях | Право | Тіло / відповідь |
+|---|---|---|---|
+| GET | `/product-orders?status&locationId&from&to&number&cursor&take` | `inventory.view ≥ own` + scope | `{items: ProductOrderSummaryDto[], hasMore, nextCursor?}`; `status` ∈ `open` (за замовч. = ефективні `pending_payment`+`paid`) \| `pending_payment` \| `paid` \| `fulfilled` \| `cancelled` \| `expired` \| `refunded` \| `all` (фільтр за **ефективним** статусом); `from/to` за `createdAt`, за замовч. 30 діб, ≤ 366 (`422 invalid_range`); `number` — ціле > 0 (`422 invalid_number`), без `from`/`to` дата-фільтр за замовчуванням не застосовується (v0.41, п. 1); `number` — точний номер; сортування `created_at DESC, id DESC`; `take` 1..200 (50) |
+| GET | `/product-orders/counts` | `inventory.view ≥ own` | `{paid: number}` — оплачені до видачі в закладах scope, обмежено 1000 (бейдж «99+», опитування 60 с) |
+| GET | `/product-orders/{id}` | `inventory.view ≥ own` + scope | `ProductOrderDto` |
+| POST | `/product-orders/{id}/fulfill` | `inventory.manage ≥ own` + scope | `{}` → `200 ProductOrderDto` (`paid` → `fulfilled`); повтор на `fulfilled` → `200` noop; Лім. |
+| POST | `/product-orders/{id}/cancel` | `inventory.manage ≥ own` + scope | `{reason?: string ≤ 300}` → `200 {order: ProductOrderDto, refundAmount: number}`: неоплачене → `cancelled` (`closeReason = staff`, `refundAmount = 0`); `paid` → повернення 100% + `sale_return` → `refunded`; Лім. |
+| POST | `/product-orders/{id}/reconcile-payment` | `inventory.manage ≥ own` + scope | `{}` → `200 ProductOrderDto` з поточним станом (завершує завислу оплату, §33.16; v0.41 п. 5); `409 nothing_to_reconcile`, `409 payment_in_progress` — як у коді; Лім. |
+
+**Помилки:** `404 product_order_not_found`; `409 order_not_paid` (fulfill не з `paid`), `409 order_fulfilled` (cancel виданого — поза 3a), `409 order_closed` (cancel закритого), `409 payment_in_progress` (cancel/reconcile під час свіжої оплати, < `PaymentStaleSeconds`), `409 refund_in_progress` (fulfill/cancel під час повернення), `409 nothing_to_reconcile`; `402 refund_failed` (замовлення лишається `paid`, склад без змін); `422 invalid_reason`, `invalid_status`, `invalid_range`, `invalid_number`, `invalid_cursor`; `429 rate_limited`.
+
+```
+ProductOrderSummaryDto { id, number, status (ефективний), location: {id, name},
+                         customer: { name, phone?: string, phoneMasked?: string },   // phone лише за clients.contacts = full (§30.5)
+                         lineCount, itemCount (Σ quantity), total, currency,
+                         createdAt, reservationExpiresAt|null, paidAt|null, fulfilledAt|null,
+                         closedAt|null, closeReason|null, paymentInProgress, refundInProgress }
+ProductOrderDto        = ProductOrderSummaryDto & {
+                         lines: [{ product: ProductRef, name, unit, quantity, unitPrice, lineTotal }], // name/unit — знімок
+                         refundAmount|null, cancelNote|null,
+                         fulfilledBy: {id, name}|null, cancelledBy: {id, name}|null,
+                         clientId?: uuid,                     // лише за clients.view = all і якщо прив'язано
+                         payment: { status: "pending"|"paid"|"failed"|"refunded", attempts }|null,
+                         saleOperationId|null, returnOperationId|null, source: "web"|"ios"|"android" }
+```
+Цін закупівлі в DTO немає; суми замовлення бачать усі з `inventory.view` (роздрібні, як `salePrice`). Перегляд деталі ПД у лог не пише.
+
+**Frontend CRM (TASK-905):** пункт «Замовлення» в розділі «Склад» (`/beauty/inventory/orders`) з бейджем `counts.paid`; список з чіпами статусів (`open` за замовч., `усі`, `видані`, `скасовані`, `повернені`, `прострочені`) і закладів, пошук за номером; деталь (бокова панель): рядки, сума, клієнт (ім'я, телефон/маска), хронологія; дії «Видано» (підтвердження), «Скасувати й повернути {total} ₴» (діалог з причиною), «Перевірити оплату» (лише `paymentInProgress`); кнопки дій — лише за `canManage` закладу (`/scope`). Коди помилок — у `errors.ts` (`BY_CODE`). Mock-клієнт відтворює переходи статусів і `refund_failed`.
+
+### 33.14 Зміни наявних DTO складу (адитивно)
+
+- `OperationSummaryDto` + `productOrderId: uuid|null` (лише `sale|sale_return`). `GET /operations?kind=` приймає `sale|sale_return`; `GET /movements?type=` — `sale|sale_return`. UI: «Продаж (замовлення №{n})», «Повернення продажу».
+- `MovementDto.type` може бути `sale_return`.
+
+### 33.15 Схема (міграція `beauty_product_orders`, адитивна, без backfill даних; **human gate**)
+
+Конвенції §32.3 (`Base`/`TenantFk`, композитні FK `(tenant_id, x_id)`, текст + CHECK, `ck_/ix_/ux_`, гроші `numeric(12,2)`).
+
+**`beauty_product_orders`:**
+- `location_id uuid NOT NULL` (FK `beauty_locations` RESTRICT); `order_number integer NOT NULL` CHECK `> 0`, UNIQUE `ux_beauty_product_orders_number (tenant_id, order_number)` (генерується `max + 1` під advisory-блокуванням tenant у транзакції створення);
+- `public_token_hash varchar(64) NOT NULL`, UNIQUE `(tenant_id, public_token_hash)`; `idempotency_key_hash varchar(64) NOT NULL`, `idempotency_request_hash varchar(64) NOT NULL`, UNIQUE `(tenant_id, idempotency_key_hash)`;
+- `status varchar(16) NOT NULL DEFAULT 'pending_payment'` CHECK ∈ `pending_payment|paid|fulfilled|cancelled|expired|refunded`;
+- `source varchar(8) NOT NULL` CHECK ∈ `web|ios|android` (мітка `X-Booking-Client`, лише метрика);
+- `guest_name varchar(100) NOT NULL` CHECK `char_length(btrim(guest_name)) BETWEEN 2 AND 100`; `guest_phone varchar(16) NOT NULL` CHECK `guest_phone ~ '^\+[1-9][0-9]{7,14}$'`; `client_id uuid NULL` (FK `beauty_clients` RESTRICT; заповнюється при оплаті);
+- `total_amount numeric(12,2) NOT NULL` CHECK `> 0 AND <= 1000000`; `currency char(3) NOT NULL DEFAULT 'UAH'` CHECK `= 'UAH'`;
+- `reservation_expires_at timestamptz NOT NULL`; `payment_attempts smallint NOT NULL DEFAULT 0` CHECK `0..10`; `payment_started_at timestamptz NULL`; `refund_started_at timestamptz NULL`;
+- `payment_id uuid NULL` (FK `beauty_payments` RESTRICT — успішний платіж); `paid_at`, `fulfilled_at`, `closed_at timestamptz NULL`; `fulfilled_by_user_id`, `cancelled_by_user_id uuid NULL` (FK `users` RESTRICT); `close_reason varchar(24) NULL` CHECK ∈ `client|staff|expired|stock_unavailable`; `cancel_note varchar(300) NULL`; `refund_amount numeric(12,2) NULL`;
+- `created_at`, `updated_at`;
+- CHECK узгодженості: `ck_…_closed`: `(status IN ('cancelled','expired','refunded')) = (closed_at IS NOT NULL AND close_reason IS NOT NULL)`; `ck_…_expired`: `(status = 'expired') = (close_reason IS NOT DISTINCT FROM 'expired')`; `ck_…_cancelled`: `status <> 'cancelled' OR close_reason IN ('client','staff')`; `ck_…_refunded`: `status <> 'refunded' OR (close_reason IN ('staff','stock_unavailable') AND payment_id IS NOT NULL AND refund_amount = total_amount)`; `ck_…_refund_amount`: `refund_amount IS NULL OR status = 'refunded'`; `ck_…_paid`: `status NOT IN ('paid','fulfilled') OR (paid_at IS NOT NULL AND payment_id IS NOT NULL)`; `ck_…_fulfilled`: `(status = 'fulfilled') = (fulfilled_at IS NOT NULL AND fulfilled_by_user_id IS NOT NULL)`; `ck_…_payment_started`: `payment_started_at IS NULL OR status = 'pending_payment'`; `ck_…_refund_started`: `refund_started_at IS NULL OR status = 'paid'`;
+- індекси: `(tenant_id, created_at DESC, id DESC)`, `(tenant_id, location_id, created_at DESC, id DESC)`, `ix_…_pending (tenant_id, location_id) WHERE status = 'pending_payment'`, `ix_…_expiry (tenant_id, reservation_expires_at) WHERE status = 'pending_payment'`, `ix_…_paid (tenant_id, location_id) WHERE status = 'paid'`, `(tenant_id, guest_phone, created_at DESC)`, `(tenant_id, client_id) WHERE client_id IS NOT NULL`.
+
+**`beauty_product_order_lines`** (**append-only**):
+- `order_id` (FK `beauty_product_orders` RESTRICT), `line_no smallint NOT NULL` CHECK `1..20`, `product_id` (FK `beauty_products` RESTRICT), `product_name varchar(200) NOT NULL`, `unit varchar(8) NOT NULL` CHECK ∈ `pcs|ml|g|l|kg|pack`, `quantity integer NOT NULL` CHECK `1..10`, `unit_price numeric(12,2) NOT NULL` CHECK `> 0 AND <= 1000000`, `line_total numeric(12,2) NOT NULL` CHECK `line_total = unit_price * quantity`, `created_at`;
+- UNIQUE `(tenant_id, order_id, product_id)`, UNIQUE `(tenant_id, order_id, line_no)`; індекс `(tenant_id, product_id)`.
+
+**`beauty_payments`** (зміна): `appointment_id` → `NULL`; `product_order_id uuid NULL` (FK `beauty_product_orders` RESTRICT); CHECK `ck_beauty_payments_subject`: `num_nonnulls(appointment_id, product_order_id) = 1`; індекс `(tenant_id, product_order_id) WHERE product_order_id IS NOT NULL`. Для замовлень `method = 'card'`; рядок на кожну спробу (`pending → paid|failed`, `paid → refunded`). EF: `Payment.AppointmentId` → `Guid?`, `ProductOrderId Guid?`.
+
+**`beauty_stock_operations`** (зміна): `kind` CHECK + `sale_return`; `product_order_id uuid NULL` (FK RESTRICT); CHECK `ck_beauty_stock_operations_product_order`: `(kind IN ('sale','sale_return')) = (product_order_id IS NOT NULL)`; UNIQUE `ux_beauty_stock_operations_product_order (tenant_id, product_order_id, kind) WHERE product_order_id IS NOT NULL` (одна операція продажу й одна повернення на замовлення).
+
+**`beauty_stock_movements`** (зміна): `type` CHECK + `sale_return`; CHECK знака: `sale_return` → `quantity > 0` (решта без змін). `is_shortage` для `sale|sale_return` завжди `false` (наявний `ck_beauty_stock_movements_shortage` це вже гарантує).
+
+**RLS:** ENABLE + FORCE + `tenant_isolation` на двох нових таблицях; `DO`-блок перевірки FORCE. Нових політик і функцій немає.
+
+**GRANT** (у міграції не виконується; синхронно `scripts/dev/setup-db.ps1` і `deploy/staging/db/grants.sql`, тест `staging-grants-sync`):
+```sql
+-- Замовлення товарів (ADR-026): замовлення не видаляються; рядки замовлень append-only
+REVOKE DELETE ON beauty_product_orders FROM beautycrm_app;
+REVOKE UPDATE, DELETE ON beauty_product_order_lines FROM beautycrm_app;
+-- Воркер: лише косметичне закриття прострочених неоплачених (TTL) і підрахунок зависих оплат
+GRANT SELECT (id, tenant_id, status, reservation_expires_at, payment_started_at) ON beauty_product_orders TO beautycrm_worker;
+GRANT UPDATE (status, closed_at, close_reason, updated_at) ON beauty_product_orders TO beautycrm_worker;
+```
+Воркер не отримує доступу до рядків, платежів, клієнтів, складу.
+
+`worker/src/testing/schema.sql` перегенерувати (без BOM, LF). **Down:** `RAISE EXCEPTION`, якщо є рядки в `beauty_product_orders`, платежі з `product_order_id` або рухи/операції `sale|sale_return`; інакше повертає CHECK-и, `NOT NULL` на `appointment_id` і видаляє таблиці. Up → Down → Up на копії.
+
+### 33.16 Алгоритми (backend)
+
+**Наявність (P1, P2):** `available = Σ quantity непрострочених партій пари (expires_on IS NULL OR expires_on >= localToday закладу) − reserved`; `reserved = Σ quantity рядків замовлень закладу зі status = 'pending_payment' AND (reservation_expires_at > now OR payment_started_at IS NOT NULL)`. У P2 — під `FOR UPDATE` наявних рядків `beauty_stock_levels` (порядок `product_id` за зростанням); рядка немає → `available = 0`, рядок **не** створюється. P1 рахує те саме без блокувань одним запитом.
+
+**Ефективний статус:** `status = 'pending_payment' AND payment_started_at IS NULL AND reservation_expires_at <= now` → `expired` (єдина функція Application для публічного й CRM API і для фільтрів).
+
+**Створення (P2):** транзакція READ COMMITTED: `pg_advisory_xact_lock` за tenant (простір `product_orders`) → повторна перевірка ідемпотентного ключа → ліміти → блокування рівнів → наявність → `order_number = COALESCE(max, 0) + 1` → `INSERT` замовлення й рядків (знімки назви, одиниці, ціни) → commit. Токен: `base64url(HMAC-SHA256(PublicBooking:TokenKey, "product_order." + tenantId + "." + orderId))` (детермінований — повтор віддає той самий токен); у БД — `SHA-256(token)`.
+
+**Оплата (P4)** — ADR-026 §2.7 дослівно:
+1. claim: `UPDATE … SET payment_started_at = now, payment_attempts = payment_attempts + 1 WHERE id = $1 AND status = 'pending_payment' AND payment_started_at IS NULL AND reservation_expires_at > now AND payment_attempts < MaxPaymentAttempts` + `INSERT beauty_payments(product_order_id, amount = total, method = 'card', status = 'pending')`; 0 рядків → відповідь за станом (§33.7), або reconcile, якщо `payment_started_at < now − PaymentStaleSeconds`;
+2. `IPaymentService.ChargeAsync(new PaymentCharge(paymentId, PaymentPurpose.ProductOrder, orderId, total, "UAH"))` — **поза транзакцією**;
+3. відмова → платіж `failed`, `payment_started_at = NULL` → `402`;
+4. успіх → (а) окрема коротка транзакція: платіж `paid` (+`provider_payment_id`, `paid_at`) — v0.41 п. 7, reconcile дозавершує (б); (б) одна транзакція фіналізації: `SELECT … FOR UPDATE` замовлення; `FOR UPDATE` рівнів пар `(location_id, product_id)` за зростанням; на кожен рядок FEFO **без прострочених**; `INSERT` операції `kind = 'sale'` (`product_order_id`, `created_by_user_id NULL`, без хешів ідемпотентності) і рухів `sale` (−take, `batch_id`, `unit_cost` партії); партії й `level.quantity` −; `ResolveClientAsync(name, phone, phone_source = web_form)` → `client_id`; замовлення `paid`, `paid_at`, `payment_id`, `payment_started_at = NULL` → commit → `200`;
+5. FEFO не вистачає → rollback; окремо платіж `paid`; `RefundAsync(paymentId, total)`: успіх → замовлення `refunded` (`close_reason = stock_unavailable`, `closed_at`, `refund_amount = total`, `payment_id`, `payment_started_at = NULL`), платіж `refunded` → `409 stock_unavailable`; збій → стан лишається «в процесі», лог Error `product_order_compensation_failed` → `409 stock_unavailable` з `paymentInProgress = true`;
+6. **reconcile** (повтор P4 після `PaymentStaleSeconds` або CRM `reconcile-payment`): перехоплення `UPDATE … SET payment_started_at = now WHERE id = $1 AND payment_started_at = $old`; останній платіж замовлення `pending` → повторний `ChargeAsync` з **тим самим** `PaymentId` → п.3/п.4; `paid` → п.4 (FEFO) → за потреби п.5.
+
+**Скасування адміном оплаченого:** claim `UPDATE … SET refund_started_at = now WHERE status = 'paid' AND (refund_started_at IS NULL OR refund_started_at < now − PaymentStaleSeconds)` → `RefundAsync(payment_id, total)` (100%, без комісій §11) → збій: `refund_started_at = NULL`, `402 refund_failed` → успіх: транзакція `FOR UPDATE` замовлення → рівні → операція `kind = 'sale_return'` (`created_by_user_id` = актор) і для **кожного руху `sale`** цього замовлення рух `sale_return` `+|q|` з тим самим `batch_id` і `unit_cost`; `batch.quantity += |q|`, `level.quantity += |q|`; дефіцит не змінюється; платіж `refunded`; замовлення `refunded` (`close_reason = staff`, `cancelled_by_user_id`, `cancel_note`, `refund_amount = total`, `closed_at`, `refund_started_at = NULL`). Видача (`fulfill`) — умовний `UPDATE … WHERE status = 'paid' AND refund_started_at IS NULL`.
+**Скасування неоплаченого** (клієнт або адмін): `UPDATE … SET status = 'cancelled', close_reason = 'client'|'staff', closed_at = now WHERE status = 'pending_payment' AND payment_started_at IS NULL AND reservation_expires_at > now`; рівні не блокуються (зняття резерву лише збільшує доступність).
+
+**Порядок блокувань** (без циклів): advisory tenant → рівні (лише створення); замовлення → рівні → товари/налаштування `FOR SHARE` (оплата, повернення); рівні (операції складу, автосписання); воркер — лише рядки замовлень (`SKIP LOCKED`).
+
+**Інваріанти** (додаються до §32.17, перевіряють тести): (1) на замовлення ≤ 1 операція `sale` і ≤ 1 `sale_return`; (2) `paid|fulfilled` ⇔ є операція `sale`, `Σ |sale| за товаром = quantity рядка`; (3) `refunded` (staff) ⇒ рухи `sale_return` дзеркальні рухам `sale` (та сама партія, та сама кількість); (4) `refunded` (stock_unavailable) ⇒ операції `sale` немає; (5) ≤ 1 платіж `paid|refunded` на замовлення; (6) інваріанти §32.17 пар заклад×товар тримаються після кожного сценарію.
+
+**`IPaymentService`** — ADR-026 §2.7: `PaymentPurpose`, `PaymentCharge`, перевантажена `ChargeAsync(PaymentCharge)` з реалізацією за замовчуванням `not_supported`; `MockPaymentService`: успіх `mock_pay_{PaymentId:N}`, відмова для сум з копійками `.13`. Запобіжник старту: `Production`/невизначене середовище + `ProductOrders:Enabled=true` + зареєстровано `MockPaymentService` → виняток старту з поясненням.
+
+### 33.17 Воркер `pollProductOrders`
+
+- `worker/src/scheduler/pollers.ts`, реєстрація в `main.ts` як `beauty.product-orders-expire`, **раз на хвилину**; `PollContext.productOrdersEnabled` ← `WORKER_PRODUCT_ORDERS_ENABLED` (лише `true` без регістру; за замовчуванням вимкнено; `.env.worker.example`); модульний гейт `beauty_inventory` (аналог `isInventoryEnabled`); час — `ctx.now()`.
+- На tenant: `UPDATE beauty_product_orders SET status = 'expired', close_reason = 'expired', closed_at = reservation_expires_at, updated_at = now WHERE id IN (SELECT id … WHERE status = 'pending_payment' AND payment_started_at IS NULL AND reservation_expires_at <= now − interval '1 minute' ORDER BY reservation_expires_at LIMIT 500 FOR UPDATE SKIP LOCKED)`; пачки ≤ 500, не більше 20 пачок за один запуск (v0.41 п. 8); лічильник зависих: `status = 'pending_payment' AND payment_started_at < now − interval '30 minutes'`.
+- Лог: `product_orders_expire tenant={id} expired={n} stuck={n}` (`stuck > 0` → Warning). Без ПД, токенів, сум.
+- Вимкнений воркер **не порушує** коректності (ефективний статус і резерв рахуються за часом), лише залишає `pending_payment` у БД.
+
+### 33.18 Безпека, логи
+
+- Анонімні маршрути — лише P1–P5; tenant за slug (§12), RLS FORCE, композитні FK; нових політик і SECURITY DEFINER немає.
+- Токен: 256 біт, HMAC з контекстом `product_order.`, у БД SHA-256, однакова `404 not_found`; `no-store`, `no-referrer`; шлях з токеном не зберігати в access-логах проксі (§12).
+- `order_number` не приймається жодним публічним маршрутом.
+- ПД: публічні DTO без імені й телефону; у CRM телефон за `clients.contacts`, `clientId` за `clients.view = all`; клієнт CRM створюється лише після оплати; ім'я наявного клієнта не перезаписується.
+- Логи backend (без імені, телефону, токена, сум, `Idempotency-Key`): `product_order_created order={id} location={id} lines={n} source={web|ios|android} replayed={bool}`, `product_order_payment order={id} attempt={n} result={paid|failed|stock_unavailable|in_progress|reconciled|replayed}`, `product_order_compensation_failed order={id}` (Error), `product_order_fulfilled order={id} user={id}`, `product_order_cancelled order={id} by={client|staff} refund={bool}`, `product_order_refund_failed order={id} user={id}` (Warning). Тег Activity `beauty.product_order.result`.
+
+### 33.19 Тест-вимоги
+
+Час — лише `TimeProvider`/`FakeTimeProvider` і `ctx.now()`; без реального годинника.
+1. **Міграція (901):** Up → Down → Up; `Down` відмовляє за даних; FORCE на 2 таблицях; усі CHECK §33.15 (статус ↔ мітки, `num_nonnulls`, знак `sale_return`, `line_total`, E.164); UNIQUE (номер, токен, ключ, операція на замовлення); крос-tenant RLS; append-only рядків (42501 на `UPDATE`/`DELETE`), `DELETE` замовлень заборонено; колонкові GRANT воркера (SELECT інших колонок → 42501); `schema-drift`, `staging-grants-sync`.
+2. **Публічний API (902, HTTP на PostgreSQL):** вмикання (модуль off / прапор off / `"1"` / порожнє → `404 product_orders_disabled`; GET за токеном працює); `426` раніше за tenant; `403 tenant_suspended`; однакова `404 not_found` для чужого/зіпсованого токена; видимість (`salon_use`, без ціни, ціна 0, неактивний, вимкнений у закладі — приховано; `inStock` з урахуванням прострочених партій і резерву); набір полів DTO (немає ПД і кількостей — тест серіалізації); кожен код §33.11.
+3. **Ідемпотентність (902):** повтор → `200` + той самий токен і номер; інше тіло → `idempotency_key_reused`; паралельні повтори → одне замовлення; повтор не повторює captcha.
+4. **Гонки (902, реальна БД):** два паралельні P2 на останню одиницю → `201` + `422 insufficient_stock`; P2 і ручне списання паралельно → без дедлоку; два паралельні P4 → один Charge (лічильник фейку), другий `409 payment_in_progress`; P4 і P5 паралельно → рівно один виграє; P4 і воркер на межі TTL → узгоджений стан; adm cancel і fulfill паралельно → рівно один.
+5. **Оплата (902):** успіх (FEFO без прострочених, межа локальної півночі `Europe/Kyiv`; операція `sale`; клієнт прив'язаний/створений лише тут); `402` і повтор; вичерпання спроб; `order_expired`; нестача після списання → повернення 100% і `refunded/stock_unavailable`; збій повернення → `paymentInProgress`, reconcile; ін'єкція збою між Charge і фіналізацією → reconcile повторює Charge з тим самим `PaymentId` (фейк рахує одне списання) і доводить до `paid`; mock `.13` → `402`; prod-запобіжник старту.
+6. **CRM (903):** права (`inventory.view = own` бачить лише свої заклади; specialist не має дій → `403 forbidden_role {permission: "inventory.manage"}`); `phone`/`phoneMasked` за `clients.contacts`; `clientId` лише за `clients.view = all`; fulfill; cancel неоплаченого; cancel оплаченого → `sale_return` у ті самі партії, рівні відновлено, дефіцит не змінено; `refund_failed` → нічого не змінено; `order_fulfilled`; reconcile; `counts`; фільтр за ефективним статусом; рядки `AuthzBaselineMatrixTests`; `no-store`; ліміт запису.
+7. **Інваріанти (902/903):** §33.16 (1)–(6) після кожного сценарію 4–6, і randomized-тест етапу 1, розширений P2/P4/cancel.
+8. **Воркер (904):** закриває лише прострочені без оплати в процесі; `SKIP LOCKED`; ліміт 500; модуль/прапор вимкнено → нічого; лог без ПД; стан після воркера збігається з ефективним статусом API.
+9. **Регресія запису (902):** оплата й скасування запису з `beauty_payments.appointment_id` nullable працюють як раніше (наявні тести зелені).
+10. **Frontend CRM (905):** vitest чистої логіки (ефективний статус від переданого часу, доступність дій, бейдж «99+», мапінг кодів); гейтинг за модулем і правами.
+
+### 33.20 Задачі (орієнтовні ID; PM підтверджує)
+
+| Задача | Агент | Обсяг | Залежить / артефакти |
+|---|---|---|---|
+| TASK-900 | project-architect | ADR-026 + цей розділ | — → `API-CONTRACT-PRODUCT-ORDERS-V1`; **human gate схеми й ПД** |
+| TASK-901 | database-engineer (`beauty-schema`) | міграція §33.15, EF-сутності (`Payment.AppointmentId Guid?`), RLS FORCE, CHECK, GRANT/REVOKE в обох файлах, `schema.sql`, тести §33.19 п.1 | 900 + gate → `ARTIFACT-PRODUCT-ORDERS-SCHEMA` |
+| TASK-902 | backend-developer (`beauty-booking-api`) | `IPaymentService` (`PaymentCharge`) + mock + запобіжник; `ProductOrdersOptions`; `PublicProductOrdersController` (P1–P5); сервіс замовлень (наявність, створення, оплата, компенсація, reconcile, ефективний статус); складова фіналізація `sale` і `sale_return` (поруч з `EfBeautyStore.InventoryOps.cs`); тести п.2–5, 7, 9 | 901 → `ARTIFACT-PRODUCT-ORDERS-PUBLIC-API` |
+| TASK-903 | backend-developer | CRM-маршрути §33.13, `OperationSummaryDto.productOrderId`, фільтри `sale|sale_return`, тести п.6–7 | 902 (спільний сервіс) → `ARTIFACT-PRODUCT-ORDERS-CRM-API` |
+| TASK-904 | backend-developer (`beauty-worker-jobs`) | `pollProductOrders` §33.17, порт/фейк, env, тести п.8 | 901 |
+| TASK-905 | frontend-developer (`beauty-admin-ui`) | екран «Замовлення» + бейдж §33.13, mock → http, тести п.10 | 900 (mock); 903 (http) |
+| TASK-906 | qa-engineer (`beauty-qa`) | таблиця відповідності ADR-026/§33 → тести; наскрізні сценарії; ручний чекліст staging (mock `.13`, TTL, повернення, reconcile) | 902–905 |
+| TASK-907 | security-reviewer (`beauty-security`) | анонімна поверхня, токени, ліміти, carding, ідемпотентність оплати, компенсація, ПД, GRANT воркера, prod-запобіжник; звіт у `docs/reviews/` | 906 |
+| TASK-908 | documentation-writer (`beauty-docs`) | `database.md`, runbook (прапори, gate, ввімкнення на staging, reconcile, відкат), known-issues, статус ADR-026 | 907 |
+| (зовн.) | мобільна команда (`mobile/`) | клієнт P1–P5, екрани §33.9–§33.10 | `API-CONTRACT-PRODUCT-ORDERS-V1` (mock на своєму боці) → staging після 902 + gate 4 |
+
+DAG: 900 → [gate] → 901 → {902 ∥ 904} → 903 → 906 → 907 → 908; 905 — mock після 900, http після 903. Human gates: ADR-026 і схема; ПД гостя; міграція на staging/prod; `ProductOrders:Enabled=true` і `WORKER_PRODUCT_ORDERS_ENABLED=true` на staging; prod-продаж (провайдер A3, ПРРО L1, ПДВ L2, оферта P3); мердж `integrate/*`.
+
+### 33.21 Відкриті питання
+
+ADR-026 §9 (P1–P7). Дефолти цього контракту: P1 — без очищення ПД; P2 — повернення після видачі поза системою; P3 — блокує prod; P4 — лише бейдж; P5 — покупки не в картці клієнта; P6 — значення §33.3; P7 — потрібен `beauty_booking`. Зміна дефолту — правкою §33 до старту TASK-901/902.
+
+### 33.22 Зображення товарів (ADR-027, v0.42, 2026-11-21, `API-CONTRACT-PRODUCT-ORDERS-V1.1`; статус ADR — `accepted`, реалізовано в гілці (TASK-911…916); human gates G3–G7 відкриті)
+
+Джерело рішень — **ADR-027** (`.claude/docs/adr/ADR-027-product-images-and-file-storage.md`). Якщо цей розділ розходиться з ADR, діє ADR. Фактичні відхилення від реалізації (коди 413/415, семафори, таймаут, grace очищувача 7 днів для страй-варіантів, бюджет пам'яті) записані в ADR-027 §12 і в **§33.22.11**. Розділ адитивний: наявні поля, коди й маршрути §32/§33 не змінюються.
+
+#### 33.22.1 Обсяг і вмикання
+
+- Галерея фото товару: завантажує CRM (`inventory.manage = all`), читають CRM, публічний каталог P1 і мобільний застосунок. Файли лежать на диску сервера (docker volume), URL публічні без авторизації.
+- **Вмикання:** функція працює, лише якщо задано `Media:RootPath`. Без нього CRM-маршрути фото повертають `404 product_images_disabled`, DTO віддають `imageUrl = null`, `images = []`, а роздача віддає `404`. Модуль `beauty_inventory` потрібен для CRM-маршрутів (клас-рівень §32.5). Від `ProductOrders:Enabled` фото не залежать: P1 і так закритий цим прапором.
+
+#### 33.22.2 Конфігурація
+
+| Ключ | За замовч. | Діапазон | Призначення |
+|---|---|---|---|
+| `Media:RootPath` | відсутній = вимкнено | абсолютний шлях | тека тому. Якщо задано, при старті перевіряються існування й запис; провал = помилка старту |
+| `Media:PublicBaseUrl` | — (обов'язковий за наявності `RootPath`) | origin `https://…` без шляху (у Development дозволено `http`) | база абсолютних URL |
+| `Media:MaxUploadBytes` | `10485760` | 1048576..20971520 | тіло файлу |
+| `Media:MaxImagesPerProduct` | `8` | 1..20 | фото на товар |
+| `Media:MaxImagesPerTenant` | `5000` | 1..100000 | квота tenant-а |
+| `Media:MaxPixels` | `25000000` | 1000000..50000000 | ширина × висота джерела |
+| `Media:MaxConcurrentProcessing` | `1` | 1..4 | паралельні обробки на процес |
+| `Media:UploadsPerUserPerMinute` | `20` | 1..120 | rate limit upload за користувачем |
+| `Media:SweepMode` | `off` | `off` \| `dry-run` \| `delete` | очищувач сиріт (§33.22.7) |
+| `Media:MaxConcurrentUploads` | `3` | 1..16 | глобальний неблокувальний ліміт одночасних upload на процес до читання тіла; перевищення → `503 media_busy` (§33.22.11) |
+| `Media:PublicPermitPerMinute` | `600` | 1..100000 | ліміт `public-media` на IP за хвилину (/64 для IPv6) |
+
+Невалідне значення дає помилку старту. Старт також перевіряє бюджет пам'яті: `Media:MaxPixels × 8 × Media:MaxConcurrentProcessing ≤ 256 МБ`, інакше помилка старту. Константи: варіанти `400` і `1600` (довша сторона, без збільшення), WebP lossy q80, мінімальна сторона джерела 200 px, максимальна 10 000 px.
+
+#### 33.22.3 Публічний каталог (P1, дельта §33.5)
+
+`PublicProductDto` + `imageUrl: string | null` (= `thumbUrl` першого фото) і `images: PublicProductImageDto[]` (`{url, thumbUrl, width, height}`, порядок `sort_order, created_at, id`, не більше `MaxImagesPerProduct`). Сервер завжди віддає `width` і `height`; мобільний клієнт приймає їх як опціональні (`width?`, `height?`) і відкидає елементи з не-https URL. Обидва URL абсолютні: `{Media:PublicBaseUrl}/api/public/media/p/{key}-{400|1600}.webp`. Набір товарів, сортування, `truncated`, ліміт 500 і коди P1 не змінюються.
+
+**Вимоги до клієнта (мобільний):** поле відсутнє або `null` → «немає фото» (плейсхолдер); у списку показувати `imageUrl`, у деталі — галерею `images[].url`, а `thumbUrl` використовувати для мініатюр. Кешувати на диску без обмеження строку (`immutable`). Додаткових заголовків (`X-Booking-Client`, `X-App-Version`) запит зображення **не потребує**. Помилку `404` на зображенні показувати як плейсхолдер, без повторів. URL не будувати самостійно, брати лише з DTO.
+
+Приклад елемента P1:
+```json
+{ "id": "b3f0a1c2-1111-4a6b-8c9d-0e1f2a3b4c5d", "name": "Шампунь відновлювальний 250 мл", "unit": "pcs", "price": 420.00,
+  "categoryPath": "Волосся › Догляд", "inStock": true,
+  "imageUrl": "https://beauty.example.com/api/public/media/p/3f9a0c1e7b2d4a6f8e1c5b7d9a0f2e4c-400.webp",
+  "images": [ { "url": "https://beauty.example.com/api/public/media/p/3f9a0c1e7b2d4a6f8e1c5b7d9a0f2e4c-1600.webp",
+                "thumbUrl": "https://beauty.example.com/api/public/media/p/3f9a0c1e7b2d4a6f8e1c5b7d9a0f2e4c-400.webp",
+                "width": 1200, "height": 1600 } ] }
+```
+
+#### 33.22.4 Роздача файлів `GET|HEAD /api/public/media/p/{file}`
+
+- Без автентифікації, без slug, без `[PublicClient]`/`426`, без `[PublicTenant]`, **без звернення до БД**. Rate limit `public-media`.
+- `file` має повністю відповідати `^(?<key>[0-9a-f]{32})-(?<size>400|1600)\.webp$`. Шлях на диску: `{root}/p/{key[0..1]}/{key}-{size}.webp`, збирається лише з груп regex. Після `GetFullPath` префікс `root` обов'язковий, symlink дає відмову.
+- `200`: `Content-Type: image/webp`, `Cache-Control: public, max-age=31536000, immutable`, `ETag: "{key}-{size}"`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Cross-Origin-Resource-Policy: cross-origin`, `Content-Disposition: inline`. Range дозволено.
+- Невалідне ім'я, файлу немає, файл видалено: однакова `404`, порожнє тіло, `Cache-Control: no-store`.
+- Призупинення tenant-а, архівування товару й вимкнення модуля роздачу не блокують (ADR-027 §2.3). Блокує лише видалення фото.
+
+#### 33.22.5 CRM-маршрути (`/api/beauty/inventory`)
+
+Клас-рівень §32.5 (`[Authorize(Staff)]` + `[RequireModule("beauty_inventory")]` + `inventory.view ≥ own`), `Cache-Control: no-store`, порядок фільтрів §30.5. Дії змінюють мережевий каталог, тому вимагають `inventory.manage = all` (як `POST/PUT /products`; у UI це `InventoryScopeDto.canEditCatalog`). Нестача права → `403 forbidden_role {permission: "inventory.manage"}`.
+
+| Метод | Шлях | Право | Тіло → відповідь |
+|---|---|---|---|
+| POST | `/products/{id}/images` | `inventory.manage = all` | `multipart/form-data`, рівно одна частина-файл з іменем `file` (інші частини ігноруються) → `201 ProductImageDto` (`Location` не віддається) |
+| DELETE | `/products/{id}/images/{imageId}` | `inventory.manage = all` | → `204` |
+| PATCH | `/products/{id}/images/order` | `inventory.manage = all` | `{ imageIds: uuid[] }` — точна перестановка поточного набору → `200 { images: ProductImageDto[] }` (`sort_order` = індекс) |
+
+Rate limit: upload — `Media:UploadsPerUserPerMinute` і `Inventory:WritePerUserPerMinute`; DELETE/PATCH — `Inventory:WritePerUserPerMinute`. Ліміт тіла: upload — `MaxUploadBytes + 64 КБ` (Kestrel і `MultipartBodyLengthLimit`), PATCH — 4 КБ.
+
+**Дельта §32.6 (адитивно):**
+```
+ProductImageDto   { id, url, thumbUrl, width, height, sizeBytes, sortOrder, createdAt }
+ProductDto        + imageUrl: string|null          // thumbUrl першого фото; null = немає або функцію вимкнено
+ProductDetailDto  + images: ProductImageDto[]      // уся галерея, порядок sort_order, created_at, id
+```
+
+**Порядок перевірок upload** (детермінований, фіксують тести): права (`403`) → функція ввімкнена (`404 product_images_disabled`) → товар під RLS (`404 product_not_found`) → тип запиту multipart з частиною `file` (`422 file_required`) → розмір (`413 file_too_large`) → швидкий підрахунок лімітів (`422 too_many_images {limit}`, `422 image_quota_exceeded {limit}`) → сигнатура формату (`415 unsupported_image_type`) → розміри (`422 image_dimensions_invalid {minSide, maxSide, maxPixels}`) → декодування (`422 image_decode_failed`) → черга обробки (`503 media_busy` + `Retry-After: 5`) → запис файлів → транзакція з повторною перевіркою лімітів (`422 too_many_images` / `image_quota_exceeded`, файли видаляються).
+
+**Помилки:** `404 product_not_found` (немає товару або чужий tenant), `404 product_image_not_found` (немає фото або фото іншого товару), `404 product_images_disabled`, `413 file_too_large` (також від nginx, тоді тіло — HTML: клієнт обробляє за статусом), `415 unsupported_image_type`, `422 file_required`, `422 too_many_images`, `422 image_quota_exceeded`, `422 image_dimensions_invalid`, `422 image_decode_failed`, `422 invalid_image_order` (не перестановка: дублікати, чужі або відсутні id, інша кількість), `429 rate_limited`, `503 media_busy`.
+
+**IDOR:** товар шукається під RLS FORCE; фото — за `id = imageId AND product_id = id`; PATCH приймає лише перестановку власного набору товару; композитний FK `(tenant_id, product_id)`. Будь-яка невідповідність дає `404`/`422` без розкриття існування чужих об'єктів.
+
+**Frontend CRM:** галерея в картці товару (`canEditCatalog`): вибір файлу (`accept="image/jpeg,image/png,image/webp"`), зменшення в браузері до довшої сторони ≤ 2560 перед відправкою, прогрес, видалення з підтвердженням, перетягування для порядку (оптимістично, при `422 invalid_image_order` — перечитати товар), прев'ю `imageUrl` у списку. `FormData` без ручного `Content-Type`. Коди — у `errors.ts` (`BY_CODE`).
+
+#### 33.22.6 Схема (міграція `beauty_product_images`, адитивна; **human gate G1/G3**)
+
+Конвенції §32.3 (`Base`/`TenantFk`, композитні FK, `ck_/ix_/ux_`).
+
+**`beauty_product_images`:**
+- `id uuid` PK; `tenant_id uuid NOT NULL` (FK `tenants` RESTRICT); `product_id uuid NOT NULL`, FK `(tenant_id, product_id)` → `beauty_products (tenant_id, id)` **ON DELETE CASCADE**;
+- `storage_key char(32) NOT NULL` CHECK `ck_beauty_product_images_storage_key`: `storage_key ~ '^[0-9a-f]{32}$'`; UNIQUE **глобально** `ux_beauty_product_images_storage_key (storage_key)`;
+- `mime varchar(32) NOT NULL` CHECK `mime = 'image/webp'`; `size_bytes integer NOT NULL` CHECK `size_bytes > 0 AND size_bytes <= 10485760` (сума варіантів);
+- `width smallint NOT NULL`, `height smallint NOT NULL`, CHECK `BETWEEN 1 AND 1600` (варіант 1600);
+- `sort_order smallint NOT NULL` CHECK `BETWEEN 0 AND 99`; `CONSTRAINT ux_beauty_product_images_order UNIQUE (tenant_id, product_id, sort_order) DEFERRABLE INITIALLY DEFERRED` (сирий SQL: EF не створює deferrable UNIQUE);
+- `created_by_user_id uuid NOT NULL` (FK `users` RESTRICT); `created_at timestamptz NOT NULL DEFAULT now()`;
+- індекс `ix_beauty_product_images_product (tenant_id, product_id, sort_order)`.
+
+**RLS:** ENABLE + FORCE + `tenant_isolation` (`tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid` в `USING` і `WITH CHECK`), `DO`-блок перевірки FORCE (патерн `20261120122321`). Нових політик і функцій немає.
+
+**GRANT** (не в міграції; синхронно `scripts/dev/setup-db.ps1` і `deploy/staging/db/grants.sql`, тест `staging-grants-sync`):
+```sql
+-- Фото товарів (ADR-027): рядок незмінний, крім порядку; воркер доступу не має
+REVOKE UPDATE ON beauty_product_images FROM beautycrm_app;
+GRANT SELECT, INSERT, DELETE ON beauty_product_images TO beautycrm_app;
+GRANT UPDATE (sort_order) ON beauty_product_images TO beautycrm_app;
+```
+(Якщо default privileges видають app-ролі `UPDATE` на всі таблиці, `REVOKE` залишає тільки колонковий `UPDATE (sort_order)`. Database-engineer звіряє з поточним шаблоном grants.) Для `beautycrm_worker` і `beautycrm_catalog` — нічого.
+
+EF: `ProductImage : TenantEntity` (`ProductId`, `StorageKey`, `Mime`, `SizeBytes`, `Width`, `Height`, `SortOrder`, `CreatedByUserId`; `CreatedAt` з базового класу або явно). `worker/src/testing/schema.sql` перегенерувати (без BOM, LF). **Down:** `RAISE EXCEPTION 'product images exist'`, якщо є хоч один рядок, інакше `DROP TABLE`. Up → Down → Up на копії.
+
+#### 33.22.7 Алгоритми (backend)
+
+- **Ключ:** 16 байт `RandomNumberGenerator.GetBytes` → lowercase hex (32 символи). Не `Guid.NewGuid` (не гарантує CSPRNG за специфікацією).
+- **Обробка (`IImageProcessor`, ImageSharp 3.1.x; ліцензія — gate G2):** конфігурація лише з JPEG/PNG/WebP; тип за сигнатурою; `Identify` → перевірка розмірів; `DecoderOptions { MaxFrames = 1 }`; `MemoryAllocator` з `AllocationLimitMegabytes = 256` (ліміт однієї алокації) і `MaximumPoolSizeMegabytes = 64`; піксель `Rgba32`; `AutoOrient()`; зняття EXIF/XMP/IPTC/ICC/CICP; ресайз `ResizeMode.Max` до 1600 і 400 без збільшення; `WebpEncoder { FileFormat = Lossy, Quality = 80, SkipMetadata = true }`; `SemaphoreSlim(MaxConcurrentProcessing)` з очікуванням ≤ 10 с (`503 media_busy`); таймаут обробки 20 с (`422 image_decode_failed`, §33.22.11).
+- **Upload — «файл, потім транзакція»:** маркер `{root}/t/{tenantId}/{key}` → варіанти `*.webp.tmp` (`CreateNew`, `Flush(true)`) → `File.Move(tmp, final, overwrite: false)` → транзакція: `SELECT … FROM beauty_products WHERE id = $1 FOR NO KEY UPDATE` → `count(product) < MaxImagesPerProduct` і `count(tenant) < MaxImagesPerTenant` → `sort_order = COALESCE(max, -1) + 1` → `INSERT` → commit. Збій після запису: варіанти й маркер видаляються (best effort). Рядок ніколи не з'являється раніше за файли.
+- **Delete:** транзакція `FOR NO KEY UPDATE` товару → `DELETE … WHERE id = $imageId AND product_id = $id` → commit → **потім** видалення варіантів і маркера (best effort; збій → Warning, залишки прибирає очищувач).
+- **Reorder:** транзакція `FOR NO KEY UPDATE` товару → поточний набір id → перевірка перестановки → один `UPDATE … SET sort_order = v.ord FROM (VALUES …) v` (deferrable UNIQUE перевіряється при commit).
+- **Порядок блокувань:** рядок `beauty_products` (`FOR NO KEY UPDATE`) — єдине блокування операцій з фото, транзакція коротка (обробка зображення відбувається до неї). `NO KEY` не конфліктує з FK-перевірками (`FOR KEY SHARE`) складу й замовлень. З `FOR SHARE` товару (оплата/повернення, §33.16) взаємне очікування коротке, але циклів немає: фото-транзакції інших рядків не блокують.
+- **P1:** один додатковий запит `SELECT product_id, storage_key, width, height FROM beauty_product_images WHERE product_id = ANY(@ids) ORDER BY product_id, sort_order, created_at, id`, групування в пам'яті, обрізання до `MaxImagesPerProduct`.
+- **Очищувач `MediaOrphanSweeper`** (`BackgroundService` в API; кожні 6 год, перший запуск через 10 хв після старту; `pg_try_advisory_lock` простору `media_sweep`; працює лише за `SweepMode ≠ off`):
+  1. tenant-и — валідні uuid серед імен тек `{root}/t/*`;
+  2. на tenant: tenant-контекст як у запиті (`app.tenant_id`) → tenant невидимий (`SELECT EXISTS … tenants WHERE id = <tenant>` → `false`) → **пропуск** (Warning). Реалізатор має перевірити, що app-роль бачить свій рядок `tenants` у цьому контексті; якщо ні — використати наявний механізм перевірки статусу tenant-а → `SELECT storage_key FROM beauty_product_images` → `live`;
+  3. кандидати: маркери з `mtime < now − 24 год` і ключем `∉ live`; `*.tmp` старші за 1 год; файли `p/**` з валідним ім'ям, але без маркера в жодному tenant-і, старші за **7 днів** (`StrayGrace`, було 24 год; §33.22.11); файли з невалідними іменами не видаляються (Warning);
+  4. запобіжники: помилка БД або ФС → tenant пропускається; кандидатів > 50% маркерів tenant-а (за > 20 маркерів) або > 500 за запуск → **нічого не видаляється** (Error `media_sweep_aborted`); для страй-варіантів додатково: відсутня `t/`, жодного маркера при наявних варіантах, або страй > 50% валідних (за > 20) → `media_sweep_aborted` без видалення страй; `dry-run` лише логує кількості;
+  5. видалення: варіанти → маркер; лог `media_sweep tenant={id} mode={m} markers={n} candidates={n} deleted={n}`; `live ∖ маркери ≠ ∅` → Warning `media_missing_files tenant={id} count={n}`.
+  Час — `TimeProvider` (тести — `FakeTimeProvider`, `mtime` задається явно).
+
+#### 33.22.8 Безпека, логи, деплой
+
+- Публічна поверхня — лише `GET|HEAD /api/public/media/p/{file}`. `t/` і будь-які інші шляхи тома не обслуговуються. Оригінал не зберігається, віддається тільки вихід енкодера.
+- Логи (без `storage_key`, імен файлів клієнта, вмісту): `product_image_uploaded product={id} image={id} bytes={n} w={w} h={h} ms={t}`, `product_image_rejected product={id} code={code}`, `product_image_deleted product={id} image={id}`, `product_image_file_cleanup_failed image={id}` (Warning), `media_sweep …`, `media_sweep_aborted reason={…}` (Error). Тег Activity `beauty.product_image.result`.
+- Деплой (TASK-915, застосування — G4/G5): том `beauty_staging_media` → `api:/data/media` (rw; `read_only` кореня лишається); одноразово `chown 1654:1654` і `chmod 0750` тома; `api.env`: `Media__RootPath=/data/media`, `Media__PublicBaseUrl=https://beauty.<DOMAIN>`, `Media__SweepMode=dry-run`; nginx — новий `location ~ ^/api/beauty/inventory/products/[0-9a-fA-F-]{36}/images$` з `client_max_body_size 11m` (решта лишається 2m); рекомендовано `mem_limit` api 768m; бекап — `pg_dump`, одразу після нього `tar` тома (`docker run --rm -v beauty_staging_media:/m:ro …`); відновлення — `pg_restore`, потім розпакування в порожній том. Basic auth для `/api/public/media/` — ADR-027 Q1 (дефолт — як для `/api/public/`).
+
+#### 33.22.9 Тест-вимоги
+
+1. **Міграція (911):** Up → Down → Up; `Down` відмовляє за наявності рядків; FORCE; CHECK ключа (довжина, регістр, символи), `mime`, `size_bytes`, розмірів, `sort_order`; глобальний UNIQUE ключа (зокрема між двома tenant-ами); deferrable UNIQUE порядку (перестановка двох фото одним `UPDATE` проходить, дубль після commit — `23505`); CASCADE при видаленні товару (на копії, під owner); крос-tenant RLS; app-роль: `UPDATE` інших колонок, крім `sort_order` → `42501`; воркер `SELECT` → `42501`; `schema-drift`, `staging-grants-sync`.
+2. **Обробка (912, unit на фікстурах, без мережі):** JPEG з EXIF-орієнтацією 6 → пікселі повернуто, EXIF/GPS у результаті відсутні; PNG з альфою → WebP з альфою; анімований WebP → один кадр; GIF/SVG/HEIC/текст з розширенням `.jpg` → `415`; 1×10 000 і 199×199 → `422 image_dimensions_invalid`; «бомба» (заголовок 30 000×30 000) → `422` без повного декодування (контроль часу й пам'яті); зіпсований JPEG → `422 image_decode_failed`; мале зображення не збільшується; детермінізм розмірів варіантів.
+3. **CRM API (912, HTTP на PostgreSQL, тимчасова тека):** права (specialist / `inventory.manage = own` → `403`; owner/admin → OK); `product_images_disabled` без `RootPath`; чужий tenant → `404 product_not_found`; фото іншого товару → `404 product_image_not_found`; ліміт 8 і квота tenant-а (зокрема паралельні upload на 8-му фото → рівно один успіх, файли того, хто програв, видалено); reorder: перестановка → OK, дубль / чужий id / неповний набір → `422 invalid_image_order`; delete → файли й маркер зникли, повтор → `404`; ін'єкція збою БД після запису файлів → рядка немає, файлів немає; ін'єкція збою видалення файлу → `204`, файл лишився (його прибере очищувач); `no-store`; rate limit; `413` за розміром.
+4. **Роздача (912):** `200` і всі заголовки §33.22.4; `HEAD`; невалідні імена (`../`, `%2e%2e`, верхній регістр, інший `size`, `.jpg`, 31/33 символи, `t/...`) → `404`; symlink у теці `p/` → `404`; відсутній файл → `404` + `no-store`; маршрут не відкриває з'єднання з БД (фейк, що рахує з'єднання); `426` не застосовується; rate limit `public-media`.
+5. **P1 (912):** `imageUrl`/`images` для товарів з фото, `null`/`[]` без фото й за вимкненої функції; порядок; обрізання до `MaxImagesPerProduct`; один додатковий запит (без N+1); тест серіалізації: поля V1 без змін, нові поля абсолютні URL з `PublicBaseUrl`.
+6. **Очищувач (912):** `off` нічого не робить; `dry-run` нічого не видаляє; `delete`: сирота старша за 24 год видаляється, молодша — ні; живий ключ не видаляється; `*.tmp` > 1 год видаляється; невидимий tenant → пропуск; помилка БД на tenant-і → пропуск; поріг 50% / 500 → відмова без жодного видалення; файли з невалідними іменами не чіпаються; `media_missing_files`.
+7. **Frontend CRM (913):** vitest чистої логіки (вибір і перевірка файлу, розрахунок зменшення, оптимістичний порядок і відкат, мапінг кодів, ховання дій без `canEditCatalog`); mock-клієнт відтворює `415`, `413`, `too_many_images`, `invalid_image_order`.
+8. **Регресія:** наявні тести P1 (§33.19 п.2) і CRUD товарів (§32) зелені; `AuthzBaselineMatrixTests` доповнено трьома маршрутами фото.
+
+#### 33.22.10 Задачі й відкриті питання
+
+Задачі TASK-910…917 і DAG — ADR-027 §10. Human gates — ADR-027 §6 (G1 схема, G2 ліцензія ImageSharp, G3 міграція, G4 інфраструктура, G5 бекап, G6 `SweepMode=delete`, G7 мердж). Відкриті питання — ADR-027 §7 (Q1 basic auth для `/api/public/media/` на staging, Q2 ліміти, Q3 фото в рядках замовлення, Q4 фото майстрів, Q5 розміри/якість). Дефолти діють до відповіді людини.
+
+#### 33.22.11 Фактичні відхилення реалізації (уточнення, без зміни API)
+
+Клієнти не змінюються: HTTP-коди, поля й маршрути §33.22.3–§33.22.5 збігаються з кодом. Це деталі поведінки, які впливають на тлумачення помилок і налаштування.
+
+1. **413 і 415** — через `ErrorKind.PayloadTooLarge` / `UnsupportedMediaType` (`ResultMapping`). Тіло `413` від nginx може бути HTML; клієнт обробляє за статусом.
+2. **Вхідний семафор upload** — `Media:MaxConcurrentUploads` (3, 1..16). Перевіряється **до** читання тіла. Відмова → `503 media_busy` + `Retry-After: 5`. Далі файл буферизується в пам'ять з лімітом `MaxUploadBytes` (до 3 одночасних буферів за замовчуванням).
+3. **Черга обробки** — `Media:MaxConcurrentProcessing`, очікування 10 с → `503 media_busy` + `Retry-After: 5`.
+4. **Таймаут обробки 20 с** — `422 image_decode_failed` (не 503). Рядок і файли не створюються.
+5. **Пам'ять** — `AllocationLimitMegabytes = 256` це ліміт однієї алокації; пул 64 МБ; піксель `Rgba32`; JPEG `TargetSize` не застосовується (декодування на повний розмір). Старт перевіряє `MaxPixels × 8 × MaxConcurrentProcessing ≤ 256 МБ`. Сирий буфер тіла в цей бюджет не входить.
+6. **Очищувач** — grace страй-варіантів (файли без маркера) **7 днів**, а не 24 год; маркери — 24 год. Додаткові запобіжники: відсутня або порожня `t/` при наявних варіантах; страй > 50%. Лог `media_sweep_aborted reason=markers_root_missing | no_markers | stray_ratio | run_limit | tenant_ratio`.
+7. **`PublicPermitPerMinute`** — налаштовується (`Media:PublicPermitPerMinute`, 600 за замовчуванням).
+8. **Після commit** — `CancellationToken.None`: скасування запиту не залишає файли живого рядка без відповіді.
+9. **Mobile** — `width`/`height` опціональні на клієнті; URL мають бути `https`; невалідний елемент відкидається.
+
+Повний перелік і причини — ADR-027 §12.

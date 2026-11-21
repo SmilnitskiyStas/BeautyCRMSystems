@@ -29,6 +29,8 @@ public static class ResultMapping
             ErrorKind.Forbidden => c.StatusCode(StatusCodes.Status403Forbidden, body),
             ErrorKind.TooManyRequests => c.StatusCode(StatusCodes.Status429TooManyRequests, body),
             ErrorKind.Unavailable => c.StatusCode(StatusCodes.Status503ServiceUnavailable, body),
+            ErrorKind.PayloadTooLarge => c.StatusCode(StatusCodes.Status413PayloadTooLarge, body),
+            ErrorKind.UnsupportedMediaType => c.StatusCode(StatusCodes.Status415UnsupportedMediaType, body),
             ErrorKind.PaymentFailed => c.StatusCode(StatusCodes.Status402PaymentRequired, body),
             _ => c.UnprocessableEntity(body),
         };

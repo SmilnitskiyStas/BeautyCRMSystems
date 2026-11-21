@@ -22,6 +22,7 @@ import { createMockInbox } from "./mock-inbox";
 import { createMockInventory } from "./mock-inventory";
 import { createMockInventoryV2 } from "./mock-inventory-v2";
 import { createMockInventoryV3 } from "./mock-inventory-v3";
+import { createMockProductOrders } from "./mock-product-orders";
 import { createMockMarketing } from "./mock-marketing";
 import { createMockTeam } from "./mock-team";
 import { createMockPhones } from "./mock-phone";
@@ -345,6 +346,14 @@ const mockInventoryV3 = createMockInventoryV3({
   autoAdvanceMs: typeof window !== "undefined" && process.env.NODE_ENV !== "test" ? 6_000 : 0,
 });
 
+/** ADR-026 / §33.13: замовлення товарів клієнтами (адмін-API CRM). */
+const mockProductOrders = createMockProductOrders({
+  role: mockRole,
+  locations: () => locations,
+  specialistLocationIds: () => staff.find((m) => m.id === "m")?.locations.map((l) => l.locationId) ?? [],
+  wait: typeof window !== "undefined" && process.env.NODE_ENV !== "test",
+});
+
 const mockAi = createMockAi({ role: mockRole });
 /** §25: телефони клієнтів; один екземпляр для картки клієнта, «Дзвінків» і inbox. */
 const mockPhones = createMockPhones({ role: mockRole });
@@ -385,6 +394,7 @@ export const mockBeautyApi: BeautyAdminApi = {
 
   ...mockInventory,
   ...mockInventoryV2,
+  ...mockProductOrders,
   getTelegramLink: mockInventoryV3.getTelegramLink,
   createTelegramLink: mockInventoryV3.createTelegramLink,
   deleteTelegramLink: mockInventoryV3.deleteTelegramLink,
@@ -448,6 +458,7 @@ export const mockBeautyApi: BeautyAdminApi = {
       isActive: true,
       closedWeekdays: [],
       workingHours: null,
+      isDiscoverable: input.isDiscoverable === true,
       ...mockCoordinates(input, null),
     };
     locations.push(created);
@@ -464,7 +475,7 @@ export const mockBeautyApi: BeautyAdminApi = {
     if (loc.isActive !== false && !input.isActive && hasFutureAt(id)) throw new BeautyApiError(409, "has_future_appointments", "future");
     if (input.timezone.trim() !== loc.timezone && hasFutureAt(id)) throw new BeautyApiError(409, "timezone_locked", "locked");
     const coords = mockCoordinates(input, loc);
-    Object.assign(loc, { name, address: input.address.trim() || null, phone: input.phone.trim() || null, timezone: input.timezone.trim(), isActive: input.isActive, ...coords });
+    Object.assign(loc, { name, address: input.address.trim() || null, phone: input.phone.trim() || null, timezone: input.timezone.trim(), isActive: input.isActive, isDiscoverable: input.isDiscoverable ?? loc.isDiscoverable ?? false, ...coords });
     return wait(loc);
   },
 

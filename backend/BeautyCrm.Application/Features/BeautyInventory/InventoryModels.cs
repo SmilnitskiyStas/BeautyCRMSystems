@@ -16,17 +16,27 @@ public sealed record ProductRef(Guid Id, string Name, string Unit, string Purpos
 public record ProductDto(
     Guid Id, string Name, string? Category, string Unit, string? Barcode, string Purpose, InventoryNamedRef? Supplier,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? PurchasePrice,
+    decimal? SalePrice,
     decimal? MinStock, bool TrackExpiry, bool IsActive, string? Note, bool HasMovements,
-    DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
+    DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt,
+    Guid? CategoryId = null, string? CategoryPath = null,
+    string? ImageUrl = null); // ADR-027: thumbUrl першого фото; null = немає або функцію вимкнено
 
 public sealed record LocationSettingDto(Guid LocationId, decimal? MinStock, bool IsEnabled, DateTimeOffset UpdatedAt);
 
 public sealed record ProductDetailDto(
     Guid Id, string Name, string? Category, string Unit, string? Barcode, string Purpose, InventoryNamedRef? Supplier,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? PurchasePrice,
+    decimal? SalePrice,
     decimal? MinStock, bool TrackExpiry, bool IsActive, string? Note, bool HasMovements,
-    DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, IReadOnlyList<LocationSettingDto> LocationSettings)
-    : ProductDto(Id, Name, Category, Unit, Barcode, Purpose, Supplier, PurchasePrice, MinStock, TrackExpiry, IsActive, Note, HasMovements, CreatedAt, UpdatedAt);
+    DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, IReadOnlyList<LocationSettingDto> LocationSettings,
+    Guid? CategoryId = null, string? CategoryPath = null, string? ImageUrl = null,
+    IReadOnlyList<BeautyProductImages.ProductImageDto>? Images = null) // ADR-027: уся галерея; сховище завжди віддає масив
+    : ProductDto(Id, Name, Category, Unit, Barcode, Purpose, Supplier, PurchasePrice, SalePrice, MinStock, TrackExpiry, IsActive, Note, HasMovements, CreatedAt, UpdatedAt,
+        CategoryId, CategoryPath, ImageUrl);
+
+/// <summary>Вузол дерева категорій (§32.27). ProductCount - прямі товари (усі, у т.ч. неактивні); ChildCount - прямі підкатегорії (усі, у т.ч. архівні).</summary>
+public sealed record CategoryDto(Guid Id, Guid? ParentId, string Name, int SortOrder, bool IsArchived, int ProductCount, int ChildCount);
 
 public sealed record SupplierDto(Guid Id, string Name, string? ContactName, string? Phone, string? Email, string? Note, bool IsActive, int ProductCount);
 
@@ -61,15 +71,15 @@ public record OperationSummaryDto(
     Guid Id, string Kind, Guid LocationId, Guid? ToLocationId, string? Reason, string? DocumentNumber, DateTimeOffset CreatedAt,
     InventoryNamedRef? CreatedBy, int ProductCount,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? TotalCost,
-    Guid? AppointmentId = null);
+    Guid? AppointmentId = null, Guid? ProductOrderId = null);
 
 public sealed record OperationDto(
     Guid Id, string Kind, Guid LocationId, Guid? ToLocationId, string? Reason, string? DocumentNumber, DateTimeOffset CreatedAt,
     InventoryNamedRef? CreatedBy, int ProductCount,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? TotalCost,
     InventoryNamedRef? Supplier, DateOnly? ReceivedOn, string? Note, Guid? StocktakeId, IReadOnlyList<MovementDto> Movements,
-    Guid? AppointmentId = null)
-    : OperationSummaryDto(Id, Kind, LocationId, ToLocationId, Reason, DocumentNumber, CreatedAt, CreatedBy, ProductCount, TotalCost, AppointmentId);
+    Guid? AppointmentId = null, Guid? ProductOrderId = null)
+    : OperationSummaryDto(Id, Kind, LocationId, ToLocationId, Reason, DocumentNumber, CreatedAt, CreatedBy, ProductCount, TotalCost, AppointmentId, ProductOrderId);
 
 public sealed record StocktakeLineDto(ProductRef Product, decimal? ExpectedQuantity, decimal? CountedQuantity, decimal? Difference, DateOnly? SurplusExpiresOn, decimal? ExpectedShortage = null);
 
@@ -99,7 +109,12 @@ public sealed record OperationResult(OperationDto Operation, bool Replayed);
 // ---------- запити (§32.6) ----------
 
 public sealed record ProductRequest(string? Name, string? Category, string? Unit, string? Barcode, string? Purpose, Guid? SupplierId,
-    decimal? PurchasePrice, decimal? MinStock, bool? TrackExpiry, bool? IsActive, string? Note);
+    decimal? PurchasePrice, decimal? SalePrice, decimal? MinStock, bool? TrackExpiry, bool? IsActive, string? Note, Guid? CategoryId = null);
+
+/// <summary>POST /categories: Name, ParentId?, SortOrder?; PUT /categories/{id}: Name, SortOrder? (ParentId ігнорується - зміна батька лише через move).</summary>
+public sealed record CategoryRequest(string? Name, Guid? ParentId, int? SortOrder);
+
+public sealed record CategoryMoveRequest(Guid? ParentId, int? SortOrder);
 
 public sealed record SupplierRequest(string? Name, string? ContactName, string? Phone, string? Email, string? Note, bool? IsActive);
 

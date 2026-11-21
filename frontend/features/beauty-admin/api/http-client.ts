@@ -73,6 +73,7 @@ import { DEFAULT_GREETING, INITIAL_CHANNELS } from "./mock-data";
 import { httpTeamApi } from "./http-team";
 import { httpMarketingApi, toAppointmentCoupon } from "./http-marketing";
 import { httpInventoryApi } from "./http-inventory";
+import { httpProductOrdersApi } from "./http-product-orders";
 import { maskCouponCodes } from "../marketing/logic";
 
 /**
@@ -791,6 +792,7 @@ async function loadClosures(locationId: string, weekStart: string, weekEnd: stri
 export const httpBeautyApi: BeautyAdminApi = {
   ...httpMarketingApi,
   ...httpInventoryApi,
+  ...httpProductOrdersApi,
   ...httpTeamApi,
   // `GET /locations` (§14.5/§16) доступний усім ролям; без `includeInactive` віддає лише активні.
   getLocations: async () => (await get<LocationDto[]>("/locations")).map(toLocation),
@@ -804,6 +806,7 @@ export const httpBeautyApi: BeautyAdminApi = {
         address: input.address.trim() || null,
         phone: input.phone.trim() || null,
         timezone: input.timezone.trim(),
+        ...(input.isDiscoverable === undefined ? {} : { isDiscoverable: input.isDiscoverable }),
         ...coordsBody(input, true),
       }),
     ),
@@ -816,6 +819,7 @@ export const httpBeautyApi: BeautyAdminApi = {
         phone: input.phone.trim() || null,
         timezone: input.timezone.trim(),
         isActive: input.isActive,
+        ...(input.isDiscoverable === undefined ? {} : { isDiscoverable: input.isDiscoverable }),
         ...coordsBody(input, false),
       }),
     ),

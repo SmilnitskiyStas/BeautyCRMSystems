@@ -22,7 +22,8 @@ import { pollFeedback } from "./feedback/poller";
 import { POLL_EVERY_MS, PURGE_EVERY_MS, PgPasswordResetStore, createPasswordMailer, loadPublicAppUrl, pollPasswordResets } from "./auth/password-reset";
 import { NONCE_CLEANUP_EVERY_MS, purgeControlPlaneNonces } from "./maintenance/nonce-cleanup";
 import { Scheduler } from "./scheduler/scheduler";
-import { pollCampaigns, pollConfirmations, pollInventory, pollInventoryTelegram, pollOutbox, pollReminders, pollReviews, pollWinback, type PollContext } from "./scheduler/pollers";
+import { isProductOrdersFlagOn, PgProductOrdersExpire } from "./product-orders/expire";
+import { pollCampaigns, pollConfirmations, pollInventory, pollInventoryTelegram, pollOutbox, pollProductOrders, pollReminders, pollReviews, pollWinback, type PollContext } from "./scheduler/pollers";
 
 const MIN = 60_000;
 
@@ -78,6 +79,9 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
       (token, chatId, text) => useMockChannels(env) ? Promise.resolve({ externalMessageId: null }) : sendTelegramText(fetch, TELEGRAM_API, token, chatId, text, { disablePreview: true }), consoleLogger),
     inventoryTelegramConfig: loadInventoryTelegramConfig(env),
     inventoryTelegramTenantAllowlist: inventoryTelegramAllowlist ?? undefined,
+    // §33.17: product-order expiry is off unless WORKER_PRODUCT_ORDERS_ENABLED is the literal "true".
+    productOrdersEnabled: isProductOrdersFlagOn(env.WORKER_PRODUCT_ORDERS_ENABLED),
+    productOrders: new PgProductOrdersExpire(db),
     reminderButtonsEnabled: /^true$/i.test(env.WORKER_REMINDER_BUTTONS_ENABLED ?? ""),
     reminderMinLeadMinutes: Number.isFinite(lead) && lead >= 0 && env.WORKER_REMINDER_MIN_LEAD_MINUTES ? lead : DEFAULT_MIN_LEAD_MINUTES,
   };
@@ -110,6 +114,7 @@ export async function createWorker(env: NodeJS.ProcessEnv = process.env, tenants
     { name: "beauty.winback", everyMs: 60 * MIN, run: () => pollWinback(ctx) },
     { name: "beauty.inventory-alerts", everyMs: 60 * MIN, run: () => pollInventory(ctx) },
     { name: "beauty.inventory-telegram", everyMs: 5 * MIN, run: () => pollInventoryTelegram(ctx) },
+    { name: "beauty.product-orders-expire", everyMs: 1 * MIN, run: () => pollProductOrders(ctx) },
   ], consoleLogger);
   return {
     scheduler, ctx,

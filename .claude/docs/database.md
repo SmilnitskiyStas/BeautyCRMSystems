@@ -1035,6 +1035,21 @@ Tests: `TenantIsolationTests.cs`, `CancellationHistoryRlsTests.cs`, `StaffHarden
 
 ---
 
+### Зображення товарів (`beauty_product_images`, ADR-027, контракт §33.22)
+
+Міграція `20261121110933_beauty_product_images` (TASK-911, адитивна). Одна таблиця: байти зберігаються на диску (том), у БД лише метадані варіантів.
+
+- Колонки: `id`, `tenant_id` (FK `tenants` RESTRICT), `product_id` (композитний FK `(tenant_id, product_id)` → `beauty_products` **ON DELETE CASCADE**), `storage_key char(32)`, `mime` (CHECK `= 'image/webp'`), `size_bytes` (CHECK `1..10485760`, сума варіантів), `width`/`height` (CHECK `1..1600`, варіант 1600), `sort_order` (CHECK `0..99`), `created_by_user_id` (FK `users` RESTRICT), `created_at`.
+- **Ключі:** `ck_beauty_product_images_storage_key` — `^[0-9a-f]{32}$`; `ux_beauty_product_images_storage_key` UNIQUE **глобально** (простір URL спільний для всіх tenant-ів, без tenant-id в URL).
+- **Порядок:** `ux_beauty_product_images_order (tenant_id, product_id, sort_order)` **DEFERRABLE INITIALLY DEFERRED**, щоб переставлення йшло одним `UPDATE`. Сирий SQL: EF цього не створює.
+- **Індекс:** `ix_beauty_product_images_product (tenant_id, product_id, sort_order)`. Додатково `ix_beauty_product_images_created_by` (аудит).
+- **RLS:** ENABLE + FORCE + `tenant_isolation` (патерн `20261120122321`), `DO`-блок перевірки FORCE. Нових політик і `SECURITY DEFINER`-функцій немає. Публічна роздача файлів не читає БД.
+- **GRANT (синхронно `scripts/dev/setup-db.ps1` і `deploy/staging/db/grants.sql`):** app-роль — `SELECT, INSERT, DELETE` і `UPDATE (sort_order)`; `REVOKE UPDATE` на таблицю. Воркер і `beautycrm_catalog` — нічого.
+- **Down:** `RAISE EXCEPTION`, якщо є хоч один рядок; інакше `DROP TABLE`. Файли на томі Down не чіпає.
+- `worker/src/testing/schema.sql` перегенеровано з цією міграцією.
+
+---
+
 ## 9. Known Constraints
 
 - No composite primary keys across tenants (all PKs include tenant_id as first column or via UNIQUE constraint).
@@ -1055,3 +1070,13 @@ pg_dump -U postgres beautycrm --blobs --roles > beautycrm.sql
 psql -U postgres < beautycrm.sql
 # Recreate roles: CREATE ROLE beautycrm_app NOSUPERUSER NOBYPASSRLS; GRANT ...
 ```
+
+### Склад: роздрібна ціна (ADR-025, контракт §32.26)
+
+- `beauty_products.sale_price numeric(12,2) NULL` + CHECK `ck_beauty_products_sale_price` (`IS NULL OR BETWEEN 0 AND 1000000`). NULL для `salon_use` і старих продажних товарів. Міграція `20261120084056_beauty_inventory_sale_price`: ADD COLUMN NULL без перезапису; Down = DROP COLUMN (ціни втрачаються). GRANT-и без змін (табличні покривають колонку; воркер читає колонково без `sale_price`).
+
+### Склад: дерево категорій товарів (ADR-025, контракт §32.27)
+
+- `beauty_product_categories`: `id`, `tenant_id`, `parent_id NULL` (композитний FK `(tenant_id, parent_id)` на ту ж таблицю, `RESTRICT`), `name varchar(100)` (CHECK `btrim` 1..100), `sort_order int DEFAULT 0`, `is_archived bool DEFAULT false`, `created_at`/`updated_at`; CHECK `parent_id <> id`; унікальний `ux_beauty_product_categories_name (tenant_id, COALESCE(parent_id, nil-uuid), lower(name))`; `ix_beauty_product_categories_parent (tenant_id, parent_id)`. RLS ENABLE+FORCE+`tenant_isolation` (як решта таблиць складу). Глибина (≤ 3), цикли й ліміт 500 — у сервісі під advisory-блокуванням tenant.
+- `beauty_products.category_id uuid NULL` + композитний FK `(tenant_id, category_id)` → категорії (`RESTRICT`) + частковий індекс `ix_beauty_products_category`. Стара `category` (текст) лишається, дерево стартує порожнім.
+- Міграція `20261120085617_beauty_inventory_product_categories`: ADD TABLE + ADD COLUMN NULL; Down = DROP (дані дерева втрачаються), але відмовляє `RAISE EXCEPTION 'product categories exist'`, якщо є рядки. GRANT: app-роль — `ALL TABLES`; воркеру доступ не потрібен.

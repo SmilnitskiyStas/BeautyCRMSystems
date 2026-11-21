@@ -14,16 +14,29 @@ public class Supplier : TenantEntity
     public bool IsActive { get; set; } = true;
 }
 
+/// <summary>Категорія товарів (дерево до 3 рівнів, ADR-025). ParentId NULL = корінь. Унікальне ім'я в межах батька без урахування регістру (вираз-індекс у міграції).</summary>
+public class ProductCategory : TenantEntity
+{
+    public Guid? ParentId { get; set; }
+    public string Name { get; set; } = null!;
+    public int SortOrder { get; set; }
+    public bool IsArchived { get; set; }
+}
+
 /// <summary>Товар мережі (каталог). Рівні й партії - по закладах.</summary>
 public class Product : TenantEntity
 {
     public string Name { get; set; } = null!;
     public string? Category { get; set; }
+    /// <summary>Категорія з дерева (beauty_product_categories); стара текстова Category лишається без змін.</summary>
+    public Guid? CategoryId { get; set; }
     public ProductUnit Unit { get; set; }
     public string? Barcode { get; set; }
     public ProductPurpose Purpose { get; set; }
     public Guid? SupplierId { get; set; }
     public decimal? PurchasePrice { get; set; }
+    /// <summary>Роздрібна ціна (мережева, одна на tenant); NULL для salon_use і для старих продажних товарів.</summary>
+    public decimal? SalePrice { get; set; }
     public decimal? MinStock { get; set; }
     public bool TrackExpiry { get; set; }
     public bool IsActive { get; set; } = true;
@@ -68,6 +81,8 @@ public class StockOperation : ITenantEntity
     public Guid? StocktakeId { get; set; }
     /// <summary>Запис, що списав матеріали (лише service_consumption; UNIQUE на (tenant, appointment) = ідемпотентність, §32.18).</summary>
     public Guid? AppointmentId { get; set; }
+    /// <summary>Замовлення товарів (лише sale | sale_return; UNIQUE (tenant, order, kind) = одна операція продажу й одна повернення, ADR-026 §2.8).</summary>
+    public Guid? ProductOrderId { get; set; }
     public string? Note { get; set; }
     /// <summary>null = система (етап 2); в етапі 1 завжди заповнено.</summary>
     public Guid? CreatedByUserId { get; set; }
@@ -184,4 +199,80 @@ public class StaffAlert : TenantEntity
     public DateTimeOffset? ReadAt { get; set; }
     public Guid? ReadByUserId { get; set; }
     public DateTimeOffset? ResolvedAt { get; set; }
+}
+
+// ---- Замовлення товарів клієнтами (ADR-026, контракт §33.15, TASK-901). RLS ENABLE+FORCE і ручні частини - в міграції beauty_product_orders ----
+
+/// <summary>Замовлення товарів гостем (самовивіз). Без DELETE для app-ролі; воркер - лише колонковий TTL.</summary>
+public class ProductOrder : TenantEntity
+{
+    public Guid LocationId { get; set; }
+    /// <summary>Послідовний у tenant (max+1 під advisory-блокуванням); публічно нічого не відкриває.</summary>
+    public int OrderNumber { get; set; }
+    public string PublicTokenHash { get; set; } = null!;
+    public string IdempotencyKeyHash { get; set; } = null!;
+    public string IdempotencyRequestHash { get; set; } = null!;
+    public ProductOrderStatus Status { get; set; } = ProductOrderStatus.PendingPayment;
+    public ProductOrderSource Source { get; set; }
+    public string GuestName { get; set; } = null!;
+    /// <summary>E.164.</summary>
+    public string GuestPhone { get; set; } = null!;
+    /// <summary>Заповнюється при успішній оплаті.</summary>
+    public Guid? ClientId { get; set; }
+    public decimal TotalAmount { get; set; }
+    public string Currency { get; set; } = "UAH";
+    public DateTimeOffset ReservationExpiresAt { get; set; }
+    public short PaymentAttempts { get; set; }
+    public DateTimeOffset? PaymentStartedAt { get; set; }
+    public DateTimeOffset? RefundStartedAt { get; set; }
+    /// <summary>Успішний платіж (beauty_payments.id).</summary>
+    public Guid? PaymentId { get; set; }
+    public DateTimeOffset? PaidAt { get; set; }
+    public DateTimeOffset? FulfilledAt { get; set; }
+    public Guid? FulfilledByUserId { get; set; }
+    public DateTimeOffset? ClosedAt { get; set; }
+    public ProductOrderCloseReason? CloseReason { get; set; }
+    public Guid? CancelledByUserId { get; set; }
+    public string? CancelNote { get; set; }
+    public decimal? RefundAmount { get; set; }
+}
+
+/// <summary>Рядок замовлення: знімки назви/одиниці/ціни. Append-only для app-ролі (REVOKE UPDATE, DELETE).</summary>
+public class ProductOrderLine : ITenantEntity
+{
+    public Guid Id { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid OrderId { get; set; }
+    public short LineNo { get; set; }
+    public Guid ProductId { get; set; }
+    public string ProductName { get; set; } = null!;
+    public ProductUnit Unit { get; set; }
+    /// <summary>Ціле 1..10.</summary>
+    public int Quantity { get; set; }
+    public decimal UnitPrice { get; set; }
+    public decimal LineTotal { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+// ---- Зображення товарів (ADR-027, контракт §33.22, human gate G1 пройдено). RLS ENABLE+FORCE, deferrable UNIQUE порядку - в міграції beauty_product_images ----
+
+/// <summary>Фото товару: метадані файлів на томі. Рядок незмінний, крім SortOrder (GRANT UPDATE (sort_order)); воркер доступу не має.</summary>
+public class ProductImage : ITenantEntity
+{
+    public Guid Id { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid ProductId { get; set; }
+    /// <summary>32 hex (16 випадкових байт); глобально унікальний, простір URL спільний для всіх tenant-ів.</summary>
+    public string StorageKey { get; set; } = null!;
+    /// <summary>Лише image/webp (CHECK).</summary>
+    public string Mime { get; set; } = "image/webp";
+    /// <summary>Сума варіантів, 1..10485760.</summary>
+    public int SizeBytes { get; set; }
+    /// <summary>Розміри найбільшого варіанта, 1..1600.</summary>
+    public short Width { get; set; }
+    public short Height { get; set; }
+    /// <summary>0..99; UNIQUE (tenant, product, sort_order) DEFERRABLE INITIALLY DEFERRED (лише в SQL міграції).</summary>
+    public short SortOrder { get; set; }
+    public Guid CreatedByUserId { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
 }

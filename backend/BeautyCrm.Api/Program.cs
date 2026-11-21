@@ -58,6 +58,8 @@ builder.Services
     .AddBeautyAuthApi(builder.Configuration, builder.Environment) // JWT, ролі, rate limit; без Auth:JwtSigningKey додаток не стартує
     .AddBeautyAiApi(builder.Configuration) // налаштування ШІ (TASK-716): ліміт ключів, мапінг винятків ШІ, swagger-фільтр секрету
     .AddBeautyPublicBookingApi(builder.Configuration, builder.Environment) // публічний запис /api/public/{slug} (TASK-688)
+    .AddBeautyProductOrdersApi(builder.Configuration, builder.Environment) // замовлення товарів клієнтами (ADR-026, §33)
+    .AddBeautyMediaApi(builder.Configuration, builder.Environment) // зображення товарів (ADR-027, §33.22)
     .AddBeautyAnalyticsApi(builder.Configuration); // ліміт деталей аналітики на користувача (TASK-764, §24.2)
 // Купони (TASK-778, §26.2): ліміти спроб і строк утримання пропозиції з конфігу (Coupons:*); значення обмежуються в CouponOptions
 builder.Services.Replace(ServiceDescriptor.Singleton(new BeautyCrm.Application.Features.BeautyCoupons.CouponOptions
@@ -131,6 +133,7 @@ app.UseMiddleware<AccessContextMiddleware>(); // ADR-023 §30.5 п.4: роль/�
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapBeautyPublicMedia(); // GET|HEAD /api/public/media/p/{file}: файли за випадковим ключем, без БД (ADR-027 §2.3)
 app.MapBeautyHealth(); // /healthz (liveness), /readyz (БД): анонімні, без деталей (TASK-800)
 
 app.Run();

@@ -43,6 +43,11 @@ services:
     env_file: ["${SECRETS_DIR}/api.env"]
     environment:
       ASPNETCORE_URLS: "http://+:8080"
+      # ADR-027 §8 (G4): медіа товарів. Без Media__RootPath функція вимкнена; з ним PublicBaseUrl обов'язковий (https, без шляху).
+      Media__RootPath: "/data/media"
+      Media__PublicBaseUrl: "${MEDIA_PUBLIC_BASE_URL:?set MEDIA_PUBLIC_BASE_URL (https://beauty.<DOMAIN>) in .env.compose}"
+    volumes:
+      - beauty_staging_media:/data/media # лише api; власник UID 1654 (одноразовий chown, README §5.1)
     depends_on:
       db: { condition: service_healthy }
     networks: [db_net, beauty_staging]
@@ -51,7 +56,7 @@ services:
     cap_drop: ["ALL"]
     read_only: true
     tmpfs: ["/tmp"]
-    mem_limit: 512m
+    mem_limit: 768m # ADR-027 §2.8: обробка зображень (було 512m)
     cpus: 1.0
     # healthcheck (/healthz) визначено в образі
 
@@ -106,3 +111,5 @@ networks:
 volumes:
   beauty_staging_pgdata:
     name: beauty_staging_pgdata
+  beauty_staging_media:
+    name: beauty_staging_media

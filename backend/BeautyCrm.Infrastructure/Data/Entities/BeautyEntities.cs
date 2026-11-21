@@ -437,7 +437,9 @@ public class Reminder : TenantEntity
 
 public class Payment : TenantEntity
 {
-    public Guid AppointmentId { get; set; }
+    /// <summary>Рівно одне з AppointmentId / ProductOrderId (ck_beauty_payments_subject, ADR-026 §2.7).</summary>
+    public Guid? AppointmentId { get; set; }
+    public Guid? ProductOrderId { get; set; }
     public decimal Amount { get; set; }
     public PaymentMethod Method { get; set; }
     public PaymentStatus Status { get; set; } = PaymentStatus.Pending;

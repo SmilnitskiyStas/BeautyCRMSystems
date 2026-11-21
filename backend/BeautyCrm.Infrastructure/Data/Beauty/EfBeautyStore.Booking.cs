@@ -19,7 +19,8 @@ namespace BeautyCrm.Infrastructure.Data.Beauty;
 /// не фільтрують за tenant_id вручну. Один scoped екземпляр на запит.
 /// </summary>
 public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector secrets, TimeProvider? clock = null,
-    Microsoft.Extensions.Configuration.IConfiguration? config = null, Microsoft.Extensions.Logging.ILogger<EfBeautyStore>? log = null)
+    Microsoft.Extensions.Configuration.IConfiguration? config = null, Microsoft.Extensions.Logging.ILogger<EfBeautyStore>? log = null,
+    BeautyCrm.Application.Features.BeautyProductImages.MediaOptions? media = null)
     : IBookingStore, ICancellationSettingsStore, ICatalogStore, IClientStore, IAnalyticsStore, IChannelSettingsStore, ILocationStore
 {
     private const string ExclusionViolation = "23P01";
@@ -393,7 +394,7 @@ public sealed partial class EfBeautyStore(BeautyDbContext db, ISecretProtector s
     {
         var p = await db.Payments.AsNoTracking().Where(p => p.AppointmentId == appointmentId)
             .OrderByDescending(p => p.CreatedAt).FirstOrDefaultAsync(ct);
-        return p is null ? null : new PaymentRecord(p.Id, p.AppointmentId, p.Amount,
+        return p is null ? null : new PaymentRecord(p.Id, appointmentId, p.Amount,
             EnumText<Ent.PaymentMethod>.ToDb(p.Method), EnumText<PaymentStatus>.ToDb(p.Status), p.ProviderPaymentId);
     }
 

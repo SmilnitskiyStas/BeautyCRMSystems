@@ -249,17 +249,33 @@ public sealed partial class InventoryService(IInventoryStore store, TimeProvider
         var purpose = req.Purpose?.Trim();
         if (purpose is null || !Purposes.Contains(purpose, StringComparer.Ordinal)) return V("invalid_purpose", "Purpose must be sale, salon_use or both.");
         if (req.PurchasePrice is { } pp && !ValidMoney(pp)) return V("invalid_price", "Price must be 0..1000000 with at most 2 decimals.");
+        // Роздрібна ціна (ADR-025 §12.x): обов'язкова для sale/both, для salon_use ігнорується (NULL). Без злиття з існуючим: PUT - повна заміна.
+        decimal? salePrice = null;
+        if (purpose != "salon_use")
+        {
+            if (req.SalePrice is not { } sp) return V("sale_price_required", "Sale price is required for products intended for sale.");
+            if (!ValidMoney(sp)) return V("invalid_price", "Price must be 0..1000000 with at most 2 decimals.");
+            salePrice = sp;
+        }
         if (req.MinStock is { } ms && !ValidMinStock(ms, unit)) return V("invalid_min_stock", "Minimum stock is invalid for this unit.");
         var note = NullIfEmpty(req.Note);
         if (note is { Length: > 500 }) return V("invalid_note", "Note is too long (max 500).");
         if (existing is not null && existing.HasMovements && !string.Equals(existing.Unit, unit, StringComparison.Ordinal))
             return UnitLocked;
         if (req.SupplierId is { } sid && await store.GetSupplierAsync(sid, ct) is null) return SupplierNotFound;
+        // Категорія з дерева (§32.27): має існувати в tenant; архівну не можна призначити, але товар, що вже в ній, редагується без зміни categoryId.
+        if (req.CategoryId is { } cid && cid != existing?.CategoryId)
+        {
+            if (await store.GetCategoryRowAsync(cid, ct) is not { } cat) return CategoryInvalid;
+            if (cat.IsArchived) return Error.Validation("category_archived", "The category is archived.");
+        }
 
         return new ProductData(name, category, unit, barcode, purpose, req.SupplierId,
-            req.PurchasePrice ?? existing?.PurchasePrice, req.MinStock,
-            req.TrackExpiry ?? existing?.TrackExpiry ?? false, existing is null ? true : req.IsActive ?? existing.IsActive, note);
+            req.PurchasePrice ?? existing?.PurchasePrice, salePrice, req.MinStock,
+            req.TrackExpiry ?? existing?.TrackExpiry ?? false, existing is null ? true : req.IsActive ?? existing.IsActive, note, req.CategoryId);
     }
+
+    private static readonly Error CategoryInvalid = Error.Validation("category_not_found", "Category not found.");
 
     private static readonly Error UnitLocked = Error.Validation("unit_locked", "The unit cannot be changed: the product already has movements.");
 
@@ -270,6 +286,7 @@ public sealed partial class InventoryService(IInventoryStore store, TimeProvider
         CatalogWriteOutcome.BarcodeTaken => Error.Conflict("barcode_taken", "A product with this barcode already exists."),
         CatalogWriteOutcome.UnitLocked => UnitLocked,
         CatalogWriteOutcome.PurposeLocked => Error.Validation("purpose_locked", "The product is used in service materials: remove it from the norms first."),
+        CatalogWriteOutcome.CategoryNotFound => CategoryInvalid,
         _ => Error.Conflict("barcode_taken", "A product with this barcode already exists."),
     };
 

@@ -102,7 +102,7 @@ public sealed class InventoryReviewFixApiTests(AuthApiFixture fx) : IClassFixtur
 
     private static async Task<Guid> NewProduct(HttpClient c, string token, string name, string unit = "pcs", decimal? price = null, decimal? minStock = null)
     {
-        var r = await Call(c, HttpMethod.Post, "/products", token, new { name, unit, purpose = "both", trackExpiry = false, purchasePrice = price, minStock });
+        var r = await Call(c, HttpMethod.Post, "/products", token, new { name, unit, purpose = "both", salePrice = 10, trackExpiry = false, purchasePrice = price, minStock });
         return (await Ok(r, HttpStatusCode.Created)).GetProperty("id").GetGuid();
     }
 
@@ -324,7 +324,7 @@ public sealed class InventoryReviewFixApiTests(AuthApiFixture fx) : IClassFixtur
         {
             var p = await NewProduct(c, t.Owner, "Race" + round, "ml");
             var receipt = Op(c, "/receipts", t.Owner, new { locationId = t.L1, lines = new[] { new { productId = p, quantity = 0.5m } } });
-            var change = Call(c, HttpMethod.Put, $"/products/{p}", t.Owner, new { name = "Race" + round, unit = "pcs", purpose = "both", trackExpiry = false });
+            var change = Call(c, HttpMethod.Put, $"/products/{p}", t.Owner, new { name = "Race" + round, unit = "pcs", purpose = "both", salePrice = 10, trackExpiry = false });
             var rs = await Task.WhenAll(receipt, change);
 
             var received = rs[0].StatusCode == HttpStatusCode.Created;

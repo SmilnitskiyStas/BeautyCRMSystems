@@ -5,6 +5,8 @@ import { useMovements } from "../hooks/use-inventory";
 import { MOVEMENT_LABEL, REASON_LABEL, movementLabel, formatMoney, formatSigned, isYmd } from "../inventory/logic";
 import type { MovementType } from "../inventory/types";
 import { dateTimeLabel } from "../format";
+import { saleMovementLabel } from "../inventory/orders";
+import Link from "next/link";
 import { InputField, InventoryPage, LoadMore, LocationChips, SelectField, locationName } from "./inventory-parts";
 import { Card, EmptyState, QueryState, Table, TD } from "./ui";
 
@@ -37,7 +39,7 @@ export function InventoryMovementsScreen() {
               value={type}
               onChange={setType}
               placeholder="Усі типи"
-              options={(["receipt", "write_off", "transfer_out", "transfer_in", "stocktake_adjust", "service_consumption"] as MovementType[]).map((t) => ({ value: t, label: MOVEMENT_LABEL[t] }))}
+              options={(["receipt", "write_off", "transfer_out", "transfer_in", "stocktake_adjust", "service_consumption", "sale", "sale_return"] as MovementType[]).map((t) => ({ value: t, label: MOVEMENT_LABEL[t] }))}
             />
             <InputField label="Від" type="date" value={from} onChange={setFrom} />
             <InputField label="До" type="date" value={to} onChange={setTo} error={rangeOk ? undefined : "Перевірте дати: «Від» не пізніше за «До»."} hint="Порожньо - останні 30 діб" />
@@ -61,7 +63,14 @@ export function InventoryMovementsScreen() {
                           </span>
                         ) : null}
                       </td>
-                      <td className={TD}>{movementLabel(m.type, m.isShortage)}</td>
+                      <td className={TD}>
+                        {m.type === "sale" || m.type === "sale_return" ? saleMovementLabel(m.type, m.productOrderId) : movementLabel(m.type, m.isShortage)}
+                        {m.productOrderId ? (
+                          <Link href="/beauty/inventory/orders" className="block text-[13px] font-semibold text-(--accent) underline">
+                            До замовлень
+                          </Link>
+                        ) : null}
+                      </td>
                       <td className={`${TD} font-semibold`}>{m.product.name}</td>
                       <td className={`${TD} whitespace-nowrap ${m.quantity < 0 ? "text-[#8A1F1F]" : "text-[#145A32]"}`}>{formatSigned(m.quantity, m.product.unit)}</td>
                       {scope.costs !== "none" ? <td className={TD}>{m.unitCost === null || m.unitCost === undefined ? "—" : formatMoney(m.unitCost)}</td> : null}

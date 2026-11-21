@@ -1,7 +1,7 @@
 namespace BeautyCrm.Application.Features.BeautyCommon;
 
 /// <summary>Expected business outcomes (mapped to HTTP by the API layer). Exceptions are for infrastructure failures only.</summary>
-public enum ErrorKind { Validation, NotFound, Conflict, PaymentFailed, Forbidden, TooManyRequests, Unavailable }
+public enum ErrorKind { Validation, NotFound, Conflict, PaymentFailed, Forbidden, TooManyRequests, Unavailable, PayloadTooLarge, UnsupportedMediaType }
 
 /// <param name="Conflicts">Додаткові дані 409 (напр. список записів, що блокують зміну вихідних, §17); у тіло відповіді як `conflicts`.</param>
 /// <param name="Extras">Додаткові поля тіла помилки (§30.11), напр. <c>permission</c>/<c>required</c> для 403 forbidden_role.</param>
@@ -18,6 +18,8 @@ public sealed record Error(ErrorKind Kind, string Code, string Message, object? 
     public static Error Conflict(string code, string message) => new(ErrorKind.Conflict, code, message);
     public static Error Forbidden(string code, string message) => new(ErrorKind.Forbidden, code, message);
     public static Error Unavailable(string code, string message) => new(ErrorKind.Unavailable, code, message);
+    public static Error TooLarge(string code, string message) => new(ErrorKind.PayloadTooLarge, code, message);
+    public static Error UnsupportedMedia(string code, string message) => new(ErrorKind.UnsupportedMediaType, code, message);
     public static Error TooMany(string code, string message) => new(ErrorKind.TooManyRequests, code, message);
     public static Error PaymentFailed(string code, string message) => new(ErrorKind.PaymentFailed, code, message);
 }

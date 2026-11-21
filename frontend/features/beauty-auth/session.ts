@@ -347,7 +347,8 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   const send = async (token: string) => {
     const headers = new Headers(init.headers);
     headers.set("Authorization", `Bearer ${token}`);
-    if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+    // FormData: boundary виставляє браузер, Content-Type вручну не ставимо.
+    if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
     try {
       return await fetch(`${API_URL}${path}`, { ...init, headers });
     } catch {

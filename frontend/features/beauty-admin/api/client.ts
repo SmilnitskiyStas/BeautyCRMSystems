@@ -12,8 +12,11 @@ import type {
   Page,
   Product,
   ProductDetail,
+  ProductImage,
   ProductQuery,
   ProductRequest,
+  Category,
+  CategoryRequest,
   ReceiptRequest,
   StockPage,
   StockQuery,
@@ -36,6 +39,7 @@ import type {
   StaffAlert,
 } from "../inventory/types";
 import type { TelegramLinkCreateRequest, TelegramLinkIssued, TelegramLinkStatus } from "../inventory/telegram-link";
+import type { CancelProductOrderResult, ProductOrder, ProductOrderCounts, ProductOrderQuery, ProductOrderSummary } from "../inventory/orders";
 import type {
   AccessSaveInput,
   AccessSaveResult,
@@ -434,12 +438,29 @@ export interface BeautyAdminApi {
   getInventoryProducts(q?: ProductQuery): Promise<Page<Product>>;
   /** GET /inventory/products/{id}: з `locationSettings` закладів scope. 404 product_not_found. */
   getInventoryProduct(id: string): Promise<ProductDetail>;
-  /** GET /inventory/categories: різні непорожні категорії. */
-  getInventoryCategories(): Promise<string[]>;
+  /** GET /inventory/categories?includeArchived: плоский список вузлів дерева категорій (до 3 рівнів). */
+  getInventoryCategories(includeArchived?: boolean): Promise<Category[]>;
+  /** POST /inventory/categories (`inventory.manage`): 409 category_name_taken, 422 category_depth|category_limit|category_not_found|category_archived|invalid_name. */
+  createInventoryCategory(r: CategoryRequest): Promise<Category>;
+  /** PUT /inventory/categories/{id}: перейменування / порядок. 404/422 category_not_found, 409 category_name_taken. */
+  updateInventoryCategory(id: string, r: { name: string; sortOrder?: number }): Promise<Category>;
+  /** PUT /inventory/categories/{id}/move: 422 category_cycle|category_depth|category_archived, 409 category_name_taken. */
+  moveInventoryCategory(id: string, r: { parentId?: string | null; sortOrder?: number }): Promise<Category>;
+  /** POST /inventory/categories/{id}/archive | /unarchive. */
+  archiveInventoryCategory(id: string): Promise<Category>;
+  unarchiveInventoryCategory(id: string): Promise<Category>;
+  /** DELETE /inventory/categories/{id}: 409 category_not_empty (є підкатегорії або товари). */
+  deleteInventoryCategory(id: string): Promise<void>;
   /** POST /inventory/products (`inventory.manage = all`): 409 barcode_taken, 422 invalid_*, 403 forbidden_role (`purchasePrice` без `costs = edit`). */
   createInventoryProduct(r: ProductRequest): Promise<Product>;
   /** PUT /inventory/products/{id}: + 422 unit_locked. */
   updateInventoryProduct(id: string, r: ProductRequest): Promise<Product>;
+  /** POST /inventory/products/{id}/images (multipart `file`, `inventory.manage = all`): 404 product_images_disabled, 413, 415, 422 too_many_images|image_*, 503 media_busy. */
+  addProductImage(productId: string, file: File): Promise<ProductImage>;
+  /** DELETE /inventory/products/{id}/images/{imageId}: 404 product_image_not_found. */
+  deleteProductImage(productId: string, imageId: string): Promise<void>;
+  /** PATCH /inventory/products/{id}/images/order: точна перестановка набору, 422 invalid_image_order. */
+  reorderProductImages(productId: string, imageIds: string[]): Promise<ProductImage[]>;
   /** PUT /inventory/products/{id}/locations/{locationId}: `minStock: null` = успадкувати мережевий. */
   setProductLocationSetting(productId: string, locationId: string, input: { minStock: number | null; isEnabled: boolean }): Promise<LocationSetting>;
   /** DELETE /inventory/products/{id}/locations/{locationId}: 404 setting_not_found. */
@@ -505,6 +526,20 @@ export interface BeautyAdminApi {
   markInventoryAlertRead(id: string): Promise<StaffAlert>;
   /** POST /inventory/alerts/read-all?locationId: `{updated}`. */
   markAllInventoryAlertsRead(locationId?: string): Promise<number>;
+
+  // ---------- ADR-026 / §33.13: замовлення товарів клієнтами (адмін-API CRM) ----------
+  /** GET /inventory/product-orders: `status` за замовчуванням `open`; 404 location_not_found; 422 invalid_status|invalid_range|invalid_cursor. */
+  getProductOrders(q?: ProductOrderQuery): Promise<Page<ProductOrderSummary>>;
+  /** GET /inventory/product-orders/counts: `{paid}` - оплачені до видачі (бейдж, опитування). */
+  getProductOrderCounts(): Promise<ProductOrderCounts>;
+  /** GET /inventory/product-orders/{id}: 404 product_order_not_found. */
+  getProductOrder(id: string): Promise<ProductOrder>;
+  /** POST /inventory/product-orders/{id}/fulfill (`inventory.manage`): `paid` -> `fulfilled`; 409 order_not_paid|refund_in_progress. */
+  fulfillProductOrder(id: string): Promise<ProductOrder>;
+  /** POST /inventory/product-orders/{id}/cancel `{reason?}`: 409 order_fulfilled|order_closed|payment_in_progress|refund_in_progress; 402 refund_failed; 422 invalid_reason. */
+  cancelProductOrder(id: string, reason?: string): Promise<CancelProductOrderResult>;
+  /** POST /inventory/product-orders/{id}/reconcile-payment: 409 nothing_to_reconcile|payment_in_progress. */
+  reconcileProductOrderPayment(id: string): Promise<ProductOrder>;
 
   // ---------- етап 2b (ADR-025 §12, §32.24): Telegram-сповіщення власнику (лише owner; все `no-store`) ----------
   /** GET /inventory/telegram/link: стан прив'язки (без chat id і токена). */

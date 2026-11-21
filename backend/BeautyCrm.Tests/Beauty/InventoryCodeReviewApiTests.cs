@@ -120,7 +120,7 @@ public sealed class InventoryCodeReviewApiTests(AuthApiFixture fx) : IClassFixtu
 
     private static async Task<Guid> NewProduct(HttpClient c, string token, string name, string unit = "pcs")
     {
-        var r = await Call(c, HttpMethod.Post, "/products", token, new { name, unit, purpose = "both", trackExpiry = false });
+        var r = await Call(c, HttpMethod.Post, "/products", token, new { name, unit, purpose = "both", salePrice = 10, trackExpiry = false });
         return (await Ok(r, HttpStatusCode.Created)).GetProperty("id").GetGuid();
     }
 
@@ -203,7 +203,7 @@ public sealed class InventoryCodeReviewApiTests(AuthApiFixture fx) : IClassFixtu
         var put = await Ok(await Call(c, HttpMethod.Put, $"/stocktakes/{id}/lines", t.Owner,
             new { expectedVersion = v, lines = new[] { new { productId = p, countedQuantity = 1.5m } } }));
         v = put.GetProperty("version").GetInt32();
-        await Ok(await Call(c, HttpMethod.Put, $"/products/{p}", t.Owner, new { name = "L9", unit = "pcs", purpose = "both" })); // рухів немає - зміна дозволена
+        await Ok(await Call(c, HttpMethod.Put, $"/products/{p}", t.Owner, new { name = "L9", unit = "pcs", purpose = "both", salePrice = 10 })); // рухів немає - зміна дозволена
         var bad = await Fails(await Call(c, HttpMethod.Post, $"/stocktakes/{id}/post", t.Owner, new { expectedVersion = v }), HttpStatusCode.UnprocessableEntity, "invalid_quantity");
         Assert.Equal(p, bad.GetProperty("productId").GetGuid());
         Assert.Equal(0m, await LevelAsync(t.Id, t.L1, p));

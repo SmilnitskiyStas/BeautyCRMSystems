@@ -7,8 +7,8 @@ export type StockUnit = "pcs" | "ml" | "g" | "l" | "kg" | "pack";
 export type ProductPurpose = "sale" | "salon_use" | "both";
 export type BatchStatus = "active" | "expiring" | "expired" | "empty";
 export type StockState = "all" | "low" | "in_stock" | "out_of_stock";
-export type MovementType = "receipt" | "write_off" | "transfer_out" | "transfer_in" | "stocktake_adjust" | "service_consumption" | "sale";
-export type OperationKind = "receipt" | "write_off" | "transfer" | "stocktake" | "service_consumption" | "sale";
+export type MovementType = "receipt" | "write_off" | "transfer_out" | "transfer_in" | "stocktake_adjust" | "service_consumption" | "sale" | "sale_return";
+export type OperationKind = "receipt" | "write_off" | "transfer" | "stocktake" | "service_consumption" | "sale" | "sale_return";
 export type WriteOffReason = "expired" | "damaged" | "lost" | "internal_use" | "correction" | "other";
 export type StocktakeStatus = "draft" | "posted" | "cancelled";
 export type CostsAccess = "none" | "view" | "edit";
@@ -42,22 +42,58 @@ export interface ProductRef {
   isActive: boolean;
 }
 
+/** Вузол дерева категорій (плоский список; `productCount` - лише прямі товари). */
+export interface Category {
+  id: string;
+  parentId: string | null;
+  name: string;
+  sortOrder: number;
+  isArchived: boolean;
+  productCount: number;
+  childCount: number;
+}
+export interface CategoryRequest {
+  name: string;
+  parentId?: string | null;
+  sortOrder?: number;
+}
+
 export interface Product {
   id: string;
   name: string;
+  /** Старе текстове поле (лише для читання; нове редагується через дерево `categoryId`). */
   category: string | null;
+  /** Вузол дерева категорій. */
+  categoryId: string | null;
+  /** Шлях у дереві, напр. «Волосся › Фарби». */
+  categoryPath: string | null;
   unit: StockUnit;
   barcode: string | null;
   purpose: ProductPurpose;
   supplier: NamedRef | null;
   purchasePrice?: number | null;
+  /** Роздрібна ціна за одиницю: обов'язкова для `sale`/`both`, `null` для `salon_use` (і для старих товарів без ціни). Видно всім з `inventory.view`. */
+  salePrice: number | null;
   minStock: number | null;
   trackExpiry: boolean;
   isActive: boolean;
   note: string | null;
   hasMovements: boolean;
+  /** thumbUrl першого фото (§33.22); відсутнє/null = немає фото або функцію вимкнено. */
+  imageUrl?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+/** Фото товару (ADR-027, §33.22.5). */
+export interface ProductImage {
+  id: string;
+  url: string;
+  thumbUrl: string;
+  width: number;
+  height: number;
+  sizeBytes: number;
+  sortOrder: number;
+  createdAt: string;
 }
 export interface LocationSetting {
   locationId: string;
@@ -67,16 +103,20 @@ export interface LocationSetting {
 }
 export interface ProductDetail extends Product {
   locationSettings: LocationSetting[];
+  images: ProductImage[];
 }
 export interface ProductRequest {
   name: string;
-  category?: string | null;
+  /** Вузол дерева категорій; `null` - без категорії. Старе текстове `category` з форми не надсилається. */
+  categoryId?: string | null;
   unit: StockUnit;
   barcode?: string | null;
   purpose: ProductPurpose;
   supplierId?: string | null;
   /** Лише за `inventory.costs = edit`; без права поле не передається взагалі. */
   purchasePrice?: number | null;
+  /** Обов'язкова для `sale`/`both`; для `salon_use` надсилається `null`. */
+  salePrice?: number | null;
   minStock?: number | null;
   trackExpiry?: boolean;
   isActive?: boolean;
@@ -164,6 +204,8 @@ export interface Movement {
   counterpartLocationId: string | null;
   stocktakeId: string | null;
   createdBy: NamedRef | null;
+  /** §33.14: замовлення товару, з яким пов'язано рух (`sale|sale_return`); поле адитивне, старий сервер його не віддає. */
+  productOrderId?: string | null;
 }
 export interface OperationSummary {
   id: string;
@@ -177,6 +219,8 @@ export interface OperationSummary {
   productCount: number;
   /** §32.17: лише для `service_consumption` (id запису без ПД). */
   appointmentId: string | null;
+  /** §33.14: лише для `sale|sale_return`. */
+  productOrderId?: string | null;
   totalCost?: number | null;
 }
 export interface Operation extends OperationSummary {

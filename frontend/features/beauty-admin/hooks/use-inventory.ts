@@ -5,6 +5,7 @@ import { BeautyApiError } from "@/features/beauty-auth/errors";
 import { beautyApi } from "../api";
 import type {
   BatchQuery,
+  CategoryRequest,
   MovementQuery,
   OperationQuery,
   Page,
@@ -46,8 +47,9 @@ function usePaged<T, Q extends { cursor?: string }>(key: readonly unknown[], fet
 export const useInventoryProducts = (q: ProductQuery = {}, enabled = true) => usePaged(K.products(q), (p: ProductQuery) => beautyApi.getInventoryProducts(p), q, enabled);
 export const useInventoryProduct = (id: string | null) =>
   useQuery({ queryKey: K.product(id ?? ""), queryFn: () => beautyApi.getInventoryProduct(id!), enabled: id !== null, retry });
+/** Плоский список вузлів дерева (разом з архівними: товар може лежати в архівній, а фільтр рахує піддерево). */
 export const useInventoryCategories = (enabled = true) =>
-  useQuery({ queryKey: K.categories, queryFn: () => beautyApi.getInventoryCategories(), enabled, retry });
+  useQuery({ queryKey: K.categories, queryFn: () => beautyApi.getInventoryCategories(true), enabled, retry });
 export const useSuppliers = (q: SupplierQuery = {}, enabled = true) => usePaged(K.suppliers(q), (p: SupplierQuery) => beautyApi.getSuppliers(p), q, enabled);
 
 export function useStock(q: StockQuery | null) {
@@ -91,6 +93,29 @@ export function useSaveProduct(id: string | null) {
     mutationFn: (r: ProductRequest) => (id ? beautyApi.updateInventoryProduct(id, r) : beautyApi.createInventoryProduct(r)),
     onSuccess: done,
   });
+}
+/** Фото товару (§33.22): завантаження, видалення, порядок. `onSettled`: після помилки (напр. invalid_image_order) список перечитується. */
+export function useProductImageMutations(productId: string) {
+  const done = useInvalidateInventory();
+  const opts = { onSettled: done };
+  return {
+    upload: useMutation({ mutationFn: (file: File) => beautyApi.addProductImage(productId, file), ...opts }),
+    remove: useMutation({ mutationFn: (imageId: string) => beautyApi.deleteProductImage(productId, imageId), ...opts }),
+    reorder: useMutation({ mutationFn: (imageIds: string[]) => beautyApi.reorderProductImages(productId, imageIds), ...opts }),
+  };
+}
+/** Мутації дерева категорій; інвалідуємо весь склад (змінюються і `categoryPath` товарів, і лічильники). */
+export function useCategoryMutations() {
+  const done = useInvalidateInventory();
+  const opts = { onSuccess: done };
+  return {
+    create: useMutation({ mutationFn: (r: CategoryRequest) => beautyApi.createInventoryCategory(r), ...opts }),
+    rename: useMutation({ mutationFn: (v: { id: string; name: string }) => beautyApi.updateInventoryCategory(v.id, { name: v.name }), ...opts }),
+    move: useMutation({ mutationFn: (v: { id: string; parentId: string | null }) => beautyApi.moveInventoryCategory(v.id, { parentId: v.parentId }), ...opts }),
+    archive: useMutation({ mutationFn: (id: string) => beautyApi.archiveInventoryCategory(id), ...opts }),
+    unarchive: useMutation({ mutationFn: (id: string) => beautyApi.unarchiveInventoryCategory(id), ...opts }),
+    remove: useMutation({ mutationFn: (id: string) => beautyApi.deleteInventoryCategory(id), ...opts }),
+  };
 }
 export function useSaveSupplier(id: string | null) {
   const done = useInvalidateInventory();
