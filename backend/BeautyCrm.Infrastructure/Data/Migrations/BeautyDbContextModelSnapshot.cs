@@ -3791,6 +3791,93 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductImage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by_user_id");
+
+                    b.Property<short>("Height")
+                        .HasColumnType("smallint")
+                        .HasColumnName("height");
+
+                    b.Property<string>("Mime")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("mime");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("product_id");
+
+                    b.Property<int>("SizeBytes")
+                        .HasColumnType("integer")
+                        .HasColumnName("size_bytes");
+
+                    b.Property<short>("SortOrder")
+                        .HasColumnType("smallint")
+                        .HasColumnName("sort_order");
+
+                    b.Property<string>("StorageKey")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character(32)")
+                        .HasColumnName("storage_key")
+                        .IsFixedLength();
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<short>("Width")
+                        .HasColumnType("smallint")
+                        .HasColumnName("width");
+
+                    b.HasKey("Id")
+                        .HasName("pk_beauty_product_images");
+
+                    b.HasAlternateKey("TenantId", "Id")
+                        .HasName("ak_beauty_product_images_tenant_id_id");
+
+                    b.HasIndex("StorageKey")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_product_images_storage_key");
+
+                    b.HasIndex("TenantId", "CreatedByUserId")
+                        .HasDatabaseName("ix_beauty_product_images_created_by");
+
+                    b.HasIndex("TenantId", "ProductId", "SortOrder")
+                        .HasDatabaseName("ix_beauty_product_images_product");
+
+                    b.ToTable("beauty_product_images", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_beauty_product_images_height", "height BETWEEN 1 AND 1600");
+
+                            t.HasCheckConstraint("ck_beauty_product_images_mime", "mime = 'image/webp'");
+
+                            t.HasCheckConstraint("ck_beauty_product_images_size", "size_bytes > 0 AND size_bytes <= 10485760");
+
+                            t.HasCheckConstraint("ck_beauty_product_images_sort_order", "sort_order BETWEEN 0 AND 99");
+
+                            t.HasCheckConstraint("ck_beauty_product_images_storage_key", "storage_key ~ '^[0-9a-f]{32}$'");
+
+                            t.HasCheckConstraint("ck_beauty_product_images_width", "width BETWEEN 1 AND 1600");
+                        });
+                });
+
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductLocationSetting", b =>
                 {
                     b.Property<Guid>("Id")
@@ -7693,6 +7780,32 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasPrincipalKey("TenantId", "Id")
                         .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_beauty_product_categories_beauty_product_categories_tenant_");
+                });
+
+            modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductImage", b =>
+                {
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_product_images_tenants_tenant_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CreatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_product_images_users_tenant_id_created_by_user_id");
+
+                    b.HasOne("BeautyCrm.Infrastructure.Data.Entities.Product", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ProductId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_beauty_product_images_beauty_products_tenant_id_product_id");
                 });
 
             modelBuilder.Entity("BeautyCrm.Infrastructure.Data.Entities.ProductLocationSetting", b =>

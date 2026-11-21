@@ -77,6 +77,7 @@ public class BeautyDbContext : DbContext
     public DbSet<StockLevel> StockLevels => Set<StockLevel>();
     public DbSet<ProductOrder> ProductOrders => Set<ProductOrder>();
     public DbSet<ProductOrderLine> ProductOrderLines => Set<ProductOrderLine>();
+    public DbSet<ProductImage> ProductImages => Set<ProductImage>();
     public DbSet<StockOperation> StockOperations => Set<StockOperation>();
     public DbSet<StockBatch> StockBatches => Set<StockBatch>();
     public DbSet<StockMovement> StockMovements => Set<StockMovement>();
@@ -1091,6 +1092,29 @@ public class BeautyDbContext : DbContext
             b.HasIndex(x => new { x.TenantId, x.OrderId, x.ProductId }).IsUnique().HasDatabaseName("ux_beauty_product_order_lines_product");
             b.HasIndex(x => new { x.TenantId, x.OrderId, x.LineNo }).IsUnique().HasDatabaseName("ux_beauty_product_order_lines_line_no");
             b.HasIndex(x => new { x.TenantId, x.ProductId }).HasDatabaseName("ix_beauty_product_order_lines_product");
+        });
+
+        mb.Entity<ProductImage>(b =>
+        {
+            KeyOnly(b, "beauty_product_images", t =>
+            {
+                t.HasCheckConstraint("ck_beauty_product_images_storage_key", "storage_key ~ '^[0-9a-f]{32}$'");
+                t.HasCheckConstraint("ck_beauty_product_images_mime", "mime = 'image/webp'");
+                t.HasCheckConstraint("ck_beauty_product_images_size", "size_bytes > 0 AND size_bytes <= 10485760");
+                t.HasCheckConstraint("ck_beauty_product_images_width", "width BETWEEN 1 AND 1600");
+                t.HasCheckConstraint("ck_beauty_product_images_height", "height BETWEEN 1 AND 1600");
+                t.HasCheckConstraint("ck_beauty_product_images_sort_order", "sort_order BETWEEN 0 AND 99");
+            });
+            b.Property(x => x.StorageKey).HasMaxLength(32).IsFixedLength();
+            b.Property(x => x.Mime).HasMaxLength(32);
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            b.HasOne<Tenant>().WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+            FkTo<ProductImage, Product>(b, "ProductId", DeleteBehavior.Cascade);
+            FkTo<ProductImage, User>(b, "CreatedByUserId", DeleteBehavior.Restrict);
+            b.HasIndex(x => x.StorageKey).IsUnique().HasDatabaseName("ux_beauty_product_images_storage_key");
+            b.HasIndex(x => new { x.TenantId, x.ProductId, x.SortOrder }).HasDatabaseName("ix_beauty_product_images_product");
+            b.HasIndex(x => new { x.TenantId, x.CreatedByUserId }).HasDatabaseName("ix_beauty_product_images_created_by");
+            // + ux_beauty_product_images_order UNIQUE (tenant_id, product_id, sort_order) DEFERRABLE INITIALLY DEFERRED - лише в SQL міграції
         });
 
         mb.Entity<StaffAlert>(b =>

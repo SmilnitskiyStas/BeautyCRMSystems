@@ -41,7 +41,10 @@ public sealed class ProductOrdersOptions
 
 public sealed record PublicOrderLocationDto(Guid Id, string Name, string? Address);
 
-public sealed record PublicProductDto(Guid Id, string Name, string Unit, decimal Price, string? CategoryPath, bool InStock);
+/// <param name="ImageUrl">V1.1 (ADR-027): thumbUrl першого фото або null.</param>
+/// <param name="Images">V1.1: уся галерея за sort_order (завжди масив).</param>
+public sealed record PublicProductDto(Guid Id, string Name, string Unit, decimal Price, string? CategoryPath, bool InStock,
+    string? ImageUrl = null, IReadOnlyList<BeautyProductImages.PublicProductImageDto>? Images = null);
 
 public sealed record PublicProductCatalogDto(
     PublicOrderLocationDto Location, string Currency, int ReservationMinutes, int MaxLines, int MaxQuantityPerLine,
@@ -78,7 +81,8 @@ public sealed record CreateProductOrderRequest(
 
 public sealed record OrderLocationRow(Guid Id, string Name, string? Address, string Timezone);
 
-public sealed record CatalogRow(Guid Id, string Name, string Unit, decimal Price, string? CategoryPath, bool InStock);
+public sealed record CatalogRow(Guid Id, string Name, string Unit, decimal Price, string? CategoryPath, bool InStock,
+    IReadOnlyList<BeautyProductImages.ProductImageRow>? Images = null);
 
 public sealed record CatalogData(OrderLocationRow Location, IReadOnlyList<CatalogRow> Items, bool Truncated);
 

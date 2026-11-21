@@ -121,7 +121,8 @@ public static class HostingSetup
                 h["X-Frame-Options"] = "DENY";
                 if (!development)
                 {
-                    h["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'";
+                    if (!h.ContainsKey("Content-Security-Policy")) // файли зображень (ADR-027) мають власну CSP з sandbox
+                        h["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'";
                     if (http.Request.IsHttps) h["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";
                 }
                 return Task.CompletedTask;

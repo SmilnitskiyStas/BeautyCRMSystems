@@ -25,7 +25,7 @@ function contentSecurityPolicy(): string {
     "default-src 'self'",
     `script-src 'self' 'unsafe-inline'${isProd ? "" : " 'unsafe-eval'"}`,
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
+    `img-src 'self' data: blob:${api ? ` ${api}` : ""}`,
     "font-src 'self'",
     `connect-src 'self'${api ? ` ${api}` : ""}${isProd ? "" : " ws: wss:"}`,
     "object-src 'none'",

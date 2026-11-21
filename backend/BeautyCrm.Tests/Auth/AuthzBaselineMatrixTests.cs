@@ -216,6 +216,10 @@ public sealed class AuthzBaselineMatrixTests(AuthApiFixture fx) : IClassFixture<
         MgmtFilter("PUT", "api/beauty/inventory/products/{id:guid}", "404"),
         MgmtFilter("PUT", "api/beauty/inventory/products/{id:guid}/locations/{locationId:guid}", "404"),
         MgmtFilter("DELETE", "api/beauty/inventory/products/{id:guid}/locations/{locationId:guid}", "404"),
+        // ---- фото товарів (ADR-027 §33.22): inventory.manage = all; тестовий хост без Media:RootPath -> 404 product_images_disabled
+        MgmtFilter("POST", "api/beauty/inventory/products/{id:guid}/images", "404"),
+        MgmtFilter("DELETE", "api/beauty/inventory/products/{id:guid}/images/{imageId:guid}", "404"),
+        MgmtFilter("PATCH", "api/beauty/inventory/products/{id:guid}/images/order", "404"),
         MgmtFilter("GET", "api/beauty/inventory/suppliers", "200"),
         MgmtFilter("POST", "api/beauty/inventory/suppliers", "422"),
         MgmtFilter("PUT", "api/beauty/inventory/suppliers/{id:guid}", "404"),

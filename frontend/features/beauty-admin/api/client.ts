@@ -12,6 +12,7 @@ import type {
   Page,
   Product,
   ProductDetail,
+  ProductImage,
   ProductQuery,
   ProductRequest,
   Category,
@@ -454,6 +455,12 @@ export interface BeautyAdminApi {
   createInventoryProduct(r: ProductRequest): Promise<Product>;
   /** PUT /inventory/products/{id}: + 422 unit_locked. */
   updateInventoryProduct(id: string, r: ProductRequest): Promise<Product>;
+  /** POST /inventory/products/{id}/images (multipart `file`, `inventory.manage = all`): 404 product_images_disabled, 413, 415, 422 too_many_images|image_*, 503 media_busy. */
+  addProductImage(productId: string, file: File): Promise<ProductImage>;
+  /** DELETE /inventory/products/{id}/images/{imageId}: 404 product_image_not_found. */
+  deleteProductImage(productId: string, imageId: string): Promise<void>;
+  /** PATCH /inventory/products/{id}/images/order: точна перестановка набору, 422 invalid_image_order. */
+  reorderProductImages(productId: string, imageIds: string[]): Promise<ProductImage[]>;
   /** PUT /inventory/products/{id}/locations/{locationId}: `minStock: null` = успадкувати мережевий. */
   setProductLocationSetting(productId: string, locationId: string, input: { minStock: number | null; isEnabled: boolean }): Promise<LocationSetting>;
   /** DELETE /inventory/products/{id}/locations/{locationId}: 404 setting_not_found. */

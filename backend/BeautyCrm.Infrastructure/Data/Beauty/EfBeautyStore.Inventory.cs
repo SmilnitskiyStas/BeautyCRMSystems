@@ -1,4 +1,5 @@
 using BeautyCrm.Application.Features.BeautyInventory;
+using BeautyCrm.Application.Features.BeautyProductImages;
 using BeautyCrm.Infrastructure.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -33,11 +34,11 @@ public sealed partial class EfBeautyStore : IInventoryStore
     private static ProductRef ToRef(Product p) =>
         new(p.Id, p.Name, EnumText<ProductUnit>.ToDb(p.Unit), EnumText<ProductPurpose>.ToDb(p.Purpose), p.Category, p.Barcode, p.IsActive);
 
-    private static ProductDto ToDto(Product p, IReadOnlyDictionary<Guid, string> suppliers, bool hasMovements, IReadOnlyDictionary<Guid, string> categoryPaths) =>
+    private static ProductDto ToDto(Product p, IReadOnlyDictionary<Guid, string> suppliers, bool hasMovements, IReadOnlyDictionary<Guid, string> categoryPaths, string? imageUrl = null) =>
         new(p.Id, p.Name, p.Category, EnumText<ProductUnit>.ToDb(p.Unit), p.Barcode, EnumText<ProductPurpose>.ToDb(p.Purpose),
             p.SupplierId is { } s && suppliers.TryGetValue(s, out var sn) ? new InventoryNamedRef(s, sn) : null,
             p.PurchasePrice, p.SalePrice, p.MinStock, p.TrackExpiry, p.IsActive, p.Note, hasMovements, p.CreatedAt, p.UpdatedAt,
-            p.CategoryId, p.CategoryId is { } c && categoryPaths.TryGetValue(c, out var path) ? path : null);
+            p.CategoryId, p.CategoryId is { } c && categoryPaths.TryGetValue(c, out var path) ? path : null, imageUrl);
 
     private async Task<Dictionary<Guid, string>> SupplierNamesAsync(CancellationToken ct) =>
         await db.Suppliers.AsNoTracking().ToDictionaryAsync(s => s.Id, s => s.Name, ct);
@@ -58,7 +59,8 @@ public sealed partial class EfBeautyStore : IInventoryStore
         var products = await db.Products.AsNoTracking().ToListAsync(ct);
         var suppliers = await SupplierNamesAsync(ct);
         var paths = await CategoryPathsAsync(ct);
-        return [.. products.Select(p => ToDto(p, suppliers, false, paths))];
+        var images = await ImagesByProductAsync(null, ct); // ADR-027: прев'ю першого фото, один запит
+        return [.. products.Select(p => ToDto(p, suppliers, false, paths, FirstThumb(images, p.Id)))];
     }
 
     /// <summary>EXISTS по індексу (tenant, product, occurred_at) лише для переданих id (сторінка), без сканування всього журналу.</summary>
@@ -87,9 +89,11 @@ public sealed partial class EfBeautyStore : IInventoryStore
         var moved = await db.StockMovements.AsNoTracking().AnyAsync(m => m.ProductId == id, ct);
         var settings = await db.ProductLocationSettings.AsNoTracking().Where(s => s.ProductId == id).OrderBy(s => s.LocationId)
             .Select(s => new LocationSettingDto(s.LocationId, s.MinStock, s.IsEnabled, s.UpdatedAt)).ToListAsync(ct);
-        var d = ToDto(p, suppliers, moved, await CategoryPathsAsync(ct));
+        var images = await ImagesByProductAsync([id], ct);
+        var d = ToDto(p, suppliers, moved, await CategoryPathsAsync(ct), FirstThumb(images, id));
         return new ProductDetailDto(d.Id, d.Name, d.Category, d.Unit, d.Barcode, d.Purpose, d.Supplier, d.PurchasePrice, d.SalePrice, d.MinStock, d.TrackExpiry,
-            d.IsActive, d.Note, d.HasMovements, d.CreatedAt, d.UpdatedAt, settings, d.CategoryId, d.CategoryPath);
+            d.IsActive, d.Note, d.HasMovements, d.CreatedAt, d.UpdatedAt, settings, d.CategoryId, d.CategoryPath, d.ImageUrl,
+            [.. images.GetValueOrDefault(id, []).Select(r => r.ToDto(media!))]);
     }
 
     public async Task<ProductDto?> GetProductByBarcodeAsync(string code, CancellationToken ct)
@@ -99,7 +103,8 @@ public sealed partial class EfBeautyStore : IInventoryStore
     }
 
     private async Task<ProductDto> ListProductsDtoAsync(Product p, CancellationToken ct) =>
-        ToDto(p, await SupplierNamesAsync(ct), await db.StockMovements.AsNoTracking().AnyAsync(m => m.ProductId == p.Id, ct), await CategoryPathsAsync(ct));
+        ToDto(p, await SupplierNamesAsync(ct), await db.StockMovements.AsNoTracking().AnyAsync(m => m.ProductId == p.Id, ct), await CategoryPathsAsync(ct),
+            FirstThumb(await ImagesByProductAsync([p.Id], ct), p.Id));
 
     public async Task<IReadOnlyList<string>> ListCategoriesAsync(CancellationToken ct) =>
         [.. (await db.Products.AsNoTracking().Where(p => p.Category != null && p.Category != "").Select(p => p.Category!).Distinct().ToListAsync(ct))

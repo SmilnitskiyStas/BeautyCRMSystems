@@ -23,7 +23,11 @@ export default function AppointmentsScreen() {
         text: t("appointments.wipeConfirmYes"),
         style: "destructive",
         onPress: async () => {
-          await localStore.wipeAll();
+          try {
+            await localStore.wipeAll();
+          } catch {
+            return Alert.alert(t("appointments.wipeFailed"));
+          }
           qc.clear();
           await list.refetch();
           Alert.alert(t("appointments.wiped"));

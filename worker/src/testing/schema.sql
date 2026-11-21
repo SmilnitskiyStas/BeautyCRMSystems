@@ -8246,3 +8246,115 @@ BEGIN
 END $EF$;
 COMMIT;
 
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261121110933_beauty_product_images') THEN
+    CREATE TABLE beauty_product_images (
+        id uuid NOT NULL DEFAULT (gen_random_uuid()),
+        tenant_id uuid NOT NULL,
+        product_id uuid NOT NULL,
+        storage_key character(32) NOT NULL,
+        mime character varying(32) NOT NULL,
+        size_bytes integer NOT NULL,
+        width smallint NOT NULL,
+        height smallint NOT NULL,
+        sort_order smallint NOT NULL,
+        created_by_user_id uuid NOT NULL,
+        created_at timestamp with time zone NOT NULL DEFAULT (now()),
+        CONSTRAINT pk_beauty_product_images PRIMARY KEY (id),
+        CONSTRAINT ak_beauty_product_images_tenant_id_id UNIQUE (tenant_id, id),
+        CONSTRAINT ck_beauty_product_images_height CHECK (height BETWEEN 1 AND 1600),
+        CONSTRAINT ck_beauty_product_images_mime CHECK (mime = 'image/webp'),
+        CONSTRAINT ck_beauty_product_images_size CHECK (size_bytes > 0 AND size_bytes <= 10485760),
+        CONSTRAINT ck_beauty_product_images_sort_order CHECK (sort_order BETWEEN 0 AND 99),
+        CONSTRAINT ck_beauty_product_images_storage_key CHECK (storage_key ~ '^[0-9a-f]{32}$'),
+        CONSTRAINT ck_beauty_product_images_width CHECK (width BETWEEN 1 AND 1600),
+        CONSTRAINT fk_beauty_product_images_beauty_products_tenant_id_product_id FOREIGN KEY (tenant_id, product_id) REFERENCES beauty_products (tenant_id, id) ON DELETE CASCADE,
+        CONSTRAINT fk_beauty_product_images_tenants_tenant_id FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE RESTRICT,
+        CONSTRAINT fk_beauty_product_images_users_tenant_id_created_by_user_id FOREIGN KEY (tenant_id, created_by_user_id) REFERENCES users (tenant_id, id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261121110933_beauty_product_images') THEN
+    CREATE INDEX ix_beauty_product_images_created_by ON beauty_product_images (tenant_id, created_by_user_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261121110933_beauty_product_images') THEN
+    CREATE INDEX ix_beauty_product_images_product ON beauty_product_images (tenant_id, product_id, sort_order);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261121110933_beauty_product_images') THEN
+    CREATE UNIQUE INDEX ux_beauty_product_images_storage_key ON beauty_product_images (storage_key);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261121110933_beauty_product_images') THEN
+
+    ALTER TABLE beauty_product_images ADD CONSTRAINT ux_beauty_product_images_order
+        UNIQUE (tenant_id, product_id, sort_order) DEFERRABLE INITIALLY DEFERRED;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261121110933_beauty_product_images') THEN
+    ALTER TABLE beauty_product_images ENABLE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261121110933_beauty_product_images') THEN
+    ALTER TABLE beauty_product_images FORCE ROW LEVEL SECURITY;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261121110933_beauty_product_images') THEN
+
+    CREATE POLICY tenant_isolation ON beauty_product_images
+        USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261121110933_beauty_product_images') THEN
+
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_class WHERE oid = to_regclass('public.beauty_product_images') AND relrowsecurity AND relforcerowsecurity
+        ) THEN
+            RAISE EXCEPTION 'FORCE ROW LEVEL SECURITY is not enabled on beauty_product_images';
+        END IF;
+    END
+    $$;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261121110933_beauty_product_images') THEN
+    INSERT INTO "__EFMigrationsHistory" (migration_id, product_version)
+    VALUES ('20261121110933_beauty_product_images', '8.0.11');
+    END IF;
+END $EF$;
+COMMIT;
+

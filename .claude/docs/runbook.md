@@ -211,6 +211,26 @@ docker exec beautycrm psql -U postgres -d beautycrm \
 - **Оплата «в процесі» і reconcile:** якщо оплата зависла понад `ProductOrders:PaymentStaleSeconds` (за замовч. 120 с), повтор `POST …/pay` від клієнта або дія CRM «Перевірити оплату» (`POST /api/beauty/inventory/product-orders/{id}/reconcile-payment`) доводить замовлення до `paid` або `refunded`. Відповіді reconcile — див. контракт §33.13 (v0.41 п. 5). Воркер лише логує зависі > 30 хв (`stuck`); фонового reconcile в backend немає.
 - **Відкат:** вимкнути `ProductOrders:Enabled` (і за потреби `WORKER_PRODUCT_ORDERS_ENABLED`). Публічний продаж зупиняється; оплачені замовлення видаються або повертаються з CRM, бо CRM від прапора не залежить. Код не відкочувати разом зі схемою.
 
+### 2f. Зображення товарів (ADR-027, контракт §33.22)
+
+Статус: код і міграція в гілці; застосування на staging/prod — human gates G3–G6 (ADR-027 §6). Агенти цих кроків не виконують.
+
+- **Міграція (G3):** `20261121110933_beauty_product_images` (від `beautycrm_owner`, Up). Після Up перевірити: таблиця `beauty_product_images`, `relforcerowsecurity = true`, UNIQUE `ux_beauty_product_images_storage_key`, deferrable `ux_beauty_product_images_order`. GRANT синхронно в `scripts/dev/setup-db.ps1` і `deploy/staging/db/grants.sql`: `REVOKE UPDATE`, потім `SELECT, INSERT, DELETE` і `UPDATE (sort_order)` для app-ролі. Воркер доступу не має. `Down` відмовляє, якщо є хоч один рядок. Відкат схеми — лише на порожній таблиці або з бекапом і рішенням людини.
+- **Вмикання (fail closed):** функція працює лише за наявності `Media__RootPath`. Без нього CRM-маршрути фото віддають `404 product_images_disabled`, DTO — `imageUrl = null`, `images = []`, роздача — `404`. Модуль `beauty_inventory` потрібен для CRM-маршрутів. `ProductOrders:Enabled` на фото не впливає.
+- **Том (G4, одноразово до першого `up api` із новим compose):** `docker volume create beauty_staging_media`, затим `chown 1654:1654` і `chmod 0750` на корінь тома (`deploy/staging/README.md` §5.1). Том монтується лише в `api` як `/data/media`. Якщо тома немає або він не пишеться, API не стартує (probe запису в `MediaSetup`). Це навмисно: помилка видна при старті, а не як `500` на upload.
+- **nginx (G4):** окремий `location` для `…/products/{id}/images` з `client_max_body_size 11m` (`deploy/staging/README.md` §6.3). Решта `/api/` лишається з `2m`. Перед reload — `nginx -t`. Q1 (basic auth для `/api/public/media/`) — рішення людини, за замовчуванням наслідує `/api/public/`.
+- **Пам'ять (G4):** `mem_limit` api — 768m у `docker-compose.staging.yml`. Не знижувати без перерахунку бюджету (ADR-027 §12.2 п.6).
+- **Бекап (G5):** спершу `pg_dump` (§5), одразу після нього tar тома (`deploy/staging/README.md` §5.1). Відновлення: `pg_restore`, потім розпакування в порожній том з `chown -R 1654:1654` і `chmod` (теки 0750, файли 0640). Неузгоджений бекап безпечний: фото без рядка прибере очищувач, рядок без файлу дає `404` і Warning `media_missing_files`. Перед першим реальним відновленням — перевірка на копії. Архів тома зараз не зашифровано (m10, відкрито).
+- **Очищувач (`Media__SweepMode`), порядок переходу `off` → `dry-run` → `delete` (G6):**
+  1. Встановити `dry-run` у `api.env` і перезапустити api. Перший запуск через 10 хв після старту, далі кожні 6 год.
+  2. Дочекатися щонайменше одного запуску. Перевірити логи: `media_sweep tenant=… mode=dry-run … candidates=… deleted=0`, `media_missing_files`, `media_sweep_aborted`.
+  3. Якщо кандидатів більше, ніж очікувалось, або є `media_sweep_aborted` без зрозумілої причини, **не переходити на `delete`**. Спершу з'ясувати причину (зазвичай неповний том або бекап).
+  4. `delete` вмикає людина після перевірки. Видалення файлів незворотне.
+- **Файли видаленого tenant-а (рідкісна дія людини):** очищувач пропускає tenant, якого не видно в `tenants` (ADR-027 §2.9), тож його файли лишаються. Прибирати вручну лише після: (a) бекапу тома й БД; (b) переконання, що tenant відсутній у `tenants`; (c) зібрати ключі з `t/<tenantId>/`; (d) видалити `p/<kk>/<key>-400.webp`, `p/<kk>/<key>-1600.webp` і маркери `t/<tenantId>/<key>`. Не видаляти за mtime. Запис у журналі задачі.
+- **Моніторинг і діагностика:** `df` тома (квота tenant-а обмежує ріст, §33.22.2). Логи: `product_image_rejected code=…`, `product_image_file_cleanup_failed` (Warning), `media_sweep_aborted reason=…` (Error). Часті `503 media_busy` — перевірити `Media__MaxConcurrentUploads` і `Media__MaxConcurrentProcessing`, `mem_limit`. Часті `413` з HTML-тілом — перевірити `location` у nginx.
+- **Dev:** `scripts/dev/*.ps1` **не** задають `Media__*`. Для локальної перевірки задати вручну в середовищі процесу: `Media__RootPath` (тека поза git, наприклад `.data/media`), `Media__PublicBaseUrl=http://localhost:5000`. Автоматичне вмикання в dev-скриптах не реалізовано.
+- **Відкат:** прибрати `Media__RootPath` (або вимкнути через env) — функція вимикається, DTO віддають `null`/`[]`, файли й рядки лишаються. Код не відкочувати разом зі схемою. Відкат схеми — лише на порожній таблиці.
+
 ---
 
 ## 3. Секрети й змінні середовища
@@ -232,6 +252,10 @@ docker exec beautycrm psql -U postgres -d beautycrm \
 | `PublicBooking:RateLimit:NearbyPermit` / `SearchPermit` | ліміти `public-nearby` (10) і `public-search` (20) на хвилину на IP |
 | `ProductOrders:Enabled` (`ProductOrders__Enabled`) | замовлення товарів (ADR-026): лише `true` (без регістру) вмикає; за замовч. вимкнено; у `Production`/невизначеному середовищі з mock-оплатою — помилка старту (§2e) |
 | `WORKER_PRODUCT_ORDERS_ENABLED` | worker: закриття прострочених неоплачених замовлень (`beauty.product-orders-expire`); лише `true`, за замовч. `false` (§2e) |
+| `Media__RootPath` | api: тека медіа товарів (staging: `/data/media`). Без неї функція фото вимкнена. При старті перевіряється існування й запис (§2f) |
+| `Media__PublicBaseUrl` (`MEDIA_PUBLIC_BASE_URL` у `.env.compose`) | api: origin для URL у DTO, `https://beauty.<DOMAIN>` без шляху й `/`. Обов'язкове з `RootPath`; у Development дозволено `http` |
+| `Media__SweepMode` | api: `off` (за замовч.) \| `dry-run` \| `delete`. Інше значення — помилка старту (§2f, порядок переходу) |
+| `Media__MaxUploadBytes`, `Media__MaxImagesPerProduct`, `Media__MaxImagesPerTenant`, `Media__MaxPixels`, `Media__MaxConcurrentProcessing`, `Media__MaxConcurrentUploads`, `Media__UploadsPerUserPerMinute`, `Media__PublicPermitPerMinute` | api: ліміти (контракт §33.22.2). Вихід за діапазон — помилка старту. Бюджет: `MaxPixels × 8 × MaxConcurrentProcessing ≤ 256 МБ` |
 | `EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_WEB_DOMAIN` | мобільний застосунок, на етапі збірки (`mobile/README.md`) |
 | `WORKER_DATABASE_URL`, `WORKER_TENANT_IDS`, `WORKER_MARKETING_DAILY_LIMIT` | worker |
 | `NEXT_PUBLIC_API_URL`, `API_URL`, `NEXT_PUBLIC_TENANT_SLUG` | frontend (читаються під час **build**) |

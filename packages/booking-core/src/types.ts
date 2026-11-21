@@ -215,6 +215,8 @@ export class BookingApiError extends Error {
     public readonly code: string,
     message: string = code,
     public readonly retryAfterSeconds?: number,
+    /** Тіло помилки (extras: `order`, `productIds`, `total`) - лише для клієнтів, яким воно потрібне (замовлення товарів). */
+    public readonly details?: unknown,
   ) {
     super(message);
     this.name = "BookingApiError";

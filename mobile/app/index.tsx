@@ -141,6 +141,9 @@ export default function LocationScreen() {
       <Link href="/appointments" style={{ minHeight: 44, paddingVertical: 12, textAlign: "center" }}>
         {t("common.myAppointments")}
       </Link>
+      <Link href="/order" style={{ minHeight: 44, paddingVertical: 12, textAlign: "center" }}>
+        {t("shop.myOrders")}
+      </Link>
 
       <ScanModal
         visible={scanning}

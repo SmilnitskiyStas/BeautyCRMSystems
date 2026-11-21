@@ -67,6 +67,25 @@ export type Profile = z.infer<typeof profileSchema>;
 
 const tokenKey = (localId: string) => `${TOKEN_PREFIX}${localId}`;
 
+/** Замовлення товарів (ADR-026): та сама схема, що й записи - токен у SecureStore, індекс без токенів у AsyncStorage. */
+const ORDER_INDEX_KEY = "beauty.orders.index.v1";
+const ORDER_TOKEN_PREFIX = "order-token.";
+const ORDER_TOKEN_IDS_KEY = "order-token-ids";
+const ORDER_PENDING_KEY = "pending-order-idempotency";
+const orderTokenKey = (localId: string) => `${ORDER_TOKEN_PREFIX}${localId}`;
+
+/** `localId` = Idempotency-Key створення; публічний токен замовлення в індекс не потрапляє. */
+export const orderRecordSchema = z.object({
+  localId: z.string().regex(LOCAL_ID_RE),
+  tenantSlug: z.string().min(1),
+  locationName: z.string(),
+  number: z.number(),
+  total: z.number(),
+  status: z.string().optional(),
+  createdAt: z.string(),
+});
+export type OrderRecord = z.infer<typeof orderRecordSchema>;
+
 function parseJson<T>(raw: string | null, schema: z.ZodType<T>): T | null {
   if (!raw) return null;
   try {
@@ -102,15 +121,46 @@ export function createLocalStore(secure: SecureKV, plain: PlainKV) {
   }
   const writeIndex = (items: AppointmentRecord[]) => plain.setItem(INDEX_KEY, JSON.stringify(items));
 
+  async function readOrderIndex(): Promise<OrderRecord[]> {
+    const raw = await plain.getItem(ORDER_INDEX_KEY);
+    if (!raw) return [];
+    try {
+      return z.array(z.unknown()).parse(JSON.parse(raw)).flatMap((x) => {
+        const r = orderRecordSchema.safeParse(x);
+        return r.success ? [r.data] : [];
+      });
+    } catch {
+      return [];
+    }
+  }
+  async function readOrderTokenIds(): Promise<string[]> {
+    const raw = await secure.getItemAsync(ORDER_TOKEN_IDS_KEY);
+    try {
+      return raw ? z.array(z.string()).parse(JSON.parse(raw)) : [];
+    } catch {
+      return [];
+    }
+  }
+  const writeOrderIndex = (items: OrderRecord[]) => plain.setItem(ORDER_INDEX_KEY, JSON.stringify(items));
+
   /** «Видалити мої дані на цьому пристрої»: токени (кожен ключ), профіль, pending-ключ, індекс, остання локація. */
   async function wipeAll(): Promise<void> {
     const ids = new Set([...(await readIndex()).map((i) => i.localId), ...(await readTokenIds())]);
-    await Promise.all([...ids].filter((id) => LOCAL_ID_RE.test(id)).map((id) => secure.deleteItemAsync(tokenKey(id))));
-    await secure.deleteItemAsync(TOKEN_IDS_KEY);
-    await secure.deleteItemAsync(PROFILE_KEY);
-    await secure.deleteItemAsync(PENDING_KEY);
-    await plain.removeItem(INDEX_KEY);
-    await plain.removeItem(LAST_LOCATION_KEY);
+    const orderIds = new Set([...(await readOrderIndex()).map((i) => i.localId), ...(await readOrderTokenIds())]);
+    // allSettled: збій одного ключа не зупиняє видалення решти; токени йдуть першими, реєстри/індекси - в тому ж пакеті
+    const results = await Promise.allSettled([
+      ...[...ids].filter((id) => LOCAL_ID_RE.test(id)).map((id) => secure.deleteItemAsync(tokenKey(id))),
+      ...[...orderIds].filter((id) => LOCAL_ID_RE.test(id)).map((id) => secure.deleteItemAsync(orderTokenKey(id))),
+      secure.deleteItemAsync(ORDER_TOKEN_IDS_KEY),
+      secure.deleteItemAsync(ORDER_PENDING_KEY),
+      plain.removeItem(ORDER_INDEX_KEY),
+      secure.deleteItemAsync(TOKEN_IDS_KEY),
+      secure.deleteItemAsync(PROFILE_KEY),
+      secure.deleteItemAsync(PENDING_KEY),
+      plain.removeItem(INDEX_KEY),
+      plain.removeItem(LAST_LOCATION_KEY),
+    ]);
+    if (results.some((r) => r.status === "rejected")) throw new Error("wipe_incomplete");
   }
 
   return {
@@ -157,6 +207,41 @@ export function createLocalStore(secure: SecureKV, plain: PlainKV) {
       plain.setItem(LAST_LOCATION_KEY, JSON.stringify(lastLocationSchema.parse(l))),
     clearLastLocation: () => plain.removeItem(LAST_LOCATION_KEY),
 
+    /** Замовлення: спершу токен, потім індекс (збій між ними не лишає запис без токена). Повтор з тим самим localId оновлює. */
+    async saveOrder(record: OrderRecord, token: string): Promise<void> {
+      const rec = orderRecordSchema.parse(record);
+      await secure.setItemAsync(orderTokenKey(rec.localId), token);
+      const ids = await readOrderTokenIds();
+      if (!ids.includes(rec.localId)) await secure.setItemAsync(ORDER_TOKEN_IDS_KEY, JSON.stringify([...ids, rec.localId]));
+      const items = await readOrderIndex();
+      await writeOrderIndex(
+        items.some((i) => i.localId === rec.localId) ? items.map((i) => (i.localId === rec.localId ? rec : i)) : [rec, ...items],
+      );
+    },
+    /** Без токенів; нові першими. */
+    async listOrders(): Promise<OrderRecord[]> {
+      return (await readOrderIndex()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    },
+    getOrderToken: (localId: string) =>
+      LOCAL_ID_RE.test(localId) ? secure.getItemAsync(orderTokenKey(localId)) : Promise.resolve(null),
+    async updateOrderSnapshot(localId: string, patch: Partial<Pick<OrderRecord, "status">>): Promise<void> {
+      await writeOrderIndex((await readOrderIndex()).map((i) => (i.localId === localId ? { ...i, ...patch } : i)));
+    },
+    async removeOrder(localId: string): Promise<void> {
+      if (!LOCAL_ID_RE.test(localId)) return;
+      await secure.deleteItemAsync(orderTokenKey(localId));
+      await secure.setItemAsync(ORDER_TOKEN_IDS_KEY, JSON.stringify((await readOrderTokenIds()).filter((i) => i !== localId)));
+      await writeOrderIndex((await readOrderIndex()).filter((i) => i.localId !== localId));
+    },
+    async getOrderPendingKey(now: number = Date.now()): Promise<PendingKey | null> {
+      const p = parseJson(await secure.getItemAsync(ORDER_PENDING_KEY), pendingKeySchema);
+      if (p && now - p.createdAt < PENDING_TTL_MS) return p;
+      if (p) await secure.deleteItemAsync(ORDER_PENDING_KEY); // протермінований: не тримати
+      return null;
+    },
+    setOrderPendingKey: (p: PendingKey) => secure.setItemAsync(ORDER_PENDING_KEY, JSON.stringify(pendingKeySchema.parse(p))),
+    clearOrderPendingKey: () => secure.deleteItemAsync(ORDER_PENDING_KEY),
+
     async getProfile(): Promise<Profile | null> {
       return parseJson(await secure.getItemAsync(PROFILE_KEY), profileSchema);
     },
@@ -176,7 +261,7 @@ export function createLocalStore(secure: SecureKV, plain: PlainKV) {
      */
     async firstRunCleanup(): Promise<"skipped" | "kept" | "purged"> {
       if (await plain.getItem(FIRST_RUN_KEY)) return "skipped";
-      const legit = (await plain.getItem(INDEX_KEY)) !== null;
+      const legit = (await plain.getItem(INDEX_KEY)) !== null || (await plain.getItem(ORDER_INDEX_KEY)) !== null;
       if (!legit) await wipeAll();
       await plain.setItem(FIRST_RUN_KEY, "1");
       return legit ? "kept" : "purged";
