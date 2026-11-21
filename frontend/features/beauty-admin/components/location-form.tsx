@@ -15,7 +15,10 @@ const inputOf = (l: BeautyLocation, isActive = l.isActive !== false): LocationIn
   phone: l.phone ?? "",
   timezone: l.timezone ?? DEFAULT_TIMEZONE,
   isActive,
+  isDiscoverable: l.isDiscoverable === true,
 });
+
+const NO_COORDS_TEXT = "Щоб показувати заклад у пошуку, вкажіть координати.";
 
 /** Поле часової зони: пошук по IANA-зонах через datalist (друк `Kyiv` -> `Europe/Kyiv`). */
 function TimeZoneField({ value, onChange, error }: { value: string; onChange: (v: string) => void; error?: string }) {
@@ -75,9 +78,11 @@ export function LocationForm({
   const isEdit = location !== null;
   const wasActive = location ? location.isActive !== false : true;
   const [values, setValues] = useState<LocationInput>(
-    location ? inputOf(location) : { name: "", address: "", phone: "", timezone: DEFAULT_TIMEZONE, isActive: true },
+    location ? inputOf(location) : { name: "", address: "", phone: "", timezone: DEFAULT_TIMEZONE, isActive: true, isDiscoverable: false },
   );
   const coordsHintId = useId();
+  const discoverHintId = useId();
+  const discoverErrId = useId();
   const [lat, setLat] = useState(coordinateText(location?.latitude));
   const [lon, setLon] = useState(coordinateText(location?.longitude));
   const [errors, setErrors] = useState<LocationErrors>({});
@@ -89,6 +94,8 @@ export function LocationForm({
     setSaved(null);
     if (k === "isActive") setConfirmingOff(false);
   };
+  const liveCoords = parseCoordinates(lat, lon);
+  const noCoordsWarning = values.isDiscoverable === true && lat.trim() === "" && lon.trim() === "" && liveCoords.latitude === null;
   const pending = create.isPending || update.isPending;
 
   async function save() {
@@ -116,7 +123,11 @@ export function LocationForm({
   function submit(e: FormEvent) {
     e.preventDefault();
     setSaved(null);
-    const next = { ...validateLocation(values), ...parseCoordinates(lat, lon).errors };
+    const coords = parseCoordinates(lat, lon);
+    const next: LocationErrors = { ...validateLocation(values), ...coords.errors };
+    if (values.isDiscoverable && (coords.latitude === null || coords.longitude === null) && !coords.errors.latitude && !coords.errors.longitude) {
+      next.isDiscoverable = NO_COORDS_TEXT;
+    }
     setErrors(next);
     if (Object.keys(next).length > 0) return;
     if (isEdit && wasActive && !values.isActive && !confirmingOff) {
@@ -168,6 +179,27 @@ export function LocationForm({
             hint="Від −180 до 180, наприклад 30.5234"
           />
         </div>
+      </fieldset>
+      <fieldset className="m-0 flex min-w-0 flex-col gap-1 border-0 p-0">
+        <legend className="mb-1 text-[13px] font-semibold">Публічний пошук</legend>
+        <label className="flex min-h-11 min-w-0 cursor-pointer items-center gap-3 text-sm">
+          <input
+            type="checkbox"
+            checked={values.isDiscoverable === true}
+            onChange={(e) => set("isDiscoverable", e.target.checked)}
+            aria-describedby={[discoverHintId, errors.isDiscoverable || noCoordsWarning ? discoverErrId : ""].filter(Boolean).join(" ")}
+            className="size-5 flex-none accent-(--accent)"
+          />
+          <span className="min-w-0 break-words">Показувати в пошуку застосунку</span>
+        </label>
+        <p id={discoverHintId} className="text-[13px] text-(--muted)">
+          Клієнти знаходять заклад у мобільному застосунку за геолокацією лише якщо вказано координати. За замовчуванням вимкнено.
+        </p>
+        {errors.isDiscoverable || noCoordsWarning ? (
+          <p id={discoverErrId} role="alert" className={ERROR_TEXT}>
+            {NO_COORDS_TEXT}
+          </p>
+        ) : null}
       </fieldset>
       {isEdit ? (
         <fieldset className="m-0 flex min-w-0 flex-col gap-1 border-0 p-0">

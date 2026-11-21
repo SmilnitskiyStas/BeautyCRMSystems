@@ -34,7 +34,7 @@ export function timeZoneOptions(): string[] {
   return list;
 }
 
-export type LocationErrors = Partial<Record<"name" | "address" | "phone" | "timezone" | "latitude" | "longitude", string>>;
+export type LocationErrors = Partial<Record<"name" | "address" | "phone" | "timezone" | "latitude" | "longitude" | "isDiscoverable", string>>;
 
 export interface ParsedCoordinates {
   /** Обидва `null` = координати не задано (для PUT це «очистити»). */
