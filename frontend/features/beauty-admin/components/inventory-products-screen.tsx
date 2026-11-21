@@ -75,8 +75,19 @@ export function InventoryProductsScreen() {
                   {items.map((p) => (
                     <tr key={p.id} className="border-t border-(--line)">
                       <th scope="row" className={`${TD} text-left font-semibold`}>
-                        {p.name}
-                        {p.trackExpiry ? <span className="block text-[13px] font-normal text-(--muted)">Зі строком придатності</span> : null}
+                        <div className="flex items-center gap-2">
+                          {p.imageUrl ? (
+                            // Декоративна мініатюра: назва товару поруч у тексті, тож alt порожній (WCAG H67).
+                            // eslint-disable-next-line @next/next/no-img-element -- зовнішній URL із DTO
+                            <img src={p.imageUrl} alt="" width={40} height={40} loading="lazy" className="h-10 w-10 shrink-0 rounded-lg bg-(--line) object-cover" />
+                          ) : (
+                            <span aria-hidden="true" className="h-10 w-10 shrink-0 rounded-lg bg-(--line)" />
+                          )}
+                          <span>
+                            {p.name}
+                            {p.trackExpiry ? <span className="block text-[13px] font-normal text-(--muted)">Зі строком придатності</span> : null}
+                          </span>
+                        </div>
                       </th>
                       <td className={TD}>
                         {(() => {

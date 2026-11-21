@@ -94,6 +94,16 @@ export function useSaveProduct(id: string | null) {
     onSuccess: done,
   });
 }
+/** Фото товару (§33.22): завантаження, видалення, порядок. `onSettled`: після помилки (напр. invalid_image_order) список перечитується. */
+export function useProductImageMutations(productId: string) {
+  const done = useInvalidateInventory();
+  const opts = { onSettled: done };
+  return {
+    upload: useMutation({ mutationFn: (file: File) => beautyApi.addProductImage(productId, file), ...opts }),
+    remove: useMutation({ mutationFn: (imageId: string) => beautyApi.deleteProductImage(productId, imageId), ...opts }),
+    reorder: useMutation({ mutationFn: (imageIds: string[]) => beautyApi.reorderProductImages(productId, imageIds), ...opts }),
+  };
+}
 /** Мутації дерева категорій; інвалідуємо весь склад (змінюються і `categoryPath` товарів, і лічильники). */
 export function useCategoryMutations() {
   const done = useInvalidateInventory();

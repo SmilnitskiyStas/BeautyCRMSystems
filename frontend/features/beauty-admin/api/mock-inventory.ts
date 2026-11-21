@@ -30,6 +30,7 @@ import type {
   Page,
   Product,
   ProductDetail,
+  ProductImage,
   ProductQuery,
   ProductRef,
   ProductRequest,
@@ -215,6 +216,7 @@ export function createMockInventory(deps: InventoryMockDeps) {
   const products: ProductRec[] = [];
   const categories: CategoryRec[] = [];
   const settings = new Map<string, LocationSetting>();
+  const images = new Map<string, ProductImage[]>();
   const batches: BatchRec[] = [];
   const movements: MovementRec[] = [];
   const operations: OperationRec[] = [];
@@ -287,6 +289,7 @@ export function createMockInventory(deps: InventoryMockDeps) {
     isActive: p.isActive,
     note: p.note,
     hasMovements: hasMovements(p.id),
+    imageUrl: (images.get(p.id) ?? [])[0]?.thumbUrl ?? null,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
   });
@@ -551,7 +554,44 @@ export function createMockInventory(deps: InventoryMockDeps) {
       const locationSettings = scopeLocations()
         .map((l) => settings.get(settingKey(id, l.id)))
         .filter((x): x is LocationSetting => x !== undefined);
-      return wait({ ...toProduct(p), locationSettings });
+      return wait({ ...toProduct(p), locationSettings, images: images.get(id) ?? [] });
+    },
+
+    // Фото (§33.22): у демо файл показується через object URL (або прозорий gif поза браузером), без обробки.
+    async addProductImage(productId: string, file: File): Promise<ProductImage> {
+      requireCatalog();
+      rateLimit();
+      if (!productById(productId)) throw err(404, "product_not_found");
+      if (file.size > 10 * 1024 * 1024) throw err(413, "file_too_large");
+      if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) throw err(415, "unsupported_image_type");
+      const list = images.get(productId) ?? [];
+      if (list.length >= 8) throw err(422, "too_many_images", { limit: 8 });
+      const url = typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
+      const img: ProductImage = { id: nextId("img"), url, thumbUrl: url, width: 800, height: 800, sizeBytes: file.size, sortOrder: list.length, createdAt: iso() };
+      images.set(productId, [...list, img]);
+      return wait(img);
+    },
+
+    async deleteProductImage(productId: string, imageId: string): Promise<void> {
+      requireCatalog();
+      rateLimit();
+      if (!productById(productId)) throw err(404, "product_not_found");
+      const list = images.get(productId) ?? [];
+      if (!list.some((i) => i.id === imageId)) throw err(404, "product_image_not_found");
+      images.set(productId, list.filter((i) => i.id !== imageId).map((i, n) => ({ ...i, sortOrder: n })));
+      return wait(undefined);
+    },
+
+    async reorderProductImages(productId: string, imageIds: string[]): Promise<ProductImage[]> {
+      requireCatalog();
+      rateLimit();
+      if (!productById(productId)) throw err(404, "product_not_found");
+      const list = images.get(productId) ?? [];
+      const same = imageIds.length === list.length && new Set(imageIds).size === list.length && imageIds.every((id) => list.some((i) => i.id === id));
+      if (!same) throw err(422, "invalid_image_order");
+      const next = imageIds.map((id, n) => ({ ...list.find((i) => i.id === id)!, sortOrder: n }));
+      images.set(productId, next);
+      return wait(next);
     },
 
     async getInventoryCategories(includeArchived = false): Promise<Category[]> {

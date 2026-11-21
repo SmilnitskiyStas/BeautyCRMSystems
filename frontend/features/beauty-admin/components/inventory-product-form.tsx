@@ -24,6 +24,7 @@ import {
 } from "../inventory/logic";
 import type { InventoryScope, Product, ProductPurpose, StockUnit } from "../inventory/types";
 import { CategoryPicker } from "./category-picker";
+import { ProductImages } from "./inventory-product-images";
 import { ErrorSummary, InputField, RequiredNote, SelectField, quantityInputMode, useFocusInvalid } from "./inventory-parts";
 import { CheckRow, ErrorBanner, SuccessBanner } from "./staff-parts";
 import { Card, PrimaryButton, SecondaryButton } from "./ui";
@@ -324,6 +325,7 @@ export function ProductForm({ product, scope, onClose }: { product: Product | nu
   return (
     <Card as="div" className="flex flex-col gap-6">
       {formBody}
+      {isEdit ? <ProductImages productId={product.id} productName={product.name} canEdit={scope.canEditCatalog} /> : null}
       {isEdit && scope.locations.length > 0 ? <LocationSettings product={product} scope={scope} /> : null}
     </Card>
   );

@@ -79,8 +79,21 @@ export interface Product {
   isActive: boolean;
   note: string | null;
   hasMovements: boolean;
+  /** thumbUrl першого фото (§33.22); відсутнє/null = немає фото або функцію вимкнено. */
+  imageUrl?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+/** Фото товару (ADR-027, §33.22.5). */
+export interface ProductImage {
+  id: string;
+  url: string;
+  thumbUrl: string;
+  width: number;
+  height: number;
+  sizeBytes: number;
+  sortOrder: number;
+  createdAt: string;
 }
 export interface LocationSetting {
   locationId: string;
@@ -90,6 +103,7 @@ export interface LocationSetting {
 }
 export interface ProductDetail extends Product {
   locationSettings: LocationSetting[];
+  images: ProductImage[];
 }
 export interface ProductRequest {
   name: string;
