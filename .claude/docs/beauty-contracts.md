@@ -5492,6 +5492,7 @@ DAG: 889 → [G1] → 895 → {890 ∥ 896}; 891 — mock після G1, http п
 - **Обсяг:** етап 3a складу — каталог товарів закладу для клієнта, замовлення гостем, резерв 15 хв, онлайн-оплата карткою (mock), самовивіз, видача й повернення в CRM. Не входить: доставка, касовий продаж, override цін по закладах, ПРРО, ПДВ, знижки, повернення після видачі (ADR-026 §2.1).
 - **Адитивно змінює:** §32.3 (CHECK типів руху/операції + `sale_return`, колонка `product_order_id`), §32.6 (`OperationSummaryDto.productOrderId`), §5/§9 (`beauty_payments` і `IPaymentService`, §33.16). Інші розділи не змінюються; нових ключів прав (§30.2) немає.
 - **Споживачі:** мобільний застосунок (`mobile/`, окрема команда), TASK-901…908 (§33.20).
+- **Дельта v0.42 (2026-11-21, ADR-027, `proposed`):** зображення товарів. `PublicProductDto` отримує адитивні поля `imageUrl` і `images` (§33.5), версія контракту — **`API-CONTRACT-PRODUCT-ORDERS-V1.1`** (minor, `MinAppVersion` без змін). CRM-маршрути фото, роздача файлів, схема `beauty_product_images` і поля `ProductDto`/`ProductDetailDto` (§32.6) описані в **§33.22**.
 - **Статус (v0.41):** реалізовано бекенд (міграція `20261120122321_beauty_product_orders`, `IPaymentService.ChargeAsync(PaymentCharge)` + `MockPaymentService`, P1–P5, CRM-маршрути), воркер `beauty.product-orders-expire`, CRM-екран (mock і http). Відкрито: TASK-906 (QA), TASK-907 (security-review), TASK-908 (цей документ, runbook — виконано частково на v0.41). Прод-вмикання — окремий gate (ADR-026 §7 п.5).
 
 **Уточнення реалізації (v0.41).** Код — джерело істини для відхилень нижче; вони доповнюють і, де сказано, замінюють текст §33.1–§33.17 та §33.19–§33.20 (зміна семантики — ADR, тут лише уточнення):
@@ -5584,6 +5585,15 @@ interface PublicProductDto {
   price: number;              // роздрібна ціна за одиницю, грн, з ПДВ, > 0
   categoryPath: string | null;// "Волосся › Догляд" (корінь → лист, роздільник " › "), null = без категорії
   inStock: boolean;           // у цьому закладі можна замовити щонайменше 1 одиницю зараз
+  // V1.1 (ADR-027, §33.22), адитивно. Сервер до V1.1 цих полів не віддає: відсутнє поле / null трактувати як «немає фото» / [].
+  imageUrl?: string | null;   // абсолютний URL прев'ю (400 px) першого фото галереї; null = фото немає
+  images?: PublicProductImageDto[]; // уся галерея за порядком CRM; сервер V1.1 завжди віддає масив (можливо порожній)
+}
+
+interface PublicProductImageDto {  // V1.1
+  url: string;                // абсолютний URL, довша сторона ≤ 1600 px, image/webp
+  thumbUrl: string;           // абсолютний URL, довша сторона ≤ 400 px, image/webp
+  width: number; height: number; // розмір варіанта url (для пропорцій плейсхолдера)
 }
 
 interface PublicProductCatalogDto {
@@ -5629,7 +5639,7 @@ interface PublicProductOrderDto {
 }
 ```
 
-У відповідях **немає** імені й телефону клієнта, id клієнта, внутрішніх id замовлення/платежу, кількостей на складі, закупівельних цін. Нових полів у V1 не додається без підвищення версії контракту; клієнт має **ігнорувати невідомі поля** (сумісність уперед).
+У відповідях **немає** імені й телефону клієнта, id клієнта, внутрішніх id замовлення/платежу, кількостей на складі, закупівельних цін. Нових полів у V1 не додається без підвищення версії контракту; клієнт має **ігнорувати невідомі поля** (сумісність уперед). **V1.1** (ADR-027) додає лише `PublicProductDto.imageUrl` і `images` (§33.22.3): адитивно й nullable, клієнт V1 працює без змін.
 
 **Приклад P1:**
 ```http
@@ -5968,3 +5978,143 @@ DAG: 900 → [gate] → 901 → {902 ∥ 904} → 903 → 906 → 907 → 908; 9
 ### 33.21 Відкриті питання
 
 ADR-026 §9 (P1–P7). Дефолти цього контракту: P1 — без очищення ПД; P2 — повернення після видачі поза системою; P3 — блокує prod; P4 — лише бейдж; P5 — покупки не в картці клієнта; P6 — значення §33.3; P7 — потрібен `beauty_booking`. Зміна дефолту — правкою §33 до старту TASK-901/902.
+
+### 33.22 Зображення товарів (ADR-027, v0.42, 2026-11-21, `API-CONTRACT-PRODUCT-ORDERS-V1.1`; статус ADR — `proposed`, human gates G1–G7)
+
+Джерело рішень — **ADR-027** (`.claude/docs/adr/ADR-027-product-images-and-file-storage.md`). Якщо цей розділ розходиться з ADR, діє ADR. Розділ адитивний: наявні поля, коди й маршрути §32/§33 не змінюються.
+
+#### 33.22.1 Обсяг і вмикання
+
+- Галерея фото товару: завантажує CRM (`inventory.manage = all`), читають CRM, публічний каталог P1 і мобільний застосунок. Файли лежать на диску сервера (docker volume), URL публічні без авторизації.
+- **Вмикання:** функція працює, лише якщо задано `Media:RootPath`. Без нього CRM-маршрути фото повертають `404 product_images_disabled`, DTO віддають `imageUrl = null`, `images = []`, а роздача віддає `404`. Модуль `beauty_inventory` потрібен для CRM-маршрутів (клас-рівень §32.5). Від `ProductOrders:Enabled` фото не залежать: P1 і так закритий цим прапором.
+
+#### 33.22.2 Конфігурація
+
+| Ключ | За замовч. | Діапазон | Призначення |
+|---|---|---|---|
+| `Media:RootPath` | відсутній = вимкнено | абсолютний шлях | тека тому. Якщо задано, при старті перевіряються існування й запис; провал = помилка старту |
+| `Media:PublicBaseUrl` | — (обов'язковий за наявності `RootPath`) | origin `https://…` без шляху (у Development дозволено `http`) | база абсолютних URL |
+| `Media:MaxUploadBytes` | `10485760` | 1048576..20971520 | тіло файлу |
+| `Media:MaxImagesPerProduct` | `8` | 1..20 | фото на товар |
+| `Media:MaxImagesPerTenant` | `5000` | 1..100000 | квота tenant-а |
+| `Media:MaxPixels` | `25000000` | 1000000..50000000 | ширина × висота джерела |
+| `Media:MaxConcurrentProcessing` | `1` | 1..4 | паралельні обробки на процес |
+| `Media:UploadsPerUserPerMinute` | `20` | 1..120 | rate limit upload за користувачем |
+| `Media:SweepMode` | `off` | `off` \| `dry-run` \| `delete` | очищувач сиріт (§33.22.7) |
+
+Невалідне значення дає помилку старту. Константи: варіанти `400` і `1600` (довша сторона, без збільшення), WebP lossy q80, мінімальна сторона джерела 200 px, максимальна 10 000 px, rate limit `public-media` 600/хв на IP (/64).
+
+#### 33.22.3 Публічний каталог (P1, дельта §33.5)
+
+`PublicProductDto` + `imageUrl: string | null` (= `thumbUrl` першого фото) і `images: PublicProductImageDto[]` (`{url, thumbUrl, width, height}`, порядок `sort_order, created_at, id`, не більше `MaxImagesPerProduct`). Обидва URL абсолютні: `{Media:PublicBaseUrl}/api/public/media/p/{key}-{400|1600}.webp`. Набір товарів, сортування, `truncated`, ліміт 500 і коди P1 не змінюються.
+
+**Вимоги до клієнта (мобільний):** поле відсутнє або `null` → «немає фото» (плейсхолдер); у списку показувати `imageUrl`, у деталі — галерею `images[].url`, а `thumbUrl` використовувати для мініатюр. Кешувати на диску без обмеження строку (`immutable`). Додаткових заголовків (`X-Booking-Client`, `X-App-Version`) запит зображення **не потребує**. Помилку `404` на зображенні показувати як плейсхолдер, без повторів. URL не будувати самостійно, брати лише з DTO.
+
+Приклад елемента P1:
+```json
+{ "id": "b3f0a1c2-1111-4a6b-8c9d-0e1f2a3b4c5d", "name": "Шампунь відновлювальний 250 мл", "unit": "pcs", "price": 420.00,
+  "categoryPath": "Волосся › Догляд", "inStock": true,
+  "imageUrl": "https://beauty.example.com/api/public/media/p/3f9a0c1e7b2d4a6f8e1c5b7d9a0f2e4c-400.webp",
+  "images": [ { "url": "https://beauty.example.com/api/public/media/p/3f9a0c1e7b2d4a6f8e1c5b7d9a0f2e4c-1600.webp",
+                "thumbUrl": "https://beauty.example.com/api/public/media/p/3f9a0c1e7b2d4a6f8e1c5b7d9a0f2e4c-400.webp",
+                "width": 1200, "height": 1600 } ] }
+```
+
+#### 33.22.4 Роздача файлів `GET|HEAD /api/public/media/p/{file}`
+
+- Без автентифікації, без slug, без `[PublicClient]`/`426`, без `[PublicTenant]`, **без звернення до БД**. Rate limit `public-media`.
+- `file` має повністю відповідати `^(?<key>[0-9a-f]{32})-(?<size>400|1600)\.webp$`. Шлях на диску: `{root}/p/{key[0..1]}/{key}-{size}.webp`, збирається лише з груп regex. Після `GetFullPath` префікс `root` обов'язковий, symlink дає відмову.
+- `200`: `Content-Type: image/webp`, `Cache-Control: public, max-age=31536000, immutable`, `ETag: "{key}-{size}"`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Cross-Origin-Resource-Policy: cross-origin`, `Content-Disposition: inline`. Range дозволено.
+- Невалідне ім'я, файлу немає, файл видалено: однакова `404`, порожнє тіло, `Cache-Control: no-store`.
+- Призупинення tenant-а, архівування товару й вимкнення модуля роздачу не блокують (ADR-027 §2.3). Блокує лише видалення фото.
+
+#### 33.22.5 CRM-маршрути (`/api/beauty/inventory`)
+
+Клас-рівень §32.5 (`[Authorize(Staff)]` + `[RequireModule("beauty_inventory")]` + `inventory.view ≥ own`), `Cache-Control: no-store`, порядок фільтрів §30.5. Дії змінюють мережевий каталог, тому вимагають `inventory.manage = all` (як `POST/PUT /products`; у UI це `InventoryScopeDto.canEditCatalog`). Нестача права → `403 forbidden_role {permission: "inventory.manage"}`.
+
+| Метод | Шлях | Право | Тіло → відповідь |
+|---|---|---|---|
+| POST | `/products/{id}/images` | `inventory.manage = all` | `multipart/form-data`, рівно одна частина-файл з іменем `file` (інші частини ігноруються) → `201 ProductImageDto` (`Location` не віддається) |
+| DELETE | `/products/{id}/images/{imageId}` | `inventory.manage = all` | → `204` |
+| PATCH | `/products/{id}/images/order` | `inventory.manage = all` | `{ imageIds: uuid[] }` — точна перестановка поточного набору → `200 { images: ProductImageDto[] }` (`sort_order` = індекс) |
+
+Rate limit: upload — `Media:UploadsPerUserPerMinute` і `Inventory:WritePerUserPerMinute`; DELETE/PATCH — `Inventory:WritePerUserPerMinute`. Ліміт тіла: upload — `MaxUploadBytes + 64 КБ` (Kestrel і `MultipartBodyLengthLimit`), PATCH — 4 КБ.
+
+**Дельта §32.6 (адитивно):**
+```
+ProductImageDto   { id, url, thumbUrl, width, height, sizeBytes, sortOrder, createdAt }
+ProductDto        + imageUrl: string|null          // thumbUrl першого фото; null = немає або функцію вимкнено
+ProductDetailDto  + images: ProductImageDto[]      // уся галерея, порядок sort_order, created_at, id
+```
+
+**Порядок перевірок upload** (детермінований, фіксують тести): права (`403`) → функція ввімкнена (`404 product_images_disabled`) → товар під RLS (`404 product_not_found`) → тип запиту multipart з частиною `file` (`422 file_required`) → розмір (`413 file_too_large`) → швидкий підрахунок лімітів (`422 too_many_images {limit}`, `422 image_quota_exceeded {limit}`) → сигнатура формату (`415 unsupported_image_type`) → розміри (`422 image_dimensions_invalid {minSide, maxSide, maxPixels}`) → декодування (`422 image_decode_failed`) → черга обробки (`503 media_busy` + `Retry-After: 5`) → запис файлів → транзакція з повторною перевіркою лімітів (`422 too_many_images` / `image_quota_exceeded`, файли видаляються).
+
+**Помилки:** `404 product_not_found` (немає товару або чужий tenant), `404 product_image_not_found` (немає фото або фото іншого товару), `404 product_images_disabled`, `413 file_too_large` (також від nginx, тоді тіло — HTML: клієнт обробляє за статусом), `415 unsupported_image_type`, `422 file_required`, `422 too_many_images`, `422 image_quota_exceeded`, `422 image_dimensions_invalid`, `422 image_decode_failed`, `422 invalid_image_order` (не перестановка: дублікати, чужі або відсутні id, інша кількість), `429 rate_limited`, `503 media_busy`.
+
+**IDOR:** товар шукається під RLS FORCE; фото — за `id = imageId AND product_id = id`; PATCH приймає лише перестановку власного набору товару; композитний FK `(tenant_id, product_id)`. Будь-яка невідповідність дає `404`/`422` без розкриття існування чужих об'єктів.
+
+**Frontend CRM:** галерея в картці товару (`canEditCatalog`): вибір файлу (`accept="image/jpeg,image/png,image/webp"`), зменшення в браузері до довшої сторони ≤ 2560 перед відправкою, прогрес, видалення з підтвердженням, перетягування для порядку (оптимістично, при `422 invalid_image_order` — перечитати товар), прев'ю `imageUrl` у списку. `FormData` без ручного `Content-Type`. Коди — у `errors.ts` (`BY_CODE`).
+
+#### 33.22.6 Схема (міграція `beauty_product_images`, адитивна; **human gate G1/G3**)
+
+Конвенції §32.3 (`Base`/`TenantFk`, композитні FK, `ck_/ix_/ux_`).
+
+**`beauty_product_images`:**
+- `id uuid` PK; `tenant_id uuid NOT NULL` (FK `tenants` RESTRICT); `product_id uuid NOT NULL`, FK `(tenant_id, product_id)` → `beauty_products (tenant_id, id)` **ON DELETE CASCADE**;
+- `storage_key char(32) NOT NULL` CHECK `ck_beauty_product_images_storage_key`: `storage_key ~ '^[0-9a-f]{32}$'`; UNIQUE **глобально** `ux_beauty_product_images_storage_key (storage_key)`;
+- `mime varchar(32) NOT NULL` CHECK `mime = 'image/webp'`; `size_bytes integer NOT NULL` CHECK `size_bytes > 0 AND size_bytes <= 10485760` (сума варіантів);
+- `width smallint NOT NULL`, `height smallint NOT NULL`, CHECK `BETWEEN 1 AND 1600` (варіант 1600);
+- `sort_order smallint NOT NULL` CHECK `BETWEEN 0 AND 99`; `CONSTRAINT ux_beauty_product_images_order UNIQUE (tenant_id, product_id, sort_order) DEFERRABLE INITIALLY DEFERRED` (сирий SQL: EF не створює deferrable UNIQUE);
+- `created_by_user_id uuid NOT NULL` (FK `users` RESTRICT); `created_at timestamptz NOT NULL DEFAULT now()`;
+- індекс `ix_beauty_product_images_product (tenant_id, product_id, sort_order)`.
+
+**RLS:** ENABLE + FORCE + `tenant_isolation` (`tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid` в `USING` і `WITH CHECK`), `DO`-блок перевірки FORCE (патерн `20261120122321`). Нових політик і функцій немає.
+
+**GRANT** (не в міграції; синхронно `scripts/dev/setup-db.ps1` і `deploy/staging/db/grants.sql`, тест `staging-grants-sync`):
+```sql
+-- Фото товарів (ADR-027): рядок незмінний, крім порядку; воркер доступу не має
+REVOKE UPDATE ON beauty_product_images FROM beautycrm_app;
+GRANT SELECT, INSERT, DELETE ON beauty_product_images TO beautycrm_app;
+GRANT UPDATE (sort_order) ON beauty_product_images TO beautycrm_app;
+```
+(Якщо default privileges видають app-ролі `UPDATE` на всі таблиці, `REVOKE` залишає тільки колонковий `UPDATE (sort_order)`. Database-engineer звіряє з поточним шаблоном grants.) Для `beautycrm_worker` і `beautycrm_catalog` — нічого.
+
+EF: `ProductImage : TenantEntity` (`ProductId`, `StorageKey`, `Mime`, `SizeBytes`, `Width`, `Height`, `SortOrder`, `CreatedByUserId`; `CreatedAt` з базового класу або явно). `worker/src/testing/schema.sql` перегенерувати (без BOM, LF). **Down:** `RAISE EXCEPTION 'product images exist'`, якщо є хоч один рядок, інакше `DROP TABLE`. Up → Down → Up на копії.
+
+#### 33.22.7 Алгоритми (backend)
+
+- **Ключ:** 16 байт `RandomNumberGenerator.GetBytes` → lowercase hex (32 символи). Не `Guid.NewGuid` (не гарантує CSPRNG за специфікацією).
+- **Обробка (`IImageProcessor`, ImageSharp 3.1.x; ліцензія — gate G2):** конфігурація лише з JPEG/PNG/WebP; тип за сигнатурою; `Identify` → перевірка розмірів; `DecoderOptions { MaxFrames = 1 }`; `MemoryAllocator` з `AllocationLimitMegabytes = 256`; `AutoOrient()`; зняття EXIF/XMP/IPTC/ICC; ресайз `ResizeMode.Max` до 1600 і 400 без збільшення; `WebpEncoder { FileFormat = Lossy, Quality = 80, SkipMetadata = true }`; `SemaphoreSlim(MaxConcurrentProcessing)` з очікуванням ≤ 10 с.
+- **Upload — «файл, потім транзакція»:** маркер `{root}/t/{tenantId}/{key}` → варіанти `*.webp.tmp` (`CreateNew`, `Flush(true)`) → `File.Move(tmp, final, overwrite: false)` → транзакція: `SELECT … FROM beauty_products WHERE id = $1 FOR NO KEY UPDATE` → `count(product) < MaxImagesPerProduct` і `count(tenant) < MaxImagesPerTenant` → `sort_order = COALESCE(max, -1) + 1` → `INSERT` → commit. Збій після запису: варіанти й маркер видаляються (best effort). Рядок ніколи не з'являється раніше за файли.
+- **Delete:** транзакція `FOR NO KEY UPDATE` товару → `DELETE … WHERE id = $imageId AND product_id = $id` → commit → **потім** видалення варіантів і маркера (best effort; збій → Warning, залишки прибирає очищувач).
+- **Reorder:** транзакція `FOR NO KEY UPDATE` товару → поточний набір id → перевірка перестановки → один `UPDATE … SET sort_order = v.ord FROM (VALUES …) v` (deferrable UNIQUE перевіряється при commit).
+- **Порядок блокувань:** рядок `beauty_products` (`FOR NO KEY UPDATE`) — єдине блокування операцій з фото, транзакція коротка (обробка зображення відбувається до неї). `NO KEY` не конфліктує з FK-перевірками (`FOR KEY SHARE`) складу й замовлень. З `FOR SHARE` товару (оплата/повернення, §33.16) взаємне очікування коротке, але циклів немає: фото-транзакції інших рядків не блокують.
+- **P1:** один додатковий запит `SELECT product_id, storage_key, width, height FROM beauty_product_images WHERE product_id = ANY(@ids) ORDER BY product_id, sort_order, created_at, id`, групування в пам'яті, обрізання до `MaxImagesPerProduct`.
+- **Очищувач `MediaOrphanSweeper`** (`BackgroundService` в API; кожні 6 год, перший запуск через 10 хв після старту; `pg_try_advisory_lock` простору `media_sweep`; працює лише за `SweepMode ≠ off`):
+  1. tenant-и — валідні uuid серед імен тек `{root}/t/*`;
+  2. на tenant: tenant-контекст як у запиті (`app.tenant_id`) → tenant невидимий (`SELECT EXISTS … tenants WHERE id = <tenant>` → `false`) → **пропуск** (Warning). Реалізатор має перевірити, що app-роль бачить свій рядок `tenants` у цьому контексті; якщо ні — використати наявний механізм перевірки статусу tenant-а → `SELECT storage_key FROM beauty_product_images` → `live`;
+  3. кандидати: маркери з `mtime < now − 24 год` і ключем `∉ live`; `*.tmp` старші за 1 год; файли `p/**` з валідним ім'ям, але без маркера в жодному tenant-і, старші за 24 год; файли з невалідними іменами не видаляються (Warning);
+  4. запобіжники: помилка БД або ФС → tenant пропускається; кандидатів > 50% маркерів tenant-а (за > 20 маркерів) або > 500 за запуск → **нічого не видаляється** (Error `media_sweep_aborted`); `dry-run` лише логує кількості;
+  5. видалення: варіанти → маркер; лог `media_sweep tenant={id} mode={m} markers={n} candidates={n} deleted={n}`; `live ∖ маркери ≠ ∅` → Warning `media_missing_files tenant={id} count={n}`.
+  Час — `TimeProvider` (тести — `FakeTimeProvider`, `mtime` задається явно).
+
+#### 33.22.8 Безпека, логи, деплой
+
+- Публічна поверхня — лише `GET|HEAD /api/public/media/p/{file}`. `t/` і будь-які інші шляхи тома не обслуговуються. Оригінал не зберігається, віддається тільки вихід енкодера.
+- Логи (без `storage_key`, імен файлів клієнта, вмісту): `product_image_uploaded product={id} image={id} bytes={n} w={w} h={h} ms={t}`, `product_image_rejected product={id} code={code}`, `product_image_deleted product={id} image={id}`, `product_image_file_cleanup_failed image={id}` (Warning), `media_sweep …`, `media_sweep_aborted reason={…}` (Error). Тег Activity `beauty.product_image.result`.
+- Деплой (TASK-915, застосування — G4/G5): том `beauty_staging_media` → `api:/data/media` (rw; `read_only` кореня лишається); одноразово `chown 1654:1654` і `chmod 0750` тома; `api.env`: `Media__RootPath=/data/media`, `Media__PublicBaseUrl=https://beauty.<DOMAIN>`, `Media__SweepMode=dry-run`; nginx — новий `location ~ ^/api/beauty/inventory/products/[0-9a-fA-F-]{36}/images$` з `client_max_body_size 11m` (решта лишається 2m); рекомендовано `mem_limit` api 768m; бекап — `pg_dump`, одразу після нього `tar` тома (`docker run --rm -v beauty_staging_media:/m:ro …`); відновлення — `pg_restore`, потім розпакування в порожній том. Basic auth для `/api/public/media/` — ADR-027 Q1 (дефолт — як для `/api/public/`).
+
+#### 33.22.9 Тест-вимоги
+
+1. **Міграція (911):** Up → Down → Up; `Down` відмовляє за наявності рядків; FORCE; CHECK ключа (довжина, регістр, символи), `mime`, `size_bytes`, розмірів, `sort_order`; глобальний UNIQUE ключа (зокрема між двома tenant-ами); deferrable UNIQUE порядку (перестановка двох фото одним `UPDATE` проходить, дубль після commit — `23505`); CASCADE при видаленні товару (на копії, під owner); крос-tenant RLS; app-роль: `UPDATE` інших колонок, крім `sort_order` → `42501`; воркер `SELECT` → `42501`; `schema-drift`, `staging-grants-sync`.
+2. **Обробка (912, unit на фікстурах, без мережі):** JPEG з EXIF-орієнтацією 6 → пікселі повернуто, EXIF/GPS у результаті відсутні; PNG з альфою → WebP з альфою; анімований WebP → один кадр; GIF/SVG/HEIC/текст з розширенням `.jpg` → `415`; 1×10 000 і 199×199 → `422 image_dimensions_invalid`; «бомба» (заголовок 30 000×30 000) → `422` без повного декодування (контроль часу й пам'яті); зіпсований JPEG → `422 image_decode_failed`; мале зображення не збільшується; детермінізм розмірів варіантів.
+3. **CRM API (912, HTTP на PostgreSQL, тимчасова тека):** права (specialist / `inventory.manage = own` → `403`; owner/admin → OK); `product_images_disabled` без `RootPath`; чужий tenant → `404 product_not_found`; фото іншого товару → `404 product_image_not_found`; ліміт 8 і квота tenant-а (зокрема паралельні upload на 8-му фото → рівно один успіх, файли того, хто програв, видалено); reorder: перестановка → OK, дубль / чужий id / неповний набір → `422 invalid_image_order`; delete → файли й маркер зникли, повтор → `404`; ін'єкція збою БД після запису файлів → рядка немає, файлів немає; ін'єкція збою видалення файлу → `204`, файл лишився (його прибере очищувач); `no-store`; rate limit; `413` за розміром.
+4. **Роздача (912):** `200` і всі заголовки §33.22.4; `HEAD`; невалідні імена (`../`, `%2e%2e`, верхній регістр, інший `size`, `.jpg`, 31/33 символи, `t/...`) → `404`; symlink у теці `p/` → `404`; відсутній файл → `404` + `no-store`; маршрут не відкриває з'єднання з БД (фейк, що рахує з'єднання); `426` не застосовується; rate limit `public-media`.
+5. **P1 (912):** `imageUrl`/`images` для товарів з фото, `null`/`[]` без фото й за вимкненої функції; порядок; обрізання до `MaxImagesPerProduct`; один додатковий запит (без N+1); тест серіалізації: поля V1 без змін, нові поля абсолютні URL з `PublicBaseUrl`.
+6. **Очищувач (912):** `off` нічого не робить; `dry-run` нічого не видаляє; `delete`: сирота старша за 24 год видаляється, молодша — ні; живий ключ не видаляється; `*.tmp` > 1 год видаляється; невидимий tenant → пропуск; помилка БД на tenant-і → пропуск; поріг 50% / 500 → відмова без жодного видалення; файли з невалідними іменами не чіпаються; `media_missing_files`.
+7. **Frontend CRM (913):** vitest чистої логіки (вибір і перевірка файлу, розрахунок зменшення, оптимістичний порядок і відкат, мапінг кодів, ховання дій без `canEditCatalog`); mock-клієнт відтворює `415`, `413`, `too_many_images`, `invalid_image_order`.
+8. **Регресія:** наявні тести P1 (§33.19 п.2) і CRUD товарів (§32) зелені; `AuthzBaselineMatrixTests` доповнено трьома маршрутами фото.
+
+#### 33.22.10 Задачі й відкриті питання
+
+Задачі TASK-910…917 і DAG — ADR-027 §10. Human gates — ADR-027 §6 (G1 схема, G2 ліцензія ImageSharp, G3 міграція, G4 інфраструктура, G5 бекап, G6 `SweepMode=delete`, G7 мердж). Відкриті питання — ADR-027 §7 (Q1 basic auth для `/api/public/media/` на staging, Q2 ліміти, Q3 фото в рядках замовлення, Q4 фото майстрів, Q5 розміри/якість). Дефолти діють до відповіді людини.
