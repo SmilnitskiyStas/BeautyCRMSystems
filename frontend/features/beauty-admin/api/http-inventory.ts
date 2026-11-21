@@ -1,4 +1,5 @@
 import { apiJson } from "@/features/beauty-auth/session";
+import { downscaleImage } from "../inventory/images";
 import type { BeautyAdminApi } from "./client";
 import type {
   AlertKind,
@@ -479,7 +480,7 @@ export const httpInventoryApi: InventoryApi = {
   updateInventoryProduct: async (id, r) => toProduct(await send("PUT", `/products/${enc(id)}`, r)),
   addProductImage: async (productId, file) => {
     const body = new FormData();
-    body.append("file", file);
+    body.append("file", await downscaleImage(file));
     return toProductImage(await apiJson(`${B}/products/${enc(productId)}/images`, { method: "POST", body, cache: "no-store" }));
   },
   deleteProductImage: async (productId, imageId) => {

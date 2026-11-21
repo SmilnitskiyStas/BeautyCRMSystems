@@ -16,6 +16,46 @@ export function validateImageFile(file: { type: string; size: number }, currentC
   return null;
 }
 
+export const IMAGE_MAX_SIDE = 2560;
+
+/** Розмір після зменшення так, щоб довша сторона ≤ `max`; `null` = зменшення не потрібне. */
+export function fitSize(w: number, h: number, max = IMAGE_MAX_SIDE): { width: number; height: number } | null {
+  const long = Math.max(w, h);
+  if (long <= max) return null;
+  const k = max / long;
+  return { width: Math.max(1, Math.round(w * k)), height: Math.max(1, Math.round(h * k)) };
+}
+
+/**
+ * Зменшує зображення в браузері до довшої сторони ≤2560 (ADR-027 §2.5) зі збереженням типу.
+ * Будь-який збій (немає canvas/декодера, результат не менший) - повертає оригінал; сервер лишається авторитетним.
+ */
+export async function downscaleImage(file: File): Promise<File> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    const size = fitSize(bitmap.width, bitmap.height);
+    if (!size) {
+      bitmap.close();
+      return file;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = size.width;
+    canvas.height = size.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      bitmap.close();
+      return file;
+    }
+    ctx.drawImage(bitmap, 0, 0, size.width, size.height);
+    bitmap.close();
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, file.type, 0.9));
+    if (!blob || blob.type !== file.type || blob.size === 0 || blob.size >= file.size) return file;
+    return new File([blob], file.name, { type: file.type, lastModified: file.lastModified });
+  } catch {
+    return file;
+  }
+}
+
 /** Нова послідовність id після переміщення елемента `index` на `dir` (-1 вгору, +1 вниз); без змін поза межами. */
 export function moveId(ids: readonly string[], index: number, dir: -1 | 1): string[] {
   const to = index + dir;

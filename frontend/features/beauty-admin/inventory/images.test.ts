@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { BeautyApiError } from "@/features/beauty-auth/errors";
-import { humanizeImageError, moveId, validateImageFile } from "./images";
+import { fitSize, humanizeImageError, moveId, validateImageFile } from "./images";
+
+describe("fitSize", () => {
+  it("зменшує довшу сторону до 2560 зі збереженням пропорцій", () => {
+    expect(fitSize(5120, 2560)).toEqual({ width: 2560, height: 1280 });
+    expect(fitSize(1000, 4000)).toEqual({ width: 640, height: 2560 });
+  });
+  it("не чіпає малі", () => expect(fitSize(2560, 100)).toBeNull());
+});
 
 describe("validateImageFile", () => {
   it("приймає jpeg/png/webp до 10 МБ, відхиляє інше", () => {

@@ -12,9 +12,11 @@ const money = z.number();
 const locRef = z.object({ id: z.string(), name: z.string(), address: z.string().nullable().optional() });
 
 /** V1.1 (ADR-027, §33.22.3): URL абсолютні, беруться лише з DTO. */
+const httpsUrl = z.string().url().refine((u) => u.startsWith("https://"));
+
 export const productImageSchema = z.object({
-  url: z.string(),
-  thumbUrl: z.string(),
+  url: httpsUrl,
+  thumbUrl: httpsUrl,
   width: z.number().optional(),
   height: z.number().optional(),
 });
@@ -28,8 +30,15 @@ export const productSchema = z.object({
   categoryPath: z.string().nullable(),
   inStock: z.boolean(),
   // відсутнє (V1) або null = немає фото
-  imageUrl: z.string().nullable().optional(),
-  images: z.array(productImageSchema).nullable().optional(),
+  // невалідний/не-https URL = немає фото, каталог не ламається
+  imageUrl: httpsUrl.nullable().optional().catch(null),
+  images: z
+    .array(productImageSchema.nullable().catch(null))
+    .nullable()
+    .optional()
+    .catch(null)
+    .transform((a) => a?.filter((i): i is PublicProductImage => i !== null))
+    .optional(),
 });
 export type PublicProduct = z.infer<typeof productSchema>;
 
