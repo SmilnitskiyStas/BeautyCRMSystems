@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { useDraft } from "@/state/draft";
 import { DEFAULT_LIMITS, cartCount, cartTotal, useCart } from "@/state/cart";
 import { useShopCatalog } from "@/features/shop/useCatalog";
+import { ProductThumb } from "@/features/shop/ProductImages";
 import { Stepper } from "@/features/shop/Stepper";
 import { isShopDisabled, shopErrorText } from "@/features/shop/errors";
 import { formatPrice } from "@/lib/format";
@@ -94,6 +95,7 @@ export default function ShopScreen() {
                 const n = qty(p.id);
                 return (
                   <View key={p.id} style={{ flexDirection: "row", alignItems: "center", gap: space.md, backgroundColor: colors.surface, borderRadius: radius.md, padding: space.md, borderWidth: 1, borderColor: colors.border }}>
+                    <ProductThumb product={p} />
                     <View style={{ flex: 1 }}>
                       <Text style={{ fontFamily: fonts.bodyMedium, fontSize: 16, color: colors.text }}>{p.name}</Text>
                       <Text style={{ fontFamily: fonts.body, fontSize: 13, color: p.inStock ? colors.muted : colors.danger }}>

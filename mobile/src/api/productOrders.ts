@@ -11,6 +11,15 @@ import type { CatalogFetch } from "@/api/catalog";
 const money = z.number();
 const locRef = z.object({ id: z.string(), name: z.string(), address: z.string().nullable().optional() });
 
+/** V1.1 (ADR-027, §33.22.3): URL абсолютні, беруться лише з DTO. */
+export const productImageSchema = z.object({
+  url: z.string(),
+  thumbUrl: z.string(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+});
+export type PublicProductImage = z.infer<typeof productImageSchema>;
+
 export const productSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -18,6 +27,9 @@ export const productSchema = z.object({
   price: money,
   categoryPath: z.string().nullable(),
   inStock: z.boolean(),
+  // відсутнє (V1) або null = немає фото
+  imageUrl: z.string().nullable().optional(),
+  images: z.array(productImageSchema).nullable().optional(),
 });
 export type PublicProduct = z.infer<typeof productSchema>;
 
