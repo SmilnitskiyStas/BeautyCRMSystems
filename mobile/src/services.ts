@@ -5,7 +5,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createHttpBookingApi, type FetchLike } from "@beauty/booking-core";
 import { config } from "@/config";
 import { createCatalogApi, type CatalogFetch } from "@/api/catalog";
+import { createProductOrdersApi } from "@/api/productOrders";
 import { createLocalStore } from "@/storage/tokenStore";
+import { createOrderSubmitter } from "@/features/shop/submit";
 import { createBookingSubmitter } from "@/features/booking/submit";
 import { withUpgradeGuard } from "@/lib/upgrade";
 import { useUpgrade } from "@/state/upgrade";
@@ -28,7 +30,8 @@ const catalogFetch: CatalogFetch = withUpgradeGuard(
   onUpgrade,
 );
 
-export const bookingApi = createHttpBookingApi({ baseUrl: config.apiBaseUrl, fetch: bookingFetch });
+export const productOrdersApi = createProductOrdersApi({ baseUrl: config.apiBaseUrl, fetch: catalogFetch });
+export const bookingApi =createHttpBookingApi({ baseUrl: config.apiBaseUrl, fetch: bookingFetch });
 export const catalogApi = createCatalogApi({ baseUrl: config.apiBaseUrl, fetch: catalogFetch });
 
 const SECURE_OPTS: SecureStore.SecureStoreOptions = { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
@@ -42,6 +45,8 @@ export const localStore = createLocalStore(
   },
   AsyncStorage,
 );
+
+export const orderSubmitter = createOrderSubmitter({ api: productOrdersApi, store: localStore, generateKey: () => Crypto.randomUUID() });
 
 /** Ключ ідемпотентності: UUID v4 з expo-crypto (core не залежить від платформи). */
 export const bookingSubmitter = createBookingSubmitter({
