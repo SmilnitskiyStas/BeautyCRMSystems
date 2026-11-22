@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ComponentRef } from "react";
-import { KeyboardAvoidingView, Modal, Pressable, StyleSheet, Text, TextInput, View, type TextInputProps } from "react-native";
+import { Keyboard, KeyboardAvoidingView, Modal, Pressable, StyleSheet, Text, TextInput, View, type TextInputProps } from "react-native";
 import { colors, fonts, radius, space, TOUCH } from "@/theme";
 
 /**
@@ -35,10 +35,36 @@ export function InputSheet({
     if (visible) setDraft(initialValue);
   }, [visible, initialValue]);
 
+  // Клавіатура має відкритись одразу з панеллю. Android ігнорує focus(), поки вікно Modal ще не отримало фокус
+  // (autoFocus тут лишає поле «у фокусі» без клавіатури), тому фокусуємо після показу і повторюємо, доки клавіатури немає.
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const clearTimers = () => {
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+  };
+  const focusInput = () => {
+    clearTimers();
+    // перша спроба одразу; наступні лише якщо клавіатура так і не з'явилась (не смикаємо її під час анімації)
+    [0, 350, 700].forEach((ms, attempt) => {
+      timers.current.push(
+        setTimeout(() => {
+          const el = input.current;
+          if (!el || Keyboard.isVisible()) return;
+          if (attempt > 0 && el.isFocused()) el.blur(); // focus() на вже сфокусованому полі клавіатуру не відкриває
+          el.focus();
+        }, ms),
+      );
+    });
+  };
+  useEffect(() => {
+    if (!visible) clearTimers();
+    return clearTimers;
+  }, [visible]);
+
   const { value: _v, onChangeText: _c, onSubmitEditing: _s, onBlur: _b, onFocus: _f, style: _st, ...rest } = inputProps;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel} statusBarTranslucent onShow={() => input.current?.focus()}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel} statusBarTranslucent onShow={focusInput}>
       {/* behavior "padding" на обох платформах: KAV рахує лише реальне перекриття, тому не подвоює відступ, якщо вікно вже зменшилось */}
       <KeyboardAvoidingView behavior="padding" style={s.overlay}>
         <Pressable accessibilityLabel={cancelLabel} accessibilityRole="button" style={StyleSheet.absoluteFill} onPress={onCancel} />
@@ -50,7 +76,6 @@ export function InputSheet({
             placeholderTextColor={colors.muted}
             returnKeyType="done"
             {...rest}
-            autoFocus
             value={draft}
             onChangeText={setDraft}
             onSubmitEditing={() => onDone(draft, true)}
