@@ -3,7 +3,7 @@
 // developer_instructions, model, model_reasoning_effort, sandbox_mode, mcp_servers.
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { p, pp, isProjectMode, resolveModel } from "../../scripts/lib/core.mjs";
+import { p, pp, isProjectMode, resolveModel, rulesBlock, ruleText } from "../../scripts/lib/core.mjs";
 import { dumpToml } from "../../scripts/lib/toml.mjs";
 import { rewriteRefs } from "../../scripts/lib/refs.mjs";
 import { listSharedSkills } from "../claude/generate-skills.mjs";
@@ -23,6 +23,10 @@ function sandboxMode(agent, modelMap) {
 function developerInstructions(agent, skillsById) {
   const { data, body } = agent;
   let instr = body.trim();
+  const rules = rulesBlock(data);
+  if (rules) instr += `
+
+${rules}`;
 
   // guardrails block (Codex has no separate must_not field)
   if (data.must_not?.length) {
@@ -55,7 +59,7 @@ function developerInstructions(agent, skillsById) {
 function skillIndex() {
   const idx = new Map();
   for (const sk of listSharedSkills()) {
-    const src = readFileSync(sk.abs, "utf8");
+    const src = readFileSync(sk.abs, "utf8").replace(/\r\n/g, "\n");
     const m = src.match(/description:\s*>-?\s*\n([\s\S]*?)\n---/) || src.match(/description:\s*"?([^"\n]+)"?/);
     const d = (m ? m[1] : "").replace(/\s+/g, " ").trim();
     idx.set(sk.slug, { desc: d.length > 220 ? d.slice(0, 217).replace(/\s+\S*$/, "") + "…" : d });
@@ -75,7 +79,7 @@ export function generate(agent, { modelMap }) {
     name: data.id,
     description: description.replace(/\s+/g, " ").trim(),
     model,
-    model_reasoning_effort: effort || "medium",
+    model_reasoning_effort: data.runtime_hints?.effort || effort || "medium",
     sandbox_mode: sandboxMode(agent, modelMap),
     developer_instructions: developerInstructions(agent, skillsById),
   };
@@ -110,7 +114,7 @@ export function syncCodex({ check, agents, modelMap }) {
   const changes = [];
   for (const [fname, content] of wanted) {
     const target = join(dir, fname);
-    const cur = existsSync(target) ? readFileSync(target, "utf8") : null;
+    const cur = existsSync(target) ? readFileSync(target, "utf8").replace(/\r\n/g, "\n") : null;
     if (cur !== content) {
       drift++;
       changes.push(`${cur === null ? "create" : "update"} ${TARGET_DIR}/${fname}`);
@@ -141,6 +145,23 @@ export function syncCodex({ check, agents, modelMap }) {
       if (next !== cur) {
         drift++;
         changes.push("update AGENTS.md roster block");
+        if (!check) writeFileSync(agentsMd, next);
+      }
+    }
+  }
+
+  // AGENTS.md model-budget block (rule text from workflow/rules/model-budget.md) — same opt-in markers
+  if (existsSync(agentsMd)) {
+    const cur = readFileSync(agentsMd, "utf8");
+    const mk = "<!-- model-budget:start -->", ek = "<!-- model-budget:end -->";
+    if (cur.includes(mk) && cur.includes(ek)) {
+      const from = cur.indexOf(mk), to = cur.indexOf(ek, from);
+      const next = to < 0 ? cur : `${cur.slice(0, from)}${mk}
+${ruleText("model-budget")}
+${cur.slice(to)}`;
+      if (next !== cur) {
+        drift++;
+        changes.push("update AGENTS.md model-budget block");
         if (!check) writeFileSync(agentsMd, next);
       }
     }

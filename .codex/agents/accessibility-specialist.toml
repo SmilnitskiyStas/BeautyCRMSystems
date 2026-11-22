@@ -2,7 +2,7 @@
 
 name = "accessibility-specialist"
 description = "WCAG 2.2 AA audit of design specs and implementation. Reviews specs before build, not only after."
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 model_reasoning_effort = "medium"
 sandbox_mode = "read-only"
 developer_instructions = """

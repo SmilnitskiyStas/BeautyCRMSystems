@@ -3,6 +3,7 @@
 //   node scripts/doctor.mjs
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { libraryInfo } from "./lib/version.mjs";
 import { loadAgents, loadHookDefs, knownSkillIds, templateNames, p, listFiles } from "./lib/core.mjs";
 
 const ok = (m) => console.log(`  ✓ ${m}`);
@@ -22,8 +23,26 @@ function cliVersion(cmd) {
 console.log("Runtimes");
 for (const [cmd, label] of [["claude", "Claude Code"], ["codex", "Codex CLI"]]) {
   const v = cliVersion(cmd);
-  if (v) ok(`${label}: ${v}`);
+  if (v && cmd === "codex" && /(\d+)\.(\d+)\.(\d+)/.test(v)) {
+    const [a, b, c] = v.match(/(\d+)\.(\d+)\.(\d+)/).slice(1).map(Number);
+    if (a === 0 && (b < 171)) warn(`${label}: ${v} — older than 0.171.0; the mapped models are rejected (model_not_found). Run \`codex update\`.`);
+    else ok(`${label}: ${v}`);
+  } else if (v) ok(`${label}: ${v}`);
   else warn(`${label}: not found on PATH — its adapter cannot be verified`);
+}
+
+console.log("\nVersion");
+{
+  const v = libraryInfo();
+  if (v.version === "unknown") bad("VERSION file missing");
+  else {
+    ok(`agent-system ${v.version}${v.commit ? ` (${v.commit})` : ""}`);
+    if (!v.vendored) {
+      const cl = existsSync(p("CHANGELOG.md")) ? readFileSync(p("CHANGELOG.md"), "utf8") : "";
+      if (cl.split("\n").some((l) => l.trim() === `## ${v.version}`)) ok("CHANGELOG.md has an entry for this version");
+      else bad(`CHANGELOG.md has no "## ${v.version}" entry`);
+    }
+  }
 }
 
 console.log("\nAdapters");

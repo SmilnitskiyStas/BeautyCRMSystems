@@ -6,7 +6,7 @@ summary: Blocks a session from ending after code edits until a task log has been
 event: Stop
 script: hooks/scripts/task-log-sync.mjs
 applies_to: both
-codex_status: unverified
+codex_status: supported
 config_keys: [task_log_dir]
 ---
 

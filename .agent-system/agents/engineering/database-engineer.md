@@ -51,6 +51,8 @@ skills:
   - database/create-indexes
   - database/seed-data
 preload_skills: []
+include_rules:
+  - minimal-change
 runtime_hints:
   max_turns: 60
 read_only: false

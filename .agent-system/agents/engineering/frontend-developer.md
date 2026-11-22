@@ -52,6 +52,8 @@ skills:
   - frontend/integrate-content
   - frontend/add-motion-animation
 preload_skills: []
+include_rules:
+  - minimal-change
 runtime_hints:
   max_turns: 80
 read_only: false

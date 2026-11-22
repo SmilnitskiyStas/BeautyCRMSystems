@@ -29,10 +29,10 @@ export function copySupportDirs({ check }) {
   const changes = [];
   for (const dir of ["workflow", "schemas", "templates"]) {
     for (const f of listFiles(dir, "").filter((x) => /\.(md|json)$/.test(x))) {
-      const src = readFileSync(p(f), "utf8");
+      const src = readFileSync(p(f), "utf8").replace(/\r\n/g, "\n");
       const body = f.endsWith(".md") ? `${MARK}\n${src}` : src;
       const target = pp(".claude", f);
-      const cur = existsSync(target) ? readFileSync(target, "utf8") : null;
+      const cur = existsSync(target) ? readFileSync(target, "utf8").replace(/\r\n/g, "\n") : null;
       if (cur !== body) {
         drift++;
         changes.push(`${cur === null ? "create" : "update"} .claude/${f}`);
@@ -42,6 +42,15 @@ export function copySupportDirs({ check }) {
   }
   return { drift, changes };
 }
+
+// Rules (workflow/rules/<id>.md) injected into the generated body of agents that list them in
+// include_rules. HTML comments are stripped so notes for maintainers never reach the model.
+export function ruleText(id) {
+  const f = p("workflow", "rules", `${id}.md`);
+  if (!existsSync(f)) throw new Error(`unknown rule "${id}" (workflow/rules/${id}.md does not exist)`);
+  return readFileSync(f, "utf8").split(String.fromCharCode(13)).join("").replace(/<!--[\s\S]*?-->/g, "").trim();
+}
+export const rulesBlock = (data) => (data.include_rules || []).map(ruleText).join(String.fromCharCode(10, 10));
 
 export function listFiles(dir, ext = ".md") {
   const abs = p(dir);

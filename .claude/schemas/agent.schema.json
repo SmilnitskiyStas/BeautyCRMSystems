@@ -128,11 +128,21 @@
       },
       "description": "Subset of skills whose FULL text is injected into the agent at spawn (costs tokens on every spawn). Everything else in skills is discovered on demand through the Skill tool via its description. Keep this to 0-2."
     },
+    "include_rules": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+      "description": "Rules from workflow/rules/<id>.md whose text is appended to this agent's generated body (costs tokens on every spawn — keep each rule short)."
+    },
     "runtime_hints": {
       "type": "object",
       "additionalProperties": false,
       "description": "Optional token/safety hints. Adapters map the ones their runtime supports and ignore the rest.",
       "properties": {
+        "effort": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "xhigh", "max"],
+          "description": "Override the tier's default reasoning effort for this agent only (Claude: effort, Codex: model_reasoning_effort)."
+        },
         "max_turns": {
           "type": "integer",
           "minimum": 1,

@@ -20,6 +20,7 @@ itself (it is project runtime state) — merge the fragment in explicitly with
 | `compact-snapshot` | `PreCompact` | lifecycle | both |
 | `compact-restore` | `SessionStart` (`compact`) | lifecycle | both |
 | `agent-run-log` | `SubagentStop` | lifecycle | both |
+| `session-context` | `SessionStart` (`startup\|resume\|clear`) | lifecycle | both |
 
 ## Runtime config
 
@@ -37,8 +38,19 @@ shared helper, and it ships alongside them.
 
 ## Codex CLI
 
-`adapters/COMPATIBILITY.md` lists Codex's `hooks` feature as "stable," but no event
-name or config shape here has been verified against the binary the way
-`model-map.yaml` is (spec §8: verified behavior, not assumptions). Every hook above is
-Claude-only for now; `adapters/codex/generate-hooks.mjs` is deferred until that
-verification happens.
+Verified live on codex-cli 0.171.0 (2026-11-20). `sync-agents` writes `.codex/hooks/**` and an **inert**
+`.codex/hooks.available.json` with the hooks marked `codex_status: supported`; nothing runs until you opt in:
+`node scripts/apply-hook-settings.mjs --codex --apply --only session-context,dependency-gate` (writes
+`.codex/hooks.json`). Codex also needs the project trusted and each hook approved once inside Codex.
+
+| hook | Codex |
+|---|---|
+| `session-context` | supported — `SessionStart` (`startup\|resume`); injected active context reached the model |
+| `dependency-gate` | supported — `PreToolUse` on shell commands; blocks via JSON `permissionDecision: deny` (see below) |
+| `task-log-sync` | supported — `Stop` |
+| `path-deny-list` | not supported — Codex edits through `apply_patch`, which `PreToolUse` does not see |
+| `compact-snapshot`, `compact-restore`, `agent-run-log` | not supported — Codex has no `PreCompact` / `SubagentStop` |
+
+Blocking differs: Claude Code honours stderr + exit 2; Codex ignores exit 2 for `PreToolUse` (the hook is just
+marked "Failed" and the command still runs) and honours only a JSON `permissionDecision: "deny"`. `block()` in
+`hooks/scripts/lib/hook-io.mjs` picks the right one — Codex hook input carries a `turn_id`, Claude's does not.

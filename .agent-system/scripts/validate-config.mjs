@@ -3,7 +3,7 @@
 //   node scripts/validate-config.mjs
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { loadAgents, loadHookDefs, loadModelMap, knownSkillIds, p, projectRoot, isProjectMode } from "./lib/core.mjs";
+import { loadAgents, loadHookDefs, loadModelMap, knownSkillIds, ruleText, p, projectRoot, isProjectMode } from "./lib/core.mjs";
 
 const errors = [];
 const warnings = [];
@@ -42,6 +42,13 @@ for (const a of agents) {
     const slug = s.split("/").pop();
     if (skills.size === 0) { warnings.push(`${a.file}: skill "${s}" — skills/ not populated yet`); continue; }
     if (!skills.has(s) && !skillSlugs.has(slug)) errors.push(`${a.file}: skill "${s}" does not resolve under skills/`);
+  }
+}
+
+// 5a. include_rules resolve to workflow/rules/<id>.md
+for (const a of agents) {
+  for (const r of a.data.include_rules || []) {
+    try { ruleText(r); } catch (e) { errors.push(`${a.file}: ${e.message}`); }
   }
 }
 

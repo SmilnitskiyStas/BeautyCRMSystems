@@ -12,6 +12,7 @@ description: >-
 ### 1. Always (будь-який агент)
 - `CLAUDE.md` — стек, архітектура, multi-agent workflow, правила проєкту
 - `.claude/tasks/current.md` — що зараз в роботі
+- `.ai/memory/activeContext.md` — поточний фокус і наступна дія (memory bank), якщо файл заповнений; зазвичай уже підкладений hook-ом `session-context`, тоді не перечитувати
 - `.claude/docs/known-issues.md` (розділ "Resolved Issues") — чи ця задача не наступає на вже відому граблю; коротко, шукати за `Area`/ключовим словом, не читати весь файл лінійно, коли він виросте
 
 ### 2. Domain context

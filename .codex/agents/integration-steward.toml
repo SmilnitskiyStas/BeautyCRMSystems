@@ -2,7 +2,7 @@
 
 name = "integration-steward"
 description = "Folds the branches produced by parallel worktree agents into one integrate/* branch in dependency order, testing after each merge. Never merges into main."
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 model_reasoning_effort = "medium"
 sandbox_mode = "workspace-write"
 developer_instructions = """

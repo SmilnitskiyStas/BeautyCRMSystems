@@ -14,7 +14,19 @@ export function readHookInput() {
   }
 }
 
-export function block(reason) {
+// Block the action. Claude Code: stderr + exit 2. Codex CLI (its hook input carries a `turn_id`,
+// Claude's never does) ignores exit 2 for PreToolUse — verified live on codex-cli 0.171.0 — and only
+// honours a JSON `permissionDecision: "deny"` on stdout, so emit that there (exit 0).
+// Pass the hook input as the second argument.
+export function block(reason, input = {}) {
+  if (input && input.turn_id !== undefined) {
+    process.stdout.write(
+      JSON.stringify({
+        hookSpecificOutput: { hookEventName: input.hook_event_name || "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
+      })
+    );
+    process.exit(0);
+  }
   process.stderr.write(`${reason}\n`);
   process.exit(2);
 }

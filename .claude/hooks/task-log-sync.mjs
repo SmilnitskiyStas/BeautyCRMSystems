@@ -57,7 +57,8 @@ const hasRecentLog = safe(() => {
 if (!hasRecentLog) {
   block(
     `task-log-sync: this turn edited files but no task log under ${logDirName} was created or updated.\n` +
-      `Run create-task-log / update-task-status before finishing (workflow/task-lifecycle.md — task_log_written).`
+      `Run create-task-log / update-task-status before finishing (workflow/task-lifecycle.md — task_log_written).`,
+    input
   );
 }
 allow();

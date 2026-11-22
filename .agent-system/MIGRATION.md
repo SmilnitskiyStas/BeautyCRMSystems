@@ -119,5 +119,13 @@ library's own `.claude/`, which Claude Code can discover as duplicate skills and
 `git pull` the library repo into a project: the histories are unrelated and its directories would be
 merged into the project root.
 
+Since 2.2.0 the update can be done from inside the project: `/update-agents` (preview) and
+`/update-agents --apply`, or `node .agent-system/scripts/update-agent-system.mjs [--apply]`. A project on
+an older copy updates once by hand with the flow above; after that it can update itself.
+
+Check what is installed: `node .agent-system/scripts/version.mjs --project . [--latest]` — vendored
+version, version of the generated `.claude/` / `.codex/` output, and (with `--latest`) the newest
+release tag. After updating, re-run `sync-agents` so the stamp matches; `--check` reports a mismatch.
+
 Overlay extras: `exclude_agents: [id, ...]` drops library roles the project does not use (an unknown
 id fails the sync).

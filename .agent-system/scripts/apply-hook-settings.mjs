@@ -8,6 +8,8 @@
 //   node scripts/apply-hook-settings.mjs --apply --only agent-run-log,compact-snapshot
 //   node scripts/apply-hook-settings.mjs --apply --local        # write .claude/settings.local.json (personal, not for git)
 //   node scripts/apply-hook-settings.mjs --apply --project <dir>
+//   node scripts/apply-hook-settings.mjs --codex --apply --only session-context   # Codex: writes .codex/hooks.json
+//     (Codex hooks additionally need the project trusted and each hook approved once inside Codex)
 //
 // --only <ids>: wire just those hooks (matched by script name). Hooks already present in the
 // target file that are NOT in the fragment are left alone when --only is used; without
@@ -18,15 +20,18 @@ import { SETTINGS_FRAGMENT } from "../adapters/claude/generate-hooks.mjs";
 
 const argv = process.argv.slice(2);
 const apply = argv.includes("--apply");
+const codex = argv.includes("--codex");
 const local = argv.includes("--local");
+if (codex && local) { console.error("✗ --local does not exist for Codex (hooks.json is project config)"); process.exit(1); }
 const only = argv.includes("--only") ? argv[argv.indexOf("--only") + 1].split(",").filter(Boolean) : null;
 const out = (...s) => (isProjectMode() ? pp(...s) : p(...s));
-const fragmentPath = out(SETTINGS_FRAGMENT);
-const targetName = local ? "settings.local.json" : "settings.json";
-const settingsPath = out(".claude", targetName);
+const fragmentPath = codex ? out(".codex", "hooks.available.json") : out(SETTINGS_FRAGMENT);
+const targetName = codex ? "hooks.json" : local ? "settings.local.json" : "settings.json";
+const settingsPath = codex ? out(".codex", targetName) : out(".claude", targetName);
+const dirLabel = codex ? ".codex" : ".claude";
 
 if (!existsSync(fragmentPath)) {
-  console.error(`✗ ${SETTINGS_FRAGMENT} not found — run \`node scripts/sync-agents.mjs\` first`);
+  console.error(`✗ ${codex ? ".codex/hooks.available.json" : SETTINGS_FRAGMENT} not found — run \`node scripts/sync-agents.mjs\` first`);
   process.exit(1);
 }
 
@@ -63,11 +68,11 @@ function merged() {
 const nextHooks = merged();
 const baseRefDiffers = fragment.worktree?.baseRef && settings.worktree?.baseRef === undefined;
 if (JSON.stringify(settings.hooks || null) === JSON.stringify(nextHooks) && !baseRefDiffers) {
-  console.log(`✓ .claude/${targetName} already has these hooks`);
+  console.log(`✓ ${dirLabel}/${targetName} already has these hooks`);
   process.exit(0);
 }
 
-console.log(apply ? `Merging into .claude/${targetName}:` : `Would merge into .claude/${targetName} (dry run — pass --apply to write):`);
+console.log(apply ? `Merging into ${dirLabel}/${targetName}:` : `Would merge into ${dirLabel}/${targetName} (dry run — pass --apply to write):`);
 console.log(JSON.stringify(selected, null, 2));
 if (baseRefDiffers) console.log(`+ worktree.baseRef = "${fragment.worktree.baseRef}" (only set when you have not chosen a value yourself)`);
 

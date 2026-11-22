@@ -29,7 +29,8 @@ for (const pattern of denyPaths) {
     block(
       `path-deny-list: "${rel}" matches denied pattern "${pattern}" in .ai/hooks.config.yaml.\n` +
         `Generated files must be edited via their source and regenerated ` +
-        `(node scripts/sync-agents.mjs), not edited directly.`
+        `(node scripts/sync-agents.mjs), not edited directly.`,
+      input
     );
   }
 }

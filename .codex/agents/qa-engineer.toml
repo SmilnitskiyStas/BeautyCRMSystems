@@ -2,7 +2,7 @@
 
 name = "qa-engineer"
 description = "Owns the test suites — unit, component, e2e, SEO — plus cross-browser checks and quality thresholds."
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 model_reasoning_effort = "medium"
 sandbox_mode = "workspace-write"
 developer_instructions = """

@@ -1,11 +1,13 @@
 # Codex CLI model map — tier -> concrete model + reasoning effort.
 # The ONLY place a Codex model name appears.
-# Verified 2026-10-31 against codex-cli 0.154.0 (~/.codex/models_cache.json):
+# Verified 2026-11-20 against codex-cli 0.171.0 (~/.codex/models_cache.json) by real `codex exec` runs
+# with a ChatGPT account (each model answered):
 #   gpt-6-luna    "Fast and affordable model for easier tasks."
-#   gpt-6.1-sol   "Latest workhorse model for coding and everyday work."
-#   gpt-6-astra   "Frontier intelligence for the most demanding work."
-#   (also listed: gpt-6.1-terra — description gives no role, so it is not mapped;
-#    gpt-6-sol "previous generation workhorse"; gpt-5.6-* "older generation".)
+#   gpt-6.2-sol   "Fast, go-to model for coding and everyday work."
+#   gpt-6.2-astra "Our most capable model for complex coding and professional work."
+# Not mapped: gpt-6.1-terra (visual / computer use), gpt-6.1-sol and gpt-6-astra ("previous generation"),
+# gpt-6-sol and gpt-5.6-* ("legacy"). codex-cli 0.154.0 rejects all of these with model_not_found —
+# the CLI must be >= 0.171.0 (`codex update`).
 # Reasoning effort accepted: low | medium | high | xhigh | max (| ultra on sol/astra/terra).
 #
 # Codex model names change roughly per release — re-verify on upgrade;
@@ -13,15 +15,17 @@
 
 tiers:
   cheap: gpt-6-luna
-  standard: gpt-6.1-sol
-  reasoning: gpt-6.1-sol
-  frontier: gpt-6-astra
+  standard: gpt-6.2-sol
+  reasoning: gpt-6.2-sol
+  frontier: gpt-6.2-astra
 
+# frontier starts at medium: xhigh drains plan limits within minutes. Climb sol medium -> sol high ->
+# astra medium -> astra high one step at a time (workflow/rules/model-budget.md); xhigh+ only on request.
 effort:
   cheap: low
   standard: medium
   reasoning: high
-  frontier: xhigh
+  frontier: medium
 
 # Codex per-agent sandbox. Adapter picks: read_only agents -> read-only; agents with
 # edit/shell capability -> workspace-write; others -> read-only. Never danger-full-access

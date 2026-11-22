@@ -57,6 +57,8 @@ skills:
   - backend/write-backend-tests
   - workflow/create-contract
 preload_skills: []
+include_rules:
+  - minimal-change
 runtime_hints:
   max_turns: 80
 read_only: false
