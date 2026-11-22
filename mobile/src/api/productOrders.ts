@@ -88,6 +88,13 @@ export interface CreateProductOrderRequest {
 
 const createdSchema = z.object({ publicToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/), order: productOrderSchema });
 const orderEnvelope = z.object({ order: productOrderSchema });
+/** P4: `paymentUrl` - сторінка оплати monobank (ADR-028), лише https; відсутнє/невалідне = без переходу (стан визначає `order`). */
+const payEnvelope = orderEnvelope.extend({ paymentUrl: httpsUrl.nullable().optional().catch(null) });
+export interface PayResponse {
+  order: PublicProductOrder;
+  /** Куди відкрити клієнта для оплати (рахунок створено, замовлення - «оплата в процесі»); null - оплата вже відпрацювала. */
+  paymentUrl: string | null;
+}
 const errBody = z.object({ order: productOrderSchema.optional(), productIds: z.array(z.string()).optional(), total: z.number().optional() });
 
 /** Extras помилки (`order`, `productIds`, `total`) з `BookingApiError.details`; усе необов'язкове. */
@@ -162,8 +169,9 @@ export function createProductOrdersApi(opts: { baseUrl: string; fetch: CatalogFe
     },
 
     /** P4: тайм-аут 30 с (§33.10 D). Мережеву помилку не повторювати наосліп - спершу `getOrder`. */
-    async pay(tenantSlug: string, token: string): Promise<PublicProductOrder> {
-      return (await call(`${orderPath(tenantSlug, token)}/pay`, orderEnvelope, { method: "POST", body: {}, timeoutMs: 30_000 })).data.order;
+    async pay(tenantSlug: string, token: string): Promise<PayResponse> {
+      const d = (await call(`${orderPath(tenantSlug, token)}/pay`, payEnvelope, { method: "POST", body: {}, timeoutMs: 30_000 })).data;
+      return { order: d.order, paymentUrl: d.paymentUrl ?? null };
     },
 
     async cancel(tenantSlug: string, token: string): Promise<PublicProductOrder> {

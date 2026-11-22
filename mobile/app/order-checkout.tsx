@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { View } from "react-native";
 import { useRouter } from "expo-router";
+import * as Linking from "expo-linking";
 import { useTranslation } from "react-i18next";
 import { BookingApiError, clientSchema } from "@beauty/booking-core";
 import { localStore, orderSubmitter, productOrdersApi } from "@/services";
@@ -16,8 +17,12 @@ import { Body, Button, ErrorText, Field, H1, Label, Screen, Spinner } from "@/ui
 import { space } from "@/theme";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+/** ADR-028: сторінка оплати monobank у системному браузері; повернення - сторінкою банку на beautycrm://order. */
+const openUrl = async (url: string) => {
+  await Linking.openURL(url);
+};
 
-/** Оформлення: ім'я/телефон (без email і згод) -> P2 -> одразу P4 (mock-оплата) -> екран статусу. */
+/** Оформлення: ім'я/телефон (без email і згод) -> P2 -> одразу P4 (mock або сторінка monobank, ADR-028) -> екран статусу. */
 export default function OrderCheckoutScreen() {
   const { t } = useTranslation();
   const router = useRouter();
@@ -107,7 +112,7 @@ export default function OrderCheckoutScreen() {
     const token = await localStore.getOrderToken(created.localId);
     let notice = "";
     if (token && created.order.status === "pending_payment") {
-      const outcome = await payWithReconcile({ api: productOrdersApi, sleep }, location.tenantSlug, token);
+      const outcome = await payWithReconcile({ api: productOrdersApi, sleep, openPaymentPage: openUrl }, location.tenantSlug, token);
       if (outcome.errorCode) notice = outcome.errorCode;
       if (outcome.order) await localStore.updateOrderSnapshot(created.localId, { status: outcome.order.status }).catch(() => undefined);
     }

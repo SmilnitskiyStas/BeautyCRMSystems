@@ -1,3 +1,4 @@
+using BeautyCrm.Api.Payments;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using BeautyCrm.Api.Auth;
 using BeautyCrm.Api.Auth.ControlPlane;
@@ -54,6 +55,7 @@ builder.Services
     .AddBeautyAi()
     .AddBeautyAiSecretsStartupCheck() // keyring ключів ШІ (Ai:Secrets:*): валідація лише логується, старт не ламає
     .AddBeautyApplication()
+    .AddBeautyPayments(builder.Configuration) // ADR-028: Payments:Provider=mock|monobank (тестовий режим); підміняє mock IPaymentService
     .AddBeautyAuthData()
     .AddBeautyAuthApi(builder.Configuration, builder.Environment) // JWT, ролі, rate limit; без Auth:JwtSigningKey додаток не стартує
     .AddBeautyAiApi(builder.Configuration) // налаштування ШІ (TASK-716): ліміт ключів, мапінг винятків ШІ, swagger-фільтр секрету

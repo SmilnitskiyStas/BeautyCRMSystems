@@ -6236,6 +6236,8 @@ Content-Type: application/json
 | замовлення закрите (скасоване тощо) | `409 {code: "order_closed", order}` | без змін |
 | невідомий токен | `404 not_found` | — |
 
+**Провайдер monobank (ADR-028, §33.23):** при `Payments:Provider=monobank` успішний P4 відповідає `200 {order, paymentUrl}` - замовлення `pending_payment` з `paymentInProgress = true`; клієнт відкриває `paymentUrl` (лише https) і далі опитує P3. Повторний P4 до `PaymentStaleSeconds` -> `409 payment_in_progress`; після - reconcile за статусом рахунку (`payment_failed`, якщо рахунок `failure|expired`). Поле `paymentUrl` відсутнє з mock.
+
 Гарантії сервера: не більше одного списання грошей на замовлення; якщо гроші списано, замовлення гарантовано стане `paid` або `refunded` (повтор `POST /pay` після `PaymentStaleSeconds` або дія адміністратора завершує завислу оплату). **Застосунок не повторює `/pay` наосліп** після мережевої помилки — спершу `GET` (§33.10, крок D).
 
 ### 33.8 Скасування клієнтом (P5)
@@ -6636,3 +6638,19 @@ EF: `ProductImage : TenantEntity` (`ProductId`, `StorageKey`, `Mime`, `SizeBytes
 9. **Mobile** — `width`/`height` опціональні на клієнті; URL мають бути `https`; невалідний елемент відкидається.
 
 Повний перелік і причини — ADR-027 §12.
+
+### 33.23 Оплата через monobank acquiring (ADR-028, v0.43, 2026-11-22, тестовий режим)
+
+**Конфіг (сервер):** `Payments:Provider` = `mock` (за замовч.) | `monobank`; `Monobank__Token` (лише секрет, тестовий токен з api.monobank.ua); `Monobank:TestMode` = `true` (обов'язково, інакше помилка старту); `Monobank:PublicBaseUrl` - публічна https-адреса API; `Monobank:InvoiceValiditySeconds` 60..3600 (300); `Monobank:ApiBaseUrl` (https://api.monobank.ua); `Monobank:AppReturnUrl` (`beautycrm://order`).
+
+**P4 (адитивно до §33.7):** `200 {order, paymentUrl}`. Рахунок: `amount` у копійках, `ccy = 980`, `merchantPaymInfo.reference` = `PaymentId` (32 hex), `redirectUrl` = `{PublicBaseUrl}/api/public/payments/return`, `webHookUrl` = `{PublicBaseUrl}/api/public/{tenantSlug}/payments/monobank/webhook`, `paymentType = debit`. Один рахунок на `beauty_payments.id` (`provider = monobank`, `provider_payment_id` = `invoiceId`).
+
+**Вебхук** `POST /api/public/{tenantSlug}/payments/monobank/webhook` (без JWT, rate limit `public-read`, тіло ≤ 64 КБ): `X-Sign` (base64 DER ECDSA-SHA256 над сирим тілом, ключ `GET /api/merchant/pubkey`) невалідний -> `401`; валідний -> `200` завжди. Статуси: `success` -> фіналізація (§33.16 п.4, нестача -> компенсація); `failure|expired|reversed` -> платіж `failed`, claim знято; `created|processing|hold` -> без змін. Ігнор (лог): невідомий `reference`, `invoiceId` не збігається з платежем, сума не збігається. Оплата на закрите замовлення -> повернення 100%.
+
+**Повернення:** `POST /api/merchant/invoice/cancel` (`extRef` = `PaymentId`, сума в копійках); `reversed` = уже повернено. Записи (передоплата) і платежі `mock_*` - mock.
+
+**Сторінка повернення** `GET /api/public/payments/return` - HTML без стану (CSP `default-src 'none'`, `no-store`), веде на `Monobank:AppReturnUrl`. Slug `payments` зарезервовано.
+
+**Застосунок:** `paymentUrl` -> системний браузер (`Linking.openURL`), опитування P3 за §33.10 D, перезапит P3 при поверненні на передній план; повторний P4 сторінку вдруге не відкриває.
+
+**Логи:** `monobank_invoice_created payment={id} test={bool}`, `payment_webhook provider=monobank payment={id} status={s} outcome={o}`, `payment_webhook_rejected reason=bad_signature|invalid_body`, `payment_webhook_ignored reason=…`, `product_order_payment_orphan`. Токен, тіло вебхука й підпис не логуються.

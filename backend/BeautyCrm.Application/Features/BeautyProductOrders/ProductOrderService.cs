@@ -291,12 +291,22 @@ public sealed partial class ProductOrderService(
         PaymentResult charge;
         try
         {
-            charge = await payments.ChargeAsync(new PaymentCharge(paymentId, PaymentPurpose.ProductOrder, o.Id, o.Total, Currency), ct);
+            charge = await payments.ChargeAsync(new PaymentCharge(paymentId, PaymentPurpose.ProductOrder, o.Id, o.Total, Currency, tenant.Slug), ct);
         }
         catch (Exception ex)
         {
             log.LogError("product_order_payment_unknown order={OrderId} error={Error}", o.Id, ex.GetType().Name);
             return await InProgressAsync(o, "unknown");
+        }
+        if (charge.Pending)
+        {
+            // ADR-028: рахунок провайдера створено/ще відкритий - клієнт платить на сторінці провайдера; claim лишається, результат дасть вебхук або reconcile
+            log.LogInformation("product_order_payment order={OrderId} attempt={Attempt} result={Result}", o.Id, o.PaymentAttempts, "awaiting_customer");
+            Result_("payment_awaiting_customer");
+            var current = await store.GetOrderAsync(o.Id, CancellationToken.None) ?? o;
+            return charge.CheckoutUrl is { } url
+                ? new PublicProductOrderResult(ToDto(current, clock.GetUtcNow()), false, url)
+                : WithOrder(ErrorKind.Conflict, "payment_in_progress", "Payment is in progress.", current, clock.GetUtcNow());
         }
         if (!charge.Success)
         {
@@ -388,6 +398,7 @@ public static class ProductOrderServiceExtensions
     {
         services.AddSingleton(options);
         services.AddScoped<ProductOrderService>();
+        services.AddProductOrderPaymentNotifications(); // ADR-028: вебхук провайдера оплати
         services.AddScoped<ProductOrderAdminService>(); // CRM (TASK-903): не залежить від PublicTenantResolver й прапора Enabled
         return services;
     }

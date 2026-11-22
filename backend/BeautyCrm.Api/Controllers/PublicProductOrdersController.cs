@@ -83,7 +83,7 @@ public sealed class PublicProductOrdersController(ProductOrderService service) :
         return this.ToResult(await service.GetAsync(publicToken, ct));
     }
 
-    /// <summary>P4: оплата (V1 - mock, тіло ігнорується). 402 payment_failed, 409 stock_unavailable|payment_in_progress|order_expired|order_closed, 422 payment_attempts_exceeded.</summary>
+    /// <summary>P4: оплата (mock або рахунок monobank - тоді 200 + paymentUrl, ADR-028; тіло ігнорується). 402 payment_failed, 409 stock_unavailable|payment_in_progress|order_expired|order_closed, 422 payment_attempts_exceeded.</summary>
     [HttpPost("product-orders/{publicToken}/pay")]
     [EnableRateLimiting(PublicRateLimit.Write)]
     [RequestSizeLimit(8 * 1024)]
@@ -108,7 +108,7 @@ public sealed class PublicProductOrdersController(ProductOrderService service) :
     private IActionResult Envelope(PublicProductOrderResult r)
     {
         if (r.Replayed) Response.Headers["Idempotent-Replayed"] = "true";
-        return Ok(new PublicProductOrderEnvelope(r.Order));
+        return Ok(new PublicProductOrderEnvelope(r.Order, r.PaymentUrl));
     }
 
     private void NoStore()

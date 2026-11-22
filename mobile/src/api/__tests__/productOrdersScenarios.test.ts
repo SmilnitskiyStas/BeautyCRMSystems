@@ -49,7 +49,16 @@ describe("P4 / P5 error bodies carry the order (§33.7, §33.8)", () => {
   });
 
   it("pay idempotent replay (already paid) resolves to the paid order", async () => {
-    expect((await setup(res(200, { order: order({ status: "paid" }) }, { "Idempotent-Replayed": "true" })).api.pay("s", "T")).status).toBe("paid");
+    expect((await setup(res(200, { order: order({ status: "paid" }) }, { "Idempotent-Replayed": "true" })).api.pay("s", "T")).order.status).toBe("paid");
+  });
+
+  it("pay with monobank invoice: https paymentUrl passed through, anything else dropped (ADR-028)", async () => {
+    const inv = order({ paymentInProgress: true, canPay: false, canCancel: false });
+    const ok = await setup(res(200, { order: inv, paymentUrl: "https://pay.mbnk.biz/p2_x" })).api.pay("s", "T");
+    expect(ok.paymentUrl).toBe("https://pay.mbnk.biz/p2_x");
+    expect(ok.order.paymentInProgress).toBe(true);
+    expect((await setup(res(200, { order: inv, paymentUrl: "javascript:alert(1)" })).api.pay("s", "T")).paymentUrl).toBeNull();
+    expect((await setup(res(200, { order: inv })).api.pay("s", "T")).paymentUrl).toBeNull();
   });
 
   it("402 with .13 total: kopecks preserved in the body order", async () => {

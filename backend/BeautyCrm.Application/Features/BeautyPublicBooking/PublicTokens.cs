@@ -106,14 +106,17 @@ public sealed partial class PublicTenantResolver(IAuthStore store)
 {
     /// <summary>
     /// Slug-и, що збігаються з першим сегментом інших публічних маршрутів `api/public/{segment}/...` (ADR-022: каталог).
-    /// Їх не можна створити як tenant (див. PlatformTenantService) і вони завжди дають 404 тут.
+    /// Їх не можна створити як tenant (див. PlatformTenantService) і вони завжди дають 404 тут. `payments` - сторінка повернення після оплати (ADR-028).
     /// </summary>
-    public static readonly IReadOnlySet<string> ReservedSlugs = new HashSet<string>(StringComparer.Ordinal) { "resolve", "locations", "integrity" };
+    public static readonly IReadOnlySet<string> ReservedSlugs = new HashSet<string>(StringComparer.Ordinal) { "resolve", "locations", "integrity", "payments" };
 
     [GeneratedRegex("^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")]
     private static partial Regex SlugPattern();
 
     public Guid? TenantId { get; private set; }
+
+    /// <summary>Нормалізований slug визначеного tenant (ADR-028: адреса вебхука провайдера оплати).</summary>
+    public string? Slug { get; private set; }
 
     /// <summary>Модулі визначеного tenant (для функцій, що залежать від інших модулів, напр. beauty_inventory).</summary>
     public IReadOnlyList<string> Modules { get; private set; } = [];
@@ -137,6 +140,7 @@ public sealed partial class PublicTenantResolver(IAuthStore store)
             return false;
         store.UseTenant(tenant.Id);
         TenantId = tenant.Id;
+        Slug = normalized;
         Modules = [.. tenant.Modules];
         return true;
     }
