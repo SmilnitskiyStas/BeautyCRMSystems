@@ -18,7 +18,7 @@ import { space } from "@/theme";
 
 /**
  * Крок 1: заклад. Над пошуком - «Продовжити запис» (незавершений запис) і «Ви нещодавно були тут» (історія закладів).
- * Незавершений запис має пріоритет над автопереходом у збережений заклад: користувач сам обирає, продовжити чи ні.
+ * Якщо є історія або незавершений запис, автопереходу в збережений заклад немає: користувач сам обирає на головній.
  * Джерело (ADR-021 §2): збережена -> явний тап nearby (дозвіл лише тут) -> місто/код/QR. Deep link обробляє app/l/[code].
  */
 export default function LocationScreen() {
@@ -70,9 +70,11 @@ export default function LocationScreen() {
       const saved = await localStore.getLastLocation();
       const pendingDraft = await localStore.getBookingDraft().catch(() => null);
       setDraft(pendingDraft);
-      setRecents(await localStore.listRecentLocations().catch(() => []));
+      const history = await localStore.listRecentLocations().catch(() => []);
+      setRecents(history);
+      // є історія або незавершений запис -> лишаємося на головній (користувач обирає сам), без автопереходу в заклад
       const outcome = await resolveStart(
-        { deepLinkCode: null, savedCode: saved?.publicCode ?? null, geo, changing: !!change || !!pendingDraft },
+        { deepLinkCode: null, savedCode: saved?.publicCode ?? null, geo, changing: !!change || !!pendingDraft || history.length > 0 },
         { resolve: (c) => catalogApi.resolve(c).then(toResolved), clearSaved: () => localStore.clearLastLocation(), isNotFound },
       );
       if (outcome.kind === "resolved") return void (await choose(outcome.location, "replace"));
