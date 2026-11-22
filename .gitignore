@@ -37,3 +37,6 @@ scripts/dev/.state/
 .ai/state/
 .ai/logs/agent-runs.jsonl
 deploy/staging/migrations/
+
+# Ліцензія Six Labors (ImageSharp): лише секретом, не в git
+**/sixlabors.lic

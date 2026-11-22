@@ -12,3 +12,4 @@ BeautyCrm.Tests/
 .gitignore
 Dockerfile
 .dockerignore
+**/sixlabors.lic
