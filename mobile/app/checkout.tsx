@@ -89,6 +89,8 @@ export default function CheckoutScreen() {
         specialistName: specialistName || t("checkout.anySpecialist"),
       });
       await localStore.setProfile({ name: client.name, phone: client.phone, email: client.email });
+      // запис створено: більше не пропонуємо «Продовжити запис»
+      await localStore.clearBookingDraft().catch(() => undefined);
       setDone(result);
     } catch (e) {
       if (isSlotLost(e)) {

@@ -9,16 +9,25 @@ import { isNotFound, type NearbyItem, type LocationRef } from "@/api/catalog";
 import { resolveStart, type GeoPermission } from "@/lib/locationSource";
 import { parseLocationInput, formatPublicCode } from "@/lib/deeplink";
 import { linkConfig } from "@/config";
-import { toResolved, useChooseLocation } from "@/features/location/choose";
+import { toResolved, useChooseLocation, useResumeDraft } from "@/features/location/choose";
+import type { BookingDraft, RecentLocation } from "@/storage/tokenStore";
+import { shortDateLabel } from "@/lib/dates";
 import { ScanModal } from "@/features/location/ScanModal";
 import { Body, Button, ErrorText, Field, H1, Row, Screen, Spinner } from "@/ui";
 import { space } from "@/theme";
 
-/** Крок 1: заклад. Джерело (ADR-021 §2): збережена -> явний тап nearby (дозвіл лише тут) -> місто/код/QR. Deep link обробляє app/l/[code]. */
+/**
+ * Крок 1: заклад. Над пошуком - «Продовжити запис» (незавершений запис) і «Ви нещодавно були тут» (історія закладів).
+ * Незавершений запис має пріоритет над автопереходом у збережений заклад: користувач сам обирає, продовжити чи ні.
+ * Джерело (ADR-021 §2): збережена -> явний тап nearby (дозвіл лише тут) -> місто/код/QR. Deep link обробляє app/l/[code].
+ */
 export default function LocationScreen() {
   const { t } = useTranslation();
   const { change } = useLocalSearchParams<{ change?: string }>();
   const choose = useChooseLocation();
+  const resume = useResumeDraft();
+  const [draft, setDraft] = useState<BookingDraft | null>(null);
+  const [recents, setRecents] = useState<RecentLocation[]>([]);
 
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
@@ -59,8 +68,11 @@ export default function LocationScreen() {
       const p = await Location.getForegroundPermissionsAsync();
       const geo: GeoPermission = p.status === "granted" ? "granted" : p.status === "denied" && !p.canAskAgain ? "denied" : "undetermined";
       const saved = await localStore.getLastLocation();
+      const pendingDraft = await localStore.getBookingDraft().catch(() => null);
+      setDraft(pendingDraft);
+      setRecents(await localStore.listRecentLocations().catch(() => []));
       const outcome = await resolveStart(
-        { deepLinkCode: null, savedCode: saved?.publicCode ?? null, geo, changing: !!change },
+        { deepLinkCode: null, savedCode: saved?.publicCode ?? null, geo, changing: !!change || !!pendingDraft },
         { resolve: (c) => catalogApi.resolve(c).then(toResolved), clearSaved: () => localStore.clearLastLocation(), isNotFound },
       );
       if (outcome.kind === "resolved") return void (await choose(outcome.location, "replace"));
@@ -92,6 +104,44 @@ export default function LocationScreen() {
     }
   };
 
+  const openRecent = async (r: RecentLocation) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await choose(toResolved(await catalogApi.resolve(r.publicCode)));
+    } catch (e) {
+      if (isNotFound(e)) {
+        // заклад закрито/прибрано з пошуку: з історії прибираємо
+        await localStore.removeRecentLocation(r.publicCode).catch(() => undefined);
+        setRecents((xs) => xs.filter((x) => x.publicCode !== r.publicCode));
+        setError(t("location.notFound"));
+      } else setError(humanizeBookingError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resumeDraft = async (d: BookingDraft) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await resume(d);
+    } catch (e) {
+      if (isNotFound(e)) {
+        await localStore.clearBookingDraft().catch(() => undefined);
+        setDraft(null);
+        setError(t("location.notFound"));
+      } else setError(humanizeBookingError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const dismissDraft = () => {
+    setDraft(null);
+    void localStore.clearBookingDraft().catch(() => undefined);
+  };
+
   const searchCity = async () => {
     if (city.trim().length < 2) return;
     setBusy(true);
@@ -111,6 +161,28 @@ export default function LocationScreen() {
       {busy && nearby.length === 0 ? <Spinner /> : null}
       {message ? <Body muted>{message}</Body> : null}
       {error ? <ErrorText>{error}</ErrorText> : null}
+
+      {draft ? (
+        <View style={{ gap: space.sm }}>
+          <Body muted>{t("location.draftTitle")}</Body>
+          <Row
+            title={draft.locationName}
+            subtitle={[draft.service.name, draft.specialist?.name, draft.date ? shortDateLabel(draft.date) : null].filter(Boolean).join(" · ")}
+            right={t("location.draftContinue")}
+            onPress={() => void resumeDraft(draft)}
+          />
+          <Button title={t("location.draftDismiss")} variant="secondary" onPress={dismissDraft} disabled={busy} />
+        </View>
+      ) : null}
+
+      {recents.length > 0 ? (
+        <View style={{ gap: space.sm }}>
+          <Body muted>{t("location.recentTitle")}</Body>
+          {recents.map((r) => (
+            <Row key={r.publicCode} title={r.name} subtitle={r.address ?? r.city ?? undefined} onPress={() => void openRecent(r)} />
+          ))}
+        </View>
+      ) : null}
 
       {nearby.length > 0 ? (
         <View style={{ gap: space.sm }}>

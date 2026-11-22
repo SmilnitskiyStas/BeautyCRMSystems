@@ -12,6 +12,7 @@ import { useTranslation } from "react-i18next";
 import { colors, fonts } from "@/theme";
 import { localStore } from "@/services";
 import { useUpgrade } from "@/state/upgrade";
+import { startDraftPersistence } from "@/state/persistDraft";
 import { Body, H1, Screen } from "@/ui";
 
 void SplashScreen.preventAutoHideAsync();
@@ -31,6 +32,9 @@ export default function RootLayout() {
   useEffect(() => {
     localStore.firstRunCleanup().catch(() => undefined).finally(() => setCleaned(true));
   }, []);
+
+  // незавершений запис -> блок «Продовжити запис» на головній
+  useEffect(() => startDraftPersistence(), []);
 
   useEffect(() => {
     if (loaded || error) void SplashScreen.hideAsync();

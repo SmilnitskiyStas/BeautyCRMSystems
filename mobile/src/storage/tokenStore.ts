@@ -23,6 +23,12 @@ export interface PlainKV {
 const INDEX_KEY = "beauty.appointments.index.v1";
 const LAST_LOCATION_KEY = "beauty.lastLocation.v1";
 const PROFILE_KEY = "beauty.profile.v1";
+/** Історія закладів (лише публічні дані закладу, без координат) і незавершений запис - AsyncStorage. */
+const RECENT_LOCATIONS_KEY = "beauty.recentLocations.v1";
+const BOOKING_DRAFT_KEY = "beauty.bookingDraft.v1";
+export const RECENT_LOCATIONS_MAX = 5;
+/** Незавершений запис старший за тиждень вважаємо неактуальним. */
+export const BOOKING_DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 /** Резервний реєстр localId токенів у SecureStore: щоб «видалити все» знайшло токени, навіть якщо індекс пошкоджено. */
 const TOKEN_IDS_KEY = "appt-token-ids";
 /** Ідемпотентний ключ створення запису, що ще не отримав відповіді (SecureStore). */
@@ -54,6 +60,52 @@ export const lastLocationSchema = z.object({
   name: z.string(),
 });
 export type LastLocation = z.infer<typeof lastLocationSchema>;
+
+export const recentLocationSchema = z.object({
+  publicCode: z.string().min(1),
+  name: z.string(),
+  address: z.string().nullable().optional(),
+  city: z.string().nullable().optional(),
+  /** Мілісекунди epoch останнього відкриття закладу. */
+  visitedAt: z.number(),
+});
+export type RecentLocation = z.infer<typeof recentLocationSchema>;
+
+/**
+ * Незавершений запис: заклад + обрані кроки. Слот не зберігається (швидко застаріває), дата - лише як підказка.
+ * Без контактів клієнта: ім'я/телефон живуть окремо в SecureStore (профіль).
+ */
+export const bookingDraftSchema = z.object({
+  publicCode: z.string().min(1),
+  locationName: z.string(),
+  service: z.object({
+    id: z.string().min(1),
+    name: z.string(),
+    durationMinutes: z.number(),
+    priceOriginal: z.number(),
+    priceFinal: z.number(),
+    description: z.string().optional(),
+    category: z.string().optional(),
+    promoLabel: z.string().optional(),
+    promotionId: z.string().optional(),
+  }),
+  /** null = «будь-який майстер». */
+  specialist: z
+    .object({
+      id: z.string().min(1),
+      name: z.string(),
+      role: z.string(),
+      photoUrl: z.string().nullable().optional(),
+      experienceYears: z.number().nullable().optional(),
+      bio: z.string().nullable().optional(),
+      rating: z.number().nullable().optional(),
+      reviewsCount: z.number().optional(),
+    })
+    .nullable(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  updatedAt: z.number(),
+});
+export type BookingDraft = z.infer<typeof bookingDraftSchema>;
 
 export const pendingKeySchema = z.object({
   fingerprint: z.string(),
@@ -143,6 +195,24 @@ export function createLocalStore(secure: SecureKV, plain: PlainKV) {
   }
   const writeOrderIndex = (items: OrderRecord[]) => plain.setItem(ORDER_INDEX_KEY, JSON.stringify(items));
 
+  async function listRecentLocations(): Promise<RecentLocation[]> {
+    const raw = await plain.getItem(RECENT_LOCATIONS_KEY);
+    if (!raw) return [];
+    try {
+      return z
+        .array(z.unknown())
+        .parse(JSON.parse(raw))
+        .flatMap((x) => {
+          const r = recentLocationSchema.safeParse(x);
+          return r.success ? [r.data] : [];
+        })
+        .sort((a, b) => b.visitedAt - a.visitedAt)
+        .slice(0, RECENT_LOCATIONS_MAX);
+    } catch {
+      return [];
+    }
+  }
+
   /** «Видалити мої дані на цьому пристрої»: токени (кожен ключ), профіль, pending-ключ, індекс, остання локація. */
   async function wipeAll(): Promise<void> {
     const ids = new Set([...(await readIndex()).map((i) => i.localId), ...(await readTokenIds())]);
@@ -159,6 +229,8 @@ export function createLocalStore(secure: SecureKV, plain: PlainKV) {
       secure.deleteItemAsync(PENDING_KEY),
       plain.removeItem(INDEX_KEY),
       plain.removeItem(LAST_LOCATION_KEY),
+      plain.removeItem(RECENT_LOCATIONS_KEY),
+      plain.removeItem(BOOKING_DRAFT_KEY),
     ]);
     if (results.some((r) => r.status === "rejected")) throw new Error("wipe_incomplete");
   }
@@ -206,6 +278,29 @@ export function createLocalStore(secure: SecureKV, plain: PlainKV) {
     setLastLocation: (l: LastLocation) =>
       plain.setItem(LAST_LOCATION_KEY, JSON.stringify(lastLocationSchema.parse(l))),
     clearLastLocation: () => plain.removeItem(LAST_LOCATION_KEY),
+
+    /** Нещодавні заклади: останній відкритий першим, без дублів за кодом, не більше RECENT_LOCATIONS_MAX. */
+    listRecentLocations,
+    async addRecentLocation(l: Omit<RecentLocation, "visitedAt">, now: number = Date.now()): Promise<void> {
+      const rec = recentLocationSchema.parse({ ...l, visitedAt: now });
+      const rest = (await listRecentLocations()).filter((i) => i.publicCode !== rec.publicCode);
+      await plain.setItem(RECENT_LOCATIONS_KEY, JSON.stringify([rec, ...rest].slice(0, RECENT_LOCATIONS_MAX)));
+    },
+    async removeRecentLocation(publicCode: string): Promise<void> {
+      const items = await listRecentLocations();
+      await plain.setItem(RECENT_LOCATIONS_KEY, JSON.stringify(items.filter((i) => i.publicCode !== publicCode)));
+    },
+
+    /** Незавершений запис; протермінований (TTL) або пошкоджений - видаляється й повертає null. */
+    async getBookingDraft(now: number = Date.now()): Promise<BookingDraft | null> {
+      const raw = await plain.getItem(BOOKING_DRAFT_KEY);
+      const d = parseJson(raw, bookingDraftSchema);
+      if (d && now - d.updatedAt < BOOKING_DRAFT_TTL_MS) return d;
+      if (raw !== null) await plain.removeItem(BOOKING_DRAFT_KEY);
+      return null;
+    },
+    setBookingDraft: (d: BookingDraft) => plain.setItem(BOOKING_DRAFT_KEY, JSON.stringify(bookingDraftSchema.parse(d))),
+    clearBookingDraft: () => plain.removeItem(BOOKING_DRAFT_KEY),
 
     /** Замовлення: спершу токен, потім індекс (збій між ними не лишає запис без токена). Повтор з тим самим localId оновлює. */
     async saveOrder(record: OrderRecord, token: string): Promise<void> {
