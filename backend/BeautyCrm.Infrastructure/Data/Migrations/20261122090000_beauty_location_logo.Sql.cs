@@ -101,11 +101,16 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
 
         private static void DropCatalogFunctions(MigrationBuilder mb)
         {
-            mb.Sql("SET ROLE beautycrm_catalog;");
-            mb.Sql("DROP FUNCTION IF EXISTS public.beauty_public_search_locations_by_city(text, integer);");
-            mb.Sql("DROP FUNCTION IF EXISTS public.beauty_public_nearby_locations(double precision, double precision, double precision, integer);");
-            mb.Sql("DROP FUNCTION IF EXISTS public.beauty_public_resolve_location(text);");
-            mb.Sql("RESET ROLE;");
+            // One statement on purpose: in the idempotent script (`migrations script --idempotent`) every mb.Sql becomes its own
+            // DO block guarded by a SELECT on __EFMigrationsHistory, which beautycrm_catalog cannot read - so the role must be
+            // reset inside the same block.
+            mb.Sql("""
+                SET ROLE beautycrm_catalog;
+                DROP FUNCTION IF EXISTS public.beauty_public_search_locations_by_city(text, integer);
+                DROP FUNCTION IF EXISTS public.beauty_public_nearby_locations(double precision, double precision, double precision, integer);
+                DROP FUNCTION IF EXISTS public.beauty_public_resolve_location(text);
+                RESET ROLE;
+                """);
         }
 
         private static void CreateCatalogFunctions(MigrationBuilder mb, bool withLogo)
