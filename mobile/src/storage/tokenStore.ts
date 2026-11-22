@@ -197,7 +197,11 @@ export function createLocalStore(secure: SecureKV, plain: PlainKV) {
 
   async function listRecentLocations(): Promise<RecentLocation[]> {
     const raw = await plain.getItem(RECENT_LOCATIONS_KEY);
-    if (!raw) return [];
+    if (!raw) {
+      // історії ще немає (стара збірка або перший вибір до цієї версії): показуємо збережену останню локацію
+      const last = parseJson(await plain.getItem(LAST_LOCATION_KEY), lastLocationSchema);
+      return last ? [{ ...last, visitedAt: 0 }] : [];
+    }
     try {
       return z
         .array(z.unknown())

@@ -51,6 +51,16 @@ describe("recent locations", () => {
   });
 });
 
+describe("recent locations fallback", () => {
+  it("shows the saved last location when history is empty (upgrade from an older build)", async () => {
+    const m = memory();
+    const s = createLocalStore(m.secure, m.plain);
+    expect(await s.listRecentLocations()).toEqual([]);
+    await s.setLastLocation({ publicCode: "7K2M9QXA", name: "Salon A" });
+    expect((await s.listRecentLocations()).map((l) => l.publicCode)).toEqual(["7K2M9QXA"]);
+  });
+});
+
 describe("booking draft", () => {
   it("round-trips and expires after TTL", async () => {
     const m = memory();
