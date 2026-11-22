@@ -3013,6 +3013,12 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .HasColumnType("numeric(9,6)")
                         .HasColumnName("latitude");
 
+                    b.Property<string>("LogoStorageKey")
+                        .HasMaxLength(32)
+                        .HasColumnType("character(32)")
+                        .HasColumnName("logo_storage_key")
+                        .IsFixedLength();
+
                     b.Property<decimal?>("Longitude")
                         .HasPrecision(9, 6)
                         .HasColumnType("numeric(9,6)")
@@ -3067,6 +3073,11 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                         .IsUnique()
                         .HasDatabaseName("ux_beauty_locations_public_code");
 
+                    b.HasIndex("LogoStorageKey")
+                        .IsUnique()
+                        .HasDatabaseName("ux_beauty_locations_logo_storage_key")
+                        .HasFilter("logo_storage_key IS NOT NULL");
+
                     b.HasIndex("Latitude", "Longitude")
                         .HasDatabaseName("ix_beauty_locations_discoverable_coords")
                         .HasFilter("is_discoverable AND is_active AND latitude IS NOT NULL");
@@ -3078,6 +3089,8 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
                             t.HasCheckConstraint("ck_beauty_locations_coordinates", "(latitude IS NULL) = (longitude IS NULL) AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180");
 
                             t.HasCheckConstraint("ck_beauty_locations_public_code", "public_code ~ '^[0-9A-HJKMNP-TV-Z]{8}$'");
+
+                            t.HasCheckConstraint("ck_beauty_locations_logo_storage_key", "logo_storage_key IS NULL OR logo_storage_key ~ '^[0-9a-f]{32}$'");
                         });
                 });
 

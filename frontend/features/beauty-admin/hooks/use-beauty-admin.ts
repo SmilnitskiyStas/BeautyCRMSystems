@@ -112,6 +112,14 @@ export function useUpdateLocation(id: string) {
   return useMutation({ mutationFn: (input: LocationInput) => beautyApi.updateLocation(id, input), onSuccess: invalidate });
 }
 
+export function useLocationLogoMutations(id: string) {
+  const invalidate = useInvalidateLocations();
+  return {
+    upload: useMutation({ mutationFn: (file: File) => beautyApi.uploadLocationLogo(id, file), onSuccess: invalidate }),
+    remove: useMutation({ mutationFn: () => beautyApi.deleteLocationLogo(id), onSuccess: invalidate }),
+  };
+}
+
 /** Закриття закладу на дати (§17); `reason` у відповіді лише для керівників. */
 export const useClosures = (locationId: LocationId, range: { from: string; to: string }, enabled = true) =>
   useQuery({

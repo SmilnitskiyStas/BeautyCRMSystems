@@ -104,7 +104,7 @@ public sealed class PublicCatalogApiTests : IClassFixture<AuthApiFixture>, IDisp
 
     private static async Task<string> RawBody(HttpResponseMessage r) => await r.Content.ReadAsStringAsync();
 
-    private static readonly string[] RefKeys = ["address", "city", "locationId", "name", "publicCode", "tenantSlug", "timezone"];
+    private static readonly string[] RefKeys = ["address", "city", "locationId", "logoUrl", "name", "publicCode", "tenantSlug", "timezone"];
 
     private static string[] Keys(JsonElement e) => e.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray();
 

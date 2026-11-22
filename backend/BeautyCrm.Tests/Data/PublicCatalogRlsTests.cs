@@ -177,14 +177,14 @@ public sealed class PublicCatalogRlsTests : IClassFixture<PostgresRlsFixture>
         cmd.Parameters.AddWithValue("c", s.Code);
         await using var r = await cmd.ExecuteReaderAsync();
         var cols = Enumerable.Range(0, r.FieldCount).Select(r.GetName).ToArray();
-        Assert.Equal(["public_code", "tenant_slug", "location_id", "name", "address", "city", "timezone"], cols);
+        Assert.Equal(["public_code", "tenant_slug", "location_id", "name", "address", "city", "timezone", "logo_storage_key"], cols);
         Assert.DoesNotContain("tenant_id", cols);
 
         await r.CloseAsync();
         await using var cmd2 = new NpgsqlCommand("SELECT * FROM public.beauty_public_nearby_locations(50.45, 30.52, 5, 5)", conn);
         await using var r2 = await cmd2.ExecuteReaderAsync();
         var cols2 = Enumerable.Range(0, r2.FieldCount).Select(r2.GetName).ToArray();
-        Assert.Equal(["public_code", "tenant_slug", "location_id", "name", "address", "city", "timezone", "distance_km"], cols2);
+        Assert.Equal(["public_code", "tenant_slug", "location_id", "name", "address", "city", "timezone", "distance_km", "logo_storage_key"], cols2);
     }
 
     // ---------- resolve ----------
@@ -393,6 +393,7 @@ public sealed class PublicCatalogRlsTests : IClassFixture<PostgresRlsFixture>
         Assert.False((bool)(await Scalar(admin, "SELECT has_column_privilege('beautycrm_catalog', 'beauty_locations', 'phone', 'SELECT')"))!);
         Assert.False((bool)(await Scalar(admin, "SELECT has_column_privilege('beautycrm_catalog', 'beauty_locations', 'working_hours', 'SELECT')"))!);
         Assert.True((bool)(await Scalar(admin, "SELECT has_column_privilege('beautycrm_catalog', 'beauty_locations', 'public_code', 'SELECT')"))!);
+        Assert.True((bool)(await Scalar(admin, "SELECT has_column_privilege('beautycrm_catalog', 'beauty_locations', 'logo_storage_key', 'SELECT')"))!);
         Assert.False((bool)(await Scalar(admin, "SELECT has_column_privilege('beautycrm_catalog', 'tenants', 'name', 'SELECT')"))!);
         Assert.False((bool)(await Scalar(admin, "SELECT has_table_privilege('beautycrm_catalog', 'beauty_clients', 'SELECT')"))!);
         Assert.False((bool)(await Scalar(admin, "SELECT has_table_privilege('beautycrm_catalog', 'beauty_appointments', 'SELECT')"))!);
@@ -409,5 +410,38 @@ public sealed class PublicCatalogRlsTests : IClassFixture<PostgresRlsFixture>
         await using (var r = await cmd.ExecuteReaderAsync())
             while (await r.ReadAsync()) rows.Add((r.GetString(0), r.GetString(1)));
         Assert.Equal([("beauty_locations", "{beautycrm_catalog}"), ("tenants", "{beautycrm_catalog}")], rows.ToArray());
+    }
+
+    /// <summary>Логотип: функції віддають лише ключ (трейлінг-колонка), решта hardening після DROP + CREATE незмінна.</summary>
+    [SkippableFact]
+    public async Task Functions_return_logo_storage_key_as_trailing_column_and_keep_hardening()
+    {
+        SkipIfNoDb();
+        var key = Guid.NewGuid().ToString("N");
+        var city = "LogoCity" + key[..10];
+        var logo = await SeedAsync("With Logo", lat: -33.123, lng: 151.456, city: city, discoverable: true);
+        var plain = await SeedAsync("No Logo", lat: -33.124, lng: 151.457, city: city, discoverable: true);
+        await using (var admin = await AdminAsync())
+            await new NpgsqlCommand($"UPDATE beauty_locations SET logo_storage_key = '{key}' WHERE id = '{logo.LocationId}'", admin).ExecuteNonQueryAsync();
+
+        var resolve = (await AppQueryAsync("SELECT logo_storage_key FROM public.beauty_public_resolve_location(@c)", ("c", logo.Code))).Single();
+        Assert.Equal(key, resolve[0]);
+        Assert.Equal("", (await AppQueryAsync("SELECT logo_storage_key FROM public.beauty_public_resolve_location(@c)", ("c", plain.Code))).Single()[0]);
+
+        var nearby = await AppQueryAsync(
+            "SELECT location_id::text, logo_storage_key FROM public.beauty_public_nearby_locations(-33.123, 151.456, 5, 10) WHERE location_id = ANY (@ids)",
+            ("ids", new[] { logo.LocationId, plain.LocationId }));
+        Assert.Equal(key, nearby.Single(r => r[0] == logo.LocationId.ToString())[1]);
+
+        var search = await AppQueryAsync("SELECT location_id::text, logo_storage_key FROM public.beauty_public_search_locations_by_city(@c, 10)", ("c", city));
+        Assert.Equal(key, search.Single(r => r[0] == logo.LocationId.ToString())[1]);
+
+        await using var conn = await AdminAsync();
+        Assert.Equal(3L, await Scalar(conn,
+            "SELECT count(*) FROM pg_proc p WHERE p.proname LIKE 'beauty\\_public\\_%' AND pg_get_userbyid(p.proowner) = 'beautycrm_catalog' AND p.prosecdef " +
+            "AND NOT has_function_privilege('public', p.oid, 'EXECUTE') AND array_to_string(p.proconfig, ',') = 'search_path=pg_catalog, pg_temp'"));
+        // a malformed key is rejected by the CHECK
+        await Assert.ThrowsAsync<PostgresException>(async () =>
+            await new NpgsqlCommand($"UPDATE beauty_locations SET logo_storage_key = 'NOT-A-KEY' WHERE id = '{plain.LocationId}'", conn).ExecuteNonQueryAsync());
     }
 }

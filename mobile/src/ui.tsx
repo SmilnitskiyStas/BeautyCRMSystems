@@ -63,9 +63,10 @@ export function Button({
 }
 
 /** Рядок-картка, що натискається (≥ 44px). */
-export function Row({ title, subtitle, right, onPress }: { title: string; subtitle?: string; right?: string; onPress: () => void }) {
+export function Row({ title, subtitle, right, leading, onPress }: { title: string; subtitle?: string; right?: string; leading?: ReactNode; onPress: () => void }) {
   return (
     <Pressable accessibilityRole="button" onPress={onPress} style={s.row}>
+      {leading}
       <View style={{ flex: 1 }}>
         <Text style={s.rowTitle}>{title}</Text>
         {subtitle ? <Text style={s.rowSub}>{subtitle}</Text> : null}

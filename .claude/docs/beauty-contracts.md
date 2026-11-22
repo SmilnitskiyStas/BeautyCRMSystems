@@ -3913,6 +3913,12 @@ TASK-817 (схема HMAC, вектор), TASK-818 (§27.3–§27.5, §27.7), TA
 - `backend/BeautyCrm.Tests/Data/PublicCatalogRlsTests.cs` — рівень даних: `public_code` (унікальність, формат, CHECK координат), definer-функції, ролі.
 - `backend/BeautyCrm.Tests/PublicBooking/PublicBookingApiTests.cs` — 426 (`old_app_version_gets_426_everywhere_on_public_api_but_labels_never_block_otherwise`), `integrity_failed` для ios/android (`X-Client-Integrity`), per-location ліміт (`MaxPublicCreatesPerLocationPerHour`, 0 = вимкнено).
 
+### 29.12 Логотип закладу (дельта, 2026-11-22; `.ai/artifacts/location-logo/API_CONTRACT.md`)
+Адитивно, без зміни наявних полів. Дані: `beauty_locations.logo_storage_key character(32) NULL` (CHECK `^[0-9a-f]{32}$`, partial UNIQUE `ux_beauty_locations_logo_storage_key`); файли - те саме медіасховище, що й фото товарів (ADR-027, варіанти 400/1600). Міграція `20261122090000_beauty_location_logo`: три функції каталогу (§29.1) перестворені (DROP під `SET ROLE beautycrm_catalog` + CREATE) з додатковою **останньою** колонкою `logo_storage_key text`, те саме hardening (REVOKE PUBLIC, EXECUTE лише `beautycrm_app`, власник `beautycrm_catalog`), `GRANT SELECT (logo_storage_key)` для ролі каталогу; Down відновлює попередні визначення.
+- Публічний каталог: `PublicLocationRefDto` і `PublicNearbyItemDto` + `logoUrl: string | null` (абсолютний URL варіанта 400; null, якщо логотипа немає або `Media:RootPath` порожній). БД віддає лише ключ, URL будує API.
+- CRM: `LocationDto` + `logoUrl` (§16). `PUT /api/beauty/locations/{id}/logo` (multipart, частина `file`, JPEG/PNG/WebP, ліміти й rate limit як у фото товарів) -> 200 `LocationDto`; `DELETE .../logo` -> 200 `LocationDto` (ідемпотентно). Право `locations.access` рівня edit. Попередній файл видаляється best effort після commit; очищувач сиріт (ADR-027) вважає ключі логотипів посиланими.
+- Помилки: 404 `location_not_found`, 404 `media_disabled`, 413 `file_too_large`, 415 `unsupported_image_type`, 422 `file_required` | `image_dimensions_invalid` | `image_decode_failed`, 429 `rate_limited`, 503 `media_busy`.
+
 ## §30. Права доступу користувачів: ролі, каталог прав, «Команда й доступи» (ADR-023, v0.33, 2026-11-15)
 
 Артефакт `API-CONTRACT-ACCESS-V1` (TASK-846). Джерело рішень: ADR-023 (accepted 2026-11-15; Q1–Q11 прийнято з рекомендованими дефолтами, див. §30.12). Уточнює §10 (ролі, матриця ендпоінтів), §13/§15 (керування працівниками), §20 (налаштування ШІ), §22.6, §24.6, §25.9, §26. Де §30 суперечить попереднім розділам щодо **доступу**, діє §30. Бізнес-логіка тих розділів не змінюється.

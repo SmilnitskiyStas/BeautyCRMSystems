@@ -26,3 +26,22 @@ describe("catalog api: coordinate privacy (M2)", () => {
     expect(JSON.parse(init.body!)).toEqual({ city: "Київ" });
   });
 });
+
+describe("catalog api: logoUrl", () => {
+  const ref = { publicCode: "7K2M9QXA", tenantSlug: "s", locationId: "l", name: "Salon", timezone: "Europe/Kyiv" };
+  const resolveWith = (extra: Record<string, unknown>) => {
+    const fetch = jest.fn<ReturnType<CatalogFetch>, Parameters<CatalogFetch>>().mockResolvedValue(ok({ ...ref, ...extra }));
+    return createCatalogApi({ baseUrl: "https://api.x", fetch }).resolve("7K2M9QXA");
+  };
+
+  it("accepts an https logo", async () => {
+    expect((await resolveWith({ logoUrl: "https://cdn.x/logo.png" })).logoUrl).toBe("https://cdn.x/logo.png");
+  });
+  it.each(["http://cdn.x/logo.png", "javascript:alert(1)", "not a url", 42])("turns %p into null without failing the parse", async (v) => {
+    expect((await resolveWith({ logoUrl: v })).logoUrl).toBeNull();
+  });
+  it("tolerates a missing or null logoUrl", async () => {
+    expect((await resolveWith({})).logoUrl ?? null).toBeNull();
+    expect((await resolveWith({ logoUrl: null })).logoUrl).toBeNull();
+  });
+});

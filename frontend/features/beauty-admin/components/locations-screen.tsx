@@ -9,6 +9,7 @@ import { useManagedLocations, useStaff } from "../hooks/use-beauty-admin";
 import { closedWeekdaysLabel, countActiveStaff, locationHoursLabel } from "../location-hours";
 import type { BeautyLocation, StaffMember } from "../types";
 import { LocationForm } from "./location-form";
+import { LocationAvatar } from "./location-logo";
 import { Badge, Card, EmptyState, LinkButton, PageHeader, PrimaryButton, QueryState } from "./ui";
 
 /** Картка закладу у списку: лише перегляд (§18.3), налаштування - на сторінці закладу. */
@@ -18,7 +19,10 @@ function LocationCard({ l, staff }: { l: BeautyLocation; staff: StaffMember[] | 
   return (
     <li className="flex min-w-0 flex-col gap-3 rounded-2xl bg-white p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="min-w-0 text-base font-semibold break-words">{l.name}</h2>
+        <div className="flex min-w-0 items-center gap-3">
+          <LocationAvatar location={l} />
+          <h2 className="min-w-0 text-base font-semibold break-words">{l.name}</h2>
+        </div>
         {active ? <Badge tone="ok">Активний</Badge> : <Badge tone="neutral">Неактивний</Badge>}
       </div>
       <dl className="m-0 flex flex-col gap-1.5 text-sm">

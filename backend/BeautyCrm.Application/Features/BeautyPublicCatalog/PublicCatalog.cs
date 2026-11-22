@@ -5,14 +5,14 @@ namespace BeautyCrm.Application.Features.BeautyPublicCatalog;
 
 /// <summary>
 /// ADR-022: публічний каталог закладів (cross-tenant, лише через definer-функції БД). Відповідь навмисно НЕ містить
-/// tenant_id, телефонів і будь-чого поза переліком полів.
+/// tenant_id, телефонів і будь-чого поза переліком полів. LogoUrl - абсолютний URL логотипу (варіант 400) або null (немає / медіа вимкнено).
 /// </summary>
 public sealed record PublicLocationRefDto(string PublicCode, string TenantSlug, Guid LocationId, string Name,
-    string? Address, string? City, string Timezone);
+    string? Address, string? City, string Timezone, string? LogoUrl = null);
 
 /// <param name="DistanceKm">Відстань до точки пошуку, км, з точністю 0.1.</param>
 public sealed record PublicNearbyItemDto(string PublicCode, string TenantSlug, Guid LocationId, string Name,
-    string? Address, string? City, string Timezone, decimal DistanceKm);
+    string? Address, string? City, string Timezone, decimal DistanceKm, string? LogoUrl = null);
 
 /// <summary>Тіло POST /locations/nearby. Координати живуть лише на час запиту: не логуються й не зберігаються.</summary>
 public sealed record NearbyRequest(double? Lat, double? Lng, double? RadiusKm = null);

@@ -2,6 +2,10 @@ using BeautyCrm.Api.Auth;
 using BeautyCrm.Api.Infrastructure;
 using BeautyCrm.Api.Tenancy;
 using BeautyCrm.Application.Features.BeautyLocations;
+using BeautyCrm.Application.Features.BeautyProductImages;
+using Microsoft.AspNetCore.Http.Features;
+using Err = BeautyCrm.Application.Features.BeautyCommon.Error;
+using BeautyCrm.Application.Features.BeautyCommon;
 using BeautyCrm.Application.Features.BeautyOverview;
 using BeautyCrm.Application.Features.BeautyAuth;
 using Microsoft.AspNetCore.Authorization;
@@ -19,7 +23,7 @@ namespace BeautyCrm.Api.Controllers;
 [Authorize(Policy = AuthPolicies.Staff)]
 [ProducesResponseType(StatusCodes.Status401Unauthorized)]
 [ProducesResponseType(StatusCodes.Status403Forbidden)]
-public sealed class LocationsController(LocationService locations) : ControllerBase
+public sealed class LocationsController(LocationService locations, LocationLogoService logos, MediaOptions media, UploadThrottle uploads) : ControllerBase
 {
     /// <summary>За замовчуванням лише активні; `includeInactive=true` враховується тільки для owner/admin.</summary>
     [HttpGet]
@@ -47,6 +51,61 @@ public sealed class LocationsController(LocationService locations) : ControllerB
     [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
     public async Task<IActionResult> Update(Guid id, [FromBody] LocationRequest request, CancellationToken ct) =>
         User.ToActor() is { } actor ? this.ToResult(await locations.UpdateAsync(actor, id, request, ct)) : Unauthorized();
+
+    // ---------- логотип закладу (ADR-027 медіасховище, контракт .ai/artifacts/location-logo) ----------
+
+    private IActionResult RateLimited()
+    {
+        Response.Headers.RetryAfter = "60";
+        return StatusCode(StatusCodes.Status429TooManyRequests, new ApiError("rate_limited", "Too many requests. Try again later."));
+    }
+
+    /// <summary>
+    /// 200 LocationDto. multipart/form-data, поле <c>file</c> (JPEG/PNG/WebP); ті самі ліміти, rate limit, конкурентність і конвеєр обробки, що й фото товарів.
+    /// Попередній логотип видаляється після commit (best effort).
+    /// </summary>
+    [HttpPut("{id:guid}/logo")]
+    [RequirePermission(PermissionKeys.LocationsAccess, PermissionLevels.Edit)]
+    [DisableFormValueModelBinding]
+    [ProducesResponseType<LocationDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status413PayloadTooLarge)]
+    [ProducesResponseType(StatusCodes.Status415UnsupportedMediaType)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> UploadLogo(Guid id, CancellationToken ct)
+    {
+        if (User.ToActor() is not { } actor) return Unauthorized();
+        if (!uploads.TryAcquire(actor.TenantId, actor.UserId)) return RateLimited();
+        // ліміт тіла для цього маршруту: файл + службові частини (тіло читається потоково нижче)
+        if (HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } f) f.MaxRequestBodySize = media.MaxUploadBytes + MultipartUpload.Overhead;
+        // глобальний ліміт одночасних upload на процес - ДО читання тіла в пам'ять
+        if (!uploads.TryEnter())
+        {
+            Response.Headers.RetryAfter = "5";
+            Result<LocationDto> busy = Err.Unavailable("media_busy", "Image processing is busy. Try again shortly.");
+            return this.ToResult(busy);
+        }
+        Result<LocationDto> result;
+        try { result = await logos.UploadAsync(actor, id, c => MultipartUpload.ReadFilePartAsync(Request, media, c), ct); }
+        finally { uploads.Exit(); }
+        if (!result.IsOk && result.Error!.Code == "media_busy") Response.Headers.RetryAfter = "5";
+        return this.ToResult(result);
+    }
+
+    /// <summary>200 LocationDto (logoUrl = null). Ідемпотентно.</summary>
+    [HttpDelete("{id:guid}/logo")]
+    [RequirePermission(PermissionKeys.LocationsAccess, PermissionLevels.Edit)]
+    [ProducesResponseType<LocationDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public async Task<IActionResult> DeleteLogo(Guid id, CancellationToken ct)
+    {
+        if (User.ToActor() is not { } actor) return Unauthorized();
+        if (!uploads.TryAcquire(actor.TenantId, actor.UserId)) return RateLimited();
+        return this.ToResult(await logos.DeleteAsync(actor, id, ct));
+    }
 
     // ---------- вихідні дні закладу (§17, TASK-701) ----------
 

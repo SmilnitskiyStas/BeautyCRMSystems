@@ -157,6 +157,10 @@ export interface BeautyAdminApi {
   createLocation(input: LocationInput): Promise<BeautyLocation>;
   /** PUT /locations/{id} (owner, admin) - 409 has_future_appointments | timezone_locked | location_name_taken */
   updateLocation(id: LocationId, input: LocationInput): Promise<BeautyLocation>;
+  /** PUT /locations/{id}/logo (owner/admin, multipart `file`) -> заклад з `logoUrl`: 404 not_found|media_disabled, 413, 415, 422 image_*, 429, 503 media_busy. */
+  uploadLocationLogo(id: LocationId, file: File): Promise<BeautyLocation>;
+  /** DELETE /locations/{id}/logo - ідемпотентно, `logoUrl = null`. */
+  deleteLocationLogo(id: LocationId): Promise<BeautyLocation>;
   /**
    * PUT /locations/{id}/closed-weekdays (owner, admin; §17) - повна заміна переліку. Без `confirm` і з активними записами
    * на нові вихідні: 409 `has_appointments_on_closed_days` (`BeautyApiError.conflicts`), змін немає.

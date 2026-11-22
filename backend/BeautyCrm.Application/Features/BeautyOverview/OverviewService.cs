@@ -14,7 +14,7 @@ namespace BeautyCrm.Application.Features.BeautyOverview;
 /// <remarks>WorkingHours — години роботи закладу (§18.1, формат §9); null = не задано (обмеження немає).</remarks>
 public sealed record LocationDto(Guid Id, string Name, string? Address, string Timezone, bool IsActive, string? Phone = null,
     IReadOnlyList<string>? ClosedWeekdays = null, JsonElement? WorkingHours = null, decimal? Latitude = null, decimal? Longitude = null,
-    string? PublicCode = null, string? City = null, bool IsDiscoverable = false);
+    string? PublicCode = null, string? City = null, bool IsDiscoverable = false, string? LogoUrl = null);
 
 /// <summary>
 /// KPI дня. AppointmentsCount — усі записи дня, крім скасованих; Revenue — сума price_final завершених (як в аналітиці);

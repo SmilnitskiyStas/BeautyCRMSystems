@@ -1,5 +1,6 @@
 import { BookingApiError } from "@beauty/booking-core";
 import { z } from "zod";
+import { optionalHttpsUrl } from "@/lib/urls";
 
 /**
  * Каталог закладів (ADR-022): міжtenant-ендпоінти, що живуть ТІЛЬКИ в mobile (не в packages/booking-core).
@@ -23,6 +24,8 @@ export const locationRefSchema = z.object({
   address: z.string().nullable().optional(),
   city: z.string().nullable().optional(),
   timezone: z.string(),
+  /** Логотип закладу: лише https, інакше null (каталог не ламається; бекенд може ще не слати поле). */
+  logoUrl: optionalHttpsUrl,
 });
 export type LocationRef = z.infer<typeof locationRefSchema>;
 

@@ -159,6 +159,7 @@ public class BeautyDbContext : DbContext
                     "(latitude IS NULL) = (longitude IS NULL) AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180");
                 // ADR-022
                 t.HasCheckConstraint("ck_beauty_locations_public_code", "public_code ~ '^[0-9A-HJKMNP-TV-Z]{8}$'");
+                t.HasCheckConstraint("ck_beauty_locations_logo_storage_key", "logo_storage_key IS NULL OR logo_storage_key ~ '^[0-9a-f]{32}$'");
             });
             b.Property(x => x.Latitude).HasPrecision(9, 6);
             b.Property(x => x.Longitude).HasPrecision(9, 6);
@@ -167,6 +168,8 @@ public class BeautyDbContext : DbContext
             b.Property(x => x.PublicCode).Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore); // незмінний (ADR-022 §1)
             b.HasIndex(x => x.PublicCode).IsUnique().HasDatabaseName("ux_beauty_locations_public_code");
             b.Property(x => x.City).HasMaxLength(100);
+            b.Property(x => x.LogoStorageKey).HasMaxLength(32).IsFixedLength();
+            b.HasIndex(x => x.LogoStorageKey).IsUnique().HasDatabaseName("ux_beauty_locations_logo_storage_key").HasFilter("logo_storage_key IS NOT NULL");
             b.Property(x => x.IsDiscoverable).HasDefaultValue(false);
             b.HasIndex(x => new { x.Latitude, x.Longitude }).HasDatabaseName("ix_beauty_locations_discoverable_coords")
                 .HasFilter("is_discoverable AND is_active AND latitude IS NOT NULL");

@@ -73,6 +73,7 @@ import { DEFAULT_GREETING, INITIAL_CHANNELS } from "./mock-data";
 import { httpTeamApi } from "./http-team";
 import { httpMarketingApi, toAppointmentCoupon } from "./http-marketing";
 import { httpInventoryApi } from "./http-inventory";
+import { downscaleImage } from "../inventory/images";
 import { httpProductOrdersApi } from "./http-product-orders";
 import { maskCouponCodes } from "../marketing/logic";
 
@@ -160,6 +161,7 @@ interface LocationDto {
   publicCode?: string | null;
   city?: string | null;
   isDiscoverable?: boolean;
+  logoUrl?: string | null;
 }
 /** §17: закриття закладу; `reason` лише керівникам. */
 interface ClosureDto {
@@ -503,6 +505,7 @@ const toLocation = (l: LocationDto): BeautyLocation => ({
   publicCode: typeof l.publicCode === "string" && l.publicCode ? l.publicCode : null,
   city: l.city ?? null,
   isDiscoverable: l.isDiscoverable === true,
+  logoUrl: typeof l.logoUrl === "string" && l.logoUrl ? l.logoUrl : null,
 });
 
 /** §28.11: PUT без полів не чіпає координати; обидва `null` очищають; створення - лише якщо задано. */
@@ -823,6 +826,15 @@ export const httpBeautyApi: BeautyAdminApi = {
         ...coordsBody(input, false),
       }),
     ),
+
+  uploadLocationLogo: async (id, file) => {
+    const body = new FormData();
+    body.append("file", await downscaleImage(file));
+    return toLocation(await apiJson<LocationDto>(`${B}/locations/${encodeURIComponent(id)}/logo`, { method: "PUT", body, cache: "no-store" }));
+  },
+
+  deleteLocationLogo: async (id) =>
+    toLocation(await apiJson<LocationDto>(`${B}/locations/${encodeURIComponent(id)}/logo`, { method: "DELETE", cache: "no-store" })),
 
   setClosedWeekdays: async (id, weekdays, confirm) => {
     const r = await send<LocationDto | undefined>("PUT", `/locations/${encodeURIComponent(id)}/closed-weekdays`, {
