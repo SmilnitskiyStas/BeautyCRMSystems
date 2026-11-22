@@ -44,7 +44,7 @@ public sealed class MonobankWebhookController(ProductOrderPaymentNotifications n
         MonobankInvoiceStatus? s;
         try { s = JsonSerializer.Deserialize<MonobankInvoiceStatus>(body, MonobankClient.Json); }
         catch (JsonException) { s = null; }
-        if (s is not { InvoiceId: { Length: > 0 } invoiceId } || !Guid.TryParseExact(s.Reference, "N", out var paymentId))
+        if (s is not { InvoiceId: { Length: > 0 } invoiceId } || !Guid.TryParseExact(s.Reference, "N", out var paymentId) || s.Ccy is not (null or 980))
         {
             log.LogWarning("payment_webhook_rejected provider={Provider} reason={Reason}", MonobankOptions.ProviderName, "invalid_body");
             return Ok(); // підпис валідний, але це не наш рахунок (reference іншого формату) - повтор не допоможе

@@ -47,7 +47,8 @@ public sealed class ProductOrderPaymentNotifications(
         // Paid
         if (p.Status == "refunded") return NotificationOutcome.AlreadyApplied; // компенсація/повернення вже завершені
         if (order.Status is "paid" or "fulfilled" or "refunded" && order.PaymentId == p.PaymentId) return NotificationOutcome.AlreadyApplied;
-        if (order is { Status: "pending_payment", PaymentStartedAt: { } startedAt })
+        // платіж уже вважався невдалим (напр. 404 статусу, а клієнт таки оплатив) - фіналізувати не можна, гроші повертаємо
+        if (p.Status == "pending" && order is { Status: "pending_payment", PaymentStartedAt: { } startedAt })
         {
             var fin = await store.FinalizePaidAsync(orderId, p.PaymentId, startedAt, n.ProviderPaymentId, clock.GetUtcNow(), cts.Token);
             switch (fin.Kind)
@@ -55,15 +56,19 @@ public sealed class ProductOrderPaymentNotifications(
                 case FinalizeKind.Paid:
                     log.LogInformation("product_order_payment order={OrderId} attempt={Attempt} result={Result}", orderId, fin.Order?.PaymentAttempts ?? order.PaymentAttempts, "paid");
                     return NotificationOutcome.Applied;
-                case FinalizeKind.AlreadyPaid:
+                case FinalizeKind.AlreadyPaid when fin.Order?.PaymentId == p.PaymentId:
                     return NotificationOutcome.AlreadyApplied;
+                case FinalizeKind.AlreadyPaid:
+                    break; // замовлення оплатила інша спроба (гонка) - ця оплата зайва -> повернення нижче
                 case FinalizeKind.StockUnavailable:
                     log.LogInformation("product_order_payment order={OrderId} attempt={Attempt} result={Result}", orderId, order.PaymentAttempts, "stock_unavailable");
                     await ProductOrderPaymentFlow.CompensateAsync(store, payments, log, clock, orderId, p.PaymentId, order.Total, startedAt, false);
                     return NotificationOutcome.Applied;
                 case FinalizeKind.ClaimLost:
-                    // claim перехопив reconcile (він дозавершить тим самим PaymentId) або платіж уже в компенсації
-                    return NotificationOutcome.AlreadyApplied;
+                    // claim перехопив reconcile (він дозавершить тим самим PaymentId) або платіж уже в компенсації;
+                    // але якщо платіж так і не став paid (claim належить іншій спробі) - гроші цієї спроби зайві
+                    if ((await refs.GetPaymentRefAsync(p.PaymentId, cts.Token))?.Status is "paid" or "refunded") return NotificationOutcome.AlreadyApplied;
+                    break;
             }
         }
 

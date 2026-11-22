@@ -20,7 +20,7 @@ public sealed class MonobankPaymentService(
         if (!string.Equals(charge.Currency, "UAH", StringComparison.OrdinalIgnoreCase)) return new(false, null, "unsupported_currency");
 
         var stored = await refs.GetPaymentRefAsync(charge.PaymentId, ct);
-        if (stored?.ProviderPaymentId is { } existing) return await StatusAsync(existing, ct);
+        if (stored?.ProviderPaymentId is { } existing) return await StatusAsync(existing, ProductOrderPaymentNotifications.ToMinor(stored.Amount), ct);
         if (charge.TenantSlug is not { } slug) return new(false, null, "invoice_not_created"); // reconcile з CRM без рахунку: явна відмова, клієнт повторить
 
         MonobankCreatedInvoice invoice;
@@ -47,7 +47,7 @@ public sealed class MonobankPaymentService(
         return PaymentResult.AwaitingCustomer(invoice.InvoiceId, invoice.PageUrl);
     }
 
-    private async Task<PaymentResult> StatusAsync(string invoiceId, CancellationToken ct)
+    private async Task<PaymentResult> StatusAsync(string invoiceId, long expectedMinor, CancellationToken ct)
     {
         MonobankInvoiceStatus s;
         try
@@ -58,7 +58,12 @@ public sealed class MonobankPaymentService(
         {
             return new(false, invoiceId, "invoice_not_found");
         }
-        return MapState(s.Status) switch
+        if (s.Amount is { } a && a != expectedMinor || s.Ccy is not (null or 980))
+        {
+            log.LogError("monobank_status_mismatch reason={Reason}", "amount_or_currency");
+            return new(false, invoiceId, null); // невідомо -> лишається «в процесі», розбір вручну
+        }
+                return MapState(s.Status) switch
         {
             ProviderPaymentState.Paid => new(true, invoiceId, null),
             ProviderPaymentState.Failed => new(false, invoiceId, s.Status == "expired" ? "invoice_expired" : "card_declined"),
@@ -92,7 +97,8 @@ public sealed class MonobankPaymentService(
             var r = await api.CancelAsync(invoiceId, extRef, ProductOrderPaymentNotifications.ToMinor(amount), ct);
             return r.Status switch
             {
-                "success" or "processing" => new(true, extRef, null), // processing: повернення прийнято банком
+                // processing: банк прийняв скасування; повторний cancel з тим самим extRef не робимо, щоб не повернути двічі (ADR-028 §3)
+                "success" or "processing" => new(true, extRef, null),
                 "failure" => new(false, null, "refund_failed"),
                 _ => new(false, null, null), // невідомо -> повтор
             };

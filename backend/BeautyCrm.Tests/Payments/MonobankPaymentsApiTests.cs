@@ -234,6 +234,50 @@ public sealed class MonobankPaymentsApiTests(AuthApiFixture fx) : IClassFixture<
     }
 
     [SkippableFact]
+    public async Task success_for_an_attempt_already_marked_failed_is_refunded_not_lost()
+    {
+        NeedDb();
+        var e = await NewEnvAsync();
+        var (c, mono) = NewHost();
+        var token = await CreateOrderAsync(c, e);
+        await Expect(await Pay(c, e, token), HttpStatusCode.OK);
+        var a = mono.Single();
+        await Expect(await Webhook(c, mono, e.Slug, a, "failure"), HttpStatusCode.OK);
+        await Expect(await Pay(c, e, token), HttpStatusCode.OK); // спроба B тримає claim
+        var b = mono.Invoices.Values.Single(i => i.Id != a.Id);
+
+        // банк таки провів A (напр. повтор на тій самій сторінці): гроші A не мають зависнути
+        a.Status = "success";
+        await Expect(await Webhook(c, mono, e.Slug, a, "success"), HttpStatusCode.OK);
+        Assert.Equal((a.Reference, a.Amount), Assert.Single(a.Cancels));
+        var o = await Order(c, e, token);
+        Assert.Equal("pending_payment", o.GetProperty("status").GetString());
+        Assert.True(o.GetProperty("paymentInProgress").GetBoolean());
+
+        // B оплачено звичайно
+        b.Status = "success";
+        await Expect(await Webhook(c, mono, e.Slug, b, "success"), HttpStatusCode.OK);
+        Assert.Equal("paid", (await Order(c, e, token)).GetProperty("status").GetString());
+        Assert.Empty(b.Cancels);
+    }
+
+    [SkippableFact]
+    public async Task wrong_currency_webhook_is_ignored()
+    {
+        NeedDb();
+        var e = await NewEnvAsync();
+        var (c, mono) = NewHost();
+        var token = await CreateOrderAsync(c, e);
+        await Expect(await Pay(c, e, token), HttpStatusCode.OK);
+        var inv = mono.Single();
+        var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { invoiceId = inv.Id, status = "success", amount = inv.Amount, ccy = 840, reference = inv.Reference }));
+        var req = new HttpRequestMessage(HttpMethod.Post, $"/api/public/{e.Slug}/payments/monobank/webhook") { Content = new ByteArrayContent(body) };
+        req.Headers.Add("X-Sign", mono.Sign(body));
+        await Expect(await c.SendAsync(req), HttpStatusCode.OK);
+        Assert.Equal("pending_payment", (await Order(c, e, token)).GetProperty("status").GetString());
+    }
+
+    [SkippableFact]
     public async Task reconcile_without_webhook_reads_invoice_status()
     {
         NeedDb();

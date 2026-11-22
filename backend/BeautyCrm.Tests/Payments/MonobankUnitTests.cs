@@ -112,13 +112,26 @@ public sealed class MonobankUnitTests
     {
         var (svc, api, refs) = NewSvc();
         var pid = refs.AddOrderPayment(100m);
-        await svc.ChargeAsync(Charge(pid), default);
+        await svc.ChargeAsync(Charge(pid, 100m), default);
         api.Single().Status = status;
-        var r = await svc.ChargeAsync(Charge(pid), default);
+        var r = await svc.ChargeAsync(Charge(pid, 100m), default);
         Assert.False(r.Success);
         Assert.False(r.Pending);
         Assert.Equal(code, r.Error);
         Assert.True(ProductOrderPaymentFlow.IsExplicitDecline(r));
+    }
+
+    [Fact]
+    public async Task status_with_other_amount_stays_unknown()
+    {
+        var (svc, api, refs) = NewSvc();
+        var pid = refs.AddOrderPayment(100m);
+        await svc.ChargeAsync(Charge(pid, 100m), default);
+        refs.Rows[pid] = refs.Rows[pid] with { Amount = 99m };
+        api.Single().Status = "success";
+        var r = await svc.ChargeAsync(Charge(pid, 99m), default);
+        Assert.False(r.Success);
+        Assert.False(ProductOrderPaymentFlow.IsExplicitDecline(r));
     }
 
     [Fact]
