@@ -70,14 +70,17 @@ public sealed class ControlPlaneTenantsTests(AuthApiFixture fx) : IClassFixture<
         return r;
     }
 
+    // ADR-024: пошта глобально унікальна (одна ідентичність), тож кожен tenant отримує власну пошту власника
+    private static string OwnerEmailOf(string externalRef) => $"owner-{externalRef}@salon.test";
+
     private static string NewRef() => "sg-" + Guid.NewGuid().ToString("N")[..16];
 
-    private static object CreateBody(string externalRef, string? slug = null, string email = "owner@salon.test", object? extra = null, string[]? modules = null)
+    private static object CreateBody(string externalRef, string? slug = null, string? email = null, object? extra = null, string[]? modules = null)
     {
         var d = new Dictionary<string, object?>
         {
             ["externalRef"] = externalRef, ["name"] = "Salon X", ["slug"] = slug ?? ("cp-" + Guid.NewGuid().ToString("N")[..20]),
-            ["owner"] = new { email, fullName = "Ім'я Прізвище" }, ["actor"] = Actor,
+            ["owner"] = new { email = email ?? OwnerEmailOf(externalRef), fullName = "Ім'я Прізвище" }, ["actor"] = Actor,
         };
         if (modules is not null) d["modules"] = modules;
         if (extra is IDictionary<string, object?> more) foreach (var (k, v) in more) d[k] = v;
@@ -113,7 +116,7 @@ public sealed class ControlPlaneTenantsTests(AuthApiFixture fx) : IClassFixture<
         await using var c = new NpgsqlConnection(fx.Db.AdminConnectionString);
         await c.OpenAsync();
         await using var cmd = new NpgsqlCommand(
-            "SELECT action, details::text, actor_id, key_id, request_id FROM platform_audit_log WHERE tenant_id = @t ORDER BY id", c);
+            "SELECT action, details::text, actor_id, key_id, request_id FROM platform_audit_log WHERE tenant_id = @t AND action NOT LIKE 'identity.%' ORDER BY id", c); // identity.created (ADR-024, §31.12) перевіряє GlobalIdentityLoginTests
         cmd.Parameters.AddWithValue("t", tenantId);
         await using var r = await cmd.ExecuteReaderAsync();
         var list = new List<(string, string, string?, string?, string?)>();
@@ -129,7 +132,7 @@ public sealed class ControlPlaneTenantsTests(AuthApiFixture fx) : IClassFixture<
         var r = await h.Client.SendAsync(Signed(HttpMethod.Post, "/api/control/v1/tenants", body));
         Assert.Equal(HttpStatusCode.Created, r.StatusCode);
         var j = await J(r);
-        return (j.GetProperty("tenantId").GetGuid(), ext, j.GetProperty("slug").GetString()!, "owner@salon.test",
+        return (j.GetProperty("tenantId").GetGuid(), ext, j.GetProperty("slug").GetString()!, OwnerEmailOf(ext),
             TokenOf(j.GetProperty("invite").GetProperty("url").GetString()!), j);
     }
 
@@ -151,7 +154,7 @@ public sealed class ControlPlaneTenantsTests(AuthApiFixture fx) : IClassFixture<
         using var h = Build();
         var ext = NewRef();
         var t0 = DateTimeOffset.UtcNow;
-        var r = await h.Client.SendAsync(Signed(HttpMethod.Post, "/api/control/v1/tenants", CreateBody(ext, "Cp-Salon-" + ext[3..9], "Owner@Salon.Test"), requestId: "req-create-1"));
+        var r = await h.Client.SendAsync(Signed(HttpMethod.Post, "/api/control/v1/tenants", CreateBody(ext, "Cp-Salon-" + ext[3..9], $"Owner-{ext}@Salon.Test"), requestId: "req-create-1"));
         Assert.Equal(HttpStatusCode.Created, r.StatusCode);
         Assert.Equal("no-store", r.Headers.CacheControl?.ToString());
         Assert.False(r.Headers.Contains("Idempotent-Replayed"));
@@ -162,7 +165,7 @@ public sealed class ControlPlaneTenantsTests(AuthApiFixture fx) : IClassFixture<
         Assert.Equal("active", j.GetProperty("status").GetString());
         Assert.Equal(6, j.GetProperty("modules").GetArrayLength()); // modules відсутній -> усі beauty-модулі (як у platform)
         Assert.Equal("invited", j.GetProperty("owner").GetProperty("state").GetString());
-        Assert.Equal("owner@salon.test", j.GetProperty("owner").GetProperty("email").GetString());
+        Assert.Equal(OwnerEmailOf(ext), j.GetProperty("owner").GetProperty("email").GetString());
 
         var url = j.GetProperty("invite").GetProperty("url").GetString()!;
         Assert.StartsWith(AppUrl + "/invite#t=", url);
@@ -187,7 +190,7 @@ public sealed class ControlPlaneTenantsTests(AuthApiFixture fx) : IClassFixture<
         Assert.Equal(["tenant.created", "owner_invite.issued"], audit.Select(a => a.Action));
         Assert.All(audit, a => { Assert.Equal("sg-admin-7", a.ActorId); Assert.Equal(Kid, a.KeyId); Assert.Equal("req-create-1", a.RequestId); });
         Assert.DoesNotContain(token, string.Join("|", audit.Select(a => a.Details)));
-        Assert.DoesNotContain("owner@salon.test", string.Join("|", audit.Select(a => a.Details))); // email -> лише user_id
+        Assert.DoesNotContain(OwnerEmailOf(ext), string.Join("|", audit.Select(a => a.Details))); // email -> лише user_id
         Assert.Contains("user_id", audit[1].Details);
         Assert.DoesNotContain(token, await Q<string>("SELECT (t.*)::text FROM tenants t WHERE id = @t", ("t", tenantId)));
         Assert.DoesNotContain(token, await Q<string>("SELECT string_agg((i.*)::text, '|') FROM platform_owner_invites i WHERE tenant_id = @t", ("t", tenantId)));
@@ -197,7 +200,7 @@ public sealed class ControlPlaneTenantsTests(AuthApiFixture fx) : IClassFixture<
 
         // власник без пароля не входить
         var login = await h.Client.PostAsync("/api/auth/login", System.Net.Http.Json.JsonContent.Create(
-            new { tenant = j.GetProperty("slug").GetString(), email = "owner@salon.test", password = Password }));
+            new { tenant = j.GetProperty("slug").GetString(), email = OwnerEmailOf(ext), password = Password }));
         Assert.Equal(HttpStatusCode.Unauthorized, login.StatusCode);
     }
 
@@ -213,7 +216,7 @@ public sealed class ControlPlaneTenantsTests(AuthApiFixture fx) : IClassFixture<
         var tenantId = (await J(first)).GetProperty("tenantId").GetGuid();
 
         // повтор (email у іншому регістрі) -> 200 + Idempotent-Replayed, invite null, той самий tenantId
-        var replay = await h.Client.SendAsync(Signed(HttpMethod.Post, "/api/control/v1/tenants", CreateBody(ext, slug.ToUpperInvariant(), "OWNER@salon.test")));
+        var replay = await h.Client.SendAsync(Signed(HttpMethod.Post, "/api/control/v1/tenants", CreateBody(ext, slug.ToUpperInvariant(), $"OWNER-{ext}@salon.test")));
         Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
         Assert.Equal("true", replay.Headers.GetValues("Idempotent-Replayed").Single());
         var rj = await J(replay);

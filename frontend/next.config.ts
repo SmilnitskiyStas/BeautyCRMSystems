@@ -65,6 +65,14 @@ const nextConfig: NextConfig = {
           { key: "Cache-Control", value: "no-store" },
         ],
       },
+      // Скидання пароля (§31.7): токен у query; без Referer і без кешу (R-5).
+      {
+        source: "/reset-password",
+        headers: [
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "Cache-Control", value: "no-store" },
+        ],
+      },
       // Публічний токен запису в шляху: не віддаємо його у Referer і не кешуємо (узгоджено з §12).
       {
         source: "/book/appointment/:path*",

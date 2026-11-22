@@ -10,6 +10,7 @@ import { TenantDb, withTenant } from "../db/tenant-db";
 import { StaticTenantDirectory } from "../db/tenants";
 import { DEFAULT_TELEGRAM_CONFIG, PgInventoryTelegram, type InventoryTelegramConfig, type TelegramSend } from "../inventory/telegram";
 import type { BeautyDeps } from "../ports";
+import { seedUser } from "../testing/seed-user";
 import { pollInventoryTelegram, type PollContext } from "../scheduler/pollers";
 
 /** TASK-896: pollInventoryTelegram against real PostgreSQL as a role with ONLY the worker GRANTs of scripts/dev/setup-db.ps1. */
@@ -38,6 +39,7 @@ beforeAll(async () => {
   container = await new PostgreSqlContainer("postgres:16-alpine").start();
   admin = new pg.Pool({ connectionString: container.getConnectionUri() });
   await admin.query(readFileSync(new URL("../testing/schema.sql", import.meta.url), "utf8"));
+  await admin.query("CREATE ROLE beautycrm_owner NOLOGIN"); // блок $grants (ADR-024, auth_identity_release) видає EXECUTE ops-ролі
   await admin.query(`CREATE ROLE ${WORKER} LOGIN PASSWORD 'pw' NOSUPERUSER NOBYPASSRLS`);
   await admin.query(`CREATE ROLE ${APP} LOGIN PASSWORD 'pw' NOSUPERUSER NOBYPASSRLS`);
   await admin.query(`GRANT USAGE ON SCHEMA public TO ${APP}, ${WORKER}`);
@@ -56,7 +58,7 @@ interface T { id: string; user: string; loc: string; channel: string; token: str
 async function tenant(o: { modules?: string; tz?: string; chActive?: boolean } = {}): Promise<T> {
   const id = randomUUID(), user = randomUUID(), loc = randomUUID(), channel = randomUUID(), token = `${BOT}-${id.slice(0, 6)}`;
   await q("INSERT INTO tenants (id, name, slug, modules) VALUES ($1,'T',$2,$3::text[])", [id, `t-${id.slice(0, 8)}`, o.modules ?? "{beauty_inventory}"]);
-  await q("INSERT INTO users (id, tenant_id, email, full_name, password_hash, role) VALUES ($1,$2,$3,'U','x','owner')", [user, id, `${user}@x.test`]);
+  await seedUser({ query: (s, p) => q(s, p) }, { id: user, tenantId: id, email: `${user}@x.test` });
   await q("INSERT INTO beauty_locations (id, tenant_id, name, timezone, is_active) VALUES ($1,$2,'Салон',$3,true)", [loc, id, o.tz ?? "Europe/Kyiv"]);
   await q("INSERT INTO beauty_channels (id, tenant_id, type, name, credentials_encrypted, is_active) VALUES ($1,$2,'telegram','bot',$3,$4)",
     [channel, id, writeCredentials(KEY, { token }), o.chActive ?? true]);
@@ -69,7 +71,8 @@ async function location(t: T, tz: string, name = "L2"): Promise<string> {
 }
 async function user(t: T, o: { role?: string; active?: boolean } = {}): Promise<string> {
   const id = randomUUID();
-  await q("INSERT INTO users (id, tenant_id, email, full_name, password_hash, role, is_active) VALUES ($1,$2,$3,'U','x',$4,$5)", [id, t.id, `${id}@x.test`, o.role ?? "owner", o.active ?? true]);
+  await seedUser({ query: (s, p) => q(s, p) }, { id, tenantId: t.id, email: `${id}@x.test`, role: o.role ?? "owner" });
+  await q("UPDATE users SET is_active = $2 WHERE id = $1", [id, o.active ?? true]);
   return id;
 }
 /** Active link activated `activatedAgo` before NOW. */

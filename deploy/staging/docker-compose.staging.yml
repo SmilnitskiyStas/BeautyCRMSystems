@@ -84,7 +84,10 @@ services:
     environment:
       API_URL: "http://api:8080" # серверні виклики Next до API всередині мережі (не секрет)
     depends_on: [api]
-    networks: [beauty_staging]
+    networks:
+      beauty_staging:
+        # Статична адреса (ADR-024 F-1, §31.9): API довіряє XFF від web лише з цієї адреси (Beauty__TrustedProxies = шлюз + ця адреса).
+        ipv4_address: ${BEAUTY_WEB_IP:?set BEAUTY_WEB_IP (в BEAUTY_SUBNET, не шлюз і не .2-.9)}
     ports:
       - "127.0.0.1:${BEAUTY_WEB_PORT:?set BEAUTY_WEB_PORT}:3000" # лише loopback
     cap_drop: ["ALL"]

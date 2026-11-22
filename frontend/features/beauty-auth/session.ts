@@ -1,6 +1,6 @@
 import { BeautyApiError, readApiError } from "./errors";
 import { ROLE_PRESETS, parsePermissions } from "./access";
-import { API_URL, USE_MOCK, type Role, type SessionResponse, type SessionUser } from "./types";
+import { API_URL, USE_MOCK, type Business, type LoginResult, type Membership, type Role, type SessionResponse, type SessionUser } from "./types";
 
 /**
  * Клієнтське сховище сесії.
@@ -133,12 +133,132 @@ async function postSession(path: string, body?: unknown): Promise<Response> {
   }
 }
 
-export async function login(input: { tenant: string; email: string; password: string }): Promise<SessionUser> {
-  const res = await postSession("login", input);
+/** Дискримінатор §31.2: перевіряємо `selectionRequired` ДО читання `accessToken`. */
+function parseBusinesses(raw: unknown): Business[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((b): Business[] => {
+    const r = (b ?? {}) as Record<string, unknown>;
+    return typeof r.tenantId === "string" && typeof r.name === "string" ? [{ tenantId: r.tenantId, name: r.name, role: r.role as Role }] : [];
+  });
+}
+
+/** Демо без backend (§31.11): пошта, що починається з `multi`, дає вибір бізнесу; решта - одразу сесію. */
+const MOCK_BUSINESSES: Business[] = [
+  { tenantId: "mock-tenant-1", name: "Beauty Lab (демо)", role: "owner" },
+  { tenantId: "mock-tenant-2", name: "Студія Y (демо)", role: "specialist" },
+];
+function mockUserFor(role: Role, email = "demo@beauty.test"): SessionUser {
+  return {
+    id: `mock-${role}`,
+    email,
+    fullName: "Демо користувач",
+    role,
+    specialistId: role === "specialist" ? "m" : null,
+    permissions: { ...ROLE_PRESETS[role] },
+  };
+}
+
+/**
+ * Вхід за поштою й паролем (§31.2, без коду бізнесу). Варіант B (≥ 2 бізнесів) повертає список для вибору;
+ * квиток лежить у httpOnly-cookie `beauty_lt` (його ставить BFF), у JS його немає.
+ */
+export async function login(input: { email: string; password: string }): Promise<LoginResult> {
+  if (USE_MOCK) {
+    if (input.email.toLowerCase().startsWith("multi")) return { kind: "selection", businesses: MOCK_BUSINESSES, ticketExpiresInSeconds: 180 };
+    const user = mockUserFor("owner", input.email);
+    store({ accessToken: "mock", expiresInSeconds: 900, user });
+    return { kind: "session", user };
+  }
+  const res = await postSession("login", { email: input.email, password: input.password });
   if (!res.ok) throw await readApiError(res);
+  const body = (await res.json()) as Record<string, unknown>;
+  if (body.selectionRequired === true) {
+    const ttl = Number(body.ticketExpiresInSeconds);
+    return { kind: "selection", businesses: parseBusinesses(body.businesses), ticketExpiresInSeconds: Number.isFinite(ttl) && ttl > 0 ? ttl : 180 };
+  }
+  store(body as unknown as SessionResponse);
+  return { kind: "session", user: await loadAccessAfterAuth() };
+}
+
+/** Вибір бізнесу (§31.3): квиток BFF бере з cookie, `401 login_ticket_invalid` = квиток спливлий/погашений. */
+export async function selectBusiness(tenantId: string): Promise<SessionUser> {
+  if (USE_MOCK) {
+    const role = MOCK_BUSINESSES.find((b) => b.tenantId === tenantId)?.role ?? "owner";
+    const user = mockUserFor(role);
+    store({ accessToken: "mock", expiresInSeconds: 900, user });
+    return user;
+  }
+  const res = await postSession("login/select", { tenantId });
+  if (!res.ok) throw await readApiError(res);
+  store((await res.json()) as SessionResponse);
+  return loadAccessAfterAuth();
+}
+
+/** Список бізнесів людини для перемикача (§31.4). Лише активні; перемикач показується при ≥ 2. */
+export async function fetchMemberships(): Promise<Membership[]> {
+  if (USE_MOCK) {
+    const cur = currentUser?.id;
+    const multi = process.env.NEXT_PUBLIC_MOCK_MULTI_BUSINESS === "1";
+    const list = multi ? MOCK_BUSINESSES : MOCK_BUSINESSES.slice(0, 1);
+    return list.map((b, i) => ({ ...b, current: cur ? cur === `mock-${b.role}` : i === 0 }));
+  }
+  const res = await apiFetch("/api/auth/memberships", { cache: "no-store" });
+  const raw = (await res.json()) as unknown;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((m): Membership[] => {
+    const [b] = parseBusinesses([m]);
+    return b ? [{ ...b, current: (m as Record<string, unknown>).current === true }] : [];
+  });
+}
+
+/**
+ * Перемикання бізнесу (§31.5): BFF додає refresh-токен з cookie і ротує його. Старий access-токен і права
+ * прибираються з пам'яті, нові права читаємо з `me` (заголовок `X-Access-Version` відповіді switch ігноруємо).
+ */
+export async function switchBusiness(tenantId: string, opts: { beforeActivate?: () => void | Promise<void> } = {}): Promise<SessionUser> {
+  if (USE_MOCK) {
+    await opts.beforeActivate?.();
+    return selectBusiness(tenantId);
+  }
+  const token = await validToken();
+  let res: Response;
+  try {
+    res = await fetch("/api/session/switch", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ tenantId }),
+    });
+  } catch {
+    throw new BeautyApiError(0, "api_unreachable", "network");
+  }
+  if (!res.ok) {
+    const err = await readApiError(res);
+    if (err.status === 401) clearSession();
+    throw err;
+  }
   const s = (await res.json()) as SessionResponse;
+  // R-1 (§31.11): кеш попереднього tenant скидається ДО збереження нового токена і першого запиту з ним.
+  await opts.beforeActivate?.();
+  clearSession(false);
   store(s);
   return loadAccessAfterAuth();
+}
+
+/** Скидання пароля (§31.7): `forgot` завжди 202 без тіла; `reset` 204 або 410 `reset_invalid`. */
+export async function requestPasswordReset(email: string): Promise<void> {
+  if (USE_MOCK) return;
+  const res = await postSession("password/forgot", { email });
+  if (!res.ok) throw await readApiError(res);
+}
+
+export async function resetPassword(input: { token: string; password: string }): Promise<void> {
+  if (USE_MOCK) {
+    if (input.token.startsWith("expired")) throw new BeautyApiError(410, "reset_invalid", "mock");
+    return;
+  }
+  const res = await postSession("password/reset", input);
+  if (!res.ok) throw await readApiError(res);
 }
 
 /** Після login/прийняття запрошення права беремо з `me`; без них сесію не лишаємо (fail-closed). */

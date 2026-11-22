@@ -84,6 +84,10 @@ public sealed class EfOwnerInviteStore(BeautyDbContext db) : IOwnerInviteStore
 
         public async Task<UserRecord?> ActivateOwnerAsync(string passwordHash, DateTimeOffset now, CancellationToken ct)
         {
+            // ADR-024: pending-ідентичність власника стає активною разом із паролем (рівно одне членство). Уже активна -> запрошення непридатне.
+            var identityId = await db.Users.AsNoTracking().Where(u => u.Id == Invite.UserId).Select(u => u.IdentityId).FirstAsync(ct);
+            var activated = (await db.Database.SqlQuery<bool>($"SELECT public.auth_identity_activate_pending({identityId}, {passwordHash}) AS \"Value\"").ToListAsync(ct)).Single();
+            if (!activated) return null;
             var n = await db.Users.Where(u => u.Id == Invite.UserId && u.State == UserStates.Invited && u.PasswordHash == null && u.IsActive)
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(u => u.PasswordHash, passwordHash)

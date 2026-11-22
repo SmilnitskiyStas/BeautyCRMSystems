@@ -163,7 +163,8 @@ public sealed class AccessSet
 /// <param name="SpecialistActive">null — немає прив'язаного профілю; false — профіль неактивний або не видно.</param>
 public sealed record AccessSnapshot(
     string Role, bool IsActive, string State, Guid? SpecialistId, int AccessVersion, bool? SpecialistActive,
-    IReadOnlyDictionary<string, string> Permissions, IReadOnlyList<string> Modules);
+    IReadOnlyDictionary<string, string> Permissions, IReadOnlyList<string> Modules,
+    DateTimeOffset? SessionsValidAfter = null);
 
 /// <summary>Порт читання доступу користувача (реалізація — Infrastructure, під RLS поточного tenant).</summary>
 public interface IAccessStore

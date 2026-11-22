@@ -108,6 +108,8 @@ public interface ICpSession
     Task AddAuditAsync(CpAuditEntry entry, CancellationToken ct);
 }
 
+public enum CpCreateOutcome { Created, Conflict, OwnerEmailInUse }
+
 public interface IControlPlaneStore
 {
     /// <summary>
@@ -118,7 +120,8 @@ public interface IControlPlaneStore
 
     /// <summary>
     /// Створює tenant + власника (state=invited, без пароля) і викликає <paramref name="inSameTransaction"/> (запрошення, аудит) в тій
-    /// самій транзакції. false = порушення унікальності (external_ref або slug): нічого не записано, потрібен повторний lookup.
+    /// самій транзакції. <see cref="CpCreateOutcome.Conflict"/> = порушення унікальності (external_ref або slug): нічого не записано,
+    /// потрібен повторний lookup; <see cref="CpCreateOutcome.OwnerEmailInUse"/> = пошта власника зайнята (активна або pending ідентичність, §31.8.3).
     /// </summary>
-    Task<bool> TryCreateAsync(CpNewTenant tenant, CpNewOwner owner, Func<ICpSession, Task> inSameTransaction, CancellationToken ct);
+    Task<CpCreateOutcome> TryCreateAsync(CpNewTenant tenant, CpNewOwner owner, Func<ICpSession, Task> inSameTransaction, CancellationToken ct);
 }

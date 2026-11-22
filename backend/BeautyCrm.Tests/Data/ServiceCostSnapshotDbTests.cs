@@ -38,8 +38,7 @@ public sealed class ServiceCostSnapshotDbTests : IClassFixture<PostgresRlsFixtur
             await admin.OpenAsync();
             await using var cmd = new NpgsqlCommand(
                 $@"INSERT INTO tenants (id, name, slug) VALUES ('{tenantId}', 'T', 'snap-{tenantId:N}');
-                   INSERT INTO users (id, tenant_id, email, full_name, password_hash, role)
-                   VALUES ('{userId}', '{tenantId}', 'u@{tenantId:N}.test', 'Owner', 'x', 'owner');", admin);
+                   {IdentitySeed.UserSql(tenantId, $"u@{tenantId:N}.test", "Owner", "x", "owner", userId)}", admin);
             await cmd.ExecuteNonQueryAsync();
         }
         await using var ctx = _db.CreateContext(tenantId);

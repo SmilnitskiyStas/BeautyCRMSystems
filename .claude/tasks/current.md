@@ -109,7 +109,7 @@
 | TASK-813 | qa-engineer | planned | ADR-017: таблиця відповідності сценаріїв, регресія booking/public/chat/analytics, ручний smoke «будь-який майстер» | .claude/logs/tasks/TASK-813.md |
 | TASK-814 | security-reviewer | planned | ADR-017: рев'ю прав (admin/owner, IDOR, RLS), відсутності витоку собівартості, публічного каталогу й ШІ (ціна лише з БД) | .claude/logs/tasks/TASK-814.md |
 | TASK-815 | project-architect | in_progress | ADR-018: контракт beauty-contracts.md §27 написано (control plane, invite, feedback, тіло заявки, підпис v1, modules, 403 tenant_suspended; ендпоінт лідів ShelfGuard — Q4 відкрито). Тестовий вектор: вхідні дані + генератор `.ai/artifacts/contracts/ADR-018-hmac-test-vector.py`; хеші/підписи ще null — запустити `python -I` генератор, тоді review | .claude/logs/tasks/TASK-815.md |
-| TASK-816 | database-engineer | planned | ADR-018: міграції external_ref+unique, suspended_*, owner state invited/password_hash NULL, platform_owner_invites, platform_audit_log, control_plane_nonces, beauty_platform_feedback (FORCE RLS), schema.sql, тести | .claude/logs/tasks/TASK-816.md |
+| TASK-816 | database-engineer | review | ADR-018: міграції external_ref+unique, suspended_*, owner state invited/password_hash NULL, platform_owner_invites, platform_audit_log, control_plane_nonces, beauty_platform_feedback (FORCE RLS), schema.sql, тести | .claude/logs/tasks/TASK-816.md |
 | TASK-817 | backend-developer | review | ADR-018: схема ControlPlaneHmac (canonical v1, вікно 300 с, nonce, kid-ротація, fail closed), rate limit, Auth:PlatformKeyEnabled, тестовий вектор, тести | .claude/logs/tasks/TASK-817.md |
 | TASK-818 | backend-developer | review | ADR-018: /api/control/v1/tenants (create ідемпотентно, get, suspend, resume, owner-invite) на спільних доменних операціях, аудит з актором, тести | .claude/logs/tasks/TASK-818.md |
 | TASK-819 | backend-developer | review | ADR-018: /api/auth/invite/inspect і /accept (хеш токена, одноразово, атомарно, 410 invite_invalid, rate limit, аудит), тести | .claude/logs/tasks/TASK-819.md |
@@ -128,6 +128,22 @@
 | TASK-832 | integrations-developer | planned | ADR-018 D4 [репозиторій ShelfGuard]: метод клієнта Beauty setModules (підпис v1, actor), тести | .claude/logs/tasks/TASK-832.md |
 | TASK-833 | frontend-developer | planned | ADR-018 D4 [репозиторій ShelfGuard]: UI модулів tenant у картці підприємства (перемикачі, підтвердження, помилки) | .claude/logs/tasks/TASK-833.md |
 | TASK-834 | frontend-developer | review | ADR-018 D2: публічний запис і віджет — екран «Запис тимчасово призупинено» на 403 tenant_suspended, mock, тести | .claude/logs/tasks/TASK-834.md |
+| TASK-859 | project-architect | done | ADR-024: контракт beauty-contracts.md §31 (login 2 кроки, select, memberships, switch, password, коди, ліміти, BFF-cookie); дельта §27 і запрошень. Надає API-CONTRACT-IDENTITY-V1 | контракт §31 v0.34.1 (лог TASK-859 не створено) |
+| TASK-860 | security-reviewer | done | ADR-024: threat-model §31 і §2.3 (функції SECURITY DEFINER, енумерація, квиток, IDOR перемикання, скидання, злиття). Звіт docs/reviews/identity-threat-model.md (approved-with-notes, без critical). Висновки внесено 2026-11-17: §31 v0.34.1 (§31.16 — вимоги до БД для 862, §31.15 п.19–31) і errata ADR-024 §9 | docs/reviews/identity-threat-model.md (лог TASK-860 не створено) |
+| TASK-861 | database-engineer | review | ADR-024 фаза 0: preflight-скрипт лише для читання, інструкція для ops, прогін на локальній копії; звіт про дублікати для людини. Надає ARTIFACT-IDENTITY-PREFLIGHT-V1. Готово: deploy/staging/db/preflight-identity-duplicates.sql, перевірено локально на синтетичних даних; на staging НЕ запускався (потрібен окремий дозвіл) | .claude/logs/tasks/TASK-861.md |
+| TASK-862 | database-engineer | review | **Готово до рев'ю 2026-11-17; відкрите питання про compat-тригер INSERT users (див. лог).** Міграція 20261117140201_auth_global_identities, гранти, ролі, DbRoleGuard, schema.sql, тести міграції. Початковий обсяг: ADR-024 фаза 1: міграція auth_global_identities (роль beautycrm_identity, identities/auth_login_tickets/auth_password_resets, функції, deny-all RLS, тригер пошти, users.identity_id + backfill з GUC-gate злиття, Down з відмовою), гранти, EF, schema.sql, тести БД. Надає ARTIFACT-IDENTITY-SCHEMA-V1 | .claude/logs/tasks/TASK-862.md |
+| TASK-863 | backend-developer | review | ADR-024: логін у 2 кроки, login/select, IIdentityStore, блокування на ідентичність, LoginEmailThrottle, refresh, memberships, switch (новий DI-scope), legacy tenant, тести | .claude/logs/tasks/TASK-863.md |
+| TASK-864 | backend-developer | review | ADR-024: email_in_use для запрошень і прийняття, InviteEmailCheckThrottle, квота 20/добу (429), owner_email_in_use у control plane і /api/platform/tenants, activate_pending, метрики identity_created/invite_email_in_use, тест SQL-запитів middleware. Gate перед мерджем: Q8 (погодити owner_email_in_use з ShelfGuard) | .claude/logs/tasks/TASK-864.md |
+| TASK-865 | backend-developer + integrations-developer | review | ADR-024 фаза 2: скидання пароля (forgot/reset), ліміти, outbox з затиранням payload, лист, purge_expired у воркері. Gate: відправник Q7 | .claude/logs/tasks/TASK-865.md |
+| TASK-866 | frontend-developer | review | ADR-024: форма входу без коду бізнесу, екран вибору бізнесу, перемикач у шапці, BFF (дві форми, cookie квитка, select, switch, password), «Забули пароль», тексти email_in_use. Старт на mock після 859 | .claude/logs/tasks/TASK-866.md |
+| TASK-867 | qa-engineer | planned | ADR-024: матриця 0/1/N членств, legacy tenant, енумерація, блокування, квиток, перемикання, запрошення з гонками, скидання, міграція на дублікатах, e2e вхід→вибір→перемикання | .claude/logs/tasks/TASK-867.md |
+| TASK-868 | security-reviewer | planned | ADR-024: рев'ю реалізації §2.3–2.8 (функції, гранти, RLS, ліміти, BFF-cookie, скидання). Звіт у docs/reviews/ | .claude/logs/tasks/TASK-868.md |
+| TASK-869 | documentation-writer | review | ADR-024: api.md, database.md, domain-model.md, runbook (preflight, GUC злиття, застосування, відкат), примітки «уточнено ADR-024» в ADR-002/006/018, CLAUDE.md | .claude/logs/tasks/TASK-869.md |
+| TASK-870 | database-engineer + backend-developer | planned | ADR-024 фаза 3 (відкладено): видалення users.password_hash/лічильників, tenants_login_lookup, legacy tenant. Після Sunset і стабілізації; human gate | .claude/logs/tasks/TASK-870.md |
+| TASK-871 | devops-engineer | review | ADR-024 errata E-14 (TASK-860 F-1, high): справжній IP клієнта за BFF — статична адреса web у beauty_staging (compose + .env.compose), Beauty__TrustedProxies = шлюз + web, nginx перезаписує XFF, порт web лише на 127.0.0.1, bootstrap-env/README/runbook, smoke двох клієнтських IP і підробленого XFF (§31.9, §31.15 п.19). Блокує реліз TASK-866 / фази 2 на staging; деплой — human gate | .claude/logs/tasks/TASK-871.md |
+| TASK-872 | backend-developer + integrations-developer | review | ADR-024 errata E-10 (TASK-860 F-10): лист «Пароль змінено» після reset — kind changed_notice у claim_delivery воркера, шаблон без назви бізнесу з посиланням на /forgot-password з PublicAppUrl, повтори до 24 год, метрика без пошти, тести (§31.7.3, §31.15 п.28). Gate: текст листа погоджує людина | .claude/logs/tasks/TASK-872.md |
+| TASK-873 | frontend-developer | review | Рев'ю identity (docs/reviews/identity-implementation-review.md): R-1 — кеш React Query скидається в beforeActivate switchBusiness до збереження токена (тест §31.15 п.29), R-5 — no-referrer + no-store для /reset-password. Лише frontend | .claude/logs/tasks/TASK-873.md |
+| TASK-874 | backend-developer | review | Рев'ю identity (docs/reviews/identity-implementation-review.md), backend: R-2 (DbRoleGuard: колонкові гранти app/worker, членство ролей ідентичності, політики лише для ролей ідентичності), R-3 (нова міграція `20261118080034_auth_users_identity_id_immutable`: тригер забороняє зміну users.identity_id; schema.sql воркера), R-4 (ValidateIdentityOptions: 60 ≤ window ≤ 86400, MaxFailedAttempts ≥ 1), R-6 (SelectAsync гасить квиток і при порожньому tenantId), R-8 (SwitchAsync відхиляє refresh, виданий до sessions_valid_after), тест §31.15 п.19 (ліміт auth за XFF від довіреного проксі). R-5/R-7 не входять | .claude/logs/tasks/TASK-874.md |
 | TASK-875 | project-architect | done | Склад (beauty_inventory) етап 1: ADR-025 (proposed, приймає людина) + контракт §32 v0.35 (модуль, права inventory.*, API, DTO, коди, FEFO, переміщення, інвентаризація) | .claude/logs/tasks/TASK-875.md |
 | TASK-876 | database-engineer | done | Склад етап 1: міграція beauty_inventory, RLS FORCE, CHECK, append-only рухи, GRANT (setup-db.ps1 + grants.sql), schema.sql, EF, тести БД | .claude/logs/tasks/TASK-876.md |
 | TASK-877 | backend-developer | review | Склад етап 1: Features/BeautyInventory, FEFO/переміщення/інвентаризація, InventoryController, PermissionKeys inventory.* + backfill + Version, RequireModule, тести | .claude/logs/tasks/TASK-877.md |
@@ -429,6 +445,43 @@ ADR: `.claude/docs/adr/ADR-018-shelfguard-control-plane-integration.md` (propose
     - `npm test`, `tsc`, `lint`, `build` зелені;
     - a11y (оголошення стану).
 
+## ADR-024: глобальна ідентичність і вибір бізнесу (TASK-859…870)
+
+Оновлено: 2026-11-17. ADR: `.claude/docs/adr/ADR-024-global-identity-and-business-selection.md` (accepted 2026-11-17; Q1–Q13 погоджено з рекомендаціями). Деталі задач — ADR §6; тут лише DAG, gates і відкладене.
+
+**DAG:** 859 → 860 → 862 → {863 ∥ 864} → 865 → 872 → 867 → 868 → 869 → merge-gate (`integrate/*`). 861 (read-only preflight) стартує одразу, на 862 впливає лише як артефакт. 866 mock після 859, інтеграція після 863/864 (скидання після 865). 871 (devops, F-1) стартує одразу й незалежно; реліз 866 / фази 2 на staging — лише після 871 зі smoke. 870 після Sunset (Q12, 30 днів після фази 2).
+
+**TASK-860 закрито (2026-11-17).** Висновки внесено: `beauty-contracts.md` §31 v0.34.1, errata ADR-024 §9. Що це означає для задач:
+- **862** бере схему й функції з §31.16: `auth_login_attempts`, без лічильників в `identities`, `users.sessions_valid_after`, матриця `EXECUTE`, чекліст F-8, allowlist злиття, `auth_identity_release`, колонки черги без сирого токена, `notice_status`.
+- **863**: блокування через `auth_login_attempts` і pepper (§31.2.1), `sessions_valid_after` у middleware й refresh (§31.6), TOCTOU у `switch` (§31.5).
+- **864**: квота й аудит `identity.created` (§31.8.2–31.8.4).
+- **865**: `202` до БД і in-process черга, токен у воркері (§31.7).
+- **866**: очищення кешів після `switch` (§31.11).
+- **861**: доповнити preflight підрахунком bcrypt cost (F-13, лише кількості). Це невелика правка в межах задачі, що зараз у `review`.
+- **868** перевіряє реалізацію за §31.15 і звітом `docs/reviews/identity-threat-model.md`.
+- Q-C1, F-2, F-4 вирішено людиною.
+
+**Конфлікти з чинними задачами (обов'язково перед стартом 862):**
+- ADR-018 торкається тих самих файлів і таблиці `users`: TASK-816 (CHECK `invited` без `password_hash`, який ADR-024 замінює у фазі 3), TASK-818 і TASK-819 (`ControlPlaneService`, `EfControlPlaneStore`, `/api/auth/invite/accept`, `OwnerInviteController`), TASK-831. ADR-024 TASK-864 і 866 змінюють ті самі місця. Порядок: 816/818/819 мають бути в `integrate/*` до 862, або один власник на всі зміни `users` і owner-invite.
+- ADR-023 (TASK-851): `AuthController`, auth store, `UserAdminService`. Перетин з 863 і 864. ADR-024 §2.2 каже, що ADR-023 не змінюється, але файли спільні. Порядок і статус TASK-846…858 у `current.md` не записано (див. звіт).
+- Worker: TASK-865 і ADR-018 TASK-821 мають спільні файли воркера (`schema.sql`).
+- Один database-engineer на 861, 862, 870 і міграції ADR-017/ADR-018. Нумерація міграцій послідовна, тож 862 не запускати паралельно з іншими міграціями.
+
+**Human gates:**
+1. ADR-024 accepted: пройдено 2026-11-17.
+2. Preflight на staging (861): читання staging лише з окремого дозволу користувача. Локальна копія без обмежень.
+3. Розв'язання 2 дублікатів пошти (Q4): перевірка з власниками акаунтів до застосування 862. Злиття з `beautycrm.identity_merge` і будь-який запис на staging або деплой лише з окремого дозволу користувача.
+4. Q8: погодження `owner_email_in_use` з ShelfGuard до старту 864 (ShelfGuard-команда, не ця сесія).
+5. Q7: адреса відправника для листа скидання до 865.
+6. Мердж `integrate/*` після 868 (`integration-steward`).
+7. Фаза 3 (870) і будь-який `Down` 862 на staging/prod.
+8. Застосування 871 на staging (compose, nginx, `api.env`) і реліз 866 / фази 2 лише після smoke F-1.
+9. Текст листа «Пароль змінено» (872), як Q7.
+10. Будь-який виклик `auth_identity_release` (звільнення пошти оператором) на staging/prod.
+
+**Відкладено (фаза 3):** TASK-870 (рядок у таблиці, статус planned, не стартувати до Sunset). Mobile-developer окремої задачі немає: входу персоналу в mobile немає (ADR-021).
+
+**Паралельність:** 859 ∥ 861 одразу. 860 ∥ 861. 863 ∥ 864 лише за розділеними регіонами `EfAuthStore` (ADR §2.10 і TASK-864) через `integration-steward`. 866 mock паралельно з усім бекендом.
 ## Склад beauty_inventory, етап 1 (TASK-875…881)
 
 План: `C:\Users\stass\.claude\plans\twinkly-exploring-axolotl.md` (етап 1 з 3). Класифікація: feature, risk high, оновлено 2026-11-18. Номери (звірено 2026-11-18): ADR — **ADR-025** (ADR-019 зайнятий `ADR-019-beauty-production-deployment` у main-checkout, ADR-024 — `global-identity` у гілці mobile, не злито); контракт — **§32** (§31 зайнятий global identity у гілці mobile); TASK-ID — з 875 (максимум у всіх worktrees — 874).

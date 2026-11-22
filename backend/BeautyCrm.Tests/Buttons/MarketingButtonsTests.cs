@@ -189,7 +189,7 @@ public sealed class MarketingButtonsDbTests : IClassFixture<PostgresRlsFixture>
         var e = new Env { H = h, S = s, Conv = conv };
         e.ClientId = withClient ? await SetClientAsync(e, conv, "Анна Секретна") : Guid.Empty;
         await using var ctx = _db.CreateContext(e.Tenant);
-        var u = new User { Id = Guid.NewGuid(), Email = $"{Guid.NewGuid():N}@t.test", FullName = "Олена", PasswordHash = "x", Role = Roles.Admin };
+        var u = await IdentitySeed.NewUserAsync(ctx, Roles.Admin, "Олена");
         ctx.Add(u);
         await ctx.SaveChangesAsync();
         e.UserId = u.Id;

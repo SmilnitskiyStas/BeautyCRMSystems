@@ -52,6 +52,13 @@ DO `$`$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='beautycrm_audit_purge') THEN CREATE ROLE beautycrm_audit_purge NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; END IF;
 END `$`$;
 GRANT beautycrm_audit_purge TO beautycrm_owner WITH INHERIT FALSE, SET TRUE;
+DO `$`$ BEGIN
+  -- ADR-024: власники SECURITY DEFINER-функцій глобальної ідентичності (identity - auth_*, identity_release - лише auth_identity_release)
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='beautycrm_identity') THEN CREATE ROLE beautycrm_identity NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='beautycrm_identity_release') THEN CREATE ROLE beautycrm_identity_release NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; END IF;
+END `$`$;
+GRANT beautycrm_identity TO beautycrm_owner WITH INHERIT FALSE, SET TRUE;
+GRANT beautycrm_identity_release TO beautycrm_owner WITH INHERIT FALSE, SET TRUE;
 ALTER ROLE beautycrm_owner PASSWORD '$own';
 ALTER ROLE beautycrm_app PASSWORD '$app' NOSUPERUSER NOBYPASSRLS;
 ALTER ROLE beautycrm_worker PASSWORD '$wrk' NOSUPERUSER NOBYPASSRLS;
@@ -150,6 +157,57 @@ GRANT EXECUTE ON FUNCTION public.beauty_public_search_locations_by_city(text, in
 -- Retention журналу доступу (ADR-023, Q7): SECURITY DEFINER-функція (власник beautycrm_audit_purge), EXECUTE лише воркеру, не PUBLIC і не app
 REVOKE ALL ON FUNCTION public.purge_user_access_audit(timestamptz) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.purge_user_access_audit(timestamptz) TO beautycrm_worker;
+-- Глобальна ідентичність (ADR-024, TASK-862; контракт §31.16, чекліст F-8). ПІСЛЯ масових GRANT вище: таблиці deny-all для app, воркера й PUBLIC
+-- (захист двошаровий: права + FORCE RLS без політик для цих ролей). Повторний прогін скрипта прав НЕ повертає доступ.
+REVOKE ALL ON identities, auth_login_tickets, auth_password_resets, auth_login_attempts FROM PUBLIC, beautycrm_app, beautycrm_worker;
+-- Ніхто з app/воркера/PUBLIC не може створювати об'єкти в public (перехоплення функції попри search_path)
+REVOKE CREATE ON SCHEMA public FROM PUBLIC, beautycrm_app, beautycrm_worker;
+-- Матриця EXECUTE для auth_* (явно для кожної функції, без масових GRANT ON ALL FUNCTIONS): спершу REVOKE, потім лише дозволені ролі
+-- app (beautycrm_app): вхід, квитки, видача/споживання скидання, створення ідентичностей
+REVOKE ALL ON FUNCTION public.auth_identity_find(text) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_identity_find(text) TO beautycrm_app;
+REVOKE ALL ON FUNCTION public.auth_login_attempt_is_locked(bytea, timestamptz) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_login_attempt_is_locked(bytea, timestamptz) TO beautycrm_app;
+REVOKE ALL ON FUNCTION public.auth_login_attempt_failed(bytea, uuid, integer, integer, integer, timestamptz) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_login_attempt_failed(bytea, uuid, integer, integer, integer, timestamptz) TO beautycrm_app;
+REVOKE ALL ON FUNCTION public.auth_login_attempt_reset(bytea) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_login_attempt_reset(bytea) TO beautycrm_app;
+REVOKE ALL ON FUNCTION public.auth_identity_login_succeeded(uuid, timestamptz) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_identity_login_succeeded(uuid, timestamptz) TO beautycrm_app;
+REVOKE ALL ON FUNCTION public.auth_identity_memberships(uuid) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_identity_memberships(uuid) TO beautycrm_app;
+REVOKE ALL ON FUNCTION public.auth_identity_is_active(uuid) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_identity_is_active(uuid) TO beautycrm_app;
+REVOKE ALL ON FUNCTION public.auth_identity_email_in_use(text) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_identity_email_in_use(text) TO beautycrm_app;
+REVOKE ALL ON FUNCTION public.auth_identity_create(text, text, uuid, text, integer) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_identity_create(text, text, uuid, text, integer) TO beautycrm_app;
+REVOKE ALL ON FUNCTION public.auth_identity_create_pending(text, uuid, text) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_identity_create_pending(text, uuid, text) TO beautycrm_app;
+REVOKE ALL ON FUNCTION public.auth_identity_activate_pending(uuid, text) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_identity_activate_pending(uuid, text) TO beautycrm_app;
+REVOKE ALL ON FUNCTION public.auth_login_ticket_issue(uuid, bytea, timestamptz) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_login_ticket_issue(uuid, bytea, timestamptz) TO beautycrm_app;
+REVOKE ALL ON FUNCTION public.auth_login_ticket_consume(bytea, uuid, timestamptz) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_login_ticket_consume(bytea, uuid, timestamptz) TO beautycrm_app;
+REVOKE ALL ON FUNCTION public.auth_password_reset_issue(text, bytea, timestamptz) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_password_reset_issue(text, bytea, timestamptz) TO beautycrm_app;
+REVOKE ALL ON FUNCTION public.auth_password_reset_consume(bytea, text, timestamptz) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_password_reset_consume(bytea, text, timestamptz) TO beautycrm_app;
+-- воркер: лише доставка листів скидання й очищення
+REVOKE ALL ON FUNCTION public.auth_password_reset_claim_delivery(timestamptz, integer, integer) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_password_reset_claim_delivery(timestamptz, integer, integer) TO beautycrm_worker;
+REVOKE ALL ON FUNCTION public.auth_password_reset_attach_token(uuid, bytea, timestamptz) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_password_reset_attach_token(uuid, bytea, timestamptz) TO beautycrm_worker;
+REVOKE ALL ON FUNCTION public.auth_password_reset_mark_delivery(uuid, text, text, text, timestamptz) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_password_reset_mark_delivery(uuid, text, text, text, timestamptz) TO beautycrm_worker;
+REVOKE ALL ON FUNCTION public.auth_identity_purge_expired(timestamptz) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_identity_purge_expired(timestamptz) TO beautycrm_worker;
+-- звільнення пошти (F-4, human gate за runbook): лише ops/мігратор (beautycrm_owner); у app і воркера EXECUTE немає
+REVOKE ALL ON FUNCTION public.auth_identity_release(uuid, text) FROM PUBLIC, beautycrm_app, beautycrm_worker;
+GRANT EXECUTE ON FUNCTION public.auth_identity_release(uuid, text) TO beautycrm_owner;
+-- тригерна функція узгодженості пошти: EXECUTE не потрібен нікому
+REVOKE ALL ON FUNCTION public.users_identity_email_guard() FROM PUBLIC, beautycrm_app, beautycrm_worker;
 "@
 $grants | docker exec -i $script:Container psql -U postgres -d beautycrm -v ON_ERROR_STOP=1 -q | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'GRANT не вдався.' }

@@ -53,6 +53,11 @@ public sealed class InventorySalePriceMigrationTests
                 await Exec(admin, $"GRANT beautycrm_catalog TO {owner} WITH INHERIT FALSE, SET TRUE");
                 await Exec(admin, "DO $$ BEGIN CREATE ROLE beautycrm_audit_purge NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; EXCEPTION WHEN duplicate_object THEN NULL; END $$");
                 await Exec(admin, $"GRANT beautycrm_audit_purge TO {owner} WITH INHERIT FALSE, SET TRUE");
+                // ADR-024 (TASK-862): ops заздалегідь створює ролі глобальної ідентичності (CREATEROLE у мігратора немає)
+                await Exec(admin, "DO $$ BEGIN CREATE ROLE beautycrm_identity NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; EXCEPTION WHEN duplicate_object THEN NULL; END $$");
+                await Exec(admin, $"GRANT beautycrm_identity TO {owner} WITH INHERIT FALSE, SET TRUE");
+                await Exec(admin, "DO $$ BEGIN CREATE ROLE beautycrm_identity_release NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; EXCEPTION WHEN duplicate_object THEN NULL; END $$");
+                await Exec(admin, $"GRANT beautycrm_identity_release TO {owner} WITH INHERIT FALSE, SET TRUE");
                 await Exec(admin, $"CREATE DATABASE {db} OWNER {owner}");
             }
             string Cs(string user) => new NpgsqlConnectionStringBuilder(adminCs) { Database = db, Username = user, Password = password }.ConnectionString;
@@ -71,7 +76,11 @@ public sealed class InventorySalePriceMigrationTests
             var user = Guid.NewGuid();
             await Exec(conn, $"SELECT set_config('app.tenant_id', '{tenant}', false)");
             await Exec(conn, $"INSERT INTO tenants (id, name, slug) VALUES ('{tenant}', 'T', 't-{suffix}')");
-            await Exec(conn, $"INSERT INTO users (id, tenant_id, email, full_name, password_hash, role) VALUES ('{user}', '{tenant}', 'u-{suffix}@x.test', 'U', 'h', 'owner')");
+            await using (var sc = new NpgsqlConnection(new NpgsqlConnectionStringBuilder(adminCs) { Database = db }.ConnectionString))
+            {
+                await sc.OpenAsync();
+                await Exec(sc, IdentitySeed.UserSql(tenant, $"u-{suffix}@x.test", "U", "h", "owner", user)); // ADR-024: users.identity_id NOT NULL
+            }
             await Exec(conn, $"INSERT INTO beauty_products (tenant_id, name, unit, purpose, updated_by_user_id) VALUES ('{tenant}', 'Old', 'pcs', 'sale', '{user}')");
             Assert.Equal(0L, await Scalar(conn, "SELECT count(*) FROM information_schema.columns WHERE table_name = 'beauty_products' AND column_name = 'sale_price'"));
 

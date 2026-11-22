@@ -26,8 +26,7 @@ public sealed class PlatformControlPlaneRlsTests : IClassFixture<PostgresRlsFixt
         var slug = $"cp-{tenantId:N}";
         var ext = externalRef is null ? "NULL, NULL" : $"'{externalRef}', 'shelfguard'";
         await Admin($@"INSERT INTO tenants (id, name, slug, external_ref, external_source) VALUES ('{tenantId}', 'T', '{slug}', {ext});
-                       INSERT INTO users (id, tenant_id, email, full_name, password_hash, role)
-                       VALUES ('{userId}', '{tenantId}', 'u@{tenantId:N}.test', 'Owner', 'x', 'owner');");
+                       {IdentitySeed.UserSql(tenantId, $"u@{tenantId:N}.test", "Owner", "x", "owner", userId)}");
         return new Seed(tenantId, userId, slug);
     }
 
@@ -208,8 +207,7 @@ public sealed class PlatformControlPlaneRlsTests : IClassFixture<PostgresRlsFixt
         Assert.Equal("active", (string)(await Scalar($"SELECT state FROM users WHERE id = '{s.UserId}'"))!); // дефолт для наявних/нових рядків
 
         string User(string state, string? hash) =>
-            $@"INSERT INTO users (tenant_id, email, full_name, password_hash, role, state)
-               VALUES ('{s.TenantId}', '{Guid.NewGuid():N}@x.test', 'N', {(hash is null ? "NULL" : $"'{hash}'")}, 'owner', '{state}')";
+            IdentitySeed.UserSql(s.TenantId, $"{Guid.NewGuid():N}@x.test", "N", hash, "owner", state: state, asApp: true);
 
         await Run(s.TenantId, User("invited", null));
         await Run(s.TenantId, User("invited", "bcrypt"));

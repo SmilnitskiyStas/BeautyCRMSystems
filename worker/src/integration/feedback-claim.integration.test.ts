@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import pg from "pg";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { seedUser } from "../testing/seed-user";
 import { TenantDb, withTenant } from "../db/tenant-db";
 import { PgFeedbackStore } from "../feedback/feedback-store";
 
@@ -31,7 +32,7 @@ describe("PgFeedbackStore", () => {
   it("leases each due row once across concurrent claimers and records outcomes", async () => {
     const tenantId = randomUUID(), userId = randomUUID();
     await admin.query("INSERT INTO tenants (id, name, slug) VALUES ($1,'Salon X','salon-fb')", [tenantId]);
-    await admin.query("INSERT INTO users (id, tenant_id, email, full_name, password_hash, role) VALUES ($1,$2,'o@x.test','O','h','admin')", [userId, tenantId]);
+    await seedUser(admin, { id: userId, tenantId, email: "o@x.test", fullName: "O", passwordHash: "h", role: "admin" });
     const ids = Array.from({ length: 6 }, () => randomUUID());
     for (const id of ids) {
       await admin.query("INSERT INTO beauty_platform_feedback (id, tenant_id, user_id, type, message, next_attempt_at) VALUES ($1,$2,$3,'bug','0123456789',$4)",

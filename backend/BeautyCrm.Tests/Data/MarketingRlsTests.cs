@@ -28,8 +28,7 @@ public sealed class MarketingRlsTests : IClassFixture<PostgresRlsFixture>
         var tenantId = Guid.NewGuid();
         var userId = Guid.NewGuid();
         await Admin($@"INSERT INTO tenants (id, name, slug) VALUES ('{tenantId}', 'T', 'mkt-{tenantId:N}');
-                       INSERT INTO users (id, tenant_id, email, full_name, password_hash, role)
-                       VALUES ('{userId}', '{tenantId}', 'u@{tenantId:N}.test', 'Owner', 'x', 'owner');");
+                       {IdentitySeed.UserSql(tenantId, $"u@{tenantId:N}.test", "Owner", "x", "owner", userId)}");
 
         await using var ctx = _db.CreateContext(tenantId);
         var loc = new Location { Name = "A", Timezone = "Europe/Kyiv" };

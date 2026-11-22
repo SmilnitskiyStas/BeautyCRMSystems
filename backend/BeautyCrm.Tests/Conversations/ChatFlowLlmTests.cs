@@ -107,7 +107,8 @@ public sealed class ChatFlowLlmTests : IClassFixture<PostgresRlsFixture>
     private static string Ref(FakeBotApi.Sent m) => m.MessageId.ToString();
     private static string Data(FakeBotApi.Sent m, string part) => Kb(m).First(b => b.Text.Contains(part)).Data;
     private static Task<Guid> Press(ChatHarness h, ChatSeed s, FakeBotApi.Sent m, string part) => h.PressAsync(s, Data(m, part), Ref(m));
-    private static string Tomorrow() => DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1)).ToString("yyyy-MM-dd");
+    // "Завтра" за часовим поясом закладу (Europe/Kyiv): після 22:00 UTC в Києві вже наступна доба, і за UTC слот "завтра" став би "сьогодні" (мітка без дати)
+    private static string Tomorrow() => DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("Europe/Kyiv")).AddDays(1)).ToString("yyyy-MM-dd");
 
     private async Task<List<ChatBookingFlow>> FlowsAsync(ChatSeed s)
     {

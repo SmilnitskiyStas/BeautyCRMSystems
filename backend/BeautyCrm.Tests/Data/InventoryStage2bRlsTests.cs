@@ -35,7 +35,7 @@ public sealed class InventoryStage2bRlsTests : IClassFixture<PostgresRlsFixture>
             async Task Exec(string sql) { await using var c = new NpgsqlCommand(sql, admin); await c.ExecuteNonQueryAsync(); }
             async Task<Guid> Id(string sql) { await using var c = new NpgsqlCommand(sql, admin); return (Guid)(await c.ExecuteScalarAsync())!; }
             await Exec($@"INSERT INTO tenants (id, name, slug) VALUES ('{t}', 'T', 'inv2b-{t:N}');
-                INSERT INTO users (id, tenant_id, email, full_name, password_hash, role) VALUES ('{user}', '{t}', 'o@{t:N}.test', 'Owner', 'x', 'owner');");
+                {IdentitySeed.UserSql(t, $"o@{t:N}.test", "Owner", "x", "owner", user)}");
             channel = await Id($"INSERT INTO beauty_channels (tenant_id, type, name, is_active) VALUES ('{t}', 'telegram', 'bot', true) RETURNING id");
             loc = await Id($"INSERT INTO beauty_locations (tenant_id, name, timezone, is_active) VALUES ('{t}', 'A', 'Europe/Kyiv', true) RETURNING id");
             product = await Id($"INSERT INTO beauty_products (tenant_id, name, unit, purpose, updated_by_user_id) VALUES ('{t}', 'Шампунь', 'ml', 'salon_use', '{user}') RETURNING id");

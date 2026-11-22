@@ -11,6 +11,8 @@ public static class AuthDataServiceExtensions
     {
         services.TryAddSingleton<IPasswordHasher, BcryptPasswordHasher>();
         services.AddScoped<IAuthStore, EfAuthStore>();
+        services.AddScoped<IIdentityStore, EfIdentityStore>(); // ADR-024: функції auth_* поза RLS tenant
+        services.AddSingleton<IPasswordResetStore, EfPasswordResetStore>(); // §31.7: функції auth_password_reset_issue/consume (без стану, singleton для фонового обробника)
         services.AddScoped<IAccessAdminStore, EfAccessAdminStore>(); // ADR-023 (TASK-851)
         services.AddScoped<IAccessStore, EfAccessStore>(); // ADR-023: доступ користувача для AccessContextMiddleware
         services.AddScoped<BeautyCrm.Application.Features.BeautyControlPlane.IControlPlaneStore, EfControlPlaneStore>();

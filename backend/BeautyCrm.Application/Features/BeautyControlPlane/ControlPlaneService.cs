@@ -54,7 +54,7 @@ public sealed partial class ControlPlaneService(IControlPlaneStore store, Contro
         var tenantId = Guid.NewGuid();
         var invite = NewInvite(now);
         CpOwnerView? ownerView = null;
-        var created = await store.TryCreateAsync(new CpNewTenant(tenantId, externalRef, name, slug, modules, now), new CpNewOwner(email, ownerName),
+        var outcome = await store.TryCreateAsync(new CpNewTenant(tenantId, externalRef, name, slug, modules, now), new CpNewOwner(email, ownerName),
             async session =>
             {
                 var owner = (await session.GetOwnerAsync(ct))!;
@@ -68,7 +68,9 @@ public sealed partial class ControlPlaneService(IControlPlaneStore store, Contro
                     new() { ["user_id"] = owner.UserId, ["invite_id"] = inviteId, ["expires_at"] = Iso(invite.ExpiresAt) }), ct);
             }, ct);
 
-        if (created)
+        if (outcome == CpCreateOutcome.OwnerEmailInUse)
+            return AuthError.Conflict("owner_email_in_use", "The owner email is already used in Beauty CRM.");
+        if (outcome == CpCreateOutcome.Created)
             return new CpCreateResult(
                 new CpCreateResponse(tenantId, externalRef, slug, "active", modules, ownerView!, new CpInviteView(InviteUrl(inviteBase, invite.Token), Iso(invite.ExpiresAt))),
                 Replayed: false);

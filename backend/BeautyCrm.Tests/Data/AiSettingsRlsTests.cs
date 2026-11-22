@@ -23,8 +23,7 @@ public sealed class AiSettingsRlsTests : IClassFixture<PostgresRlsFixture>
         await admin.OpenAsync();
         var slug = "ai-" + tenantId.ToString("N")[..20];
         await Exec(admin, $"INSERT INTO tenants (id, name, slug) VALUES ('{tenantId}', 'T', '{slug}')");
-        await Exec(admin, $@"INSERT INTO users (id, tenant_id, email, full_name, password_hash, role)
-                             VALUES ('{userId}', '{tenantId}', 'u@{slug}.test', 'Owner', 'x', 'owner')");
+        await Exec(admin, IdentitySeed.UserSql(tenantId, $"u@{slug}.test", "Owner", "x", "owner", userId));
         return new Seed(tenantId, userId);
     }
 

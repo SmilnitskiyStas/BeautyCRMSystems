@@ -25,8 +25,7 @@ public sealed class CancellationHistoryRlsTests : IClassFixture<PostgresRlsFixtu
             await admin.OpenAsync();
             var slug = "hist-" + tenantId.ToString("N")[..20];
             await Exec(admin, $"INSERT INTO tenants (id, name, slug) VALUES ('{tenantId}', 'T', '{slug}')");
-            await Exec(admin, $@"INSERT INTO users (id, tenant_id, email, full_name, password_hash, role)
-                                 VALUES ('{userId}', '{tenantId}', 'u@{slug}.test', 'Staff Name', 'x', 'admin')");
+            await Exec(admin, IdentitySeed.UserSql(tenantId, $"u@{slug}.test", "Staff Name", "x", "admin", userId));
         }
         await using var ctx = _db.CreateContext(tenantId);
         var location = new Location { Name = "L", Timezone = "UTC" };

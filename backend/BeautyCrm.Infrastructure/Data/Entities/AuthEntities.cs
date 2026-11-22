@@ -47,8 +47,85 @@ public class User : TenantEntity
     public DateTimeOffset? LastLoginAt { get; set; }
     /// <summary>ADR-023: +1 за кожної зміни ролі, прав і активності (оптимістичне блокування й синхронізація UI). Починається з 1.</summary>
     public int AccessVersion { get; set; } = 1;
+    /// <summary>ADR-024: глобальна ідентичність (людина) цього членства. NOT NULL у БД; пароль і блокування живуть у identities.
+    /// Прямого доступу до таблиці identities застосунок не має (deny-all), id повертають лише функції auth_*.</summary>
+    public Guid IdentityId { get; set; }
+    /// <summary>ADR-024 §31.6 (F-6): токени, видані раніше за цей момент, недійсні (скидання пароля, злиття, звільнення пошти). NULL = без обмеження.</summary>
+    public DateTimeOffset? SessionsValidAfter { get; set; }
 
     public Specialist? Specialist { get; set; }
+}
+
+/// <summary>
+/// ADR-024 §2.1: глобальна ідентичність (людина): нормалізована пошта, пароль, стан. Без tenant_id, ENABLE + FORCE RLS,
+/// політики лише TO beautycrm_identity; доступ застосунку лише через SECURITY DEFINER-функції auth_* (контракт §31.16).
+/// Блокування входу тут немає: його тримає <see cref="AuthLoginAttempt"/> за ключем пошти (F-2).
+/// </summary>
+public class AuthIdentity
+{
+    public Guid Id { get; set; }
+    /// <summary>lower(btrim()); унікальна на платформі.</summary>
+    public string Email { get; set; } = null!;
+    /// <summary>NULL лише для стану pending (власник ще не задав пароль).</summary>
+    public string? PasswordHash { get; set; }
+    /// <summary>pending | active.</summary>
+    public string State { get; set; } = "active";
+    public DateTimeOffset? LastLoginAt { get; set; }
+    public DateTimeOffset? PasswordChangedAt { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
+/// <summary>ADR-024 §2.5: квиток вибору бізнесу. У БД лише SHA-256 токена; одноразовий, коротка TTL. Deny-all, лише функції auth_login_ticket_*.</summary>
+public class AuthLoginTicket
+{
+    public Guid Id { get; set; }
+    public Guid IdentityId { get; set; }
+    public byte[] TokenHash { get; set; } = null!;
+    public DateTimeOffset ExpiresAt { get; set; }
+    public DateTimeOffset? ConsumedAt { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+/// <summary>
+/// ADR-024 §2.8 / контракт §31.7: запит скидання пароля й черга доставки листів (ADR-003, патерн черги-таблиці).
+/// Сирого токена в БД немає ніколи (F-9): <see cref="TokenHash"/> NULL до першої спроби доставки, далі лише sha256.
+/// Deny-all; воркер працює лише через auth_password_reset_claim_delivery / attach_token / mark_delivery.
+/// </summary>
+public class AuthPasswordReset
+{
+    public Guid Id { get; set; }
+    public Guid IdentityId { get; set; }
+    /// <summary>HMAC-ключ пошти (§31.1) для зняття блокування при consume.</summary>
+    public byte[] LoginKey { get; set; } = null!;
+    public byte[]? TokenHash { get; set; }
+    public DateTimeOffset ExpiresAt { get; set; }
+    public DateTimeOffset? ConsumedAt { get; set; }
+    public DateTimeOffset? SupersededAt { get; set; }
+    /// <summary>pending | sent | failed (лист із посиланням).</summary>
+    public string DeliveryStatus { get; set; } = "pending";
+    public int Attempts { get; set; }
+    public DateTimeOffset NextAttemptAt { get; set; }
+    /// <summary>Код помилки (без токена й пошти).</summary>
+    public string? LastError { get; set; }
+    /// <summary>none | pending | sent | failed (лист «Пароль змінено», §31.7.3).</summary>
+    public string NoticeStatus { get; set; } = "none";
+    public int NoticeAttempts { get; set; }
+    public DateTimeOffset? NoticeNextAttemptAt { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+/// <summary>
+/// ADR-024 errata E-2 (F-2): єдиний глобальний лічильник невдалих входів за ключем пошти (HMAC-SHA256 з pepper, 32 байти):
+/// однаково для наявної, невідомої й pending пошти. Колонок пошти чи identity_id немає. Deny-all, лише функції auth_login_attempt_*.
+/// </summary>
+public class AuthLoginAttempt
+{
+    public byte[] LoginKey { get; set; } = null!;
+    public int FailedCount { get; set; }
+    public DateTimeOffset WindowStartedAt { get; set; }
+    public DateTimeOffset? LockedUntil { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
 }
 
 /// <summary>

@@ -31,6 +31,7 @@ beforeAll(async () => {
   container = await new PostgreSqlContainer("postgres:16-alpine").start();
   admin = new pg.Pool({ connectionString: container.getConnectionUri() });
   await admin.query(readFileSync(new URL("../testing/schema.sql", import.meta.url), "utf8"));
+  await admin.query("CREATE ROLE beautycrm_owner NOLOGIN"); // блок $grants (ADR-024, auth_identity_release) видає EXECUTE ops-ролі
   await admin.query(`CREATE ROLE ${WORKER} LOGIN PASSWORD 'pw' NOSUPERUSER NOBYPASSRLS`);
   await admin.query(`CREATE ROLE ${APP} LOGIN PASSWORD 'pw' NOSUPERUSER NOBYPASSRLS`);
   await admin.query(`GRANT USAGE ON SCHEMA public TO ${APP}, ${WORKER}`);

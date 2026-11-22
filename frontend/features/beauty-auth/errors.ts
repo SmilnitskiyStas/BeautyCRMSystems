@@ -31,9 +31,17 @@ export class BeautyApiError extends Error {
 
 /** Людські тексти за кодом помилки. Англомовний `message` сервера користувачу не показуємо. */
 const BY_CODE: Record<string, string> = {
-  invalid_credentials: "Невірна пошта, пароль або назва бізнесу.",
-  account_locked: "Забагато невдалих спроб. Обліковий запис тимчасово заблоковано, спробуйте через 15 хвилин.",
+  // §31.11: тексти входу, вибору й перемикання бізнесу, скидання пароля
+  invalid_credentials: "Невірна пошта або пароль",
+  account_locked: "Забагато невдалих спроб. Спробуйте за 15 хвилин або скиньте пароль",
   rate_limited: "Забагато запитів. Зачекайте хвилину і спробуйте ще раз.",
+  login_ticket_invalid: "Час вибору минув, увійдіть ще раз",
+  membership_not_found: "Доступ до цього бізнесу недоступний",
+  email_in_use: "Ця пошта вже використовується в Beauty CRM. Вкажіть іншу пошту",
+  owner_email_in_use: "Ця пошта вже використовується в Beauty CRM. Вкажіть іншу пошту",
+  reset_invalid: "Посилання недійсне або застаріло. Запросіть нове",
+  invalid_email: "Вкажіть коректну пошту",
+  same_tenant: "Цей бізнес уже відкрито",
   invalid_token: "Сесія завершилась. Увійдіть знову.",
   tenant_required: "Сесія завершилась. Увійдіть знову.",
   no_session: "Сесія завершилась. Увійдіть знову.",
@@ -266,7 +274,6 @@ const BY_CODE: Record<string, string> = {
   invalid_lot_number: "Номер партії: до 64 символів.",
   invalid_contact_name: "Контактна особа: до 200 символів.",
   invalid_phone: "Телефон: до 32 символів, цифри та + ( ) - . пробіл.",
-  invalid_email: "Вкажіть коректну пошту.",
   location_required: "Оберіть заклад.",
   expected_version_required: "Технічна помилка запиту. Оновіть сторінку.",
 };
@@ -351,6 +358,12 @@ export function humanizeError(e: unknown, fallback = "Щось пішло не �
   }
   if (e instanceof TypeError) return BY_CODE.api_unreachable;
   return fallback;
+}
+
+/** Тексти екранів входу/вибору/скидання пароля (§31.11): `rate_limited` тут має власне формулювання. */
+export function humanizeAuthError(e: unknown, fallback?: string): string {
+  if (e instanceof BeautyApiError && e.code === "rate_limited") return "Забагато спроб. Спробуйте пізніше";
+  return humanizeError(e, fallback);
 }
 
 function parseConflict(raw: unknown): ApiConflict[] {

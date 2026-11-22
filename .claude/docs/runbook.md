@@ -79,6 +79,68 @@ docker exec beautycrm psql -U postgres -d beautycrm \
 
 **Відомі обмеження:** `DbRoleGuard` не перевіряє роль `beautycrm_audit_purge`; retention-job воркера для `purge_user_access_audit` ще не реалізовано (known-issues KI-006).
 
+## 2b. ADR-024: глобальна ідентичність (міграція `20261117140201_auth_global_identities`)
+
+Статус (2026-11-18): код у гілці (TASK-861…866, 871, 872), **на staging не застосовано**. Міграція, `grants.sql` і зміна env — human gate. Модель і контракт: ADR-024 (§ «Реалізація»), `beauty-contracts.md` §31, `database.md` «Global identity».
+
+### 2b.1 Preflight (лише читання, до міграції)
+1. Бекап БД (`deploy/staging/README.md` §5) і перевірка файлу.
+2. Від `postgres` у БД `beautycrm`:
+   ```bash
+   psql -U postgres -d beautycrm -v ON_ERROR_STOP=1 -f deploy/staging/db/preflight-identity-duplicates.sql
+   ```
+   Скрипт працює в `BEGIN READ ONLY … ROLLBACK`. Він падає, якщо роль не обходить RLS (`users` має FORCE RLS, без BYPASSRLS результат був би хибно порожнім). Повні адреси пошти — лише з `-v show_email=1` у терміналі оператора; звіт не комітити й не вставляти в чат.
+3. Розділи звіту: 1 групи дублікатів (`email_key` = 8 hex md5 нормалізованої пошти); 2 членства і кандидат-переможець (правило «найсвіжіший вхід»); 3 блокери B1 (invited-власник у групі), B2 (немає активного членства з паролем), B3 (призупинений tenant); 4 аномалії нормалізації (регістр, пробіли, не-ASCII); 5 живі запрошення персоналу, що конфліктують; 6 запрошені власники; 7 розподіл bcrypt cost.
+4. Обмеження: хеші солені, тож розбіжність паролів однієї пошти з звіту не видно. «Активний» = `state='active' AND is_active`.
+5. Звіт іде людині (Q4). Рішення по групах:
+   - одна людина → її `email_key` до allowlist (див. 2b.2); пароль «переможця» (найсвіжіший вхід) лишається, паролі інших членств перестануть працювати;
+   - різні люди або тестові акаунти → розвести до міграції (змінити пошту/вимкнути членство), повторити preflight;
+   - B1/B2/B3 → лише вручну до міграції. Автоматичного злиття для них немає, міграція відмовить.
+
+### 2b.2 Застосування міграції (human gate)
+1. **Ролі.** Якщо мігратор не має `CREATEROLE`, ops створює `beautycrm_identity` і `beautycrm_identity_release` за `deploy/staging/db/init-catalog-role.sql` (NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT) і дає мігратору членство `WITH INHERIT FALSE, SET TRUE`. Інакше міграція зупиниться з готовою інструкцією в тексті помилки.
+2. **Allowlist злиття** передається сесійним параметром, а не файлом: `beautycrm.identity_merge_allowlist` = список `email_key` через кому (8 hex). Порожньо = злиття не дозволено; дублікати тоді дають `RAISE EXCEPTION`.
+   - Npgsql: `Options=-c beautycrm.identity_merge_allowlist=<key1>,<key2>` у рядку мігратора; або `PGOPTIONS`;
+   - psql з SQL-файлом: рядок `SET beautycrm.identity_merge_allowlist = '<key1>,<key2>';` перед тілом міграції, застосування з `-1` (одна транзакція, GUC бачить міграція).
+   - Синонім `beautycrm.identity_merge_allow` приймається; різні значення → помилка. Значення не комітити в git, не писати в чат.
+3. **Порядок:**
+   1. бекап і preflight (2b.1), рішення Q4 записане;
+   2. `$DC stop api worker` (`deploy/staging/README.md` §4, крок 3);
+   3. міграція від `beautycrm_owner` (README §4, крок 4) з allowlist з п.2;
+   4. **`deploy/staging/db/grants.sql` від postgres** (обов'язково після міграції: `REVOKE ALL` на глобальні таблиці йде після `GRANT ON ALL TABLES`, і без нього app може їх читати);
+   5. `$DC up -d api`, перевірка `DbRoleGuard` у логах, `/readyz`; `$DC up -d worker`.
+4. **Очікувані повідомлення:** `NOTICE` з кількостями backfill. Помилки `identity backfill incomplete`, `Duplicate email groups found…`, `…invited owner (B1…)`, `…no active membership with a password (B2…)` означають: виправте дані або allowlist і повторіть з бекапу, не обходьте.
+5. **Відкат.** `Down` — human gate. Відмовляє, якщо є активне членство з `users.password_hash IS NULL` (dual-write порушено). Втрачаються блокування, квитки й токени скидання. Образ API попереднього релізу працює з цією БД, бо `users.password_hash` не змінюється (dual-write до фази 3). Відкат образу без відкату БД — штатний шлях.
+6. **Фаза 3 (TASK-870)** видаляє `users.password_hash`, лічильники, `tenants_login_lookup` і поле `tenant`. Не раніше ніж після `Sunset` і стабілізації, окремий human gate.
+
+### 2b.3 Звільнення пошти (`auth_identity_release`, оператор; ADR-024 E-7, Q11)
+Лише коли заявник не володіє скринькою або пошту треба звільнити для нового запрошення. Це не звичайне «забув пароль» (для нього є скидання пароля). **Human gate:** спершу поза системою перевірте, що заявник володіє скринькою, і зафіксуйте рішення.
+
+1. Під `beautycrm_owner` знайти ідентичність. Таблиця `identities` має FORCE RLS, тож читання йде через роль, яка має політику:
+   ```sql
+   SET ROLE beautycrm_identity_release;
+   SELECT id FROM identities WHERE email = lower(btrim('<пошта>'));
+   RESET ROLE;
+   ```
+2. Виклик (EXECUTE видано `beautycrm_owner` і `beautycrm_identity_release`):
+   ```sql
+   SELECT public.auth_identity_release('<identity_id>'::uuid, '<reason_code>');
+   ```
+   `reason_code` за `^[a-z0-9_]{1,64}$` (напр. `owner_request`, `wrong_email_squat`). Помилки: `22023` (невірний код), `P0002` (ідентичність не знайдено).
+3. Ефект в одній транзакції: пошта ідентичності й `users.email` усіх членств → `released+<identity_id>@released.invalid`; членства `is_active = false`; refresh-токени відкликано; `sessions_valid_after = now()`, `access_version + 1`; квитки входу й запити скидання погашено; запис `identity.released` (`tenant_id = NULL`, `{identityId, reasonCode}`) у `platform_audit_log`.
+4. Перевірка: `SELECT public.auth_identity_email_in_use('<пошта>');` → `false`. Після цього пошту можна запросити знову. Старі FK на членства лишаються.
+5. Запишіть результат (дата, оператор, `reason_code`, identity_id) у журнал змін. Пошту в публічних каналах не писати.
+
+### 2b.4 Нові змінні середовища (ADR-024)
+Повний перелік з коментарями — у таблиці §3. Обов'язкові поза Development:
+- API: `Auth__LoginAttemptKeyPepper` (≥ 32 байти), `Auth__LegacyTenantLogin__DeprecatedAt`, `Auth__LegacyTenantLogin__SunsetAt`; `Beauty__TrustedProxies` (шлюз + `web`).
+- Compose: `BEAUTY_WEB_IP` (статична адреса web).
+- Worker (скидання пароля, TASK-865/872): `PUBLIC_APP_URL` — `https`, без query, fragment і userinfo; `http` лише в Development або на loopback. Без нього воркер не бере рядки скидання (записує помилку раз за прохід). Посилання = `{PUBLIC_APP_URL}/reset-password#t=<токен>`. `EMAIL_FROM` — адреса відправника; обов'язковий разом із `SMTP_*`, коли `EMAIL_MODE=smtp`. У mock-режимі листи не надсилаються.
+
+**Увага (KI-I1).** `deploy/staging/.env.api.example` і корневий `.env.example` **не містять** `Auth__LoginAttemptKeyPepper` та `Auth__LegacyTenantLogin__*`. Скопійований з прикладу env без них API на staging не стартує. Додайте значення перед першим стартом.
+
+**SMTP-налаштування й перевірка листів.** Відправник і текст листів погоджує людина (Q7). Шаблони в плейсхолдері, потребують погодження до релізу TASK-865 (скидання) і TASK-872 (зміна пароля).
+
 ### 2b. Склад `beauty_inventory` (ADR-025, контракт §32)
 
 **Міграції** (дві, під `beautycrm_owner`, у цьому порядку):
@@ -241,6 +303,13 @@ docker exec beautycrm psql -U postgres -d beautycrm \
 | `ConnectionStrings__Default` | runtime-рядок, роль `beautycrm_app` |
 | `ConnectionStrings__Migrator` | лише для `dotnet ef` (власник) |
 | `Auth__JwtSigningKey`, `Auth__PlatformKey` | без них API не стартує / ендпоінти оператора вимкнені |
+| `Auth__LoginAttemptKeyPepper` | ADR-024 (§31.1, E-2): HMAC-ключ `auth_login_attempts`, **≥ 32 байти UTF-8**, обов'язковий поза Development (інакше API не стартує). Зміна скидає лічильники блокувань. Значення задає лише людина |
+| `Auth__LegacyTenantLogin__DeprecatedAt`, `Auth__LegacyTenantLogin__SunsetAt` | ADR-024 (§31.2.3, E-12): дати для заголовків `Deprecation` (`@<unix>`) і `Sunset` легкого логіну з полем `tenant`. **Обов'язкові поза Development.** Sunset = дата фази 3 (Q12: 30 днів після релізу фази 2) |
+| `Auth__LoginAttemptWindowSeconds` (900), `Auth__LoginTicketSeconds` (180), `Auth__PasswordResetMinutes` (30) | ADR-024 дефолти (§31.9); змінювати лише з рішенням людини |
+| `Auth__IdentityCreate__PerTenantPerDay` (20, 1..200), `Auth__InviteEmailCheck__PerTenantPerHour` (30) | квота нових ідентичностей через запрошення (E-7) і перевірки пошти при створенні запрошення |
+| `Auth__PasswordForgot__PerIpPermit` (5), `__PerEmailPermit` (3), `__QueueCapacity` (1000) | ліміти й черга `password/forgot` (per-instance, in-memory) |
+| `Beauty__TrustedProxies` | (ADR-024 E-14, TASK-871) **шлюз** мережі `beauty_staging` + **статична адреса web** (`BEAUTY_WEB_IP`), окремі IP. Без цього `auth` (10/хв) рахується спільно для всіх клієнтів |
+| `BEAUTY_WEB_IP` (`.env.compose`) | статична адреса контейнера `web` у підмережі `BEAUTY_SUBNET` (не шлюз, не `.2`–`.9`); обов'язкова в `docker-compose.staging.yml`. Порт web лише на `127.0.0.1` |
 | `Channels__EncryptionKey` | шифрування секретів каналів (AES-256-GCM) |
 | `Channels__UseMocks` | `true` лише в Development; поза Development `true` зупиняє старт |
 | `Beauty__AllowedOrigins` | точні origin для CORS, без `*` |

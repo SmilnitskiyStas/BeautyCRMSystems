@@ -37,8 +37,7 @@ public sealed class InventoryRlsTests : IClassFixture<PostgresRlsFixture>
             await admin.OpenAsync();
             await using var cmd = new NpgsqlCommand(
                 $@"INSERT INTO tenants (id, name, slug) VALUES ('{tenantId}', 'T', 'inv-{tenantId:N}');
-                   INSERT INTO users (id, tenant_id, email, full_name, password_hash, role)
-                   VALUES ('{userId}', '{tenantId}', 'u@{tenantId:N}.test', 'Owner', 'x', 'owner');", admin);
+                   {IdentitySeed.UserSql(tenantId, $"u@{tenantId:N}.test", "Owner", "x", "owner", userId)}", admin);
             await cmd.ExecuteNonQueryAsync();
         }
 

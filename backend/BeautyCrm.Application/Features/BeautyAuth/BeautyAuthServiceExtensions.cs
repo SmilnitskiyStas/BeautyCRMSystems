@@ -10,7 +10,17 @@ public static class BeautyAuthServiceExtensions
     {
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton(options ?? new AuthOptions());
-        services.AddSingleton<LoginAttemptTracker>();
+        services.TryAddSingleton<LoginDummyHash>(); // F-13: фіктивний bcrypt-хеш того самого cost; Program.cs створює його на старті
+        services.TryAddSingleton(sp => new InviteEmailCheckThrottle(
+            sp.GetRequiredService<AuthOptions>().InviteEmailCheck.PerTenantPerHour, TimeSpan.FromHours(1), sp.GetRequiredService<TimeProvider>()));
+        services.TryAddSingleton(sp => new PasswordForgotQueue(sp.GetRequiredService<AuthOptions>().PasswordForgot.QueueCapacity));
+        services.TryAddSingleton(sp =>
+        {
+            var f = sp.GetRequiredService<AuthOptions>().PasswordForgot;
+            return new PasswordForgotEmailThrottle(f.PerEmailPermit, TimeSpan.FromSeconds(Math.Max(1, f.PerEmailWindowSeconds)), sp.GetRequiredService<TimeProvider>());
+        });
+        services.AddSingleton<PasswordForgotProcessor>();
+        services.AddScoped<PasswordResetService>();
         services.AddScoped<AuthService>();
         services.AddScoped<UserAdminService>();
         services.AddScoped<AccessAdminService>(); // ADR-023 (TASK-851)
