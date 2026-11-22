@@ -180,6 +180,8 @@ public sealed class AuthzBaselineMatrixTests(AuthApiFixture fx) : IClassFixture<
         MgmtFilter("PUT", "api/beauty/locations/{id:guid}", "422"),
         MgmtFilter("PUT", "api/beauty/locations/{id:guid}/closed-weekdays", "422"),
         MgmtFilter("PUT", "api/beauty/locations/{id:guid}/working-hours", "422"),
+        MgmtFilter("PUT", "api/beauty/locations/{id:guid}/logo", "404"),
+        MgmtFilter("DELETE", "api/beauty/locations/{id:guid}/logo", "404"),
         Open("GET", "api/beauty/locations/{id:guid}/closures", "404"),
         MgmtFilter("POST", "api/beauty/locations/{id:guid}/closures", "404"),
         MgmtFilter("DELETE", "api/beauty/locations/{id:guid}/closures/{closureId:guid}", "404"),

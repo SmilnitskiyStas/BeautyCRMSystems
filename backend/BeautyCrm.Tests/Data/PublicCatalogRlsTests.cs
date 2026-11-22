@@ -177,14 +177,14 @@ public sealed class PublicCatalogRlsTests : IClassFixture<PostgresRlsFixture>
         cmd.Parameters.AddWithValue("c", s.Code);
         await using var r = await cmd.ExecuteReaderAsync();
         var cols = Enumerable.Range(0, r.FieldCount).Select(r.GetName).ToArray();
-        Assert.Equal(["public_code", "tenant_slug", "location_id", "name", "address", "city", "timezone"], cols);
+        Assert.Equal(["public_code", "tenant_slug", "location_id", "name", "address", "city", "timezone", "logo_storage_key"], cols);
         Assert.DoesNotContain("tenant_id", cols);
 
         await r.CloseAsync();
         await using var cmd2 = new NpgsqlCommand("SELECT * FROM public.beauty_public_nearby_locations(50.45, 30.52, 5, 5)", conn);
         await using var r2 = await cmd2.ExecuteReaderAsync();
         var cols2 = Enumerable.Range(0, r2.FieldCount).Select(r2.GetName).ToArray();
-        Assert.Equal(["public_code", "tenant_slug", "location_id", "name", "address", "city", "timezone", "distance_km"], cols2);
+        Assert.Equal(["public_code", "tenant_slug", "location_id", "name", "address", "city", "timezone", "distance_km", "logo_storage_key"], cols2);
     }
 
     // ---------- resolve ----------

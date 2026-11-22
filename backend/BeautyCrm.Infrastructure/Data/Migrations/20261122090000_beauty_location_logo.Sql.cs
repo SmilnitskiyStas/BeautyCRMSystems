@@ -105,7 +105,7 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
             // DO block guarded by a SELECT on __EFMigrationsHistory, which beautycrm_catalog cannot read - so the role must be
             // reset inside the same block.
             mb.Sql("""
-                SET ROLE beautycrm_catalog;
+                SET LOCAL ROLE beautycrm_catalog;
                 DROP FUNCTION IF EXISTS public.beauty_public_search_locations_by_city(text, integer);
                 DROP FUNCTION IF EXISTS public.beauty_public_nearby_locations(double precision, double precision, double precision, integer);
                 DROP FUNCTION IF EXISTS public.beauty_public_resolve_location(text);
@@ -146,7 +146,7 @@ namespace BeautyCrm.Infrastructure.Data.Migrations
 
         private static void UpCatalogLogo(MigrationBuilder mb)
         {
-            // The role must read the new column before the functions that select it are created (SQL functions are validated at creation).
+            // Column grant first, kept next to the functions that read it (privileges are checked at execution; the order is for readability).
             mb.Sql("GRANT SELECT (logo_storage_key) ON beauty_locations TO beautycrm_catalog;");
             DropCatalogFunctions(mb);
             CreateCatalogFunctions(mb, withLogo: true);

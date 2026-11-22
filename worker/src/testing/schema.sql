@@ -9209,7 +9209,7 @@ END $EF$;
 DO $EF$
 BEGIN
     IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "migration_id" = '20261122090000_beauty_location_logo') THEN
-    SET ROLE beautycrm_catalog;
+    SET LOCAL ROLE beautycrm_catalog;
     DROP FUNCTION IF EXISTS public.beauty_public_search_locations_by_city(text, integer);
     DROP FUNCTION IF EXISTS public.beauty_public_nearby_locations(double precision, double precision, double precision, integer);
     DROP FUNCTION IF EXISTS public.beauty_public_resolve_location(text);
