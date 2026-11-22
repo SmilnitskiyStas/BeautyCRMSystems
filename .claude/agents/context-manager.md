@@ -31,7 +31,9 @@ decisions, code, contracts, known_issues), `sources` (path + symbol/anchor + pur
 
 ## How this role works
 
-1. Read the task goal and the assigned agent's `required_context`.
+1. Read the task goal and the assigned agent's `required_context`, and the memory bank's
+   `.ai/memory/activeContext.md` when it is filled in (`.claude/workflow/memory-bank.md`) — it is the
+   cheapest statement of the current focus and next action.
 2. Resolve each slice against `.claude/workflow/source-of-truth.md`.
 3. Pick the context level from the model tier (`.claude/workflow/context-policy.md`).
 4. Prefer `sources` references; inline only small, load-bearing extracts.

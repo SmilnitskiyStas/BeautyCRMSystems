@@ -25,7 +25,8 @@ const unapproved = packages.filter((pkg) => !approved.has(pkg));
 if (unapproved.length) {
   block(
     `dependency-gate: package(s) not in .ai/hooks.config.yaml -> approved_packages: ${unapproved.join(", ")}.\n` +
-      `Get sign-off first — see workflow/human-gates.md.`
+      `Get sign-off first — see workflow/human-gates.md.`,
+    input
   );
 }
 allow();

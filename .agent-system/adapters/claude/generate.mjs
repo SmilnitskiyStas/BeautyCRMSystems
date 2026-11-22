@@ -3,7 +3,7 @@
 //   name, description, tools, disallowedTools, model, skills, effort, maxTurns, omitClaudeMd,
 // autoCompactWindow, isolation, experimental.cacheTtl (re-verified against the docs 2026-10-31;
 // unknown keys are silently dropped by Claude Code, so newer fields are safe on older builds).
-import { resolveModel, isProjectMode } from "../../scripts/lib/core.mjs";
+import { resolveModel, isProjectMode, rulesBlock } from "../../scripts/lib/core.mjs";
 import { dumpYaml } from "../../scripts/lib/yaml.mjs";
 import { rewriteRefs } from "../../scripts/lib/refs.mjs";
 
@@ -41,7 +41,9 @@ export function generate(agent, { modelMap, refPrefix = null, noPreload = false 
   const { model, effort } = resolveModel(data.default_model_tier, modelMap);
 
   const fm = { name: data.id, description: description(data), model };
-  if (effort) fm.effort = effort;
+  const h = data.runtime_hints || {};
+  const eff = h.effort || effort; // per-agent override beats the tier default
+  if (eff) fm.effort = eff;
   const tools = toolList(data.tools, (data.skills || []).length > 0);
   if (tools) fm.tools = tools.join(", ");
   if (data.read_only) fm.disallowedTools = "Write, Edit";
@@ -50,7 +52,6 @@ export function generate(agent, { modelMap, refPrefix = null, noPreload = false 
   // fall back to preloading everything (legacy behaviour).
   const preload = noPreload ? [] : (data.preload_skills ?? data.skills ?? []);
   if (preload.length) fm.skills = preload.map((s) => s.split("/").pop());
-  const h = data.runtime_hints || {};
   if (h.max_turns) fm.maxTurns = h.max_turns;
   if (h.omit_project_instructions) fm.omitClaudeMd = true;
   if (h.auto_compact_window) fm.autoCompactWindow = h.auto_compact_window;
@@ -66,6 +67,7 @@ export function generate(agent, { modelMap, refPrefix = null, noPreload = false 
     `(allowed: ${data.allowed_model_tiers.join(", ")}). ` +
     `Escalation and downgrade rules: workflow/model-routing.md.\n`;
 
-  const out = `---\n${dumpYaml(fm)}\n---\n\n${header}${tierNote}\n${body.trim()}\n`;
+  const rules = rulesBlock(data);
+  const out = `---\n${dumpYaml(fm)}\n---\n\n${header}${tierNote}\n${body.trim()}${rules ? `\n\n${rules}` : ""}\n`;
   return rewriteRefs(out, { projectMode: isProjectMode(), prefix: refPrefix });
 }

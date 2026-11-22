@@ -32,6 +32,14 @@ Concrete model per runtime is resolved only in `adapters/<runtime>/model-map.yam
 4. A manual instruction from the user overrides the heuristic, unless it breaks a safety
    or project rule (spec §50): "use reasoning tier", "do not use Opus", "keep it cheap".
 
+## Cost ladder (usage limits)
+
+Within and above a tier, climb one step at a time and only after a concrete failure; the top steps
+drain plan limits fastest. Codex: `luna` low → `sol` medium → `sol` high → `astra` medium → `astra` high;
+xhigh / max / ultra only when the user asks. The `frontier` tier therefore maps to `astra` **medium**
+(not xhigh). Full text: `workflow/rules/model-budget.md` — kept in a project's `AGENTS.md` between
+`<!-- model-budget:start -->` / `<!-- model-budget:end -->` markers so the Codex orchestrator sees it.
+
 ## Decision record (spec §46)
 
 Every task log records:

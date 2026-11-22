@@ -57,6 +57,10 @@
       "items": { "type": "string" },
       "description": "Keys this hook reads from the consuming project's .ai/hooks.config.yaml, if any."
     },
+    "codex_matcher": {
+      "type": "string",
+      "description": "Matcher to use in .codex/hooks.json when it differs from `matcher` (Codex SessionStart only matches startup|resume)."
+    },
     "codex_status": {
       "enum": ["supported", "unverified", "unsupported"],
       "description": "Whether an equivalent Codex CLI hook has been verified against the binary (adapters/COMPATIBILITY.md). Defaults to \"unverified\" when omitted."

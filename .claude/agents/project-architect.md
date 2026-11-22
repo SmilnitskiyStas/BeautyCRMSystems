@@ -2,7 +2,7 @@
 name: project-architect
 description: Owns architecture decisions, ADRs, and decomposition of the project spec into tasks. Does not write business code or UI.
 model: opus
-effort: high
+effort: medium
 tools: Read, Grep, Glob, Write, Edit, Skill
 skills:
   - create-adr

@@ -6,7 +6,7 @@ summary: Appends one JSON line per finished subagent (agent, model, requests, to
 event: SubagentStop
 script: hooks/scripts/agent-run-log.mjs
 applies_to: both
-codex_status: unverified
+codex_status: unsupported
 config_keys: [agent_run_log]
 ---
 

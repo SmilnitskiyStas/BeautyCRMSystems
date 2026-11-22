@@ -2,7 +2,7 @@
 
 name = "ai-agent-developer"
 description = "Реалізує AI-асистента Beauty CRM (Claude API) — tools, режими suggest/confirm/auto, журнал beauty_ai_actions, правила передачі менеджеру. Використовуй для AI-логіки."
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 model_reasoning_effort = "medium"
 sandbox_mode = "workspace-write"
 developer_instructions = """

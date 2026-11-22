@@ -49,6 +49,7 @@ skills:
 preload_skills: [workflow/create-adr]
 runtime_hints:
   max_turns: 40
+  effort: medium
 read_only: false
 ---
 

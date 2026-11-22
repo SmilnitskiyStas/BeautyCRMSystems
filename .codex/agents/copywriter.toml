@@ -2,7 +2,7 @@
 
 name = "copywriter"
 description = "Writes page copy, case-study narrative, and blog drafts in the project's languages and tone."
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 model_reasoning_effort = "medium"
 sandbox_mode = "workspace-write"
 developer_instructions = """

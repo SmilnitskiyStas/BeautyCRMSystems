@@ -7,7 +7,7 @@ event: PreToolUse
 matcher: Write|Edit|MultiEdit
 script: hooks/scripts/path-deny-list.mjs
 applies_to: both
-codex_status: unverified
+codex_status: unsupported
 config_keys: [deny_paths]
 ---
 

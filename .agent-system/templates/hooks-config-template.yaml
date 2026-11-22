@@ -13,3 +13,10 @@ approved_packages: []
 
 # task-log-sync — where task logs are expected to land after an edit.
 task_log_dir: .ai/logs/tasks
+
+# session-context — "off" disables the version banner and the memory-bank active-context injection.
+session_context: on
+# update_check — "off" disables only the "newer release available" notice (default on).
+update_check: on
+# update_repo — git URL to look for v<semver> release tags (default: the AI_agent_only_v2 repo).
+# update_repo: https://github.com/SmilnitskiyStas/AI_agent_only_v2.git

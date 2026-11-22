@@ -48,6 +48,8 @@ skills:
   - mobile/offline-storage
   - shared/add-validation
 preload_skills: []
+include_rules:
+  - minimal-change
 runtime_hints:
   max_turns: 80
 read_only: false

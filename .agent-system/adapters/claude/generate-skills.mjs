@@ -34,7 +34,7 @@ export function listSharedSkills() {
 }
 
 export function generateSkill(skill, { refPrefix = null } = {}) {
-  const src = readFileSync(skill.abs, "utf8");
+  const src = readFileSync(skill.abs, "utf8").replace(/\r\n/g, "\n"); // CRLF checkouts (autocrlf)
   // inject provenance into frontmatter
   const m = src.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
   if (!m) throw new Error(`${skill.id}: SKILL.md has no frontmatter`);
@@ -56,7 +56,7 @@ export function syncSkills({ check, skillFilter = null }) {
     wantedSlugs.add(skill.slug);
     const target = join(dir, skill.slug, "SKILL.md");
     const content = generateSkill(skill);
-    const current = existsSync(target) ? readFileSync(target, "utf8") : null;
+    const current = existsSync(target) ? readFileSync(target, "utf8").replace(/\r\n/g, "\n") : null;
     if (current !== content) {
       drift++;
       changes.push(`${current === null ? "create" : "update"} ${SKILLS_TARGET_DIR}/${skill.slug}/SKILL.md`);

@@ -2,8 +2,8 @@
 
 name = "project-architect"
 description = "Owns architecture decisions, ADRs, and decomposition of the project spec into tasks. Does not write business code or UI."
-model = "gpt-6.1-sol"
-model_reasoning_effort = "high"
+model = "gpt-6.2-sol"
+model_reasoning_effort = "medium"
 sandbox_mode = "workspace-write"
 developer_instructions = """
 # Project Architect

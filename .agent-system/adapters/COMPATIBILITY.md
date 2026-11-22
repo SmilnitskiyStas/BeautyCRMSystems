@@ -17,7 +17,7 @@ assumptions (spec §8). Re-verify on a runtime upgrade.
 | Skills — preload | yes — `skills:` frontmatter | via `developer_instructions` pointing at skill files; `~/.codex/skills/` discovery | inline the procedure in the body |
 | Skills — runtime discovery | yes — `Skill` tool | yes — skill discovery + `skill_mcp_dependency_install` (stable) | reference by path |
 | Built-in read-only explore agent | yes — `Explore` (and `Plan`) | yes — built-in `explorer` (plus `default`, `worker`) | `project-researcher` runs the retrieval manually |
-| Hooks | yes — `hooks/*.md` compiles to `.claude/hooks/**` + `.claude/settings.hooks.json` (`scripts/apply-hook-settings.mjs --apply` to wire in) | feature `hooks` = stable per Codex docs, **not yet verified** against the binary — `adapters/codex/generate-hooks.mjs` deferred | `hooks/README.md`'s per-hook fallback (self-check / manual review / permission rules) |
+| Hooks | yes — `hooks/*.md` compiles to `.claude/hooks/**` + `.claude/settings.hooks.json` (`scripts/apply-hook-settings.mjs --apply` to wire in) | yes, verified on 0.171.0 — `.codex/hooks.available.json` + `.codex/hooks/**`, wired in with `apply-hook-settings.mjs --codex --apply`; only `SessionStart`/`PreToolUse(shell)`/`Stop` hooks (see `hooks/README.md`) | `hooks/README.md`'s per-hook fallback (self-check / manual review / permission rules) |
 | Root project instructions | `CLAUDE.md` (+ nested) | `AGENTS.md` (+ nested + `~/.codex/AGENTS.md`), keep < 150 lines | required — always present |
 | Rules / command allowlist | `settings.json` `permissions` | `~/.codex/rules/*.rules` (`prefix_rule(...)`), `/permissions` | manual approval |
 | Native artifact bus | no (v2 uses a `.ai/artifacts/` convention) | experimental — feature `artifact` = under development, **not used** | the `.ai/artifacts/` convention + `schemas/artifact.schema.json` |
@@ -40,11 +40,16 @@ and on upgrades.
 
 ## Known gaps / degradations
 
-- **Codex hooks unverified**: the row above reflects Codex's own claim of a stable
-  `hooks` feature, not a binary-verified event/config shape (unlike `model-map.yaml`,
-  which is re-checked per runtime upgrade). Every hook in `hooks/` is Claude-only until
-  someone confirms the real Codex hook surface and `adapters/codex/generate-hooks.mjs`
-  is written against it.
+- **Codex hooks are partial** (verified 2026-11-20, codex-cli 0.171.0): `SessionStart` matches `startup|resume`;
+  `PreToolUse`/`PostToolUse` see shell commands only (no edit interception, so `path-deny-list` cannot work);
+  no `SubagentStop`/`PreCompact`; blocking needs a JSON `deny`, exit 2 is ignored. Hooks need a trusted project
+  and one-time hook approval.
+- **Codex CLI version**: the mapped models (`gpt-6.2-sol`, `gpt-6.2-astra`, `gpt-6-luna`) are rejected by
+  codex-cli 0.154.0 (`model_not_found`); use >= 0.171.0 (`codex update`).
+- **Codex skills** are generated into `.agents/skills/`; Claude-only skills (`agent-stats`, `update-agents`,
+  `ctx-check`, `delegate-to-codex`) are not generated there.
+- **Codex Windows sandbox** can fail to provision (`helper_sandbox_lock_failed`, see `codex doctor`); shell
+  commands then fail inside Codex regardless of our config.
 - **Codex frontmatter drift**: `multi_agent_v2` is under development. The `.codex/agents/`
   TOML schema (`name`, `description`, `developer_instructions`, `model`,
   `model_reasoning_effort`, `sandbox_mode`, `mcp_servers`) is confirmed against the

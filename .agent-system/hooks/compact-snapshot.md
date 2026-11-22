@@ -6,7 +6,7 @@ summary: Saves a small working-state snapshot (branch, changed files, current ta
 event: PreCompact
 script: hooks/scripts/compact-snapshot.mjs
 applies_to: both
-codex_status: unverified
+codex_status: unsupported
 ---
 
 # compact-snapshot

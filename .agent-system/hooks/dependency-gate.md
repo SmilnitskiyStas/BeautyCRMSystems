@@ -7,7 +7,7 @@ event: PreToolUse
 matcher: Bash
 script: hooks/scripts/dependency-gate.mjs
 applies_to: consuming_project
-codex_status: unverified
+codex_status: supported
 config_keys: [approved_packages]
 ---
 

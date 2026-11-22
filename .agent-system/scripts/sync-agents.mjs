@@ -19,6 +19,8 @@ import * as claude from "../adapters/claude/generate.mjs";
 import { syncSkills } from "../adapters/claude/generate-skills.mjs";
 import { syncHooks } from "../adapters/claude/generate-hooks.mjs";
 import { syncCodex } from "../adapters/codex/generate.mjs";
+import { syncCodexExtras } from "../adapters/codex/generate-extras.mjs";
+import { syncStamp } from "./lib/version.mjs";
 
 const args = process.argv.slice(2);
 const check = args.includes("--check");
@@ -38,7 +40,7 @@ function syncClaude({ agents, modelMap, skillFilter }) {
   const changes = [];
   for (const [fname, content] of wanted) {
     const target = join(dir, fname);
-    const cur = existsSync(target) ? readFileSync(target, "utf8") : null;
+    const cur = existsSync(target) ? readFileSync(target, "utf8").replace(/\r\n/g, "\n") : null;
     if (cur !== content) {
       drift++;
       changes.push(`${cur === null ? "create" : "update"} ${claude.TARGET_DIR}/${fname}`);
@@ -104,13 +106,26 @@ for (const name of TARGETS) {
     continue;
   }
 
-  const r = name === "claude" ? syncClaude({ agents, modelMap, skillFilter }) : syncCodex({ check, agents, modelMap });
+  let r;
+  if (name === "claude") r = syncClaude({ agents, modelMap, skillFilter });
+  else {
+    r = syncCodex({ check, agents, modelMap });
+    const ex = syncCodexExtras({ check, skillFilter });
+    r.drift += ex.drift;
+    r.changes = [...r.changes, ...ex.changes];
+    r.skills = ex.skills;
+    r.hooks = ex.hooks;
+    r.problems = ex.problems;
+  }
   if (r.problems?.length) {
     console.error(`✗ ${name}: hook definitions have ${r.problems.length} problem(s):`);
     for (const pr of r.problems) console.error(`  - ${pr}`);
     totalErrors += r.problems.length;
     continue;
   }
+  const st = syncStamp({ check, dirName: name === "claude" ? ".claude" : ".codex", runtime: name });
+  r.drift += st.drift;
+  r.changes = [...(r.changes || []), ...st.changes];
   totalDrift += r.drift;
 
   if (r.drift === 0) {

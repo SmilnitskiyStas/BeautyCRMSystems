@@ -1,7 +1,8 @@
 # Vendored agent library
 
-Source: github.com/SmilnitskiyStas/AI_agent_only_v2 @ `c11256e3847006e1206e4bcd6b238c3cad7d8bfd`
-Vendored: 2026-11-01
+Version: **2.6.1**
+Source: github.com/SmilnitskiyStas/AI_agent_only_v2 @ `2bfe3e05ec73844a5e39ea64cff3c68c11c80f2a`
+Vendored: 2026-11-22
 
 Do not edit anything in this directory — it is replaced on every update.
 Project agents, skills and overrides live in `.ai/agents/`, `.ai/skills/`, `.ai/agent-overlay.yaml`.

@@ -11,7 +11,9 @@ Everything below is what it applies.
 ## What every task needs ("Always")
 
 - The project root rules (`CLAUDE.md` / `AGENTS.md`).
-- What is currently in progress (the task store's current view).
+- What is currently in progress (the task store's current view) and, when present, the memory
+  bank's `.ai/memory/activeContext.md` (`workflow/memory-bank.md`) — usually already injected at
+  session start, so do not re-read it.
 - Relevant resolved entries from `known-issues.md` — retrieved by area/keyword, **not** the
   whole file read top to bottom (spec §32). As the file grows, this is retrieval, not a
   linear read.

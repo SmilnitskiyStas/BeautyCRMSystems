@@ -13,6 +13,7 @@ import { cpSync, mkdirSync, rmSync, existsSync, readdirSync, writeFileSync, read
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { ROOT } from "./lib/core.mjs";
+import { libraryInfo } from "./lib/version.mjs";
 
 const argv = process.argv.slice(2);
 const dry = argv.includes("--dry-run");
@@ -25,7 +26,7 @@ const proj = resolve(target);
 if (!existsSync(proj)) { console.error(`✗ ${proj} does not exist`); process.exit(2); }
 
 const DIRS = ["agents", "skills", "workflow", "schemas", "templates", "adapters", "scripts", "profiles", "hooks"];
-const FILES = ["MIGRATION.md", "AGENTS.template.md", "CLAUDE.template.md"];
+const FILES = ["VERSION", "CHANGELOG.md", "MIGRATION.md", "AGENTS.template.md", "CLAUDE.template.md"];
 const dest = join(proj, ".agent-system");
 
 function sha() {
@@ -46,11 +47,16 @@ if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
 mkdirSync(dest, { recursive: true });
 for (const d of DIRS) if (existsSync(join(ROOT, d))) cpSync(join(ROOT, d), join(dest, d), { recursive: true });
 for (const f of FILES) if (existsSync(join(ROOT, f))) cpSync(join(ROOT, f), join(dest, f));
+const vendoredOn = new Date().toISOString().slice(0, 10);
+writeFileSync(
+  join(dest, ".vendor.json"),
+  JSON.stringify({ version: libraryInfo().version, commit: sha().slice(0, 7), dirty: dirty(), vendored: vendoredOn }, null, 2) + "\n"
+);
 writeFileSync(
   join(dest, "VENDOR.md"),
-  `# Vendored agent library\n\nSource: github.com/SmilnitskiyStas/AI_agent_only_v2 @ \`${sha()}\`${dirty() ? " (+uncommitted changes)" : ""}\nVendored: ${new Date().toISOString().slice(0, 10)}\n\n` +
+  `# Vendored agent library\n\nVersion: **${libraryInfo().version}**\nSource: github.com/SmilnitskiyStas/AI_agent_only_v2 @ \`${sha()}\`${dirty() ? " (+uncommitted changes)" : ""}\nVendored: ${vendoredOn}\n\n` +
     "Do not edit anything in this directory — it is replaced on every update.\n" +
     "Project agents, skills and overrides live in `.ai/agents/`, `.ai/skills/`, `.ai/agent-overlay.yaml`.\n\n" +
     "Update:\n\n```\nnode <path-to-library>/scripts/vendor-into.mjs .\nnode .agent-system/scripts/sync-agents.mjs --project .\nnode .agent-system/scripts/validate-config.mjs --project .\n```\n"
 );
-console.log(`✓ vendored @ ${sha().slice(0, 7)}. Next: node .agent-system/scripts/sync-agents.mjs --project <project>`);
+console.log(`✓ vendored v${libraryInfo().version} @ ${sha().slice(0, 7)}. Next: node .agent-system/scripts/sync-agents.mjs --project <project>`);

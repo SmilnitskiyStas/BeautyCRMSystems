@@ -63,6 +63,13 @@ const pad = (s, n, r = false) => (r ? String(s).padStart(n) : String(s).padEnd(n
 const total = (a) => a.input + a.cache_read + a.cache_write + a.output;
 const list = [...by.values()].sort((x, y) => total(y) - total(x));
 
+function versionLine() {
+  try {
+    const v = JSON.parse(readFileSync(resolve(".claude/agent-system.json"), "utf8")).agent_system;
+    if (v) console.log("agent-system v" + v);
+  } catch { /* no stamp: library predates versioning */ }
+}
+
 if (argv.includes("--json")) {
   console.log(JSON.stringify(list.map((a) => ({ ...a, models: [...a.models], total_tokens: total(a) })), null, 2));
   process.exit(0);
@@ -84,19 +91,21 @@ function sessionSection() {
   if (models > 1) console.log(models + " models used in this session: each switch re-caches the whole conversation — avoid switching mid-session.");
 }
 
+versionLine();
 if (!list.length) { console.log("No runs in range."); sessionSection(); process.exit(0); }
 
-console.log(pad("Agent", 24), pad("Runs", 5, true), pad("Calls", 6, true), pad("Output", 8, true), pad("Total", 8, true), pad("Avg/run", 8, true), pad("Cache%", 7, true), pad("Tools", 6, true), pad("Avg s", 6, true), " Model");
-console.log("-".repeat(104));
+console.log(pad("Agent", 24), pad("Runs", 5, true), pad("Calls", 6, true), pad("Output", 8, true), pad("Think%", 7, true), pad("Out/call", 9, true), pad("Total", 8, true), pad("Avg/run", 8, true), pad("Cache%", 7, true), pad("Tools", 6, true), pad("Avg s", 6, true), " Model");
+console.log("-".repeat(120));
 let g = 0, gr = 0;
 for (const a of list) {
   const t = total(a);
   g += t; gr += a.runs;
   const cachePct = t ? Math.round((100 * a.cache_read) / t) : 0;
-  console.log(pad(a.agent, 24), pad(a.runs, 5, true), pad(a.requests, 6, true), pad(k(a.output), 8, true), pad(k(t), 8, true), pad(k(Math.round(t / a.runs)), 8, true), pad(`${cachePct}%`, 7, true), pad(a.tools, 6, true), pad(Math.round(a.dur / a.runs), 6, true), " " + [...a.models].join(","));
+  console.log(pad(a.agent, 24), pad(a.runs, 5, true), pad(a.requests, 6, true), pad(k(a.output), 8, true), pad(`${a.output ? Math.round((100 * a.thinking) / a.output) : 0}%`, 7, true), pad(k(a.requests ? Math.round(a.output / a.requests) : 0), 9, true), pad(k(t), 8, true), pad(k(Math.round(t / a.runs)), 8, true), pad(`${cachePct}%`, 7, true), pad(a.tools, 6, true), pad(Math.round(a.dur / a.runs), 6, true), " " + [...a.models].join(","));
 }
-console.log("-".repeat(104));
+console.log("-".repeat(120));
 console.log(`${gr} subagent run(s), ${k(g)} tokens processed (Total = input + cache + output; Cache% = share served from prompt cache).`);
+console.log("Think% = thinking share of Output; Out/call = Output per model call. Compare before/after a change with --since <date>.");
 console.log("Agents with big Avg/run are the first tuning targets. For plan limits and cost, see /usage.");
 sessionSection();
 process.exit(0);

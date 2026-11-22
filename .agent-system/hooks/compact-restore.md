@@ -7,7 +7,7 @@ event: SessionStart
 matcher: compact
 script: hooks/scripts/compact-restore.mjs
 applies_to: both
-codex_status: unverified
+codex_status: unsupported
 ---
 
 # compact-restore
@@ -17,7 +17,8 @@ codex_status: unverified
 Runs on `SessionStart` with matcher `compact` (the event Claude Code fires after a
 compaction). Reads `.ai/state/session-snapshot.md` and returns it as
 `hookSpecificOutput.additionalContext`, prefixed with how old it is. Capped at 3000
-characters.
+characters. If `.ai/memory/activeContext.md` is filled in (memory bank), its first 1500
+characters are appended.
 
 ## Rules
 
@@ -26,4 +27,4 @@ characters.
 
 ## Failure mode
 
-No snapshot, unreadable file — outputs nothing, exits 0.
+No snapshot and no active context, unreadable file — outputs nothing, exits 0.

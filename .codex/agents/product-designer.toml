@@ -2,7 +2,7 @@
 
 name = "product-designer"
 description = "Owns discovery — positioning, information architecture, content model, and visual direction."
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 model_reasoning_effort = "medium"
 sandbox_mode = "workspace-write"
 developer_instructions = """
