@@ -9,6 +9,13 @@ export const uk = {
     currency: "₴",
     minutes: "хв",
   },
+  home: {
+    nextAppointment: "Найближчий: {{when}}",
+    appointmentsCount: "Записів: {{n}}",
+    activeOrders: "Активних: {{n}}",
+    ordersCount: "Замовлень: {{n}}",
+    nothingYet: "Поки немає",
+  },
   location: {
     title: "Оберіть заклад",
     resolving: "Шукаємо ваш заклад…",
