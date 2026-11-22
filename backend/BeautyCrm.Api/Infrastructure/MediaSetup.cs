@@ -79,6 +79,7 @@ public static class MediaSetup
         services.AddSingleton<FileProductImageStorage>();
         services.AddSingleton<IProductImageStorage>(sp => sp.GetRequiredService<FileProductImageStorage>());
         services.AddSingleton<IImageProcessor, ImageSharpProcessor>();
+        services.AddScoped<BeautyCrm.Application.Features.BeautyLocations.LocationLogoService>();
         services.AddScoped<ProductImageService>(); // порти сховища/обробки реєструються тут, тож і сервіс тут
         services.AddSingleton(new UploadThrottle(o.UploadsPerUserPerMinute, Range(config, "MaxConcurrentUploads", 3, 1, 16)));
         if (o.Enabled && o.SweepMode != MediaSweepMode.Off) services.AddHostedService<MediaOrphanSweeper>();

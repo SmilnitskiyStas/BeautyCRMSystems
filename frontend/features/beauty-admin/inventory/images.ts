@@ -88,6 +88,18 @@ const IMAGE_BY_STATUS: Record<number, string> = {
   503: IMAGE_BY_CODE.media_busy!,
 };
 
+const LOGO_BY_CODE: Record<string, string> = {
+  media_disabled: "Завантаження зображень на сервері не підключено. Зверніться до адміністратора.",
+  location_not_found: "Заклад не знайдено.",
+  forbidden_role: "Логотип змінює лише керівник з правом редагування закладів.",
+};
+
+/** Помилки логотипу закладу: коди контракту location-logo, решта - як у фото товарів. */
+export function humanizeLogoError(e: unknown): string {
+  if (e instanceof BeautyApiError && LOGO_BY_CODE[e.code]) return LOGO_BY_CODE[e.code]!;
+  return humanizeImageError(e);
+}
+
 export function humanizeImageError(e: unknown): string {
   if (e instanceof BeautyApiError) {
     const text = IMAGE_BY_CODE[e.code] ?? IMAGE_BY_STATUS[e.status];

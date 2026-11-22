@@ -60,6 +60,7 @@ public static class DataServiceExtensions
         services.AddScoped<IStaffStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<IOverviewStore>(sp => sp.GetRequiredService<EfBeautyStore>());
         services.AddScoped<ILocationStore>(sp => sp.GetRequiredService<EfBeautyStore>());
+        services.AddScoped<ILocationLogoStore>(sp => sp.GetRequiredService<EfBeautyStore>()); // логотип закладу (медіасховище ADR-027)
         services.AddScoped<BeautyCrm.Application.Features.BeautyInventory.IInventoryStore>(sp => sp.GetRequiredService<EfBeautyStore>()); // ADR-025: склад
         services.AddScoped<BeautyCrm.Application.Features.BeautyInventory.IInventoryNormsStore>(sp => sp.GetRequiredService<EfBeautyStore>()); // етап 2a: норми
         services.AddScoped<BeautyCrm.Application.Features.BeautyInventory.IStaffAlertStore>(sp => sp.GetRequiredService<EfBeautyStore>()); // етап 2a: сповіщення

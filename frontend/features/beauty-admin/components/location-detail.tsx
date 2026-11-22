@@ -13,6 +13,7 @@ import { defaultHours, normalizeHours, summarizeHours, validateHours, WEEKDAYS }
 import { ClosedDaysConflictDialog, ClosedDaysSection } from "./closed-days";
 import { LocationForm } from "./location-form";
 import { LocationInviteLink } from "./location-invite-link";
+import { LocationAvatar, LocationLogoBlock } from "./location-logo";
 import { CheckRow, ERROR_TEXT, ErrorBanner, SuccessBanner, WorkingHoursEditor } from "./staff-parts";
 import { Badge, Card, EmptyState, PrimaryButton, QueryState, SecondaryButton, TextLink } from "./ui";
 
@@ -63,6 +64,7 @@ function BasicSection({ location, canEdit }: { location: BeautyLocation; canEdit
           <ReadOnlyRow label="Статус">{location.isActive !== false ? "Активний" : "Неактивний"}</ReadOnlyRow>
         </dl>
       )}
+      <LocationLogoBlock location={location} canEdit={canEdit} />
       <div>
         <MapLink address={location.address} />
       </div>
@@ -284,6 +286,7 @@ export function LocationDetailScreen({ id }: { id: string }) {
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-3">
+              <LocationAvatar location={location} size={48} />
               <h1 className="beauty-display min-w-0 text-[26px] font-semibold break-words">{location.name}</h1>
               {location.isActive !== false ? <Badge tone="ok">Активний</Badge> : <Badge tone="neutral">Неактивний</Badge>}
             </div>

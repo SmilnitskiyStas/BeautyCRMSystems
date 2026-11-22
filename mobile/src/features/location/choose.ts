@@ -17,6 +17,7 @@ export const toResolved = (r: LocationRef): ResolvedLocation => ({
   address: r.address,
   city: r.city,
   timezone: r.timezone,
+  logoUrl: r.logoUrl ?? null,
 });
 
 /** Зафіксувати заклад: у чернетку + «остання локація» + історія (лише код, назва, адреса; без координат) -> крок «послуга». */
@@ -28,7 +29,7 @@ export function useChooseLocation() {
       setLocation(loc);
       await localStore.setLastLocation({ publicCode: loc.publicCode, name: loc.name });
       await localStore
-        .addRecentLocation({ publicCode: loc.publicCode, name: loc.name, address: loc.address ?? null, city: loc.city ?? null })
+        .addRecentLocation({ publicCode: loc.publicCode, name: loc.name, address: loc.address ?? null, city: loc.city ?? null, logoUrl: loc.logoUrl ?? null })
         .catch(() => undefined);
       if (mode === "replace") router.replace("/service");
       else router.push("/service");
@@ -50,7 +51,7 @@ export function useResumeDraft() {
       st.setLocation(loc);
       await localStore.setLastLocation({ publicCode: loc.publicCode, name: loc.name });
       await localStore
-        .addRecentLocation({ publicCode: loc.publicCode, name: loc.name, address: loc.address ?? null, city: loc.city ?? null })
+        .addRecentLocation({ publicCode: loc.publicCode, name: loc.name, address: loc.address ?? null, city: loc.city ?? null, logoUrl: loc.logoUrl ?? null })
         .catch(() => undefined);
 
       const services = await bookingApi.getServices(loc.tenantSlug, loc.locationId, ANY_SPECIALIST_ID);

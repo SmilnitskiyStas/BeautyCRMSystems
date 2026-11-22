@@ -17,6 +17,7 @@ export function toBookingDraft(d: DraftSnapshot, now: number = Date.now()): Book
   return {
     publicCode: d.location.publicCode,
     locationName: d.location.name,
+    locationLogoUrl: d.location.logoUrl ?? null,
     service: { id, name, durationMinutes, priceOriginal, priceFinal, description, category, promoLabel, promotionId },
     // nextFree - підказка mock, у сховище не потрапляє
     specialist: sp
@@ -29,7 +30,7 @@ export function toBookingDraft(d: DraftSnapshot, now: number = Date.now()): Book
 
 /** Ключ змін, що варті запису: зміна лише слота чи часу оновлення не переписує сховище. */
 export function draftKey(d: BookingDraft | null): string {
-  return d ? [d.publicCode, d.service.id, d.specialist?.id ?? "any", d.date ?? ""].join("|") : "";
+  return d ? [d.publicCode, d.locationLogoUrl ?? "", d.service.id, d.specialist?.id ?? "any", d.date ?? ""].join("|") : "";
 }
 
 /** Дата в минулому (відносно сьогодні в закладі) при відновленні відкидається. */

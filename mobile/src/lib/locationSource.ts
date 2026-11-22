@@ -34,6 +34,7 @@ export interface ResolvedLocation {
   address?: string | null;
   city?: string | null;
   timezone: string;
+  logoUrl?: string | null;
 }
 
 export interface StartDeps {

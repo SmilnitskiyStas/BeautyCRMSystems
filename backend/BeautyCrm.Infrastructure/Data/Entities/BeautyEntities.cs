@@ -40,6 +40,8 @@ public class Location : TenantEntity
     public string? City { get; set; }
     /// <summary>ADR-022: заклад показується у публічному каталозі (nearby / за містом) лише якщо true (opt-in).</summary>
     public bool IsDiscoverable { get; set; }
+    /// <summary>Логотип закладу (ADR-027 медіасховище): 32 hex-символи ключа файлів; null = немає. Глобально унікальний (partial index).</summary>
+    public string? LogoStorageKey { get; set; }
 }
 
 /// <summary>Конкретні дати закриття закладу (повні дні в зоні закладу, включно; без автоповтору). TASK-701, §17.</summary>
