@@ -18,9 +18,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Webp;
-using SixLabors.ImageSharp.PixelFormats;
+using SkiaSharp;
 using static BeautyCrm.Tests.Auth.AuthApiFixture;
 
 namespace BeautyCrm.Tests.Beauty;
@@ -228,7 +226,7 @@ public sealed class ProductImagesApiTests(AuthApiFixture fx) : IClassFixture<Aut
         Assert.Equal("cross-origin", get.Headers.GetValues("Cross-Origin-Resource-Policy").Single());
         Assert.Equal("inline", get.Content.Headers.ContentDisposition?.DispositionType);
         var body = await get.Content.ReadAsByteArrayAsync();
-        using (var webp = Image.Load<Rgba32>(body)) Assert.Equal(400, webp.Width);
+        using (var webp = SKBitmap.Decode(body)) Assert.Equal(400, webp.Width);
         Assert.Equal(HttpStatusCode.OK, (await h.Client.SendAsync(new HttpRequestMessage(HttpMethod.Head, PathOf(url)))).StatusCode);
         var cond = new HttpRequestMessage(HttpMethod.Get, PathOf(thumb)); cond.Headers.IfNoneMatch.Add(new EntityTagHeaderValue($"\"{key}-400\""));
         Assert.Equal(HttpStatusCode.NotModified, (await h.Client.SendAsync(cond)).StatusCode);

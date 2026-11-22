@@ -1,60 +1,118 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Text;
 using BeautyCrm.Application.Features.BeautyProductImages;
 using BeautyCrm.Infrastructure.Media;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Webp;
-using SixLabors.ImageSharp.Metadata.Profiles.Exif;
-using SixLabors.ImageSharp.PixelFormats;
+using SkiaSharp;
 
 namespace BeautyCrm.Tests.Beauty;
 
-/// <summary>Фікстури зображень для тестів фото товарів (генеруються в пам'яті, без мережі й файлів).</summary>
+/// <summary>Фікстури зображень для тестів фото товарів (генеруються в пам'яті SkiaSharp, без мережі й файлів).</summary>
 internal static class Images
 {
-    private static byte[] Save(Image img, Action<Image, MemoryStream> save)
+    private static SKBitmap Canvas(int w, int h, SKColor fill)
     {
-        using (img)
+        var bmp = new SKBitmap(new SKImageInfo(w, h, SKColorType.Rgba8888, SKAlphaType.Unpremul));
+        bmp.Erase(fill);
+        var diag = new SKColor(0, 0, 0, fill.Alpha);
+        for (var i = 0; i < Math.Min(w, h); i++) bmp.SetPixel(i, i, diag); // діагональ: щоб поворот був помітний
+        return bmp;
+    }
+
+    private static byte[] Encode(SKBitmap bmp, SKEncodedImageFormat format, int quality = 90)
+    {
+        using (bmp)
+        using (var data = bmp.Encode(format, quality)) return data.ToArray();
+    }
+
+    /// <summary>JPEG; orientation - EXIF Orientation; withMetadata додає EXIF Make, XMP і ICC-профіль (мають зникнути).</summary>
+    public static byte[] Jpeg(int w, int h, ushort? orientation = null, bool withMetadata = false)
+    {
+        var jpeg = Encode(Canvas(w, h, new SKColor(200, 80, 40, 255)), SKEncodedImageFormat.Jpeg);
+        if (orientation is null && !withMetadata) return jpeg;
+        var segments = new List<byte[]> { App1Exif(orientation, withMetadata ? "SECRETMAKE" : null) };
+        if (withMetadata)
         {
-            var ms = new MemoryStream();
-            save(img, ms);
-            return ms.ToArray();
+            segments.Add(Segment(0xE1, [.. "http://ns.adobe.com/xap/1.0/\0"u8.ToArray(), .. "<x:xmpmeta>SECRETXMP</x:xmpmeta>"u8.ToArray()]));
+            segments.Add(Segment(0xE2, [.. "ICC_PROFILE\0"u8.ToArray(), 1, 1, .. "SECRETICC"u8.ToArray(), .. new byte[128]]));
         }
+        // сегменти APPn - одразу після SOI
+        return [jpeg[0], jpeg[1], .. segments.SelectMany(x => x), .. jpeg[2..]];
     }
 
-    private static Image<Rgba32> Canvas(int w, int h, Rgba32 fill)
+    private static byte[] Segment(byte marker, byte[] payload)
     {
-        var img = new Image<Rgba32>(w, h, fill);
-        for (var i = 0; i < Math.Min(w, h); i++) img[i, i] = new Rgba32(0, 0, 0, fill.A); // діагональ: щоб поворот був помітний
-        return img;
+        var len = payload.Length + 2;
+        return [0xFF, marker, (byte)(len >> 8), (byte)len, .. payload];
     }
 
-    /// <summary>JPEG; orientation - EXIF Orientation; withMetadata додає Make і GPS-мітку (мають зникнути).</summary>
-    public static byte[] Jpeg(int w, int h, ushort? orientation = null, bool withMetadata = false) =>
-        Save(Canvas(w, h, new Rgba32(200, 80, 40, 255)), (img, ms) =>
+    /// <summary>APP1 Exif (TIFF big-endian, IFD0: Orientation і, за потреби, Make).</summary>
+    private static byte[] App1Exif(ushort? orientation, string? make)
+    {
+        var entries = new List<(ushort Tag, ushort Type, uint Count, byte[] Value)>();
+        if (make is not null) entries.Add((0x010F, 2, (uint)make.Length + 1, [.. Encoding.ASCII.GetBytes(make), 0]));
+        if (orientation is { } o) entries.Add((0x0112, 3, 1, [(byte)(o >> 8), (byte)o, 0, 0]));
+        var tiff = new List<byte> { (byte)'M', (byte)'M', 0, 42, 0, 0, 0, 8 };
+        var ifdSize = 2 + entries.Count * 12 + 4;
+        var extra = new List<byte>();
+        void U16(List<byte> l, int v) { l.Add((byte)(v >> 8)); l.Add((byte)v); }
+        void U32(List<byte> l, uint v) { l.Add((byte)(v >> 24)); l.Add((byte)(v >> 16)); l.Add((byte)(v >> 8)); l.Add((byte)v); }
+        U16(tiff, entries.Count);
+        foreach (var (tag, type, count, value) in entries)
         {
-            if (orientation is not null || withMetadata)
-            {
-                var exif = new ExifProfile();
-                if (orientation is { } o) exif.SetValue(ExifTag.Orientation, o);
-                if (withMetadata) { exif.SetValue(ExifTag.Make, "SECRETMAKE"); exif.SetValue(ExifTag.GPSLatitudeRef, "N"); }
-                img.Metadata.ExifProfile = exif;
-            }
-            img.SaveAsJpeg(ms);
-        });
+            U16(tiff, tag); U16(tiff, type); U32(tiff, count);
+            if (value.Length <= 4) tiff.AddRange(value.Concat(new byte[4 - value.Length]));
+            else { U32(tiff, (uint)(8 + ifdSize + extra.Count)); extra.AddRange(value); }
+        }
+        U32(tiff, 0);
+        tiff.AddRange(extra);
+        return Segment(0xE1, [.. "Exif\0\0"u8.ToArray(), .. tiff]);
+    }
 
-    public static byte[] Png(int w, int h, byte alpha = 255) => Save(Canvas(w, h, new Rgba32(10, 200, 10, alpha)), (img, ms) => img.SaveAsPng(ms));
+    public static byte[] Png(int w, int h, byte alpha = 255) => Encode(Canvas(w, h, new SKColor(10, 200, 10, alpha)), SKEncodedImageFormat.Png);
 
+    public static byte[] Webp(int w, int h, SKColor fill) => Encode(Canvas(w, h, fill), SKEncodedImageFormat.Webp, 80);
+
+    /// <summary>Анімований WebP з двох кадрів (VP8X + ANIM + ANMF), зібраний з двох статичних lossy WebP.</summary>
     public static byte[] AnimatedWebp(int w, int h)
     {
-        using var img = Canvas(w, h, new Rgba32(255, 0, 0, 255));
-        using var second = Canvas(w, h, new Rgba32(0, 0, 255, 255));
-        img.Frames.AddFrame(second.Frames.RootFrame);
-        img.Frames[0].Metadata.GetWebpMetadata().FrameDelay = 100;
-        img.Frames[1].Metadata.GetWebpMetadata().FrameDelay = 100;
-        var ms = new MemoryStream();
-        img.SaveAsWebp(ms, new WebpEncoder { FileFormat = WebpFileFormatType.Lossy });
-        return ms.ToArray();
+        static byte[] Vp8Chunk(byte[] webp)
+        {
+            for (var i = 12; i + 8 <= webp.Length;)
+            {
+                var size = (int)BinaryPrimitives.ReadUInt32LittleEndian(webp.AsSpan(i + 4));
+                var total = 8 + size + (size & 1);
+                if (webp.AsSpan(i, 4).SequenceEqual("VP8 "u8)) return webp[i..(i + total)];
+                i += total;
+            }
+            throw new InvalidOperationException("no VP8 chunk");
+        }
+        static byte[] U24(int v) => [(byte)v, (byte)(v >> 8), (byte)(v >> 16)];
+        static byte[] Chunk(string fourcc, byte[] data)
+        {
+            var b = new byte[8 + data.Length + (data.Length & 1)];
+            Encoding.ASCII.GetBytes(fourcc).CopyTo(b, 0);
+            BinaryPrimitives.WriteUInt32LittleEndian(b.AsSpan(4), (uint)data.Length);
+            data.CopyTo(b, 8);
+            return b;
+        }
+        byte[] Frame(SKColor c) => Chunk("ANMF", [.. U24(0), .. U24(0), .. U24(w - 1), .. U24(h - 1), .. U24(100), 0, .. Vp8Chunk(Webp(w, h, c))]);
+
+        byte[] body = [.. "WEBP"u8.ToArray(),
+            .. Chunk("VP8X", [0x02, 0, 0, 0, .. U24(w - 1), .. U24(h - 1)]),
+            .. Chunk("ANIM", [0, 0, 0, 0, 0, 0]),
+            .. Frame(new SKColor(255, 0, 0)), .. Frame(new SKColor(0, 0, 255))];
+        var riff = new byte[8 + body.Length];
+        "RIFF"u8.CopyTo(riff);
+        BinaryPrimitives.WriteUInt32LittleEndian(riff.AsSpan(4), (uint)body.Length);
+        body.CopyTo(riff, 8);
+        return riff;
+    }
+
+    public static int FrameCount(byte[] bytes)
+    {
+        using var codec = SKCodec.Create(new SKMemoryStream(bytes));
+        return Math.Max(1, codec.FrameCount);
     }
 
     public static byte[] Gif() => [.. "GIF89a"u8.ToArray(), .. new byte[64]];
@@ -112,7 +170,7 @@ internal static class Images
 /// <summary>ADR-027 §2.5, §33.22.9 п.2: конвеєр обробки зображень (unit, без БД і мережі).</summary>
 public sealed class ProductImageProcessorTests
 {
-    private static ImageSharpProcessor Processor(int maxPixels = 25_000_000) => new(new MediaOptions { MaxPixels = maxPixels });
+    private static SkiaSharpProcessor Processor(int maxPixels = 25_000_000) => new(new MediaOptions { MaxPixels = maxPixels });
 
     private static async Task<ProcessedImage> Ok(byte[] bytes)
     {
@@ -131,18 +189,33 @@ public sealed class ProductImageProcessorTests
     [Fact]
     public async Task Exif_orientation_is_applied_to_pixels_and_all_metadata_is_stripped()
     {
-        var p = await Ok(Images.Jpeg(300, 200, orientation: 6, withMetadata: true));
+        var src = Images.Jpeg(300, 200, orientation: 6, withMetadata: true);
+        foreach (var marker in new[] { "SECRETMAKE", "SECRETXMP", "SECRETICC" }) Assert.Contains(marker, Encoding.Latin1.GetString(src)); // фікстура справді несе метадані
+        var p = await Ok(src);
         Assert.Equal((200, 300), (p.Width, p.Height)); // 300x200 з орієнтацією 6 -> 200x300
         foreach (var v in p.Variants)
         {
-            using var img = Image.Load(v.Bytes);
-            Assert.Equal((200, 300), (img.Width, img.Height));
-            Assert.Null(img.Metadata.ExifProfile);
-            Assert.Null(img.Metadata.IccProfile);
-            Assert.DoesNotContain("SECRETMAKE", Encoding.Latin1.GetString(v.Bytes));
-            Assert.DoesNotContain("EXIF", Encoding.Latin1.GetString(v.Bytes));
-            Assert.DoesNotContain("XMP", Encoding.Latin1.GetString(v.Bytes));
+            using var codec = SKCodec.Create(new SKMemoryStream(v.Bytes));
+            Assert.Equal(SKEncodedImageFormat.Webp, codec.EncodedFormat);
+            Assert.Equal(SKEncodedOrigin.TopLeft, codec.EncodedOrigin);
+            var text = Encoding.Latin1.GetString(v.Bytes);
+            foreach (var marker in new[] { "SECRETMAKE", "SECRETXMP", "SECRETICC", "EXIF", "XMP ", "ICCP", "VP8X" })
+                Assert.DoesNotContain(marker, text);
         }
+        // орієнтація 6 (поворот 90° за годинниковою): діагональ з (0,0) переходить у верхній правий кут
+        using var full = SKBitmap.Decode(p.Variants[0].Bytes);
+        Assert.Equal((200, 300), (full.Width, full.Height));
+        Assert.True(full.GetPixel(full.Width - 2, 1).Red < 120, "dark diagonal expected top-right after rotation");
+        Assert.True(full.GetPixel(1, 1).Red > 150, "background expected top-left after rotation");
+    }
+
+    [Theory]
+    [InlineData(1, 300, 200)] [InlineData(3, 300, 200)] [InlineData(6, 200, 300)] [InlineData(8, 200, 300)]
+    [InlineData(2, 300, 200)] [InlineData(4, 300, 200)] [InlineData(5, 200, 300)] [InlineData(7, 200, 300)]
+    public async Task Every_exif_orientation_gives_expected_dimensions(ushort orientation, int w, int h)
+    {
+        var p = await Ok(Images.Jpeg(300, 200, orientation: orientation));
+        Assert.Equal((w, h), (p.Width, p.Height));
     }
 
     [Fact]
@@ -162,8 +235,8 @@ public sealed class ProductImageProcessorTests
     public async Task Png_alpha_is_preserved_in_webp()
     {
         var p = await Ok(Images.Png(300, 300, alpha: 0));
-        using var img = Image.Load<Rgba32>(p.Variants[0].Bytes);
-        Assert.True(img[100, 150].A < 8);
+        using var img = SKBitmap.Decode(p.Variants[0].Bytes);
+        Assert.True(img.GetPixel(100, 150).Alpha < 8);
         Assert.Equal("RIFF", Encoding.ASCII.GetString(p.Variants[0].Bytes, 0, 4));
         Assert.Equal("WEBP", Encoding.ASCII.GetString(p.Variants[0].Bytes, 8, 4));
     }
@@ -172,9 +245,11 @@ public sealed class ProductImageProcessorTests
     public async Task Animated_webp_keeps_only_the_first_frame()
     {
         var src = Images.AnimatedWebp(300, 300);
-        Assert.Equal(2, Image.Load(src).Frames.Count);
+        Assert.Equal(2, Images.FrameCount(src));
         var p = await Ok(src);
-        Assert.All(p.Variants, v => Assert.Equal(1, Image.Load(v.Bytes).Frames.Count));
+        Assert.All(p.Variants, v => Assert.Equal(1, Images.FrameCount(v.Bytes)));
+        using var first = SKBitmap.Decode(p.Variants[0].Bytes);
+        Assert.True(first.GetPixel(150, 20).Red > 150 && first.GetPixel(150, 20).Blue < 100, "first (red) frame expected");
     }
 
     [Fact]
@@ -205,9 +280,89 @@ public sealed class ProductImageProcessorTests
     [Fact]
     public async Task Processing_timeout_gives_422_decode_failed_not_a_hang()
     {
-        var p = new ImageSharpProcessor(new MediaOptions()) { ProcessingTimeout = TimeSpan.Zero };
+        using var p = new SkiaSharpProcessor(new MediaOptions()) { ProcessingTimeout = TimeSpan.Zero };
         var r = await p.ProcessAsync(new MemoryStream(Images.Jpeg(800, 800)), default);
         Assert.Equal("image_decode_failed", r.Error?.Code);
+    }
+
+    [Fact]
+    public async Task Slot_of_timed_out_work_is_released_so_the_next_upload_is_not_503()
+    {
+        using var p = new SkiaSharpProcessor(new MediaOptions()) { ProcessingTimeout = TimeSpan.Zero };
+        for (var i = 0; i < 3; i++)
+            Assert.Equal("image_decode_failed", (await p.ProcessAsync(new MemoryStream(Images.Jpeg(800, 800)), default)).Error?.Code);
+    }
+
+    [Fact]
+    public async Task Slot_stays_held_after_timeout_until_native_work_really_ends()
+    {
+        using var release = new ManualResetEventSlim();
+        using var p = new SkiaSharpProcessor(new MediaOptions())
+        {
+            ProcessingTimeout = TimeSpan.FromMilliseconds(100), WaitTimeout = TimeSpan.FromMilliseconds(300),
+            BeforeDecode = _ => release.Wait(TimeSpan.FromSeconds(30)), // "нативна" робота, яку не можна перервати
+        };
+        Assert.Equal("image_decode_failed", (await p.ProcessAsync(new MemoryStream(Images.Jpeg(400, 400)), default)).Error?.Code);
+        // перша робота ще йде: слот зайнятий, друга обробка не стартує
+        Assert.Equal("media_busy", (await p.ProcessAsync(new MemoryStream(Images.Jpeg(400, 400)), default)).Error?.Code);
+        release.Set();
+        var r = await p.ProcessAsync(new MemoryStream(Images.Jpeg(400, 400)), default);
+        Assert.True(r.IsOk, r.Error?.Code);
+    }
+
+    [Fact]
+    public async Task Client_cancel_during_processing_throws_and_frees_the_slot_after_work_ends()
+    {
+        using var started = new ManualResetEventSlim();
+        using var p = new SkiaSharpProcessor(new MediaOptions())
+        {
+            WaitTimeout = TimeSpan.FromSeconds(5),
+            BeforeDecode = t => { if (started.IsSet) return; started.Set(); while (!t.IsCancellationRequested) Thread.Sleep(5); },
+        };
+        using var cts = new CancellationTokenSource();
+        var first = p.ProcessAsync(new MemoryStream(Images.Jpeg(400, 400)), cts.Token);
+        Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+        var r = await p.ProcessAsync(new MemoryStream(Images.Jpeg(400, 400)), default);
+        Assert.True(r.IsOk, r.Error?.Code);
+    }
+
+    [Fact]
+    public async Task Jpeg_with_too_many_scans_is_rejected_before_decoding()
+    {
+        var jpeg = new List<byte> { 0xFF, 0xD8 };
+        for (var i = 0; i < SkiaSharpProcessor.MaxJpegScans + 1; i++) jpeg.AddRange(new byte[] { 0xFF, 0xDA, 0x00, 0x08, 1, 1, 0, 0, 63, 0, 0x12, 0x34 });
+        jpeg.AddRange(new byte[] { 0xFF, 0xD9 });
+        Assert.Equal(SkiaSharpProcessor.MaxJpegScans + 1, SkiaSharpProcessor.CountJpegScans(jpeg.ToArray(), SkiaSharpProcessor.MaxJpegScans));
+        Assert.Equal("image_decode_failed", (await Rejected(jpeg.ToArray())).Code);
+        Assert.Equal(1, SkiaSharpProcessor.CountJpegScans(Images.Jpeg(300, 300), SkiaSharpProcessor.MaxJpegScans)); // baseline JPEG
+    }
+
+    [Fact]
+    public async Task Jpeg_header_bomb_is_rejected_by_dimensions()
+    {
+        var jpeg = Images.Jpeg(300, 300);
+        var sof = Enumerable.Range(2, jpeg.Length - 10).First(i => jpeg[i] == 0xFF && jpeg[i + 1] is 0xC0 or 0xC2);
+        jpeg[sof + 5] = 30000 >> 8; jpeg[sof + 6] = 30000 & 0xFF; jpeg[sof + 7] = 30000 >> 8; jpeg[sof + 8] = 30000 & 0xFF;
+        Assert.Equal("image_dimensions_invalid", (await Rejected(jpeg)).Code);
+    }
+
+    [Fact]
+    public async Task Truncated_jpeg_and_webp_are_422_decode_failed()
+    {
+        var jpeg = Images.Jpeg(800, 800);
+        Assert.Equal("image_decode_failed", (await Rejected(jpeg[..(jpeg.Length / 2)])).Code);
+        var webp = Images.Webp(800, 800, new SkiaSharp.SKColor(1, 2, 3));
+        Assert.Equal("image_decode_failed", (await Rejected(webp[..(webp.Length / 2)])).Code);
+    }
+
+    [Fact]
+    public async Task Concurrent_uploads_are_processed_one_at_a_time_without_errors()
+    {
+        using var p = new SkiaSharpProcessor(new MediaOptions());
+        var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => p.ProcessAsync(new MemoryStream(Images.Png(1200, 900)), default)));
+        Assert.All(results, r => Assert.True(r.IsOk, r.Error?.Code));
     }
 
     [Fact]

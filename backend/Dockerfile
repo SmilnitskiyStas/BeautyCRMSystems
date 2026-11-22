@@ -14,7 +14,10 @@ RUN dotnet restore BeautyCrm.Api/BeautyCrm.Api.csproj
 COPY . .
 
 FROM restore AS publish
-RUN dotnet publish BeautyCrm.Api/BeautyCrm.Api.csproj -c Release --no-restore -o /app/publish /p:UseAppHost=false
+# Обробка зображень - SkiaSharp (MIT, ADR-027 §12.4): ліцензійного ключа й BuildKit-секрету збірка не потребує.
+# Нативна libSkiaSharp.so (SkiaSharp.NativeAssets.Linux.NoDependencies) потрапляє в publish без системних пакетів.
+RUN dotnet publish BeautyCrm.Api/BeautyCrm.Api.csproj -c Release --no-restore -o /app/publish /p:UseAppHost=false \
+    && find /app/publish/runtimes -path "*linux-*" -name libSkiaSharp.so | grep -q .
 
 # ---- runtime (останній stage = ціль за замовчуванням) ----
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
