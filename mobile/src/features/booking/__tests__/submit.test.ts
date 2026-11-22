@@ -136,7 +136,7 @@ describe("pending idempotency key survives restarts", () => {
     await make(store, create, "bbbbbbbb").submit("salon-a", req(), names); // "перезапуск": інший генератор/holder
     expect(create.mock.calls[1][2]).toBe(create.mock.calls[0][2]);
     expect(create.mock.calls[0][2]).toMatch(/^aaaaaaaa/);
-    expect(await store.getPendingKey()).toBeNull(); // очищено після успіху
+    expect(await store.getPendingKey(new Date("2026-11-09T10:00:00Z").getTime())).toBeNull(); // очищено після успіху
   });
 
   it("a different body after restart gets a new key", async () => {
@@ -162,7 +162,7 @@ describe("pending idempotency key survives restarts", () => {
     const store = sharedStore();
     const create = jest.fn().mockRejectedValueOnce(new BookingApiError(409, "slot_unavailable"));
     await expect(make(store, create, "aaaaaaaa").submit("salon-a", req(), names)).rejects.toBeDefined();
-    expect(await store.getPendingKey()).toBeNull();
+    expect(await store.getPendingKey(new Date("2026-11-09T10:00:00Z").getTime())).toBeNull();
 
     const fail = jest.fn().mockRejectedValueOnce(new BookingApiError(0, "api_unreachable"));
     await expect(make(store, fail, "cccccccc").submit("salon-a", req(), names)).rejects.toBeDefined();

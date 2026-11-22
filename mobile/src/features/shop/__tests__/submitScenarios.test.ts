@@ -16,7 +16,9 @@ function setup(createOrder: jest.Mock, nowRef = { t: Date.parse("2026-11-20T10:0
   );
   let n = 0;
   const submitter = createOrderSubmitter({ api: { createOrder }, store, generateKey: () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`, now: () => new Date(nowRef.t) });
-  return { submitter, store, secureMap, nowRef };
+  // Читати pending-ключ на тому ж фіксованому годиннику, що й submitter: дефолт Date.now() робить тести залежними від реальної дати (TTL 24 год).
+  const pendingKey = () => store.getOrderPendingKey(nowRef.t);
+  return { submitter, store, secureMap, nowRef, pendingKey };
 }
 const keys = (m: jest.Mock) => m.mock.calls.map((c) => c[2] as string);
 
@@ -32,10 +34,10 @@ describe("P2 idempotency (§33.6, §33.10 C)", () => {
   });
 
   it("replayed 200 is handled like 201: token saved, pending key cleared", async () => {
-    const { submitter, store } = setup(jest.fn().mockResolvedValue(created(true)));
+    const { submitter, store, pendingKey } = setup(jest.fn().mockResolvedValue(created(true)));
     const r = await submitter.submit("s", req(), "S");
     expect(await store.getOrderToken(r.localId)).toBe("SECRET-ORDER-TOKEN");
-    expect(await store.getOrderPendingKey()).toBeNull();
+    expect(await pendingKey()).toBeNull();
   });
 
   it.each([
@@ -55,9 +57,9 @@ describe("P2 idempotency (§33.6, §33.10 C)", () => {
 
   it("409 price_changed is final: pending key cleared, next submit (confirmed new total) uses a new key", async () => {
     const createOrder = jest.fn().mockRejectedValueOnce(new BookingApiError(409, "price_changed", "x", undefined, { total: 900 })).mockResolvedValue(created());
-    const { submitter, store } = setup(createOrder);
+    const { submitter, store, pendingKey } = setup(createOrder);
     await expect(submitter.submit("s", req(), "S")).rejects.toMatchObject({ code: "price_changed" });
-    expect(await store.getOrderPendingKey()).toBeNull();
+    expect(await pendingKey()).toBeNull();
     await submitter.submit("s", req({ expectedTotal: 900 }), "S");
     const k = keys(createOrder);
     expect(k[1]).not.toBe(k[0]);
@@ -66,18 +68,18 @@ describe("P2 idempotency (§33.6, §33.10 C)", () => {
   it.each([[422, "duplicate_line"], [422, "insufficient_stock"], [422, "product_unavailable"], [422, "idempotency_key_reused"]])(
     "%i %s clears the pending key and propagates",
     async (status, code) => {
-      const { submitter, store } = setup(jest.fn().mockRejectedValue(new BookingApiError(status, code)));
+      const { submitter, store, pendingKey } = setup(jest.fn().mockRejectedValue(new BookingApiError(status, code)));
       await expect(submitter.submit("s", req(), "S")).rejects.toMatchObject({ status, code });
-      expect(await store.getOrderPendingKey()).toBeNull();
+      expect(await pendingKey()).toBeNull();
     },
   );
 
   it.each([[429, "rate_limited"], [404, "product_orders_disabled"], [426, "upgrade_required"], [403, "tenant_suspended"]])(
     "%i %s keeps the pending key and propagates",
     async (status, code) => {
-      const { submitter, store } = setup(jest.fn().mockRejectedValue(new BookingApiError(status, code)));
+      const { submitter, store, pendingKey } = setup(jest.fn().mockRejectedValue(new BookingApiError(status, code)));
       await expect(submitter.submit("s", req(), "S")).rejects.toMatchObject({ status, code });
-      expect(await store.getOrderPendingKey()).not.toBeNull();
+      expect(await pendingKey()).not.toBeNull();
     },
   );
 
@@ -98,13 +100,13 @@ describe("P2 idempotency (§33.6, §33.10 C)", () => {
 
   it("pending key is persisted BEFORE the request is sent (survives app restart)", async () => {
     let seen: unknown = "unset";
-    const holder: { store?: ReturnType<typeof setup>["store"] } = {};
+    const holder: { pendingKey?: ReturnType<typeof setup>["pendingKey"] } = {};
     const createOrder = jest.fn().mockImplementation(async () => {
-      seen = await holder.store!.getOrderPendingKey();
+      seen = await holder.pendingKey!();
       return created();
     });
     const s = setup(createOrder);
-    holder.store = s.store;
+    holder.pendingKey = s.pendingKey;
     await s.submitter.submit("s", req(), "S");
     expect(seen).toMatchObject({ key: expect.any(String) });
   });
@@ -150,7 +152,7 @@ describe("P2 idempotency (§33.6, §33.10 C)", () => {
   });
 
   it("token is never part of the plain index", async () => {
-    const { submitter, store } = setup(jest.fn().mockResolvedValue(created()));
+    const { submitter, store, pendingKey } = setup(jest.fn().mockResolvedValue(created()));
     await submitter.submit("s", req(), "S");
     expect(JSON.stringify(await store.listOrders())).not.toContain("SECRET");
   });
