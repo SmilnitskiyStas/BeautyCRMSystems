@@ -15,3 +15,5 @@ aa140d83f5338095a49c68e22efa9c91338832d2:backend/BeautyCrm.Tests/Security/Harden
 92696a7bcb84d4d52740096e0ce7ecc3a366abca:.claude/docs/beauty-contracts.md:generic-api-key:5641
 # Синтетична фікстура мобільного тесту (fingerprint:"f", key:"..."), не секрет (ADR-026 етап 3b).
 deebb1f30cd53d3db594552b09554301ea57d05d:mobile/src/storage/__tests__/orderStore.test.ts:generic-api-key:22
+# Той самий синтетичний рядок після squash-мерджу PR #18 (новий SHA коміту).
+1b539522f2160b62ab16c34f3798d2afe0b2ee7b:mobile/src/storage/__tests__/orderStore.test.ts:generic-api-key:22
