@@ -1,7 +1,9 @@
-import type { ReactNode } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps } from "react-native";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View, type TextInputProps } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors, fonts, radius, space, TOUCH } from "@/theme";
+import { InputSheet } from "@/components/InputSheet";
 
 export function Screen({ children, scroll = true }: { children: ReactNode; scroll?: boolean }) {
   return (
@@ -87,18 +89,64 @@ export function Chip({ label, selected, disabled, onPress }: { label: string; se
   );
 }
 
-export function Field(props: TextInputProps & { label: string; error?: string }) {
-  const { label, error, ...rest } = props;
+type FieldProps = Omit<TextInputProps, "onSubmitEditing"> & {
+  label: string;
+  error?: string;
+  /** Викликається після «Enter» у панелі вводу, коли нове значення вже передане в onChangeText. */
+  onSubmitEditing?: () => void;
+};
+
+/**
+ * Поле форми. Сам TextInput на екрані не відкривається: тап відкриває панель над клавіатурою ({@link InputSheet}),
+ * а «Готово» переносить текст назад у поле. Так клавіатура не перекриває поле на жодному екрані.
+ */
+export function Field(props: FieldProps) {
+  const { label, error, value, onChangeText, onSubmitEditing, placeholder, secureTextEntry, editable = true, ...rest } = props;
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [pendingSubmit, setPendingSubmit] = useState(false);
+  // onSubmitEditing екрана читає свій state: викликаємо його після ре-рендеру з новим значенням, а не зі старим замиканням
+  const submitRef = useRef(onSubmitEditing);
+  submitRef.current = onSubmitEditing;
+  useEffect(() => {
+    if (!pendingSubmit) return;
+    setPendingSubmit(false);
+    submitRef.current?.();
+  }, [pendingSubmit]);
+
+  const text = value ?? "";
+  const shown = text ? (secureTextEntry ? "•".repeat(text.length) : text) : (placeholder ?? "");
   return (
     <View style={{ gap: space.xs }}>
       <Label>{label}</Label>
-      <TextInput
+      <Pressable
+        accessibilityRole="button"
         accessibilityLabel={label}
-        placeholderTextColor={colors.muted}
-        {...rest}
-        style={[s.input, error ? { borderColor: colors.danger } : null]}
-      />
+        accessibilityValue={{ text: secureTextEntry ? undefined : text }}
+        accessibilityState={{ disabled: !editable, expanded: open }}
+        disabled={!editable}
+        onPress={() => setOpen(true)}
+        style={[s.input, s.inputBox, error ? { borderColor: colors.danger } : null, !editable && { opacity: 0.5 }]}
+      >
+        <Text numberOfLines={rest.multiline ? undefined : 1} style={[s.inputText, !text && { color: colors.muted }]}>
+          {shown}
+        </Text>
+      </Pressable>
       {error ? <Text style={s.error}>{error}</Text> : null}
+      <InputSheet
+        visible={open}
+        label={label}
+        initialValue={text}
+        inputProps={{ ...rest, placeholder, secureTextEntry }}
+        doneLabel={t("common.done")}
+        cancelLabel={t("common.cancel")}
+        onCancel={() => setOpen(false)}
+        onDone={(v, submitted) => {
+          setOpen(false);
+          onChangeText?.(v);
+          if (submitted && onSubmitEditing) setPendingSubmit(true);
+        }}
+      />
     </View>
   );
 }
@@ -130,5 +178,7 @@ const s = StyleSheet.create({
   chipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
   chipText: { fontFamily: fonts.bodyMedium, fontSize: 15, color: colors.text },
   input: { minHeight: TOUCH, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, backgroundColor: colors.surface, paddingHorizontal: space.md, fontFamily: fonts.body, fontSize: 16, color: colors.text },
+  inputBox: { justifyContent: "center", paddingVertical: space.sm },
+  inputText: { fontFamily: fonts.body, fontSize: 16, color: colors.text },
   error: { fontFamily: fonts.body, fontSize: 13, color: colors.danger },
 });

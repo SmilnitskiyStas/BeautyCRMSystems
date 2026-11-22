@@ -4,6 +4,7 @@ export const uk = {
     back: "Назад",
     retry: "Спробувати ще раз",
     cancel: "Скасувати",
+    done: "Готово",
     loading: "Завантаження…",
     myAppointments: "Мої записи",
     currency: "₴",
