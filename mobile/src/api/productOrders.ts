@@ -1,6 +1,7 @@
 import { BookingApiError } from "@beauty/booking-core";
 import { z } from "zod";
 import type { CatalogFetch } from "@/api/catalog";
+import { httpsUrl } from "@/lib/urls";
 
 /**
  * Замовлення товарів (ADR-026, контракт §33, P1-P5). Публічні маршрути `/api/public/{tenantSlug}`, без автентифікації.
@@ -12,7 +13,6 @@ const money = z.number();
 const locRef = z.object({ id: z.string(), name: z.string(), address: z.string().nullable().optional() });
 
 /** V1.1 (ADR-027, §33.22.3): URL абсолютні, беруться лише з DTO. */
-const httpsUrl = z.string().url().refine((u) => u.startsWith("https://"));
 
 export const productImageSchema = z.object({
   url: httpsUrl,

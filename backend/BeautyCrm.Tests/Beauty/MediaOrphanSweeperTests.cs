@@ -105,6 +105,25 @@ public sealed class MediaOrphanSweeperTests(AuthApiFixture fx) : IClassFixture<A
     }
 
     [SkippableFact]
+    public async Task Location_logo_keys_count_as_live_and_are_not_deleted()
+    {
+        Skip.If(fx.SkipReason is not null, fx.SkipReason);
+        var t = await fx.CreateTenantAsync();
+        var logo = Key();
+        await using (var ctx = fx.Db.CreateContext(t.TenantId))
+        {
+            ctx.Locations.Add(new Location { Name = "L", Timezone = "Europe/Kyiv", LogoStorageKey = logo });
+            await ctx.SaveChangesAsync();
+        }
+        var r = NewRig(MediaSweepMode.Delete);
+        var logoOld = await PutAsync(r, t.TenantId, TimeSpan.FromHours(30), logo); // давній файл, на нього посилається лише заклад
+        var orphan = await PutAsync(r, t.TenantId, TimeSpan.FromHours(30));
+        await r.Sweeper.RunOnceAsync(default);
+        Assert.True(Exists(r, t.TenantId, logoOld));
+        Assert.False(Exists(r, t.TenantId, orphan));
+    }
+
+    [SkippableFact]
     public async Task Invisible_tenant_and_empty_live_set_with_many_markers_delete_nothing_and_missing_files_are_logged()
     {
         Skip.If(fx.SkipReason is not null, fx.SkipReason);

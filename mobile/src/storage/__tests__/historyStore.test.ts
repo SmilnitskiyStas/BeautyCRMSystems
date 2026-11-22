@@ -89,3 +89,33 @@ describe("booking draft", () => {
     expect(await s.getBookingDraft()).toBeNull();
   });
 });
+
+describe("location logo in storage", () => {
+  it("keeps logoUrl of a recent location and drops a non-https one", async () => {
+    const m = memory();
+    const s = createLocalStore(m.secure, m.plain);
+    await s.addRecentLocation({ ...loc("A"), logoUrl: "https://cdn.x/a.png" }, 1);
+    await s.addRecentLocation({ ...loc("B"), logoUrl: "http://cdn.x/b.png" }, 2);
+    const list = await s.listRecentLocations();
+    expect(list.find((l) => l.publicCode === "A")?.logoUrl).toBe("https://cdn.x/a.png");
+    expect(list.find((l) => l.publicCode === "B")?.logoUrl).toBeNull();
+  });
+
+  it("parses old entries stored without logoUrl", async () => {
+    const m = memory();
+    m.plainMap.set("beauty.recentLocations.v1", JSON.stringify([{ publicCode: "OLD", name: "Old", visitedAt: 1 }]));
+    const list = await createLocalStore(m.secure, m.plain).listRecentLocations();
+    expect(list).toHaveLength(1);
+    expect(list[0].publicCode).toBe("OLD");
+    expect(list[0].logoUrl ?? null).toBeNull();
+  });
+
+  it("keeps locationLogoUrl in the booking draft and parses an old draft without it", async () => {
+    const m = memory();
+    const s = createLocalStore(m.secure, m.plain);
+    await s.setBookingDraft({ ...draft(Date.now()), locationLogoUrl: "https://cdn.x/a.png" });
+    expect((await s.getBookingDraft())?.locationLogoUrl).toBe("https://cdn.x/a.png");
+    await s.setBookingDraft(draft(Date.now()));
+    expect((await s.getBookingDraft())?.locationLogoUrl ?? null).toBeNull();
+  });
+});

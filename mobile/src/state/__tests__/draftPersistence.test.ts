@@ -38,3 +38,11 @@ describe("booking draft persistence", () => {
     expect(resumeStep({ date: "2026-11-25" }, "2026-11-22")).toBe("/time");
   });
 });
+
+describe("booking draft logo", () => {
+  it("carries the location logo and null when absent", () => {
+    const withLogo = toBookingDraft({ location: { ...location, logoUrl: "https://cdn.x/a.png" }, service, specialist: null, date: null }, 1)!;
+    expect(withLogo.locationLogoUrl).toBe("https://cdn.x/a.png");
+    expect(toBookingDraft({ location, service, specialist: null, date: null }, 1)!.locationLogoUrl).toBeNull();
+  });
+});

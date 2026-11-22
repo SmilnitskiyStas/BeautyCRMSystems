@@ -12,6 +12,7 @@ import { linkConfig } from "@/config";
 import { toResolved, useChooseLocation, useResumeDraft } from "@/features/location/choose";
 import type { BookingDraft, RecentLocation } from "@/storage/tokenStore";
 import { shortDateLabel } from "@/lib/dates";
+import { LocationLogo } from "@/features/location/LocationLogo";
 import { ScanModal } from "@/features/location/ScanModal";
 import { Body, Button, ErrorText, Field, H1, Row, Screen, Spinner } from "@/ui";
 import { space } from "@/theme";
@@ -168,6 +169,7 @@ export default function LocationScreen() {
         <View style={{ gap: space.sm }}>
           <Body muted>{t("location.draftTitle")}</Body>
           <Row
+            leading={<LocationLogo name={draft.locationName} logoUrl={draft.locationLogoUrl} />}
             title={draft.locationName}
             subtitle={[draft.service.name, draft.specialist?.name, draft.date ? shortDateLabel(draft.date) : null].filter(Boolean).join(" · ")}
             right={t("location.draftContinue")}
@@ -181,7 +183,7 @@ export default function LocationScreen() {
         <View style={{ gap: space.sm }}>
           <Body muted>{t("location.recentTitle")}</Body>
           {recents.map((r) => (
-            <Row key={r.publicCode} title={r.name} subtitle={r.address ?? r.city ?? undefined} onPress={() => void openRecent(r)} />
+            <Row key={r.publicCode} leading={<LocationLogo name={r.name} logoUrl={r.logoUrl} />} title={r.name} subtitle={r.address ?? r.city ?? undefined} onPress={() => void openRecent(r)} />
           ))}
         </View>
       ) : null}
@@ -190,7 +192,7 @@ export default function LocationScreen() {
         <View style={{ gap: space.sm }}>
           <Body muted>{t("location.nearbyTitle")}</Body>
           {nearby.map((n) => (
-            <Row key={n.publicCode} title={n.name} subtitle={n.address ?? n.city ?? undefined} right={`${n.distanceKm.toFixed(1)} ${t("location.km")}`} onPress={() => void choose(toResolved(n))} />
+            <Row key={n.publicCode} leading={<LocationLogo name={n.name} logoUrl={n.logoUrl} />} title={n.name} subtitle={n.address ?? n.city ?? undefined} right={`${n.distanceKm.toFixed(1)} ${t("location.km")}`} onPress={() => void choose(toResolved(n))} />
           ))}
         </View>
       ) : null}
@@ -202,7 +204,7 @@ export default function LocationScreen() {
         <Button title={t("location.searchCity")} variant="secondary" onPress={() => void searchCity()} disabled={busy || city.trim().length < 2} />
         {cityResults?.length === 0 ? <Body muted>{t("location.searchEmpty")}</Body> : null}
         {cityResults?.map((r) => (
-          <Row key={r.publicCode} title={r.name} subtitle={r.address ?? r.city ?? undefined} onPress={() => void choose(toResolved(r))} />
+          <Row key={r.publicCode} leading={<LocationLogo name={r.name} logoUrl={r.logoUrl} />} title={r.name} subtitle={r.address ?? r.city ?? undefined} onPress={() => void choose(toResolved(r))} />
         ))}
       </View>
 

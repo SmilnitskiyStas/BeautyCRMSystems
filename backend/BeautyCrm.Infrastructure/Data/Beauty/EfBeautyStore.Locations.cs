@@ -85,9 +85,10 @@ public sealed partial class EfBeautyStore
         return new(LocationWriteOutcome.Ok, ToLocationDto(l));
     }
 
-    private static LocationDto ToLocationDto(Location l) =>
+    private LocationDto ToLocationDto(Location l) =>
         new(l.Id, l.Name, l.Address, l.Timezone, l.IsActive, l.Phone, l.ClosedWeekdays, WorkingHoursValidator.Parse(l.WorkingHours),
-            l.Latitude, l.Longitude, l.PublicCode, l.City, l.IsDiscoverable);
+            l.Latitude, l.Longitude, l.PublicCode, l.City, l.IsDiscoverable,
+            media is { Enabled: true } && l.LogoStorageKey is { } logo ? media.Url(logo, BeautyCrm.Application.Features.BeautyProductImages.MediaOptions.ThumbSize) : null);
 
     // ---------- вихідні дні закладу (TASK-701, §17) ----------
 

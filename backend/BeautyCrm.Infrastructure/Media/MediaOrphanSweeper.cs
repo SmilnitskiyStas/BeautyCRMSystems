@@ -162,6 +162,9 @@ public sealed class MediaOrphanSweeper(IServiceScopeFactory scopes, FileProductI
         scope.ServiceProvider.GetRequiredService<TenantContext>().SetTenant(tenant);
         var db = scope.ServiceProvider.GetRequiredService<BeautyDbContext>();
         if (!await db.Tenants.AsNoTracking().AnyAsync(t => t.Id == tenant, ct)) return null;
-        return (await db.ProductImages.AsNoTracking().Select(i => i.StorageKey).ToListAsync(ct)).ToHashSet(StringComparer.Ordinal);
+        var keys = (await db.ProductImages.AsNoTracking().Select(i => i.StorageKey).ToListAsync(ct)).ToHashSet(StringComparer.Ordinal);
+        // логотипи закладів живуть у тому самому сховищі (ключ у beauty_locations.logo_storage_key): без цього очищувач видалив би їх
+        keys.UnionWith(await db.Locations.AsNoTracking().Where(l => l.LogoStorageKey != null).Select(l => l.LogoStorageKey!).ToListAsync(ct));
+        return keys;
     }
 }

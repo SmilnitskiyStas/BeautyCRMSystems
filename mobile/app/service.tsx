@@ -7,6 +7,8 @@ import { bookingApi } from "@/services";
 import { useDraft } from "@/state/draft";
 import { useShopCatalog } from "@/features/shop/useCatalog";
 import { formatPrice } from "@/lib/format";
+import { View } from "react-native";
+import { LocationLogo } from "@/features/location/LocationLogo";
 import { Body, Button, ErrorText, H1, Row, Screen, Spinner } from "@/ui";
 
 /** Крок 2: послуга. */
@@ -30,7 +32,12 @@ export default function ServiceScreen() {
 
   return (
     <Screen>
-      <H1>{location?.name ?? ""}</H1>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+        {location ? <LocationLogo name={location.name} logoUrl={location.logoUrl} size={56} /> : null}
+        <View style={{ flex: 1 }}>
+          <H1>{location?.name ?? ""}</H1>
+        </View>
+      </View>
       <Button title={t("service.change")} variant="secondary" onPress={() => router.push("/?change=1")} />
       {/* «Магазин» показуємо лише коли P1 відповів 200; 404 product_orders_disabled/помилка -> розділу немає (§33.10 A) */}
       {shop.data ? <Button title={t("shop.entry")} variant="secondary" onPress={() => router.push("/shop")} /> : null}

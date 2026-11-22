@@ -479,6 +479,24 @@ export const mockBeautyApi: BeautyAdminApi = {
     return wait(loc);
   },
 
+  uploadLocationLogo: async (id, file) => {
+    if (!isManager()) throw forbid();
+    const loc = locations.find((l) => l.id === id);
+    if (!loc) throw notFound();
+    if (file.size > 10 * 1024 * 1024) throw new BeautyApiError(413, "file_too_large", "too large");
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) throw new BeautyApiError(415, "unsupported_image_type", "type");
+    loc.logoUrl = typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
+    return wait(loc);
+  },
+
+  deleteLocationLogo: async (id) => {
+    if (!isManager()) throw forbid();
+    const loc = locations.find((l) => l.id === id);
+    if (!loc) throw notFound();
+    loc.logoUrl = null;
+    return wait(loc);
+  },
+
   setClosedWeekdays: async (id, weekdays, confirm) => {
     if (!isManager()) throw forbid();
     const loc = locations.find((l) => l.id === id);

@@ -5,6 +5,7 @@ import type { ResolvedLocation } from "@/lib/locationSource";
 import { formatPrice } from "@/lib/format";
 import { shortDateLabel, timeLabel } from "@/lib/dates";
 import { Avatar } from "./Avatar";
+import { LocationLogo } from "@/features/location/LocationLogo";
 import { locationAddress, specialistRatingText } from "./summary";
 import { colors, fonts, radius, space, TOUCH } from "@/theme";
 
@@ -29,9 +30,12 @@ export function BookingSummary({
   return (
     <View style={s.card} accessibilityLabel={t("checkout.summaryTitle")}>
       <View style={s.head}>
-        <Text accessibilityRole="header" style={s.title}>
-          {location.name}
-        </Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+          <LocationLogo name={location.name} logoUrl={location.logoUrl} size={36} />
+          <Text accessibilityRole="header" style={[s.title, { flex: 1 }]}>
+            {location.name}
+          </Text>
+        </View>
         {address ? <Text style={s.muted}>{address}</Text> : null}
       </View>
 

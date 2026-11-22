@@ -31,6 +31,8 @@ export interface BeautyLocation {
   publicCode?: string | null;
   city?: string | null;
   isDiscoverable?: boolean;
+  /** Логотип закладу: абсолютний URL варіанта 400; `null`/відсутнє = немає (або медіа вимкнено). */
+  logoUrl?: string | null;
 }
 
 /** Закриття закладу на дати (§17): повні дні в зоні закладу, включно. `reason` приходить лише керівникам. */

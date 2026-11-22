@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { optionalHttpsUrl } from "@/lib/urls";
 
 /**
  * Локальне сховище гостя (ADR-021 §4, skill offline-storage).
@@ -66,6 +67,7 @@ export const recentLocationSchema = z.object({
   name: z.string(),
   address: z.string().nullable().optional(),
   city: z.string().nullable().optional(),
+  logoUrl: optionalHttpsUrl,
   /** Мілісекунди epoch останнього відкриття закладу. */
   visitedAt: z.number(),
 });
@@ -78,6 +80,7 @@ export type RecentLocation = z.infer<typeof recentLocationSchema>;
 export const bookingDraftSchema = z.object({
   publicCode: z.string().min(1),
   locationName: z.string(),
+  locationLogoUrl: optionalHttpsUrl,
   service: z.object({
     id: z.string().min(1),
     name: z.string(),
