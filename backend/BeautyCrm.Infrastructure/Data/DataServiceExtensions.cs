@@ -65,6 +65,7 @@ public static class DataServiceExtensions
         services.AddScoped<BeautyCrm.Application.Features.BeautyInventory.IStaffAlertStore>(sp => sp.GetRequiredService<EfBeautyStore>()); // етап 2a: сповіщення
         services.AddScoped<BeautyCrm.Application.Features.BeautyInventory.IStaffAlertWriter>(sp => sp.GetRequiredService<EfBeautyStore>()); // етап 2a: спільний writer
         services.AddScoped<BeautyCrm.Application.Features.BeautyProductOrders.IProductOrderStore>(sp => sp.GetRequiredService<EfBeautyStore>()); // ADR-026: замовлення товарів
+        services.AddScoped<BeautyCrm.Application.Features.BeautyBooking.IPaymentRefStore>(sp => sp.GetRequiredService<EfBeautyStore>()); // ADR-028: рахунки провайдера оплати
         services.AddScoped<BeautyCrm.Application.Features.BeautyProductOrders.IProductOrderAdminStore>(sp => sp.GetRequiredService<EfBeautyStore>()); // TASK-903: CRM замовлень
         services.AddScoped<BeautyCrm.Application.Features.BeautyProductImages.IProductImageStore>(sp => sp.GetRequiredService<EfBeautyStore>()); // ADR-027: фото товарів
         services.AddScoped<BeautyCrm.Application.Features.BeautyCoupons.ICouponStore>(sp => sp.GetRequiredService<EfBeautyStore>()); // TASK-778

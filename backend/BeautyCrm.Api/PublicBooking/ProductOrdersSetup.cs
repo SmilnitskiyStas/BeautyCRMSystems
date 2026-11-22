@@ -26,7 +26,12 @@ public static class ProductOrdersSetup
         };
         services.AddBeautyProductOrdersApplication(options);
         var productionOrUnknown = env is null || env.IsProduction();
-        services.AddSingleton<IHostedService>(sp => new ProductOrdersStartupGuard(options, productionOrUnknown, sp.GetRequiredService<IPaymentService>(), sp.GetService<ILogger<ProductOrdersStartupGuard>>()));
+        services.AddSingleton<IHostedService>(sp =>
+        {
+            // реальний провайдер (ADR-028) - scoped (RLS): тип визначаємо в окремому scope, не з кореневого контейнера
+            using var scope = sp.CreateScope();
+            return new ProductOrdersStartupGuard(options, productionOrUnknown, scope.ServiceProvider.GetRequiredService<IPaymentService>(), sp.GetService<ILogger<ProductOrdersStartupGuard>>());
+        });
         return services;
     }
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Text, View } from "react-native";
+import { Alert, AppState, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import * as Linking from "expo-linking";
 import { useTranslation } from "react-i18next";
 import { BookingApiError } from "@beauty/booking-core";
 import { localStore, productOrdersApi } from "@/services";
@@ -16,6 +17,9 @@ import { colors, fonts, radius, space } from "@/theme";
 
 const TERMINAL = new Set(["cancelled", "expired", "refunded", "fulfilled"]);
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const openUrl = async (url: string) => {
+  await Linking.openURL(url);
+};
 
 /** Статус замовлення (P3), оплата/скасування за `canPay`/`canCancel`. Токен читається лише в момент запиту й не потрапляє в навігацію/логи. */
 export default function OrderScreen() {
@@ -61,6 +65,16 @@ export default function OrderScreen() {
   }, [load]);
 
   const reserving = order?.status === "pending_payment" && !order.paymentInProgress && !!order.reservationExpiresAt;
+  const processing = order?.status === "pending_payment" && order.paymentInProgress;
+
+  // ADR-028: клієнт повертається зі сторінки банку - перепитати сервер (результат уже міг прийти вебхуком)
+  useEffect(() => {
+    if (!processing) return;
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active" && !guard.current) void load();
+    });
+    return () => sub.remove();
+  }, [processing, load]);
   useEffect(() => {
     if (!reserving) return;
     const h = setInterval(() => setNow(Date.now()), 1000);
@@ -100,7 +114,7 @@ export default function OrderScreen() {
 
   const pay = () =>
     withToken(async (slug, token) => {
-      const r = await payWithReconcile({ api: productOrdersApi, sleep }, slug, token);
+      const r = await payWithReconcile({ api: productOrdersApi, sleep, openPaymentPage: openUrl }, slug, token);
       if (r.order) await apply(r.order);
       setMessage(r.errorCode ? shopCodeText(r.errorCode) : null);
     });
@@ -142,6 +156,7 @@ export default function OrderScreen() {
       <Label>{order.location.name}</Label>
       <Body>{statusText(order, t as never, now)}</Body>
       {reserving && order.reservationExpiresAt ? <Body muted>{formatLeft(order.reservationExpiresAt, now)}</Body> : null}
+      {processing ? <Body muted>{t("shop.paymentPageHint")}</Body> : null}
       <View style={{ gap: space.xs, backgroundColor: colors.surface, borderRadius: radius.md, padding: space.md, borderWidth: 1, borderColor: colors.border }}>
         {order.lines.map((l) => (
           <View key={l.productId} style={{ flexDirection: "row", justifyContent: "space-between", gap: space.md }}>

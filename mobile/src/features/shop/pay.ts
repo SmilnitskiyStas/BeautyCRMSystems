@@ -13,19 +13,36 @@ export interface PayOutcome {
 }
 
 /**
- * Оплата (P4) без наосліпних повторів: після мережевої помилки/тайм-ауту/5xx спершу P3 (контракт §33.7: списання не більше одного,
+ * Оплата (P4) без наосліпних повторів. Якщо сервер повернув `paymentUrl` (рахунок monobank, ADR-028) - відкриваємо сторінку банку
+ * й опитуємо P3, поки триває оплата.: після мережевої помилки/тайм-ауту/5xx спершу P3 (контракт §33.7: списання не більше одного,
  * але клієнт не знає, чи дійшов запит). Якщо оплата «в процесі» - опитування, через ~2 хв рівно один повтор P4.
  */
 export async function payWithReconcile(
-  deps: { api: Pick<ProductOrdersApi, "pay" | "getOrder">; sleep: (ms: number) => Promise<void>; delays?: number[] },
+  deps: {
+    api: Pick<ProductOrdersApi, "pay" | "getOrder">;
+    sleep: (ms: number) => Promise<void>;
+    delays?: number[];
+    /** ADR-028: відкрити сторінку оплати monobank (системний браузер). Без нього - лише опитування. */
+    openPaymentPage?: (url: string) => Promise<void>;
+  },
   tenantSlug: string,
   token: string,
 ): Promise<PayOutcome> {
   const delays = deps.delays ?? POLL_DELAYS_MS;
 
-  const attemptPay = async (): Promise<PayOutcome | "poll" | "check"> => {
+  const attemptPay = async (openPage: boolean): Promise<PayOutcome | "poll" | "check"> => {
     try {
-      return { order: await deps.api.pay(tenantSlug, token), errorCode: null };
+      const r = await deps.api.pay(tenantSlug, token);
+      if (openPage && r.paymentUrl && r.order.status === "pending_payment" && r.order.paymentInProgress) {
+        // клієнт платить на сторінці банку; результат прийде вебхуком на сервер -> опитуємо P3
+        try {
+          await deps.openPaymentPage?.(r.paymentUrl);
+        } catch {
+          return { order: r.order, errorCode: "payment_page_failed" };
+        }
+        return "poll";
+      }
+      return { order: r.order, errorCode: null };
     } catch (e) {
       if (!(e instanceof BookingApiError) || isRetryable(e)) return "check";
       if (e.code === "payment_in_progress") return "poll";
@@ -41,7 +58,7 @@ export async function payWithReconcile(
     }
   };
 
-  const first = await attemptPay();
+  const first = await attemptPay(true);
   if (typeof first === "object") return first;
 
   for (let i = 0; ; i++) {
@@ -52,6 +69,6 @@ export async function payWithReconcile(
     await deps.sleep(delays[i]);
   }
 
-  const last = await attemptPay();
+  const last = await attemptPay(false); // повторний P4 не відкриває сторінку банку вдруге без дії клієнта
   return typeof last === "object" ? last : check();
 }

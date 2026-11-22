@@ -6,6 +6,7 @@ import { payWithReconcile } from "../pay";
 const o = (over: Record<string, unknown> = {}): PublicProductOrder => productOrderSchema.parse(rawOrder(over));
 const inProgress = o({ paymentInProgress: true, canPay: false });
 const net = () => new BookingApiError(0, "api_unreachable", "network");
+const payResp = (order: PublicProductOrder, paymentUrl: string | null = null) => ({ order, paymentUrl });
 
 function deps(pay: jest.Mock, getOrder: jest.Mock) {
   const sleep = jest.fn().mockResolvedValue(undefined);
@@ -14,7 +15,7 @@ function deps(pay: jest.Mock, getOrder: jest.Mock) {
 
 describe("payWithReconcile", () => {
   it("success: one P4, no P3", async () => {
-    const pay = jest.fn().mockResolvedValue(o({ status: "paid", canPay: false }));
+    const pay = jest.fn().mockResolvedValue(payResp(o({ status: "paid", canPay: false })));
     const getOrder = jest.fn();
     const r = await payWithReconcile(deps(pay, getOrder), "s", "T");
     expect(r.order?.status).toBe("paid");
@@ -47,7 +48,7 @@ describe("payWithReconcile", () => {
   });
 
   it("in progress: polls with 5/10/20/40/45 s delays, then exactly one more P4", async () => {
-    const pay = jest.fn().mockRejectedValueOnce(net()).mockResolvedValueOnce(o({ status: "paid", canPay: false }));
+    const pay = jest.fn().mockRejectedValueOnce(net()).mockResolvedValueOnce(payResp(o({ status: "paid", canPay: false })));
     const getOrder = jest.fn().mockResolvedValue(inProgress);
     const d = deps(pay, getOrder);
     const r = await payWithReconcile(d, "s", "T");
@@ -69,5 +70,36 @@ describe("payWithReconcile", () => {
   it("P3 failing too -> error code, no order", async () => {
     const r = await payWithReconcile(deps(jest.fn().mockRejectedValue(net()), jest.fn().mockRejectedValue(net())), "s", "T");
     expect(r).toEqual({ order: null, errorCode: "api_unreachable" });
+  });
+
+  describe("monobank payment page (ADR-028)", () => {
+    const url = "https://pay.mbnk.biz/p2_abc";
+
+    it("opens the bank page once, then polls P3 until paid", async () => {
+      const pay = jest.fn().mockResolvedValue(payResp(inProgress, url));
+      const getOrder = jest.fn().mockResolvedValueOnce(inProgress).mockResolvedValueOnce(o({ status: "paid", canPay: false }));
+      const openPaymentPage = jest.fn().mockResolvedValue(undefined);
+      const r = await payWithReconcile({ ...deps(pay, getOrder), openPaymentPage }, "s", "T");
+      expect(openPaymentPage).toHaveBeenCalledWith(url);
+      expect(pay).toHaveBeenCalledTimes(1);
+      expect(r).toEqual({ order: expect.objectContaining({ status: "paid" }), errorCode: null });
+    });
+
+    it("still in progress after polling: one more P4, but the bank page is not reopened", async () => {
+      const pay = jest.fn().mockResolvedValue(payResp(inProgress, url));
+      const getOrder = jest.fn().mockResolvedValue(inProgress);
+      const openPaymentPage = jest.fn().mockResolvedValue(undefined);
+      const r = await payWithReconcile({ ...deps(pay, getOrder), openPaymentPage }, "s", "T");
+      expect(openPaymentPage).toHaveBeenCalledTimes(1);
+      expect(pay).toHaveBeenCalledTimes(2);
+      expect(r.order?.paymentInProgress).toBe(true);
+    });
+
+    it("bank page failed to open -> error code with the order", async () => {
+      const pay = jest.fn().mockResolvedValue(payResp(inProgress, url));
+      const r = await payWithReconcile({ ...deps(pay, jest.fn()), openPaymentPage: jest.fn().mockRejectedValue(new Error("no browser")) }, "s", "T");
+      expect(r.errorCode).toBe("payment_page_failed");
+      expect(r.order?.paymentInProgress).toBe(true);
+    });
   });
 });

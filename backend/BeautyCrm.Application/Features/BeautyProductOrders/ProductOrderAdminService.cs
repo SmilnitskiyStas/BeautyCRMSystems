@@ -318,6 +318,7 @@ public sealed class ProductOrderAdminService(
                 log?.LogError("product_order_reconcile_failed order={OrderId} error={Error}", id, ex.GetType().Name);
                 return Detail(actor, (await ReloadAsync(id, ct)).Value!, clock.GetUtcNow());
             }
+            if (charge.Pending) return Detail(actor, (await ReloadAsync(id, ct)).Value!, clock.GetUtcNow()); // ADR-028: клієнт ще на сторінці оплати
             if (!charge.Success)
             {
                 if (ProductOrderPaymentFlow.IsExplicitDecline(charge)) await orders.MarkPaymentFailedAsync(id, claim.PaymentId, claimAt, pct);

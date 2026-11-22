@@ -59,12 +59,16 @@ public sealed record PublicProductOrderDto(
 
 public sealed record PublicProductOrderCreatedDto(string PublicToken, PublicProductOrderDto Order);
 
-public sealed record PublicProductOrderEnvelope(PublicProductOrderDto Order);
+/// <param name="PaymentUrl">ADR-028: сторінка оплати провайдера (лише у відповіді P4, коли створено рахунок); інакше поле відсутнє.</param>
+public sealed record PublicProductOrderEnvelope(
+    PublicProductOrderDto Order,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? PaymentUrl = null);
 
 public sealed record PublicProductOrderCreateResult(PublicProductOrderCreatedDto Created, bool Replayed);
 
 /// <param name="Replayed">true - повтор (уже оплачено / уже скасовано клієнтом): HTTP 200 + Idempotent-Replayed.</param>
-public sealed record PublicProductOrderResult(PublicProductOrderDto Order, bool Replayed);
+/// <param name="PaymentUrl">ADR-028: клієнт має завершити оплату на цій сторінці провайдера (замовлення - «оплата в процесі»).</param>
+public sealed record PublicProductOrderResult(PublicProductOrderDto Order, bool Replayed, string? PaymentUrl = null);
 
 // ---------- вхідні DTO ----------
 
