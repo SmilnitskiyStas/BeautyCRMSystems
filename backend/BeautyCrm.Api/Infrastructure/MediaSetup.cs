@@ -64,7 +64,7 @@ public static class MediaSetup
             UploadsPerUserPerMinute = Range(config, "UploadsPerUserPerMinute", 20, 1, 120),
             SweepMode = ParseSweep(config["Media:SweepMode"]),
         };
-        // найгірше декодування: піксель Rgba32 (4 Б) x 2 копії (AutoOrient) на кожну паралельну обробку мусить вміщатися в бюджет пам'яті
+        // бюджет SkiaSharp (ADR-027 §12.4 п.4): вихід Rgba8888 4 Б + mip-рівні ~1/3 + малі варіанти < 8 Б/піксель; буфери progressive/CMYK JPEG - §12.3 (виміряти)
         if ((long)o.MaxPixels * 8 * o.MaxConcurrentProcessing > MemoryBudgetBytes)
             throw new InvalidOperationException("Media:MaxPixels x Media:MaxConcurrentProcessing exceeds the image memory budget (256 MB at 8 bytes per pixel).");
         var root = config["Media:RootPath"];
@@ -78,7 +78,7 @@ public static class MediaSetup
         services.Replace(ServiceDescriptor.Singleton(o));
         services.AddSingleton<FileProductImageStorage>();
         services.AddSingleton<IProductImageStorage>(sp => sp.GetRequiredService<FileProductImageStorage>());
-        services.AddSingleton<IImageProcessor, ImageSharpProcessor>();
+        services.AddSingleton<IImageProcessor, SkiaSharpProcessor>();
         services.AddScoped<BeautyCrm.Application.Features.BeautyLocations.LocationLogoService>();
         services.AddScoped<ProductImageService>(); // порти сховища/обробки реєструються тут, тож і сервіс тут
         services.AddSingleton(new UploadThrottle(o.UploadsPerUserPerMinute, Range(config, "MaxConcurrentUploads", 3, 1, 16)));

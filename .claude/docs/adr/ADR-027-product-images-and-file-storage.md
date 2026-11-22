@@ -73,6 +73,8 @@ DTO віддають **абсолютний** URL: `{Media:PublicBaseUrl}/api/pu
 
 ### 2.5 Обробка зображення — **бібліотека: SixLabors.ImageSharp 3.1.x** (керований код, без нативних залежностей)
 
+> **Замінено 2026-11-22 на SkiaSharp (резервний вибір нижче) — див. §12.4.** Текст розділу лишено як початкове рішення; фактична реалізація й відмінності — у §12.4.
+
 **Ліцензійне зауваження (human gate G2).** ImageSharp 3.x поширюється під **Six Labors Split License**: безплатно (Apache 2.0) для open source, для використання як транзитивної залежності і для комерційних організацій з річним валовим доходом **менше 1 млн доларів США**. В інших випадках потрібна платна комерційна ліцензія. ImageSharp 2.x (чиста Apache 2.0) не підтримується й не отримує виправлень безпеки, тому відхилено. Перед TASK-912 людина підтверджує, що ліцензійні умови виконано. Якщо ні, резервний вибір — **SkiaSharp** (MIT, нативний libSkia через `SkiaSharp.NativeAssets.Linux.NoDependencies`). Контракт §33.22 від бібліотеки не залежить: усе приховано за портом `IImageProcessor` в Application.
 
 Конвеєр (`IImageProcessor.ProcessAsync(Stream, ct) → ProcessedImage{ variants[], width, height }`):
@@ -349,9 +351,9 @@ DAG: 910 → [G1, G2] → 911 → 912 → {914, 915} → 916 → 917; 913 — mo
 | Задача | Стан |
 |---|---|
 | TASK-910 ADR-027 і §33.22 | виконано (цей документ; §33.22 оновлено) |
-| G1 схема, G2 ліцензія ImageSharp | затверджено людиною 2026-11-21 |
+| G1 схема, G2 ліцензія ImageSharp | затверджено людиною 2026-11-21; G2 знято 2026-11-22 заміною на SkiaSharp (§12.4) |
 | TASK-911 міграція `20261121110933_beauty_product_images` | реалізовано: таблиця, RLS FORCE, CHECK, глобальний UNIQUE ключа, deferrable UNIQUE порядку, GRANT синхронно в `scripts/dev/setup-db.ps1` і `deploy/staging/db/grants.sql`, `worker/src/testing/schema.sql` перегенеровано |
-| TASK-912 backend | реалізовано: `IImageProcessor` (ImageSharp 3.1.x), `IProductImageStorage` (файлова реалізація), `MediaOptions` з валідацією старту, CRM-маршрути, публічна роздача, поля DTO (§32.6, §33.5 V1.1), `MediaOrphanSweeper` |
+| TASK-912 backend | реалізовано: `IImageProcessor` (ImageSharp 3.1.x; з 2026-11-22 — SkiaSharp, §12.4), `IProductImageStorage` (файлова реалізація), `MediaOptions` з валідацією старту, CRM-маршрути, публічна роздача, поля DTO (§32.6, §33.5 V1.1), `MediaOrphanSweeper` |
 | TASK-913 frontend CRM | реалізовано: галерея в картці товару, зменшення в браузері до довшої сторони ≤ 2560, прев'ю в списку |
 | Mobile (V1.1) | реалізовано: показ `imageUrl` і `images[]` з валідацією https; невалідне поле = немає фото |
 | TASK-914 QA | тести є: `ProductImagesApiTests`, `ProductImageProcessorTests`, `MediaOrphanSweeperTests`, `MediaSetupLimitsTests`, `ProductImagesMigrationTests`. Таблиця відповідності ADR → тести і ручний чекліст у цій сесії не перевірялись |
@@ -379,9 +381,32 @@ DAG: 910 → [G1, G2] → 911 → 912 → {914, 915} → 916 → 917; 913 — mo
 11. **Форма `images[]` у mobile.** Клієнт приймає `{url, thumbUrl, width?, height?}`. Кожен URL має бути `https` (`z.string().url()`). Невалідний елемент відкидається, а невалідний `imageUrl` трактується як `null`. Сервер завжди віддає `width` і `height`, тож опціональність — захист клієнта, а не реальна поведінка сервера.
 12. **Зменшення в браузері.** Довша сторона ≤ 2560 перед відправкою (m9, §2.5 «Frontend CRM»). CSP `img-src` додає `apiOrigin()` (не wildcard).
 
+### 12.4 Заміна ImageSharp на SkiaSharp (2026-11-22, рішення користувача)
+
+**Причина.** Six Labors Split License безплатна лише до 1 млн доларів річного доходу, а ImageSharp 3.2 у Release-збірці вимагав ключ ліцензії (BuildKit-секрет `sixlabors_license_key`, репозиторний секрет `SIXLABORS_LICENSE_KEY`). Користувач обрав не залежати від цього й перейти на резервний варіант з §2.5 — **SkiaSharp (MIT)**. Порт `IImageProcessor` і контракт §33.22 не змінились.
+
+**Що зроблено.**
+- `SkiaSharpProcessor` (`backend/BeautyCrm.Infrastructure/Media/`) замість `ImageSharpProcessor`; пакети `SkiaSharp` і `SkiaSharp.NativeAssets.Linux.NoDependencies` 3.119.4 (нативна `libSkiaSharp.so` потребує лише glibc; перевірено `ldd` в образі `aspnet:8.0`). Пакет `SixLabors.ImageSharp` прибрано з усіх проєктів, тести генерують фікстури через SkiaSharp.
+- `backend/Dockerfile` і `staging-images.yml` більше не приймають і не вимагають ліцензійного секрету. Секрет `SIXLABORS_LICENSE_KEY` у репозиторії можна видалити після мерджу (дія людини).
+
+**Відповідність §2.5 (п. 1–9) і відмінності реалізації.**
+1. Тип: та сама перевірка сигнатури (JPEG/PNG/WebP), **плюс** `SKCodec.EncodedFormat` має бути одним із трьох (інакше `415`).
+2. Розміри: `SKCodec.Create` читає лише заголовок; ліміти сторін і `Media:MaxPixels` перевіряються до декодування пікселів (замість `Image.IdentifyAsync`).
+3. Один кадр: декодується кадр 0 (`SKCodecOptions(0)`). Результат декодування, відмінний від `Success` (зокрема `IncompleteInput` для обірваного файлу), дає `422 image_decode_failed`.
+4. Пам'ять: у Skia немає аналога `MemoryAllocator` / `AllocationLimitMegabytes`. Межа — ліміти розмірів і семафор: вихідний буфер 4 Б/піксель (`Rgba8888`, 16-бітні PNG не розгортаються) + mip-рівні при зменшенні (≈ 1/3) + малі варіанти, тобто < 8 Б/піксель. Перевірка бюджету при старті (§12.2 п.6, `MaxPixels × 8 × MaxConcurrentProcessing ≤ 256 МБ`) лишається чинною межею. Поворот за EXIF робиться **після** зменшення, тож другої повнорозмірної копії немає. Кодек і буфери декодера звільняються одразу після `GetPixels`, до ресайзу (security M2). Процесор тримає одну нативну копію байтів тіла (`SKData`, до `MaxUploadBytes`), бо викликач закриває потік; це додає до ~10 МБ на upload до залишкового ризику §12.3. **Увага:** буфери коефіцієнтів progressive/CMYK JPEG і interlaced PNG під час декодування можуть дати 10–12 Б/піксель (оцінка рев'ю, не виміряно) — див. §12.3.
+5. Орієнтація: `SKCodec.EncodedOrigin` (усі 8 значень EXIF) застосовується до пікселів. Метадані: `SKBitmap` їх не містить; колір приводиться до sRGB при декодуванні, а енкодер отримує буфер без колірного простору, тож ICC не вбудовується. Тест перевіряє відсутність EXIF/XMP/ICC-чанків і `VP8X` у результаті.
+6. Ресайз: вписування в 1600 і 400 за довшою стороною без збільшення; фільтр — білінійний з mip-мапами (`SKFilterMode.Linear` + `SKMipmapMode.Linear`) замість Lanczos3. Розміри варіантів збігаються з попередньою реалізацією (округлення до найближчого).
+7. WebP lossy q80 (`SKWebpEncoderOptions`), прозорість PNG зберігається.
+8. Паралельність і таймаути: `MaxConcurrentProcessing`, очікування 10 с → `503 media_busy`, таймаут 20 с → `422 image_decode_failed`. **Відмінність:** нативне декодування не переривається, тому після таймауту відповідь віддається одразу, а слот семафора звільняється лише коли фонова робота справді завершилась (скасування перевіряється між кроками). Так таймаути не дозволяють перевищити бюджет пам'яті, але **CPU таймаут не обмежує**. Щоб закрити найвідоміший вектор (progressive JPEG з тисячами сканів), до декодування керований прохід маркерами відхиляє JPEG з понад `MaxJpegScans = 100` сканами (`422 image_decode_failed`).
+9. Результат — як раніше (`width`/`height` варіанта 1600, `size_bytes` = сума варіантів).
+
+**Безпека.** Нативні декодери libSkia (libjpeg-turbo, libpng, libwebp) — більша нативна поверхня, ніж керований ImageSharp; її обмежують лише три формати, перевірка заголовка до декодування й оновлення пакета. Рев'ю — `docs/reviews/security-review-skiasharp-image-processor.md`. Рекомендація `dotnet list package --vulnerable` у CI (§12.3) тепер стосується й SkiaSharp.
+
 ### 12.3 Відкрито після реалізації
 
 - **m10 (deploy):** образ `alpine:3` без digest у кроці tar тома (`deploy/staging/README.md` §5.1) і tar медіа без шифрування, на відміну від дампів БД (`age`). Виправлення — до G4/G5, не в коді.
 - **Залишковий ризик пам'яті:** сирий буфер тіла (до ~30 МБ за замовчуванням) не входить у бюджет §12.2 п.6. Розмір `mem_limit` api 768m рахується з цим запасом. Якщо підняти `MaxUploadBytes` або `MaxConcurrentUploads`, перерахувати.
 - **Q1 (basic auth для `/api/public/media/`)** — відкрите, дефолт не змінено.
-- **Перевірка `dotnet list package --vulnerable`** — рекомендація security-рев'ю для CI, у пайплайні не підтверджено.
+- **Перевірка `dotnet list package --vulnerable`** — додано в `ci.yml`; для SkiaSharp вона бачить лише advisory NuGet-пакета, а не CVE вбудованих libjpeg-turbo/libpng/libwebp. Рекомендація: Dependabot (nuget) і SLA оновлення SkiaSharp (critical ≤ 7 днів).
+- **SkiaSharp, пам'ять (рев'ю M2):** виміряти пік (VmHWM) для progressive 4:4:4 і CMYK JPEG та interlaced RGBA16 PNG на рівні `MaxPixels`; за результатом підняти множник у перевірці старту (`MediaSetup`) або знизити дефолт `MaxPixels`.
+- **SkiaSharp, CPU (рев'ю M1):** нативна робота після таймауту не переривається. Відкрито: лог/метрика `media_processing_overrun` і cooldown для автора; довгостроково — обробка в окремому процесі з kill за таймаутом (окремий ADR).

@@ -14,18 +14,10 @@ RUN dotnet restore BeautyCrm.Api/BeautyCrm.Api.csproj
 COPY . .
 
 FROM restore AS publish
-# ImageSharp 3.2 перевіряє ліцензію Six Labors під час Release-збірки (ADR-027 §2.5, gate G2).
-# Ключ приходить BuildKit-секретом (id=sixlabors_license_key) і живе лише в цьому RUN: у шари й образ не потрапляє.
-#   docker build --secret id=sixlabors_license_key,env=SIXLABORS_LICENSE_KEY -t beautycrm-api backend
-RUN --mount=type=secret,id=sixlabors_license_key,required=true \
-    set -eu; \
-    LIC=BeautyCrm.Infrastructure/sixlabors.lic; \
-    cp /run/secrets/sixlabors_license_key "$LIC"; \
-    test -s "$LIC" || { echo "sixlabors_license_key secret is empty" >&2; rm -f "$LIC"; exit 1; }; \
-    dotnet publish BeautyCrm.Api/BeautyCrm.Api.csproj -c Release --no-restore -o /app/publish /p:UseAppHost=false \
-      || { rm -f "$LIC"; exit 1; }; \
-    rm -f "$LIC"; \
-    ! find /app/publish -iname 'sixlabors.lic' | grep -q .
+# Обробка зображень - SkiaSharp (MIT, ADR-027 §12.4): ліцензійного ключа й BuildKit-секрету збірка не потребує.
+# Нативна libSkiaSharp.so (SkiaSharp.NativeAssets.Linux.NoDependencies) потрапляє в publish без системних пакетів.
+RUN dotnet publish BeautyCrm.Api/BeautyCrm.Api.csproj -c Release --no-restore -o /app/publish /p:UseAppHost=false \
+    && find /app/publish/runtimes -path "*linux-*" -name libSkiaSharp.so | grep -q .
 
 # ---- runtime (останній stage = ціль за замовчуванням) ----
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final

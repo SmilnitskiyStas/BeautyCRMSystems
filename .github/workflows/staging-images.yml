@@ -120,12 +120,6 @@ jobs:
         run: |
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           echo "name=ghcr.io/${owner}/beautycrm-${{ matrix.service }}" >> "$GITHUB_OUTPUT"
-      - name: Require Six Labors license secret (api only, ADR-027 gate G2)
-        if: matrix.service == 'api'
-        env:
-          KEY: ${{ secrets.SIXLABORS_LICENSE_KEY }}
-        run: |
-          [ -n "$KEY" ] || { echo "::error::Repository secret SIXLABORS_LICENSE_KEY is not set: ImageSharp 3.2 Release build needs it (backend/Dockerfile)."; exit 1; }
       - id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -137,8 +131,6 @@ jobs:
           build-args: |
             ${{ matrix.service == 'web' && format('NEXT_PUBLIC_API_URL={0}', inputs.public_origin) || '' }}
             ${{ matrix.service == 'web' && format('NEXT_PUBLIC_TENANT_SLUG={0}', inputs.tenant_slug) || '' }}
-          secrets: |
-            ${{ matrix.service == 'api' && format('sixlabors_license_key={0}', secrets.SIXLABORS_LICENSE_KEY) || '' }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
       - name: Digest for the deploy (use the digest, not the tag)

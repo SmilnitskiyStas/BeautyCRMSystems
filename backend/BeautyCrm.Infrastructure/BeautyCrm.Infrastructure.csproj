@@ -15,7 +15,13 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="SixLabors.ImageSharp" Version="3.2.0" />
+    <!-- ADR-027 §12.4: SkiaSharp (MIT) замість ImageSharp; Linux-нативка без системних залежностей (fontconfig не потрібен) -->
+    <PackageReference Include="SkiaSharp" Version="3.119.4" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.119.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="BeautyCrm.Tests" />
   </ItemGroup>
 
   <PropertyGroup>
