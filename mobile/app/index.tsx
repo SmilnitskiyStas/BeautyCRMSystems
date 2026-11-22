@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { View } from "react-native";
-import { Link, useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams } from "expo-router";
 import * as Location from "expo-location";
 import { useTranslation } from "react-i18next";
 import { BookingApiError, humanizeBookingError } from "@beauty/booking-core";
@@ -13,11 +13,12 @@ import { toResolved, useChooseLocation, useResumeDraft } from "@/features/locati
 import type { BookingDraft, RecentLocation } from "@/storage/tokenStore";
 import { shortDateLabel } from "@/lib/dates";
 import { ScanModal } from "@/features/location/ScanModal";
+import { MyShortcuts } from "@/features/home/MyShortcuts";
 import { Body, Button, ErrorText, Field, H1, Row, Screen, Spinner } from "@/ui";
 import { space } from "@/theme";
 
 /**
- * Крок 1: заклад. Над пошуком - «Продовжити запис» (незавершений запис) і «Ви нещодавно були тут» (історія закладів).
+ * Крок 1: заклад. Вгорі - входи «Мої записи» / «Мої замовлення» (MyShortcuts). Над пошуком - «Продовжити запис» (незавершений запис) і «Ви нещодавно були тут» (історія закладів).
  * Якщо є історія або незавершений запис, автопереходу в збережений заклад немає: користувач сам обирає на головній.
  * Джерело (ADR-021 §2): збережена -> явний тап nearby (дозвіл лише тут) -> місто/код/QR. Deep link обробляє app/l/[code].
  */
@@ -159,6 +160,7 @@ export default function LocationScreen() {
 
   return (
     <Screen>
+      <MyShortcuts />
       <H1>{t("location.title")}</H1>
       {busy && nearby.length === 0 ? <Spinner /> : null}
       {message ? <Body muted>{message}</Body> : null}
@@ -211,13 +213,6 @@ export default function LocationScreen() {
         <Button title={t("location.codeOpen")} onPress={() => void openByInput(code)} disabled={busy || code.trim().length === 0} />
         <Button title={t("location.scanQr")} variant="secondary" onPress={() => setScanning(true)} />
       </View>
-
-      <Link href="/appointments" style={{ minHeight: 44, paddingVertical: 12, textAlign: "center" }}>
-        {t("common.myAppointments")}
-      </Link>
-      <Link href="/order" style={{ minHeight: 44, paddingVertical: 12, textAlign: "center" }}>
-        {t("shop.myOrders")}
-      </Link>
 
       <ScanModal
         visible={scanning}
