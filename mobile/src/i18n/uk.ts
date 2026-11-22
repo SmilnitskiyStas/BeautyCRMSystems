@@ -34,6 +34,10 @@ export const uk = {
     switchBody: "Посилання веде до іншого закладу, ніж збережений у вас раніше.",
     switchYes: "Відкрити",
     switchNo: "Залишити попередній",
+    draftTitle: "Незавершений запис",
+    draftContinue: "Продовжити",
+    draftDismiss: "Почати заново",
+    recentTitle: "Ви нещодавно були тут",
   },
   upgrade: {
     title: "Оновіть застосунок",
